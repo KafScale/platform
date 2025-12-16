@@ -42,6 +42,25 @@ type MetadataResponse struct {
 	Topics        []MetadataTopic
 }
 
+// ProduceResponse contains per-partition acknowledgement info.
+type ProduceResponse struct {
+	CorrelationID int32
+	Topics        []ProduceTopicResponse
+	ThrottleMs    int32
+}
+
+type ProduceTopicResponse struct {
+	Name       string
+	Partitions []ProducePartitionResponse
+}
+
+type ProducePartitionResponse struct {
+	Partition       int32
+	ErrorCode       int16
+	BaseOffset      int64
+	LogAppendTimeMs int64
+	LogStartOffset  int64
+}
 // EncodeApiVersionsResponse renders bytes ready to send on the wire.
 func EncodeApiVersionsResponse(resp *ApiVersionsResponse) ([]byte, error) {
 	w := newByteWriter(64)
@@ -88,6 +107,27 @@ func EncodeMetadataResponse(resp *MetadataResponse) ([]byte, error) {
 			}
 		}
 	}
+	return w.Bytes(), nil
+}
+
+// EncodeProduceResponse renders bytes for produce responses.
+func EncodeProduceResponse(resp *ProduceResponse) ([]byte, error) {
+	w := newByteWriter(128)
+	w.Int32(resp.CorrelationID)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int32(int32(len(topic.Partitions)))
+		for _, p := range topic.Partitions {
+			w.Int32(p.Partition)
+			w.Int16(p.ErrorCode)
+			w.Int64(p.BaseOffset)
+			w.Int64(p.LogAppendTimeMs)
+			w.Int64(p.LogStartOffset)
+			w.Int32(0) // log_offset_delta (unused for v9)
+		}
+	}
+	w.Int32(resp.ThrottleMs)
 	return w.Bytes(), nil
 }
 

@@ -22,6 +22,25 @@ type ApiVersionsRequest struct{}
 
 func (ApiVersionsRequest) APIKey() int16 { return APIKeyApiVersion }
 
+// ProduceRequest is a simplified representation of Kafka ProduceRequest v9.
+type ProduceRequest struct {
+	Acks      int16
+	TimeoutMs int32
+	Topics    []ProduceTopic
+}
+
+type ProduceTopic struct {
+	Name       string
+	Partitions []ProducePartition
+}
+
+type ProducePartition struct {
+	Partition int32
+	Records   []byte
+}
+
+func (ProduceRequest) APIKey() int16 { return APIKeyProduce }
+
 // MetadataRequest asks for cluster metadata. Empty Topics means "all".
 type MetadataRequest struct {
 	Topics []string
@@ -67,6 +86,51 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 	switch header.APIKey {
 	case APIKeyApiVersion:
 		req = &ApiVersionsRequest{}
+	case APIKeyProduce:
+		acks, err := reader.Int16()
+		if err != nil {
+			return nil, nil, fmt.Errorf("read produce acks: %w", err)
+		}
+		timeout, err := reader.Int32()
+		if err != nil {
+			return nil, nil, fmt.Errorf("read produce timeout: %w", err)
+		}
+		topicCount, err := reader.Int32()
+		if err != nil {
+			return nil, nil, fmt.Errorf("read produce topic count: %w", err)
+		}
+		topics := make([]ProduceTopic, 0, topicCount)
+		for i := int32(0); i < topicCount; i++ {
+			name, err := reader.String()
+			if err != nil {
+				return nil, nil, fmt.Errorf("read produce topic name: %w", err)
+			}
+			partitionCount, err := reader.Int32()
+			if err != nil {
+				return nil, nil, fmt.Errorf("read produce partition count: %w", err)
+			}
+			partitions := make([]ProducePartition, 0, partitionCount)
+			for j := int32(0); j < partitionCount; j++ {
+				index, err := reader.Int32()
+				if err != nil {
+					return nil, nil, fmt.Errorf("read produce partition index: %w", err)
+				}
+				records, err := reader.Bytes()
+				if err != nil {
+					return nil, nil, fmt.Errorf("read produce records: %w", err)
+				}
+				partitions = append(partitions, ProducePartition{
+					Partition: index,
+					Records:   records,
+				})
+			}
+			topics = append(topics, ProduceTopic{Name: name, Partitions: partitions})
+		}
+		req = &ProduceRequest{
+			Acks:      acks,
+			TimeoutMs: timeout,
+			Topics:    topics,
+		}
 	case APIKeyMetadata:
 		var topics []string
 		count, err := reader.Int32()

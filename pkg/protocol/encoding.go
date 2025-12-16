@@ -158,6 +158,26 @@ func (w *byteWriter) NullableString(v *string) {
 	w.String(*v)
 }
 
+func (r *byteReader) Bytes() ([]byte, error) {
+	length, err := r.Int32()
+	if err != nil {
+		return nil, err
+	}
+	if length < 0 {
+		return nil, fmt.Errorf("invalid bytes length %d", length)
+	}
+	b, err := r.read(int(length))
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func (w *byteWriter) BytesWithLength(b []byte) {
+	w.Int32(int32(len(b)))
+	w.write(b)
+}
+
 func (w *byteWriter) Bytes() []byte {
 	return w.buf
 }

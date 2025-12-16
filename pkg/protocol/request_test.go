@@ -47,3 +47,38 @@ func TestParseMetadataRequest(t *testing.T) {
 		t.Fatalf("client id mismatch: %#v", header.ClientID)
 	}
 }
+
+func TestParseProduceRequest(t *testing.T) {
+	w := newByteWriter(128)
+	w.Int16(APIKeyProduce)
+	w.Int16(9)
+	w.Int32(100)
+	clientID := "producer-1"
+	w.NullableString(&clientID)
+	w.Int16(1) // acks
+	w.Int32(1500)
+	w.Int32(1)     // topic count
+	w.String("orders")
+	w.Int32(1)                 // partitions
+	w.Int32(0)                // partition id
+	batch := []byte("record") // placeholder bytes
+	w.BytesWithLength(batch)
+
+	header, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	if header.APIKey != APIKeyProduce {
+		t.Fatalf("unexpected api key %d", header.APIKey)
+	}
+	produceReq, ok := req.(*ProduceRequest)
+	if !ok {
+		t.Fatalf("expected ProduceRequest got %T", req)
+	}
+	if produceReq.Acks != 1 || len(produceReq.Topics) != 1 {
+		t.Fatalf("produce data mismatch: %#v", produceReq)
+	}
+	if string(produceReq.Topics[0].Partitions[0].Records) != "record" {
+		t.Fatalf("records mismatch")
+	}
+}

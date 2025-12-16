@@ -10,6 +10,43 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 - **Storage**: message segments live in S3 buckets; brokers only keep in-memory caches.
 - **Operator**: Kubernetes controller that provisions brokers, topics, and wiring based on CRDs.
 
+## S3 Configuration
+
+1. **Create (or reference) a bucket**  
+   - Name convention: `kafscale-{env}-{region}` (example: `kafscale-prod-us-east-1`).  
+   - Bucket region should match the Kubernetes cluster region to avoid cross-region latency/cost.  
+   - Enable versioning + SSE-KMS with a customer-managed key if your security posture requires it.
+
+2. **Provision IAM credentials**  
+   Grant `s3:ListBucket`, `GetObject`, `PutObject`, and `DeleteObject` on the bucket prefix. If the operator should manage buckets, include `CreateBucket` as well. Store the access key/secret (or assume-role info) in a Kubernetes `Secret`, ideally via Sealed Secrets/External Secrets so data at rest stays encrypted.
+
+3. **Configure the KafscaleCluster CRD**  
+   ```yaml
+   apiVersion: kafscale.yourorg/v1alpha1
+   kind: KafscaleCluster
+   metadata:
+     name: prod
+   spec:
+     s3:
+       bucket: kafscale-prod-us-east-1
+       region: us-east-1
+       endpoint: ""          # optional custom endpoint
+       kmsKeyArn: arn:aws:kms:us-east-1:1234:key/abcd
+       forcePathStyle: false
+       credentialsSecretRef:
+         name: kafscale-s3-creds
+         namespace: kafscale
+   ```
+
+4. **Mount credentials into brokers**  
+   The operator projects the secret into broker pods and sets env vars (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, etc.). Credential rotation is automatic—update the secret and the operator will restart brokers through the drain RPC.
+
+5. **Validation**  
+   The operator validates bucket access (list + put) during reconciliation. Check operator logs if the CRD status reports `S3ValidationFailed`.
+
+6. **Broker overrides (optional)**  
+   Brokers can read overrides from environment variables if you need different values per pod: `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_KMS_ARN`.
+
 ## Getting Started
 
 1. **Deploy the Operator + Brokers**  

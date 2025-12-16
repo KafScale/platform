@@ -14,7 +14,7 @@ import (
 
 type testHandler struct{}
 
-func (h *testHandler) Handle(header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
+func (h *testHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
 	switch req.(type) {
 	case *protocol.ApiVersionsRequest:
 		return protocol.EncodeApiVersionsResponse(&protocol.ApiVersionsResponse{

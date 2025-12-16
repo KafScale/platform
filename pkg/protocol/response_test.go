@@ -54,3 +54,26 @@ func TestEncodeMetadataResponse(t *testing.T) {
 		t.Fatalf("unexpected correlation id %d", corr)
 	}
 }
+
+func TestEncodeProduceResponse(t *testing.T) {
+	payload, err := EncodeProduceResponse(&ProduceResponse{
+		CorrelationID: 7,
+		Topics: []ProduceTopicResponse{
+			{
+				Name: "orders",
+				Partitions: []ProducePartitionResponse{
+					{Partition: 0, ErrorCode: 0, BaseOffset: 10, LogAppendTimeMs: 1234, LogStartOffset: 10},
+				},
+			},
+		},
+		ThrottleMs: 5,
+	})
+	if err != nil {
+		t.Fatalf("EncodeProduceResponse: %v", err)
+	}
+	reader := newByteReader(payload)
+	corr, _ := reader.Int32()
+	if corr != 7 {
+		t.Fatalf("unexpected correlation id %d", corr)
+	}
+}

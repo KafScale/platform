@@ -13,7 +13,7 @@ import (
 
 // Handler processes parsed Kafka protocol requests and returns the response payload.
 type Handler interface {
-	Handle(header *protocol.RequestHeader, req protocol.Request) ([]byte, error)
+	Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error)
 }
 
 // Server implements minimal Kafka TCP handling for milestone 1.
@@ -69,6 +69,8 @@ func (s *Server) Wait() {
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	defer conn.Close()
 	for {
 		frame, err := protocol.ReadFrame(conn)
@@ -85,7 +87,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 
-		respPayload, err := s.Handler.Handle(header, req)
+		respPayload, err := s.Handler.Handle(ctx, header, req)
 		if err != nil {
 			log.Printf("handle request api=%d err=%v", header.APIKey, err)
 			return

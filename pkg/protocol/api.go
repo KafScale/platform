@@ -4,6 +4,7 @@ package protocol
 const (
 	APIKeyMetadata   int16 = 3
 	APIKeyApiVersion int16 = 18
+	APIKeyProduce    int16 = 0
 )
 
 // ApiVersion describes the supported version range for an API.

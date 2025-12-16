@@ -1,0 +1,36 @@
+package storage
+
+import (
+	"context"
+	"fmt"
+)
+
+// ByteRange represents an inclusive byte range for reads.
+type ByteRange struct {
+	Start int64
+	End   int64
+}
+
+func (br *ByteRange) headerValue() *string {
+	if br == nil {
+		return nil
+	}
+	val := fmt.Sprintf("bytes=%d-%d", br.Start, br.End)
+	return &val
+}
+
+// S3Client is the abstraction used by storage to read/write segments.
+type S3Client interface {
+	UploadSegment(ctx context.Context, key string, body []byte) error
+	UploadIndex(ctx context.Context, key string, body []byte) error
+	DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error)
+}
+
+// S3Config describes connection details for AWS S3 or compatible endpoints.
+type S3Config struct {
+	Bucket         string
+	Region         string
+	Endpoint       string
+	ForcePathStyle bool
+	KMSKeyARN      string
+}

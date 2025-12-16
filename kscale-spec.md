@@ -48,6 +48,37 @@ Kafscale deliberately focuses on durable message transport only. There is no bui
 
 **S3**: Immutable segment storage. All message data lives here. Brokers have no local persistent state.
 
+### S3 Configuration
+
+- **Bucket naming**: `kafscale-{environment}-{region}` (e.g. `kafscale-prod-us-east-1`). Each environment gets a dedicated bucket to isolate retention policies and IAM permissions.
+- **Region / AZ affinity**: The bucket region must match the Kubernetes cluster’s region to avoid cross-region bandwidth charges. Operators can optionally enable S3 Multi-AZ (S3 Standard) or Cross-Region Replication for DR via CRD flags.
+- **Namespace layout**: `{bucket}/{namespace}/{topic}/{partition}/segment-{base_offset}.kfs` as described later in the Data Model.
+- **Encryption**: All objects use SSE-KMS with a customer-managed CMK (provided in cluster spec). If no CMK is provided, default to SSE-S3 but emit a warning.
+- **Lifecycle**: Retention policies are applied at the bucket level based on topic-level TTL (operator maintains prefix-specific lifecycle rules to avoid global deletes).
+
+The Kubernetes operator manages S3 buckets when requested (via IAM credentials with `s3:CreateBucket`). In managed environments the bucket may already exist; the CRD allows referencing existing buckets by ARN/name.
+
+### Secret & Configuration Store
+
+- **KafscaleCluster CRD**: Gains an `s3` stanza with `bucket`, `region`, `endpoint`, `kmsKeyArn`, `replication` (bool), and `credentialsSecretRef`.
+- **Credentials**: Access key / secret, session token, and optional STS role are stored in a Kubernetes `Secret` (type `Opaque`). Users are expected to provision it via Sealed Secrets, External Secrets, or KMS-backed CSI so data at rest remains encrypted.
+- **Operator behavior**:
+  - Reads the secret, mounts credentials into broker pods via projected volume/env vars.
+  - Rotates credentials by watching the secret; restarts pods when data changes.
+  - Validates bucket access (list bucket) before reconciling brokers.
+- **In-broker config**: The broker config (`/etc/kafscale/broker.yaml`) includes:
+  ```yaml
+  s3:
+    bucket: "kafscale-prod-us-east-1"
+    region: "us-east-1"
+    endpoint: ""            # optional custom endpoint (MinIO, VPC)
+    kmsKeyArn: "arn:aws:kms:..."
+    roleArn: ""             # optional assume-role
+    credentialSource: "env" # env, iam, workload-identity
+  ```
+
+Secrets are never written to etcd; only the operator and pods with the `kafscale-broker` ServiceAccount can read them. All restarts go through the BrokerControl drain RPC to avoid data loss.
+
 ---
 
 ## Data Model
@@ -1881,6 +1912,8 @@ KAFSCALE_BROKER_PORT
 KAFSCALE_S3_BUCKET
 KAFSCALE_S3_REGION
 KAFSCALE_S3_ENDPOINT
+KAFSCALE_S3_PATH_STYLE          # "true" to force path-style URLs
+KAFSCALE_S3_KMS_ARN             # Optional SSE-KMS key ARN
 KAFSCALE_ETCD_ENDPOINTS          # Comma-separated
 KAFSCALE_SEGMENT_BYTES
 KAFSCALE_FLUSH_INTERVAL_MS
@@ -2264,19 +2297,19 @@ ENTRYPOINT ["./broker"]
 
 ### Milestone 1: Core Protocol
 
-- [ ] Kafka protocol frame parsing
-- [ ] ApiVersions request/response
-- [ ] Metadata request/response
-- [ ] Basic connection handling
-- [ ] Unit tests for protocol parsing
+- [x] Kafka protocol frame parsing
+- [x] ApiVersions request/response
+- [x] Metadata request/response
+- [x] Basic connection handling
+- [x] Unit tests for protocol parsing
 
 ### Milestone 2: Storage Layer
 
-- [ ] Segment file format implementation
-- [ ] Index file format implementation
-- [ ] S3 upload/download
-- [ ] Write buffer with flush logic
-- [ ] LRU segment cache
+- [x] Segment file format implementation
+- [x] Index file format implementation
+- [x] S3 upload/download
+- [x] Write buffer with flush logic
+- [x] LRU segment cache
 
 ### Milestone 3: Produce Path
 
