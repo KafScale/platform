@@ -8,7 +8,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/alo/kafscale/pkg/protocol"
+	"github.com/novatechflow/kafscale/pkg/protocol"
 )
 
 // Handler processes parsed Kafka protocol requests and returns the response payload.
@@ -34,7 +34,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	s.listener = ln
-	log.Printf("broker listening on %s", s.Addr)
+	log.Printf("broker listening on %s", ln.Addr())
 
 	go func() {
 		<-ctx.Done()
@@ -66,6 +66,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 // Wait blocks until all connection goroutines exit.
 func (s *Server) Wait() {
 	s.wg.Wait()
+}
+
+// ListenAddress returns the actual listener address if the server has started.
+func (s *Server) ListenAddress() string {
+	if s.listener != nil {
+		return s.listener.Addr().String()
+	}
+	return s.Addr
 }
 
 func (s *Server) handleConnection(conn net.Conn) {

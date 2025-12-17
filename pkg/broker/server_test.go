@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alo/kafscale/pkg/protocol"
+	"syscall"
+
+	"github.com/novatechflow/kafscale/pkg/protocol"
 )
 
 type testHandler struct{}
@@ -179,6 +181,9 @@ func TestServerListenAndServe_Shutdown(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if err != nil {
+			if errors.Is(err, syscall.EPERM) {
+				t.Skip("binding sockets not permitted in sandbox")
+			}
 			t.Fatalf("ListenAndServe error: %v", err)
 		}
 	case <-time.After(2 * time.Second):

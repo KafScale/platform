@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package kafscale.control;
 
-option go_package = "github.com/alo/kafscale/pkg/gen/control;control";
+option go_package = "github.com/novatechflow/kafscale/pkg/gen/control;control";
 
 service BrokerControl {
   rpc GetStatus(BrokerStatusRequest) returns (BrokerStatusResponse);

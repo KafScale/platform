@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package kafscale.metadata;
 
-option go_package = "github.com/alo/kafscale/pkg/gen/metadata;metadata";
+option go_package = "github.com/novatechflow/kafscale/pkg/gen/metadata;metadata";
 
 message TopicConfig {
   string name = 1;

@@ -2,9 +2,10 @@ package metadata
 
 import (
 	"context"
+	"errors"
 	"testing"
 
-	"github.com/alo/kafscale/pkg/protocol"
+	"github.com/novatechflow/kafscale/pkg/protocol"
 )
 
 func TestInMemoryStoreMetadata_AllTopics(t *testing.T) {
@@ -123,5 +124,35 @@ func TestInMemoryStoreOffsets(t *testing.T) {
 	}
 	if offset != 10 {
 		t.Fatalf("expected offset 10 got %d", offset)
+	}
+}
+
+func TestInMemoryStoreCreateDeleteTopic(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
+	})
+	ctx := context.Background()
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "", NumPartitions: 0}); err == nil {
+		t.Fatalf("expected invalid topic error")
+	}
+	topic, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 2, ReplicationFactor: 1})
+	if err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if topic == nil || topic.Name != "orders" {
+		t.Fatalf("unexpected topic: %#v", topic)
+	}
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1}); err == nil {
+		t.Fatalf("expected duplicate topic error")
+	}
+	if err := store.DeleteTopic(ctx, "missing"); !errors.Is(err, ErrUnknownTopic) {
+		t.Fatalf("expected unknown topic error, got %v", err)
+	}
+	if err := store.DeleteTopic(ctx, "orders"); err != nil {
+		t.Fatalf("DeleteTopic: %v", err)
+	}
+	meta, _ := store.Metadata(ctx, nil)
+	if len(meta.Topics) != 0 {
+		t.Fatalf("expected topic removed")
 	}
 }

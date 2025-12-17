@@ -1,0 +1,56 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: kafscaletopics.kafscale.io
+spec:
+  group: kafscale.io
+  scope: Namespaced
+  names:
+    plural: kafscaletopics
+    singular: kafscaletopic
+    kind: KafscaleTopic
+    shortNames:
+      - kt
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - clusterRef
+                - partitions
+              properties:
+                clusterRef:
+                  type: string
+                partitions:
+                  type: integer
+                  minimum: 1
+                retentionMs:
+                  type: integer
+                retentionBytes:
+                  type: integer
+                config:
+                  type: object
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                partitions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      leader:
+                        type: string
+                      logEndOffset:
+                        type: integer

@@ -8,32 +8,31 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alo/kafscale/pkg/cache"
+	"github.com/novatechflow/kafscale/pkg/cache"
 )
 
 // PartitionLogConfig configures per-partition log behavior.
 type PartitionLogConfig struct {
-	Buffer  WriteBufferConfig
-	Segment SegmentWriterConfig
+	Buffer            WriteBufferConfig
+	Segment           SegmentWriterConfig
 	ReadAheadSegments int
 	CacheEnabled      bool
 }
 
 // PartitionLog coordinates buffering, segment serialization, S3 uploads, and caching.
 type PartitionLog struct {
-	topic     string
-	partition int32
-	s3        S3Client
-	cache     *cache.SegmentCache
-	cfg       PartitionLogConfig
-
+	topic      string
+	partition  int32
+	s3         S3Client
+	cache      *cache.SegmentCache
+	cfg        PartitionLogConfig
 	buffer     *WriteBuffer
 	nextOffset int64
 	onFlush    func(context.Context, *SegmentArtifact)
+	onS3Op     func(string, time.Duration, error)
 	segments   []segmentRange
 	prefetchMu sync.Mutex
-
-	mu sync.Mutex
+	mu         sync.Mutex
 }
 
 type segmentRange struct {
@@ -45,7 +44,7 @@ type segmentRange struct {
 var ErrOffsetOutOfRange = errors.New("offset out of range")
 
 // NewPartitionLog constructs a log for a topic partition.
-func NewPartitionLog(topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact)) *PartitionLog {
+func NewPartitionLog(topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error)) *PartitionLog {
 	return &PartitionLog{
 		topic:      topic,
 		partition:  partition,
@@ -55,6 +54,7 @@ func NewPartitionLog(topic string, partition int32, startOffset int64, s3Client 
 		buffer:     NewWriteBuffer(cfg.Buffer),
 		nextOffset: startOffset,
 		onFlush:    onFlush,
+		onS3Op:     onS3Op,
 		segments:   make([]segmentRange, 0),
 	}
 }
@@ -115,11 +115,21 @@ func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error
 	segmentKey := l.segmentKey(artifact.BaseOffset)
 	indexKey := l.indexKey(artifact.BaseOffset)
 
-	if err := l.s3.UploadSegment(ctx, segmentKey, artifact.SegmentBytes); err != nil {
-		return nil, err
+	start := time.Now()
+	uploadErr := l.s3.UploadSegment(ctx, segmentKey, artifact.SegmentBytes)
+	if l.onS3Op != nil {
+		l.onS3Op("upload_segment", time.Since(start), uploadErr)
 	}
-	if err := l.s3.UploadIndex(ctx, indexKey, artifact.IndexBytes); err != nil {
-		return nil, err
+	if uploadErr != nil {
+		return nil, uploadErr
+	}
+	start = time.Now()
+	uploadErr = l.s3.UploadIndex(ctx, indexKey, artifact.IndexBytes)
+	if l.onS3Op != nil {
+		l.onS3Op("upload_index", time.Since(start), uploadErr)
+	}
+	if uploadErr != nil {
+		return nil, uploadErr
 	}
 	if l.cache != nil {
 		l.cache.SetSegment(l.topic, l.partition, artifact.BaseOffset, artifact.SegmentBytes)
@@ -166,7 +176,11 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 
 	data, ok := l.cache.GetSegment(l.topic, l.partition, seg.baseOffset)
 	if !ok {
+		start := time.Now()
 		bytes, err := l.s3.DownloadSegment(ctx, l.segmentKey(seg.baseOffset), nil)
+		if l.onS3Op != nil {
+			l.onS3Op("download_segment", time.Since(start), err)
+		}
 		if err != nil {
 			return nil, err
 		}

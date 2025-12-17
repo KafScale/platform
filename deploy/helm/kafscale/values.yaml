@@ -1,0 +1,48 @@
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
+operator:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/novatechflow/kafscale-operator
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  etcdEndpoints:
+    - "http://etcd:2379"
+  leaderKey: "/kafscale/operator/leader"
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+console:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/novatechflow/kafscale-console
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: console.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []

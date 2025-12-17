@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alo/kafscale/pkg/cache"
+	"github.com/novatechflow/kafscale/pkg/cache"
 )
 
 func TestPartitionLogAppendFlush(t *testing.T) {
@@ -22,7 +22,7 @@ func TestPartitionLogAppendFlush(t *testing.T) {
 		},
 	}, func(ctx context.Context, artifact *SegmentArtifact) {
 		flushCount++
-	})
+	}, nil)
 
 	batchData := make([]byte, 70)
 	batch, err := NewRecordBatchFromBytes(batchData)
@@ -60,7 +60,7 @@ func TestPartitionLogRead(t *testing.T) {
 		},
 		ReadAheadSegments: 1,
 		CacheEnabled:      true,
-	}, nil)
+	}, nil, nil)
 
 	batchData := make([]byte, 70)
 	batch, _ := NewRecordBatchFromBytes(batchData)
@@ -77,5 +77,35 @@ func TestPartitionLogRead(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatalf("expected data from read")
+	}
+}
+
+func TestPartitionLogReportsS3Uploads(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	c := cache.NewSegmentCache(1024)
+	var uploads int
+	log := NewPartitionLog("orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, func(op string, d time.Duration, err error) {
+		uploads++
+	})
+
+	batchData := make([]byte, 70)
+	batch, _ := NewRecordBatchFromBytes(batchData)
+	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if uploads < 2 {
+		t.Fatalf("expected upload callback for segment + index, got %d", uploads)
 	}
 }

@@ -5,7 +5,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	metadatapb "github.com/alo/kafscale/pkg/gen/metadata"
+	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
 )
 
 const (

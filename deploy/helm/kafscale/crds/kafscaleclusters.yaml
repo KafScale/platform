@@ -1,0 +1,108 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: kafscaleclusters.kafscale.io
+spec:
+  group: kafscale.io
+  scope: Namespaced
+  names:
+    plural: kafscaleclusters
+    singular: kafscalecluster
+    kind: KafscaleCluster
+    shortNames:
+      - kfs
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - s3
+                - brokers
+              properties:
+                brokers:
+                  type: object
+                  properties:
+                    replicas:
+                      type: integer
+                      minimum: 1
+                      default: 3
+                    image:
+                      type: object
+                      properties:
+                        repository:
+                          type: string
+                        tag:
+                          type: string
+                    resources:
+                      type: object
+                      description: Pod resource requests/limits applied to brokers.
+                s3:
+                  type: object
+                  required:
+                    - bucket
+                    - region
+                  properties:
+                    bucket:
+                      type: string
+                    region:
+                      type: string
+                    endpoint:
+                      type: string
+                    kmsKeyArn:
+                      type: string
+                    credentialsSecretRef:
+                      type: string
+                etcd:
+                  type: object
+                  properties:
+                    endpoints:
+                      type: array
+                      items:
+                        type: string
+                    useKubeEtcd:
+                      type: boolean
+                ui:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                config:
+                  type: object
+                  properties:
+                    segmentBytes:
+                      type: integer
+                    flushIntervalMs:
+                      type: integer
+                    cacheSize:
+                      type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                brokerCount:
+                  type: integer
+                topicCount:
+                  type: integer
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string

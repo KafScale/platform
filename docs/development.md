@@ -35,10 +35,65 @@ The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit genera
 ## Common Tasks
 
 ```bash
-make build   # compile all Go binaries
-make test    # run go test ./...
-make tidy    # clean go.mod/go.sum
-make lint    # run golangci-lint (requires installation)
+make build        # compile all Go binaries
+make test         # run go test ./...
+make docker-build # build broker/operator/console images (run this whenever broker/operator/console code changes)
+make test-e2e     # run the minio/franz + operator e2e suites (images from docker-build are reused)
+make docker-clean # delete dev images and prune Docker caches when you need a fresh slate
+
+## Kafka Compatibility Tracking
+
+To stay Kafka-compatible we track every protocol key + version that upstream exposes. Upstream Kafka 3.7.0 currently advertises the following highest ApiVersions (see `kafka-protocol` docs):
+
+| API Key | Name | Kafka 3.7 Version | Kafscale Status |
+|---------|------|-------------------|-----------------|
+| 0 | Produce | 9 | ✅ Implemented |
+| 1 | Fetch | 13 | ✅ Implemented |
+| 2 | ListOffsets | 7 | ✅ Implemented |
+| 3 | Metadata | 12 | ✅ Implemented |
+| 4 | LeaderAndIsr | 5 | ❌ Not needed (internal) |
+| 5 | StopReplica | 3 | ❌ Not needed (internal) |
+| 6 | UpdateMetadata | 7 | ❌ Not needed (internal) |
+| 7 | ControlledShutdown | 3 | ❌ Replaced by Kubernetes rollouts |
+| 8 | OffsetCommit | 8 | ✅ Implemented |
+| 9 | OffsetFetch | 8 | ✅ Implemented |
+| 10 | FindCoordinator | 4 | ✅ Implemented |
+| 11 | JoinGroup | 9 | ✅ Implemented |
+| 12 | Heartbeat | 4 | ✅ Implemented |
+| 13 | LeaveGroup | 5 | ✅ Implemented |
+| 14 | SyncGroup | 5 | ✅ Implemented |
+| 15 | DescribeGroups | 5 | 🔜 Planned |
+| 16 | ListGroups | 5 | 🔜 Planned |
+| 17 | SaslHandshake | 1 | ❌ Authentication not in scope yet |
+| 18 | ApiVersions | 3 | ✅ Implemented |
+| 19 | CreateTopics | 7 | ✅ Implemented |
+| 20 | DeleteTopics | 6 | ✅ Implemented |
+| 21 | DeleteRecords | 2 | ❌ Rely on S3 lifecycle |
+| 22 | InitProducerId | 4 | ❌ Transactions out of scope |
+| 23 | OffsetForLeaderEpoch | 3 | 🔜 Needed for catch-up tooling |
+| 24 | AddPartitionsToTxn | 3 | ❌ Transactions out of scope |
+| 25 | AddOffsetsToTxn | 3 | ❌ Transactions out of scope |
+| 26 | EndTxn | 3 | ❌ Transactions out of scope |
+| 27 | WriteTxnMarkers | 0 | ❌ Transactions out of scope |
+| 28 | TxnOffsetCommit | 3 | ❌ Transactions out of scope |
+| 29 | DescribeAcls | 1 | ❌ Auth not in v1 |
+| 30 | CreateAcls | 1 | ❌ Auth not in v1 |
+| 31 | DeleteAcls | 1 | ❌ Auth not in v1 |
+| 32 | DescribeConfigs | 4 | ⚠️ Read-only subset |
+| 33 | AlterConfigs | 1 | 🔜 After admin API hardening |
+| 34 | AlterReplicaLogDirs | 1 | ❌ Not relevant (S3 backed) |
+| 35 | DescribeLogDirs | 1 | ❌ Not relevant (S3 backed) |
+| 36 | SaslAuthenticate | 2 | ❌ Auth not in v1 |
+| 37 | CreatePartitions | 3 | 🔜 Requires S3 layout changes |
+| 38 | CreateDelegationToken | 2 | ❌ Auth not in v1 |
+| 39 | RenewDelegationToken | 2 | ❌ Auth not in v1 |
+| 40 | ExpireDelegationToken | 2 | ❌ Auth not in v1 |
+| 41 | DescribeDelegationToken | 2 | ❌ Auth not in v1 |
+| 42 | DeleteGroups | 2 | ✅ Implemented |
+
+We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer in the spec backlog so we can track when to bring it online (e.g., DescribeGroups/ListGroups for Kafka UI parity, OffsetForLeaderEpoch for catch-up tooling).
+make tidy         # clean go.mod/go.sum
+make lint         # run golangci-lint (requires installation)
 ```
 
 ## Coding Standards

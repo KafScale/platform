@@ -81,6 +81,117 @@ type FetchPartitionResponse struct {
 	RecordSet     []byte
 }
 
+type CreateTopicResult struct {
+	Name         string
+	ErrorCode    int16
+	ErrorMessage string
+}
+
+type CreateTopicsResponse struct {
+	CorrelationID int32
+	Topics        []CreateTopicResult
+}
+
+type DeleteTopicResult struct {
+	Name         string
+	ErrorCode    int16
+	ErrorMessage string
+}
+
+type DeleteTopicsResponse struct {
+	CorrelationID int32
+	Topics        []DeleteTopicResult
+}
+
+type ListOffsetsPartitionResponse struct {
+	Partition int32
+	ErrorCode int16
+	Timestamp int64
+	Offset    int64
+}
+
+type ListOffsetsTopicResponse struct {
+	Name       string
+	Partitions []ListOffsetsPartitionResponse
+}
+
+type ListOffsetsResponse struct {
+	CorrelationID int32
+	Topics        []ListOffsetsTopicResponse
+}
+
+type FindCoordinatorResponse struct {
+	CorrelationID int32
+	ErrorCode     int16
+	NodeID        int32
+	Host          string
+	Port          int32
+}
+
+type JoinGroupMember struct {
+	MemberID string
+	Metadata []byte
+}
+
+type JoinGroupResponse struct {
+	CorrelationID int32
+	ErrorCode     int16
+	GenerationID  int32
+	ProtocolName  string
+	LeaderID      string
+	MemberID      string
+	Members       []JoinGroupMember
+}
+
+type SyncGroupResponse struct {
+	CorrelationID int32
+	ErrorCode     int16
+	Assignment    []byte
+}
+
+type HeartbeatResponse struct {
+	CorrelationID int32
+	ErrorCode     int16
+}
+
+type LeaveGroupResponse struct {
+	CorrelationID int32
+	ErrorCode     int16
+}
+
+type OffsetCommitPartitionResponse struct {
+	Partition int32
+	ErrorCode int16
+}
+
+type OffsetCommitTopicResponse struct {
+	Name       string
+	Partitions []OffsetCommitPartitionResponse
+}
+
+type OffsetCommitResponse struct {
+	CorrelationID int32
+	Topics        []OffsetCommitTopicResponse
+}
+
+type OffsetFetchPartitionResponse struct {
+	Partition int32
+	Offset    int64
+	Metadata  string
+	ErrorCode int16
+}
+
+type OffsetFetchTopicResponse struct {
+	Name       string
+	Partitions []OffsetFetchPartitionResponse
+}
+
+type OffsetFetchResponse struct {
+	CorrelationID int32
+	Topics        []OffsetFetchTopicResponse
+	ErrorCode     int16
+}
+
 // EncodeApiVersionsResponse renders bytes ready to send on the wire.
 func EncodeApiVersionsResponse(resp *ApiVersionsResponse) ([]byte, error) {
 	w := newByteWriter(64)
@@ -174,6 +285,128 @@ func EncodeFetchResponse(resp *FetchResponse) ([]byte, error) {
 			}
 		}
 	}
+	return w.Bytes(), nil
+}
+
+func EncodeCreateTopicsResponse(resp *CreateTopicsResponse) ([]byte, error) {
+	w := newByteWriter(128)
+	w.Int32(resp.CorrelationID)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int16(topic.ErrorCode)
+		w.String(topic.ErrorMessage)
+	}
+	return w.Bytes(), nil
+}
+
+func EncodeDeleteTopicsResponse(resp *DeleteTopicsResponse) ([]byte, error) {
+	w := newByteWriter(128)
+	w.Int32(resp.CorrelationID)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int16(topic.ErrorCode)
+		w.String(topic.ErrorMessage)
+	}
+	return w.Bytes(), nil
+}
+
+func EncodeListOffsetsResponse(resp *ListOffsetsResponse) ([]byte, error) {
+	w := newByteWriter(256)
+	w.Int32(resp.CorrelationID)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int32(int32(len(topic.Partitions)))
+		for _, part := range topic.Partitions {
+			w.Int32(part.Partition)
+			w.Int16(part.ErrorCode)
+			w.Int64(part.Timestamp)
+			w.Int64(part.Offset)
+		}
+	}
+	return w.Bytes(), nil
+}
+
+func EncodeFindCoordinatorResponse(resp *FindCoordinatorResponse) ([]byte, error) {
+	w := newByteWriter(64)
+	w.Int32(resp.CorrelationID)
+	w.Int16(resp.ErrorCode)
+	w.Int32(resp.NodeID)
+	w.String(resp.Host)
+	w.Int32(resp.Port)
+	return w.Bytes(), nil
+}
+
+func EncodeJoinGroupResponse(resp *JoinGroupResponse) ([]byte, error) {
+	w := newByteWriter(256)
+	w.Int32(resp.CorrelationID)
+	w.Int16(resp.ErrorCode)
+	w.Int32(resp.GenerationID)
+	w.String(resp.ProtocolName)
+	w.String(resp.LeaderID)
+	w.String(resp.MemberID)
+	w.Int32(int32(len(resp.Members)))
+	for _, member := range resp.Members {
+		w.String(member.MemberID)
+		w.BytesWithLength(member.Metadata)
+	}
+	return w.Bytes(), nil
+}
+
+func EncodeSyncGroupResponse(resp *SyncGroupResponse) ([]byte, error) {
+	w := newByteWriter(128)
+	w.Int32(resp.CorrelationID)
+	w.Int16(resp.ErrorCode)
+	w.BytesWithLength(resp.Assignment)
+	return w.Bytes(), nil
+}
+
+func EncodeHeartbeatResponse(resp *HeartbeatResponse) ([]byte, error) {
+	w := newByteWriter(32)
+	w.Int32(resp.CorrelationID)
+	w.Int16(resp.ErrorCode)
+	return w.Bytes(), nil
+}
+
+func EncodeLeaveGroupResponse(resp *LeaveGroupResponse) ([]byte, error) {
+	w := newByteWriter(32)
+	w.Int32(resp.CorrelationID)
+	w.Int16(resp.ErrorCode)
+	return w.Bytes(), nil
+}
+
+func EncodeOffsetCommitResponse(resp *OffsetCommitResponse) ([]byte, error) {
+	w := newByteWriter(256)
+	w.Int32(resp.CorrelationID)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int32(int32(len(topic.Partitions)))
+		for _, part := range topic.Partitions {
+			w.Int32(part.Partition)
+			w.Int16(part.ErrorCode)
+		}
+	}
+	return w.Bytes(), nil
+}
+
+func EncodeOffsetFetchResponse(resp *OffsetFetchResponse) ([]byte, error) {
+	w := newByteWriter(256)
+	w.Int32(resp.CorrelationID)
+	w.Int32(int32(len(resp.Topics)))
+	for _, topic := range resp.Topics {
+		w.String(topic.Name)
+		w.Int32(int32(len(topic.Partitions)))
+		for _, part := range topic.Partitions {
+			w.Int32(part.Partition)
+			w.Int64(part.Offset)
+			w.String(part.Metadata)
+			w.Int16(part.ErrorCode)
+		}
+	}
+	w.Int16(resp.ErrorCode)
 	return w.Bytes(), nil
 }
 

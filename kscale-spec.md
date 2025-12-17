@@ -10,6 +10,8 @@ Kafscale trades latency for operational simplicity. Brokers are stateless. S3 is
 
 Kafscale deliberately focuses on durable message transport only. There is no built-in stream-processing runtime; teams should continue to pair the platform with engines such as Apache Flink, Wayang, or any other compute stack that reads from Kafka topics. Keeping processing concerns out of the broker keeps the surface area small and lets us optimize for throughput + durability while reusing the rich processing ecosystem that already speaks Kafka.
 
+Project overview and architecture: https://www.novatechflow.com/p/kafscale.html
+
 ---
 
 ## Architecture Overview
@@ -22,12 +24,12 @@ flowchart TD
             B1["Broker Pod 1"]
             B2["Broker Pod 2"]
         end
-        ETCD[("etcd (metadata)\nTopic config / offsets")]
+        ETCD[("etcd (metadata)\ Topic config / offsets")]
         B0 --> ETCD
         B1 --> ETCD
         B2 --> ETCD
     end
-    K8s --> S3[("S3 Bucket\nSegment storage (source of truth)")]
+    K8s --> S3[("S3 Bucket \ Segment storage (source of truth)")]
 ```
 
 ### Component Responsibilities
@@ -611,24 +613,26 @@ Fetch Request
 
 ### Supported API Keys
 
-| API Key | Name | Version | Status | Notes |
-|---------|------|---------|--------|-------|
-| 0 | Produce | 0-9 | Full | Core functionality |
-| 1 | Fetch | 0-13 | Full | Core functionality |
-| 2 | ListOffsets | 0-7 | Full | Required for consumers |
-| 3 | Metadata | 0-12 | Full | Topic/broker discovery |
-| 8 | OffsetCommit | 0-8 | Full | Consumer group tracking |
-| 9 | OffsetFetch | 0-8 | Full | Consumer group tracking |
-| 10 | FindCoordinator | 0-4 | Full | Group coordinator lookup |
-| 11 | JoinGroup | 0-9 | Full | Consumer group membership |
-| 12 | Heartbeat | 0-4 | Full | Consumer liveness |
-| 13 | LeaveGroup | 0-5 | Full | Graceful consumer shutdown |
-| 14 | SyncGroup | 0-5 | Full | Partition assignment |
-| 18 | ApiVersions | 0-3 | Full | Client capability negotiation |
-| 19 | CreateTopics | 0-7 | Full | Topic management |
-| 20 | DeleteTopics | 0-6 | Full | Topic management |
-| 32 | DescribeConfigs | 0-4 | Partial | Read-only config access |
-| 42 | DeleteGroups | 0-2 | Full | Consumer group cleanup |
+| API Key | Name | Kafka 3.7 Version | Supported Version | Status | Notes |
+|---------|------|-------------------|-------------------|--------|-------|
+| 0 | Produce | 9 | 0-9 | Full | Core functionality |
+| 1 | Fetch | 13 | 0-13 | Full | Core functionality |
+| 2 | ListOffsets | 7 | 0-7 | Full | Required for consumers |
+| 3 | Metadata | 12 | 0-12 | Full | Topic/broker discovery |
+| 8 | OffsetCommit | 8 | 0-8 | Full | Consumer group tracking |
+| 9 | OffsetFetch | 8 | 0-8 | Full | Consumer group tracking |
+|10 | FindCoordinator | 4 | 0-4 | Full | Group coordinator lookup |
+|11 | JoinGroup | 9 | 0-9 | Full | Consumer group membership |
+|12 | Heartbeat | 4 | 0-4 | Full | Consumer liveness |
+|13 | LeaveGroup | 5 | 0-5 | Full | Graceful consumer shutdown |
+|14 | SyncGroup | 5 | 0-5 | Full | Partition assignment |
+|18 | ApiVersions | 3 | 0-3 | Full | Client capability negotiation |
+|19 | CreateTopics | 7 | 0-7 | Full | Topic management |
+|20 | DeleteTopics | 6 | 0-6 | Full | Topic management |
+|32 | DescribeConfigs | 4 | 0-4 | Partial | Read-only config access |
+|42 | DeleteGroups | 2 | 0-2 | Full | Consumer group cleanup |
+
+Kafka also defines additional API keys (DescribeGroups, ListGroups, SASL/auth flows, transaction APIs, ACL management, log dir manipulation, CreatePartitions, delegation tokens, etc.). These are not implemented yet because v1 of Kafscale focuses on unauthenticated clusters with a single replica per partition stored in S3. We track those unactioned keys in the backlog and revisit once we implement authentication, ACLs, and multi-replica semantics.
 
 ### Explicitly Unsupported (v1.0)
 
@@ -764,6 +768,12 @@ func handleProduce(req *ProduceRequest) *ProduceResponse {
     return resp
 }
 ```
+
+### Topic Admin APIs
+
+- **CreateTopics**: Inputs run through basic validation (non-empty name, `numPartitions > 0`, replication factor ≤ broker count). The broker maps each request to `Store.CreateTopic` and returns a per-topic status (`NONE`, `TOPIC_ALREADY_EXISTS`, `INVALID_TOPIC_EXCEPTION`, etc.). Once etcd-based persistence lands, the call will also push configuration into the operator’s CRD.
+- **DeleteTopics**: Each name is passed to `Store.DeleteTopic`. Missing topics return `UNKNOWN_TOPIC_OR_PARTITION`; successful deletes remove offsets from the store snapshot to avoid dangling state while the operator drains S3 data in the background.
+- **ListOffsets**: For now Kafscale exposes the high-watermark derived from `Store.NextOffset` for each partition regardless of the requested timestamp. This keeps consumers compatible with the Kafka API while we defer multi-tier timestamp lookups to a future milestone.
 
 ### Fetch Request Handling
 
@@ -934,6 +944,14 @@ Consumer (Follower)         Broker                         etcd
    │  (my partition list)     │                              │
    │                          │                              │
 ```
+
+### Coordinator Implementation Notes
+
+- **State tracking**: Each broker tracks group phases (`Empty`, `PreparingRebalance`, `CompletingRebalance`, `Stable`, `Dead`). Any membership change (joins, explicit leaves, heartbeat expiry) bumps the generation, resets assignments, and forces all remaining members to rejoin.
+- **JoinGroup semantics**: New generations respond with `REBALANCE_IN_PROGRESS` until every member has rejoined that generation. Only once all members have checked in does the leader receive the full member list and the broker transitions to `CompletingRebalance`.
+- **SyncGroup gating**: Followers attempting to sync before the leader get `REBALANCE_IN_PROGRESS`. When the leader syncs, the broker computes deterministic range assignments, persists them for every member, and marks the group `Stable`.
+- **Heartbeat enforcement**: Heartbeats from an outdated generation return `ILLEGAL_GENERATION`; heartbeats received while the group is rebalancing return `REBALANCE_IN_PROGRESS`, prompting clients to rejoin immediately.
+- **LeaveGroup + cleanup**: The broker implements the Kafka `LeaveGroup` API so consumers can voluntarily exit. Long-running cleanup loops evict members whose session timeouts or rebalance deadlines are exceeded, ensuring orphaned members do not block progress.
 
 ### Partition Assignment Strategies
 
@@ -1108,6 +1126,20 @@ func (b *Broker) triggerReadAhead(topic string, partition int32, currentSegment 
     }()
 }
 ```
+
+### S3 Resiliency & Backpressure
+
+Kafscale deliberately avoids persistent local queues, so when S3 misbehaves we surface it through protocol-native backpressure + operator automation instead of inventing new operational knobs.
+
+- **Health state machine**: Every broker tracks S3 health as `Healthy → Degraded → Unavailable` based on sliding-window S3 `PutObject` latency/error metrics. Thresholds (`KAFSCALE_S3_LATENCY_WARN_MS`, `KAFSCALE_S3_ERROR_RATE_WARN`) are configurable via env vars.
+  - *Healthy*: flushes proceed normally.
+  - *Degraded*: retries become more conservative (longer jittered backoff), produce responses return `REQUEST_TIMED_OUT` once retry budget expires, and `produce_backpressure_state{state="degraded"}` metrics fire so clients/operators know to back off.
+  - *Unavailable*: broker immediately fails produce requests with `UNKNOWN_SERVER_ERROR` to avoid unbounded queues, disables segment flushes, and exposes a `S3Unavailable` flag over `BrokerControl.GetStatus`.
+- **Operator guardrails**: The Kubernetes operator watches broker health via control-plane RPCs (or Prometheus). When any broker is `Degraded`, rollouts are paused; if a quorum reports `Unavailable`, the operator halts HPA decisions, emits alerts, and optionally rechecks IAM credentials/endpoints before resuming.
+- **Metrics & tracing**: Brokers export `s3_put_latency_ms`, `s3_put_failures_total`, `produce_backpressure_state`, and `backpressure_duration_seconds` so dashboards clearly show when/why throughput drops.
+- **Testing expectations**: Milestone 6 must add unit tests that simulate injected S3 latency/errors, verifying brokers transition between states, emit the correct errors, and that operator watchers observe the control-plane flags. Regression tests should cover the Kafka client behavior (produce retries, backpressure metrics) so we catch regressions before shipping.
+- **Fetch path enforcement**: The same health monitor wraps the fetch path’s S3 range reads so degraded buckets slow read-ahead, emit `REQUEST_TIMED_OUT`, and update cache-hit metrics; unavailability raises `UNKNOWN_SERVER_ERROR` immediately so consumers understand the outage.
+- **Surfacing state**: The broker exposes `/metrics` with Prometheus-style gauges (`kafscale_s3_health_state`, `kafscale_s3_latency_ms_avg`, `kafscale_s3_error_rate`) and `BrokerControl.GetStatus` returns a sentinel partition named `__s3_health` whose `state` field reflects the current S3 state. Operators or HPAs can watch either interface to gate rollouts or trigger alerts. For ops teams that prefer push semantics, the broker also opens a `StreamMetrics` gRPC stream (see Observability) and continuously emits the latest health snapshot plus derived latency/error stats to the operator so automation can react without scraping delays.
 
 ---
 
@@ -1439,6 +1471,24 @@ spec:
       - kt
 ```
 
+The operator now watches both CRDs. `KafscaleCluster` resources drive the broker
+deployments and services, while `KafscaleTopic` objects describe user-facing topics.
+Every reconcile loop performs the following:
+
+- **Broker workloads**: a Deployment, Service, and HorizontalPodAutoscaler are generated
+  for each cluster using the images published under `ghcr.io/novatechflow/*`. Resources
+  inherit the `spec.brokers.resources` block so operators can tune CPU/memory
+  requests without editing manifests manually.
+- **Metadata snapshots**: the topic controller lists all `KafscaleTopic` resources that
+  target a cluster, derives the Kafka metadata structure (broker IDs, partitions,
+  ISRs), and publishes a snapshot to etcd at `/kafscale/metadata/snapshot`. Brokers
+  and admin APIs consume that snapshot via the existing `EtcdStore`, so topic CRUD
+  now flows through CRDs without custom scripts.
+- **Status + metrics**: both controllers update Kubernetes status conditions and push
+  Prometheus metrics (`kafscale_operator_clusters`, `kafscale_operator_snapshot_publish_total`)
+  via the controller-runtime registry. Dashboards and HPAs can consume those metrics
+  directly from the operator’s `/metrics` endpoint.
+
 ### Example Cluster Resource
 
 ```yaml
@@ -1678,6 +1728,11 @@ spec:
       selectPolicy: Max
 ```
 
+### Leader Election & Console Runtime
+
+- **Operator HA**: every operator pod reads the etcd endpoints configured in `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` (wired via the Helm chart) and participates in a lease-based election stored at `/kafscale/operator/leader`. Only the elected replica performs reconciliation, but two pods stay running so if the leader dies the follower merely calls `Campaign`, acquires the lease, and resumes work instantly.
+- **Console split**: the UI now runs as its own binary (`cmd/console`) and Deployment. The operator no longer serves HTTP; it can scale strictly for control-plane concerns, while the console exposes `/ui/` and `/ui/api/*` behind a dedicated Service/Ingress. This keeps RBAC minimal and lets platform teams scale the UI independently of the controller.
+
 ---
 
 ## Observability
@@ -1782,42 +1837,50 @@ panels:
       - expr: avg(kafscale_cache_hit_rate)
 ```
 
+### Prometheus / Kubernetes Integration
+
+All metrics, including the S3 health gauges and latency histograms, are exposed on the broker’s metrics port (default `9093`) using the Prometheus text exposition format so clusters can reuse native Kubernetes scraping patterns. The operator/Helm chart installs the broker `Service` plus optional `ServiceMonitor`/`PodMonitor` objects (when Prometheus Operator is present); vanilla Prometheus deployments can scrape `/metrics` via static configs. By sticking to core labels (namespace, pod, container) and bounding topic/partition label cardinality, the data flows cleanly into `kubectl top`, Lens, Rancher, or HPA/KEDA inputs without extra adapters. That keeps SRE workflows simple—no custom agents or push gateways—while the `StreamMetrics` RPC augments situations where automation prefers push semantics.
+
+The Kubernetes operator exposes its own gauges:
+
+- `kafscale_operator_clusters`: live count of `KafscaleCluster` objects managed by the controller-runtime manager.
+- `kafscale_operator_snapshot_publish_total{result="success|error"}`: metadata snapshot publish attempts so SRE teams can alert on failures.
+
+These metrics surface on the operator pod’s `/metrics` endpoint and inherit the same service monitor setup as the brokers.
+
+### Health Endpoints
+
+The broker’s metrics server now also serves `GET /healthz` and `GET /readyz`. `/healthz` always returns `200 OK` with the current S3 state so liveness probes and simple `curl` checks stay lightweight. `/readyz` returns `503 Service Unavailable` whenever the S3 health monitor reports the `Unavailable` state; otherwise it returns `200 OK` and includes the state string. The operator continues to expose controller-runtime’s standard health and readiness endpoints, so Kubernetes probes can be wired directly to both components.
+
 ### Structured Logging
 
+Broker logs are emitted via Go’s structured `slog` JSON handler and honor the `KAFSCALE_LOG_LEVEL` environment variable (`debug`, `info`, `warn`, `error`). Every log line includes the component (`broker` or `handler`) plus contextual fields (topic, partition, offsets, and error strings) so log processors such as Loki or Elastic can filter/aggregate without brittle parsing. Controller-runtime’s zap logger already provides structured JSON output for the operator.
+
+### Dashboard Templates
+
+A curated Grafana dashboard that visualizes the core Prometheus metrics ships in `docs/grafana/broker-dashboard.json` (see `docs/grafana/README.md` for import instructions). It includes S3 health tiles, produce throughput, and the S3 latency/error time series so teams can drop it into their existing Grafana instance without rebuilding panels from scratch.
+
+### Structured Logging Example
+
 ```go
-// Using zerolog for structured logging
-type BrokerLogger struct {
-    log zerolog.Logger
-}
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    AddSource: true,
+    Level:     slog.LevelInfo,
+})).With("component", "broker")
 
-func (l *BrokerLogger) ProduceReceived(topic string, partition int32, batchSize int) {
-    l.log.Info().
-        Str("event", "produce_received").
-        Str("topic", topic).
-        Int32("partition", partition).
-        Int("batch_size", batchSize).
-        Msg("Received produce request")
-}
+logger.Info("segment flushed",
+    "topic", topic,
+    "partition", partition,
+    "base_offset", result.BaseOffset,
+    "size_bytes", result.SizeBytes,
+    "flush_ms", time.Since(start).Milliseconds(),
+)
 
-func (l *BrokerLogger) SegmentFlushed(topic string, partition int32, baseOffset int64, size int, duration time.Duration) {
-    l.log.Info().
-        Str("event", "segment_flushed").
-        Str("topic", topic).
-        Int32("partition", partition).
-        Int64("base_offset", baseOffset).
-        Int("size_bytes", size).
-        Dur("duration", duration).
-        Msg("Segment flushed to S3")
-}
-
-func (l *BrokerLogger) ConsumerGroupRebalance(groupID string, generation int32, members int) {
-    l.log.Info().
-        Str("event", "consumer_rebalance").
-        Str("group_id", groupID).
-        Int32("generation", generation).
-        Int("member_count", members).
-        Msg("Consumer group rebalanced")
-}
+logger.Error("s3 upload failed",
+    "topic", topic,
+    "partition", partition,
+    "error", err,
+)
 ```
 
 ---
@@ -2056,7 +2119,14 @@ func TestProduceRequestParsing(t *testing.T) {
 }
 ```
 
+### Admin + Metadata Tests
+
+- `pkg/metadata/store_test.go` covers topic creation/deletion edge cases (invalid configs, duplicates, offset cleanup).
+- `cmd/broker/main_test.go` validates Kafka `CreateTopics`, `DeleteTopics`, and `ListOffsets` handlers end-to-end, ensuring protocol error codes and per-topic responses stay Kafka-compatible.
+
 ### Integration Tests
+
+Our `test/e2e/franz_test.go::TestFranzGoProduceConsume` test (gated behind `KAFSCALE_E2E=1`) builds and runs the real broker binary, provisions a MinIO container via Docker, and points the broker’s S3 client at that endpoint.  It then drives the broker with the Franz-go client (`github.com/twmb/franz-go`), producing and consuming records through a consumer group.  The test automatically skips when Docker/loopback sockets are unavailable so local development remains smooth, but in CI or a developer shell it exercises the full produce→flush-to-MinIO→consume pipeline.
 
 ```go
 // Test with localstack S3
@@ -2136,6 +2206,19 @@ func TestKafkaClientCompatibility(t *testing.T) {
     assert.Equal(t, 100, received)
 }
 ```
+
+In addition to the unit/integration suites, a lightweight end-to-end harness now lives under
+`test/e2e`. It boots an embedded etcd instance, publishes a cluster snapshot via the new
+operator snapshot helpers, and validates that the broker-facing `EtcdStore` immediately
+serves the published metadata. The harness doubles as a regression test for the metadata
+publish pipeline and will be extended to cover smoke-produce/fetch flows once the rest of
+the stack is wired in CI.
+
+### Resiliency Regression Suite
+
+- **Produce backpressure**: `cmd/broker/main_test.go` drives the broker into `Degraded` and `Unavailable` states via a failing S3 client and asserts that Produce responses surface `REQUEST_TIMED_OUT` and `UNKNOWN_SERVER_ERROR` respectively.
+- **Fetch backpressure**: The same suite forces the read path through the S3 health monitor and verifies that degraded reads return `REQUEST_TIMED_OUT`, unavailable buckets throw `UNKNOWN_SERVER_ERROR`, and healthy segments still respect `OFFSET_OUT_OF_RANGE`.
+- **Control/metrics parity**: Tests scrape `/metrics` and call `BrokerControl.GetStatus` to confirm both pathways expose the sentinel `__s3_health` partition and Prometheus gauges flip whenever S3 latency/error thresholds are exceeded.
 
 ---
 
@@ -2218,7 +2301,7 @@ kafscale/
 .PHONY: build test lint docker deploy
 
 VERSION ?= $(shell git describe --tags --always --dirty)
-REGISTRY ?= ghcr.io/yourorg
+REGISTRY ?= ghcr.io/novatechflow
 
 build:
 	CGO_ENABLED=0 go build -ldflags="-X main.version=$(VERSION)" -o bin/broker ./cmd/broker
@@ -2259,26 +2342,133 @@ deploy: deploy-crds
 		--set operator.image.tag=$(VERSION)
 ```
 
+### Helm Chart
+
+The chart under `deploy/helm/kafscale` now ships two deployments:
+
+1. **Operator** – runs two replicas by default, connects to the etcd endpoints provided in `values.yaml`, and performs leader election by writing a lease key (default `/kafscale/operator/leader`). Only the elected replica reconciles resources, but Kubernetes still maintains two pods for automatic failover. The manifest wires in the `POD_NAME`/`POD_NAMESPACE` fields plus `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` so the binary can bootstrap leader election.
+2. **Console** – a stateless web front-end that serves the UI from `/ui/`. It owns its own `Service`/optional `Ingress`, so SREs can scale it independently of the operator.
+
+The chart still creates the shared service account/RBAC objects (when enabled) and exposes tunables for resources, node selectors, tolerations, and ingress annotations. One `helm upgrade --install` installs the whole ops surface without extra manifests.
+
+### Production Operations
+
+- **Helm distribution**: The chart includes the `KafscaleCluster`/`KafscaleTopic` CRDs so `helm upgrade --install` completes the control plane install in a single command.  Values such as `.operator.etcdEndpoints`, `.operator.leaderKey`, `.console.ingress`, and `.imagePullSecrets` cover multi-cluster + private registry setups.  By default two operator replicas participate in etcd-based leader election to keep rollouts HA.
+- **Ops guide**: `docs/operations.md` documents prerequisites, install/upgrade/rollback commands, how to create the S3 credentials secret, and how to expose the console through ingress or NodePorts.  It lives alongside the developer docs so SREs have a single, versioned reference.
+- **Security posture**: The chart wires scoped ServiceAccounts/RBAC, never copies S3 credentials into etcd, and exposes TLS env vars (`KAFSCALE_BROKER_TLS_*`, `KAFSCALE_CONSOLE_TLS_*`) so teams can mount cert secrets and enforce HTTPS end-to-end.  Prometheus scrapes plus the console UI surface S3 pressure and broker health to guide alerting.
+
+### GitHub Actions (Docker Publish)
+
+`.github/workflows/docker.yml` builds and pushes all three images (`ghcr.io/novatechflow/kafscale-broker`, `ghcr.io/novatechflow/kafscale-operator`, and `ghcr.io/novatechflow/kafscale-console`). The workflow:
+
+1. Triggers on `main`, semver-like tags, or manual dispatch.
+2. Configures multi-arch Buildx + QEMU.
+3. Logs in to GHCR using the repository token.
+4. Runs a matrix build (`broker`, `operator`, `console`) with `docker/build-push-action`, targeting `linux/amd64` and `linux/arm64`, tagging each artifact with `latest` (for `main`), the git tag, and the commit SHA.
+
+This ensures clusters (and the Helm chart defaults) always pull immutable, signed artifacts directly from CI.
+
 ### Broker Dockerfile
 
 ```dockerfile
-FROM golang:1.22-alpine AS builder
+# syntax=docker/dockerfile:1.7
 
-WORKDIR /app
+ARG GO_VERSION=1.25.2
+FROM golang:${GO_VERSION}-alpine AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o broker ./cmd/broker
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /out/broker ./cmd/broker
 
 FROM alpine:3.19
-RUN apk --no-cache add ca-certificates
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 kafscale
+USER 10001
 WORKDIR /app
-COPY --from=builder /app/broker .
 
-EXPOSE 9092 9093
-ENTRYPOINT ["./broker"]
+COPY --from=builder /out/broker /usr/local/bin/kafscale-broker
+
+EXPOSE 19092 19093 19094
+ENTRYPOINT ["/usr/local/bin/kafscale-broker"]
 ```
+
+### Operator Dockerfile
+
+```dockerfile
+# syntax=docker/dockerfile:1.7
+
+ARG GO_VERSION=1.25.2
+FROM golang:${GO_VERSION}-alpine AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /out/operator ./cmd/operator
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 kafscale
+USER 10001
+WORKDIR /app
+
+COPY --from=builder /out/operator /usr/local/bin/kafscale-operator
+
+ENTRYPOINT ["/usr/local/bin/kafscale-operator"]
+```
+
+### Console Dockerfile
+
+```dockerfile
+# syntax=docker/dockerfile:1.7
+
+ARG GO_VERSION=1.25.2
+FROM golang:${GO_VERSION}-alpine AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w" -o /out/console ./cmd/console
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 kafscale
+USER 10001
+WORKDIR /app
+
+COPY --from=builder /out/console /usr/local/bin/kafscale-console
+
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/kafscale-console"]
+```
+
+### End-to-End Harness
+
+The `test/e2e` package contains a kind-based smoke test (build tag `e2e`). It bootstraps a sandbox cluster, installs a single-node etcd via Bitnami, deploys the local Helm chart, waits for the operator/console rollouts, and verifies the console `/ui/api/status` endpoint over a port-forward. Run it manually with:
+
+```bash
+KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -v
+```
+
+`make test-e2e` wraps the same command. The test requires Docker, kind, kubectl, and helm on the host; setting `KAFSCALE_KIND_CLUSTER` reuses an existing cluster instead of creating a temporary one.
 
 ---
 
@@ -2318,47 +2508,47 @@ ENTRYPOINT ["./broker"]
 
 ### Milestone 5: Consumer Groups
 
-- [ ] FindCoordinator
-- [ ] JoinGroup / SyncGroup / Heartbeat
-- [ ] Partition assignment (range strategy)
-- [ ] OffsetCommit / OffsetFetch
-- [ ] Consumer group state machine
+- [x] FindCoordinator
+- [x] JoinGroup / SyncGroup / Heartbeat
+- [x] Partition assignment (range strategy)
+- [x] OffsetCommit / OffsetFetch
+- [x] Consumer group state machine
 
 ### Milestone 6: Admin Operations
 
-- [ ] CreateTopics
-- [ ] DeleteTopics
-- [ ] ListOffsets
-- [ ] etcd topic/partition management
+- [x] CreateTopics
+- [x] DeleteTopics
+- [x] ListOffsets
+- [x] etcd topic/partition management
 
 ### Milestone 7: Kubernetes Operator
 
-- [ ] CRD definitions
-- [ ] Cluster reconciler
-- [ ] Topic reconciler
-- [ ] Broker deployment management
-- [ ] HPA configuration
+- [x] CRD definitions
+- [x] Cluster reconciler
+- [x] Topic reconciler
+- [x] Broker deployment management
+- [x] HPA configuration
 
 ### Milestone 8: Observability
 
-- [ ] Prometheus metrics
-- [ ] Structured logging
-- [ ] Health endpoints
-- [ ] Grafana dashboard templates
+- [x] Prometheus metrics
+- [x] Structured logging
+- [x] Health endpoints
+- [x] Grafana dashboard templates
 
 ### Milestone 9: Testing & Hardening
 
 - [ ] Integration test suite
-- [ ] Kafka client compatibility tests
+- [x] Kafka client compatibility tests
 - [ ] Chaos testing (pod failures, S3 latency)
 - [ ] Performance benchmarks
 
 ### Milestone 10: Production Readiness
 
-- [ ] Helm chart
-- [ ] Documentation
-- [ ] CI/CD pipeline
-- [ ] Security review (TLS, auth)
+- [x] Helm chart
+- [x] Documentation
+- [x] CI/CD pipeline
+- [x] Security review (TLS, auth)
 
 ---
 
@@ -2464,4 +2654,32 @@ FetchPartition =>
 
 ---
 
-*This document provides a complete technical specification for implementing Kafscale. Start with Milestone 1 (protocol parsing) and iterate from there.*
+## Appendix C: Downstream Connectors
+
+Although Kafscale focuses on durable message transport only, we want downstream engines to feel first-class:
+
+- **Apache Flink**: Provide an example `KafkaSource` configuration (standalone job + Helm add-on) that sets the bootstrap servers to the Kafscale broker service, enables TLS if configured, and points checkpointing to the same S3 bucket. Include an optional `KafkaSink` example so users can loop data back through Kafscale topics.
+- **Apache Wayang**: Ship a reference execution plan + config that uses Wayang’s Kafka channel to ingest from Kafscale. Document bootstrap server settings, serialization expectations, and how to wire output sinks (e.g., S3/Parquet or JDBC). Since Wayang is pluggable, ensure the connector package is versioned alongside Kafscale releases so upgrades stay in sync.
+
+Both connectors remain thin wrappers around standard Kafka clients—no custom protocol—so they automatically pick up improvements (consumer groups, fetch path, etc.) without bespoke maintenance.
+
+## Appendix D: Operations Console (Preview)
+
+To keep day-2 ops simple, we’ll ship a lightweight, cluster-local UI alongside the operator:
+
+- **Objectives**: mirror Confluent-like dashboards without heavy auth/tenancy. It should show real-time health, offer topic CRUD + smoke tests, and surface S3 backpressure state. Historical monitoring/logins are out of scope for OSS.
+- **Data feeds**:
+  - `BrokerControl.GetStatus` and the upcoming streaming RPC for per-broker readiness, partition assignments, and S3 state machine.
+  - `/metrics` (polled every few seconds) for throughput/latency gauges (`kafscale_produce_requests_total`, `kafscale_s3_health_state`, `kafscale_consumer_lag`, etc.).
+  - Kubernetes API via the operator for Deployment/HPA/pod status.
+- **UI sections**:
+  1. **Cluster Overview**: cards for broker desired/ready, S3 state, etcd connectivity, pending rollouts, plus alert banners when S3 degrades.
+  2. **Topics**: searchable table with partitions, high-watermarks, retention, and buttons to create/delete topics (calling Kafka admin APIs). Include a minimal produce/consume widget for smoke tests.
+  3. **Metrics strip**: small sparkline charts fed by an SSE/WebSocket bridge that streams `StreamMetrics` samples (S3 latency, produce/fetch throughput).
+  4. **Broker detail drawer**: when selecting a broker, show assigned partitions, cache utilization, last heartbeat, and current backpressure state.
+- **Implementation**:
+  - Frontend lives under `ui/public` and is embedded into the dedicated `cmd/console` binary. That binary runs behind its own Deployment/Service and serves `/ui/` plus `/ui/api/*`.
+  - The console proxies back to the operator (gRPC/REST) for health snapshots and metrics; only the console needs to be exposed through an Ingress.
+  - Helm ships optional Service/Ingress manifests and config toggles for the console, while the operator remains private and HA behind its etcd-based leader election. Tests use Playwright (smoke) plus Go unit tests for the proxy layer.
+
+This appendix documents the UI charter; development will track alongside the Milestone 7 operator work so ops teams have a first-class console on day one.

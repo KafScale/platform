@@ -3,7 +3,7 @@ package metadata
 import (
 	"testing"
 
-	metadatapb "github.com/alo/kafscale/pkg/gen/metadata"
+	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
 )
 
 func TestTopicConfigCodec(t *testing.T) {

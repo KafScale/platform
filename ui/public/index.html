@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kafscale Console</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Kafscale Operations Console</h1>
+    <p id="cluster-summary">Loading cluster status…</p>
+  </header>
+  <main>
+    <section>
+      <h2>Cluster Health</h2>
+      <div id="health-cards" class="cards"></div>
+      <div id="alerts"></div>
+      <div>
+        <h3>Broker Fleet</h3>
+        <div id="broker-grid" class="grid"></div>
+      </div>
+    </section>
+    <section>
+      <h2>Topics</h2>
+      <div class="actions">
+        <input type="text" id="topic-name" placeholder="orders" />
+        <input type="number" id="topic-partitions" min="1" value="1" />
+        <button id="create-topic">Create Topic</button>
+      </div>
+      <table id="topic-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Partitions</th>
+            <th>State</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Live Metrics</h2>
+      <pre id="metric-stream">Connecting…</pre>
+    </section>
+  </main>
+  <footer>
+    <small>Prototype UI &middot; data is real-time only</small>
+  </footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

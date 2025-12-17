@@ -16,8 +16,15 @@
 *.key
 coverage*.out
 
+# Local Go cache (use GOCACHE=.gocache for hermetic builds/tests)
+.gocache/
+
 # Go modules/vendor
 /vendor/
+/third_party/**
+
+# e2e / smoke artifacts
+/test/pkg/
 
 # IDE/editor state
 .idea/

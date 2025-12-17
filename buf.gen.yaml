@@ -3,7 +3,7 @@ version: v1
 managed:
   enabled: true
   go_package_prefix:
-    default: github.com/alo/kafscale/pkg/gen
+    default: github.com/novatechflow/kafscale/pkg/gen
 
 plugins:
   - plugin: buf.build/protocolbuffers/go

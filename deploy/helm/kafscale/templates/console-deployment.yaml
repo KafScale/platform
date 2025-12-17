@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kafscale.componentName" (dict "root" . "component" "console") }}
+  labels:
+{{ include "kafscale.labels" . | indent 4 }}
+    app.kubernetes.io/component: console
+spec:
+  replicas: {{ .Values.console.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "console") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "console") | indent 8 }}
+{{- with .Values.console.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+{{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+{{- end }}
+{{- end }}
+      containers:
+        - name: console
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          env:
+            - name: KAFSCALE_CONSOLE_HTTP_ADDR
+              value: ":8080"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+{{- if .Values.console.resources }}
+{{ toYaml .Values.console.resources | indent 12 }}
+{{- else }}
+            {}
+{{- end }}
+{{- with .Values.console.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.console.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.console.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
