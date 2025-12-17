@@ -198,6 +198,9 @@ func (s *InMemoryStore) NextOffset(ctx context.Context, topic string, partition 
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if !topicHasPartition(s.state.Topics, topic, partition) {
+		return 0, ErrUnknownTopic
+	}
 	return s.offsets[partitionKey(topic, partition)], nil
 }
 
@@ -261,6 +264,21 @@ func (s *InMemoryStore) CreateTopic(ctx context.Context, spec TopicSpec) (*proto
 	}
 	s.state.Topics = append(s.state.Topics, newTopic)
 	return &newTopic, nil
+}
+
+func topicHasPartition(topics []protocol.MetadataTopic, name string, partition int32) bool {
+	for _, topic := range topics {
+		if topic.Name != name {
+			continue
+		}
+		for _, part := range topic.Partitions {
+			if part.PartitionIndex == partition {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func (s *InMemoryStore) defaultLeaderID() int32 {

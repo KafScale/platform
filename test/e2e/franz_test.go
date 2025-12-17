@@ -47,12 +47,14 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		"KAFSCALE_S3_REGION=us-east-1",
 		fmt.Sprintf("KAFSCALE_S3_ENDPOINT=%s", minio.Endpoint),
 		"KAFSCALE_S3_PATH_STYLE=true",
+		"KAFSCALE_AUTO_CREATE_TOPICS=true",
+		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
 		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
 		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
 	)
 	var brokerLogs bytes.Buffer
-	logWriter := io.MultiWriter(&brokerLogs, os.Stdout)
+	logWriter := io.MultiWriter(&brokerLogs, os.Stdout, mustLogFile(t, "broker.log"))
 	brokerCmd.Stdout = logWriter
 	brokerCmd.Stderr = logWriter
 	if err := brokerCmd.Start(); err != nil {
@@ -80,7 +82,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	producer, err := kgo.NewClient(
 		kgo.SeedBrokers(brokerAddr),
 		kgo.AllowAutoTopicCreation(),
-		kgo.RequiredAcks(kgo.LeaderAck()),
+		kgo.DisableIdempotentWrite(),
 	)
 	if err != nil {
 		t.Fatalf("create producer: %v\nlogs:\n%s", err, brokerLogs.String())
@@ -133,6 +135,22 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("determine repo root: %v", err)
 	}
 	return root
+}
+
+func mustLogFile(t *testing.T, name string) io.Writer {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), "test", "e2e", "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create log dir: %v", err)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%d.log", strings.TrimSuffix(name, ".log"), time.Now().UnixNano()))
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create log file: %v", err)
+	}
+	t.Logf("streaming broker logs to %s", path)
+	t.Cleanup(func() { _ = f.Close() })
+	return f
 }
 
 type minioInstance struct {

@@ -78,9 +78,9 @@ func TestOperatorAndConsoleDeploy(t *testing.T) {
 }
 
 func ensureBinary(t *testing.T, name string) {
-    if _, err := exec.LookPath(name); err != nil {
-        t.Skipf("%s not found in PATH", name)
-    }
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("%s not found in PATH", name)
+	}
 }
 
 func ensureKindCluster(t *testing.T, ctx context.Context) (string, func(*testing.T, context.Context)) {

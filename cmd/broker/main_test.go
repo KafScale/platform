@@ -132,6 +132,49 @@ func TestHandleFetch(t *testing.T) {
 	}
 }
 
+func TestAutoCreateTopicOnProduce(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		ControllerID: 1,
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "localhost", Port: 19092},
+		},
+	})
+	handler := newTestHandler(store)
+
+	req := &protocol.ProduceRequest{
+		Acks:      -1,
+		TimeoutMs: 1000,
+		Topics: []protocol.ProduceTopic{
+			{
+				Name: "auto-created",
+				Partitions: []protocol.ProducePartition{
+					{
+						Partition: 0,
+						Records:   testBatchBytes(0, 0, 1),
+					},
+				},
+			},
+		},
+	}
+	if _, err := handler.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 99}, req); err != nil {
+		t.Fatalf("handleProduce auto-create: %v", err)
+	}
+	meta, err := store.Metadata(context.Background(), []string{"auto-created"})
+	if err != nil {
+		t.Fatalf("metadata: %v", err)
+	}
+	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != protocol.NONE {
+		t.Fatalf("expected topic metadata, got %+v", meta.Topics)
+	}
+	offset, err := store.NextOffset(context.Background(), "auto-created", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 1 {
+		t.Fatalf("expected offset advanced to 1 got %d", offset)
+	}
+}
+
 func TestHandleCreateDeleteTopics(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)

@@ -37,9 +37,10 @@ The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit genera
 ```bash
 make build        # compile all Go binaries
 make test         # run go test ./...
-make docker-build # build broker/operator/console images (run this whenever broker/operator/console code changes)
+make docker-build # build broker/operator/console images (run locally whenever their code changes; CI builds on release tags)
 make test-e2e     # run the minio/franz + operator e2e suites (images from docker-build are reused)
 make docker-clean # delete dev images and prune Docker caches when you need a fresh slate
+make stop-containers # stop leftover kafscale-minio/kind containers from previous e2e runs
 
 ## Kafka Compatibility Tracking
 

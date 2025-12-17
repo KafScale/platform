@@ -72,6 +72,13 @@ func (s *EtcdStore) Metadata(ctx context.Context, topics []string) (*ClusterMeta
 func (s *EtcdStore) NextOffset(ctx context.Context, topic string, partition int32) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	exists, err := s.partitionExists(ctx, topic, partition)
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, ErrUnknownTopic
+	}
 	key := offsetKey(topic, partition)
 	resp, err := s.client.Get(ctx, key)
 	if err != nil {
@@ -154,6 +161,26 @@ func (s *EtcdStore) CreateTopic(ctx context.Context, spec TopicSpec) (*protocol.
 		return nil, err
 	}
 	return topic, nil
+}
+
+func (s *EtcdStore) partitionExists(ctx context.Context, topic string, partition int32) (bool, error) {
+	meta, err := s.metadata.Metadata(ctx, []string{topic})
+	if err != nil {
+		return false, err
+	}
+	if len(meta.Topics) == 0 {
+		return false, nil
+	}
+	t := meta.Topics[0]
+	if t.ErrorCode != 0 {
+		return false, nil
+	}
+	for _, part := range t.Partitions {
+		if part.PartitionIndex == partition {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // DeleteTopic updates the local snapshot so admin APIs behave consistently.

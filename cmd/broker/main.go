@@ -34,17 +34,19 @@ const (
 )
 
 type handler struct {
-	apiVersions []protocol.ApiVersion
-	store       metadata.Store
-	s3          storage.S3Client
-	cache       *cache.SegmentCache
-	logs        map[string]map[int32]*storage.PartitionLog
-	logMu       sync.Mutex
-	logConfig   storage.PartitionLogConfig
-	coordinator *broker.GroupCoordinator
-	s3Health    *broker.S3HealthMonitor
-	brokerInfo  protocol.MetadataBroker
-	logger      *slog.Logger
+	apiVersions          []protocol.ApiVersion
+	store                metadata.Store
+	s3                   storage.S3Client
+	cache                *cache.SegmentCache
+	logs                 map[string]map[int32]*storage.PartitionLog
+	logMu                sync.Mutex
+	logConfig            storage.PartitionLogConfig
+	coordinator          *broker.GroupCoordinator
+	s3Health             *broker.S3HealthMonitor
+	brokerInfo           protocol.MetadataBroker
+	logger               *slog.Logger
+	autoCreateTopics     bool
+	autoCreatePartitions int32
 }
 
 func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
@@ -373,35 +375,66 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 	})
 }
 
+func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32) error {
+	desired := int32(h.autoCreatePartitions)
+	if desired < partition+1 {
+		desired = partition + 1
+	}
+	spec := metadata.TopicSpec{
+		Name:              topic,
+		NumPartitions:     desired,
+		ReplicationFactor: 1,
+	}
+	_, err := h.store.CreateTopic(ctx, spec)
+	if err != nil && !errors.Is(err, metadata.ErrTopicExists) {
+		return err
+	}
+	h.logger.Info("auto-created topic", "topic", topic, "partitions", desired)
+	return nil
+}
+
 func (h *handler) getPartitionLog(ctx context.Context, topic string, partition int32) (*storage.PartitionLog, error) {
-	h.logMu.Lock()
-	partitions := h.logs[topic]
-	if partitions == nil {
-		partitions = make(map[int32]*storage.PartitionLog)
-		h.logs[topic] = partitions
-	}
-	if log, ok := partitions[partition]; ok {
-		h.logMu.Unlock()
-		return log, nil
-	}
-	nextOffset, err := h.store.NextOffset(ctx, topic, partition)
-	if err != nil {
-		h.logMu.Unlock()
-		return nil, err
-	}
-	plog := storage.NewPartitionLog(topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
-		if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
-			h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
+	for {
+		h.logMu.Lock()
+		partitions := h.logs[topic]
+		if partitions == nil {
+			partitions = make(map[int32]*storage.PartitionLog)
+			h.logs[topic] = partitions
 		}
-	}, h.recordS3Op)
-	partitions[partition] = plog
-	h.logMu.Unlock()
-	return plog, nil
+		if log, ok := partitions[partition]; ok {
+			h.logMu.Unlock()
+			return log, nil
+		}
+		nextOffset, err := h.store.NextOffset(ctx, topic, partition)
+		if err != nil {
+			h.logMu.Unlock()
+			if errors.Is(err, metadata.ErrUnknownTopic) && h.autoCreateTopics {
+				if err := h.ensureTopic(ctx, topic, partition); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return nil, err
+		}
+		plog := storage.NewPartitionLog(topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
+			if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
+				h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
+			}
+		}, h.recordS3Op)
+		partitions[partition] = plog
+		h.logMu.Unlock()
+		return plog, nil
+	}
 }
 
 func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo protocol.MetadataBroker, logger *slog.Logger) *handler {
 	readAhead := parseEnvInt("KAFSCALE_READAHEAD_SEGMENTS", 2)
 	cacheSize := parseEnvInt("KAFSCALE_CACHE_BYTES", 32<<20)
+	autoCreate := parseEnvBool("KAFSCALE_AUTO_CREATE_TOPICS", true)
+	autoPartitions := int32(parseEnvInt("KAFSCALE_AUTO_CREATE_PARTITIONS", 1))
+	if autoPartitions < 1 {
+		autoPartitions = 1
+	}
 	health := broker.NewS3HealthMonitor(broker.S3HealthConfig{
 		Window:      time.Duration(parseEnvInt("KAFSCALE_S3_HEALTH_WINDOW_SEC", 60)) * time.Second,
 		LatencyWarn: time.Duration(parseEnvInt("KAFSCALE_S3_LATENCY_WARN_MS", 500)) * time.Millisecond,
@@ -438,10 +471,12 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			ReadAheadSegments: readAhead,
 			CacheEnabled:      true,
 		},
-		coordinator: broker.NewGroupCoordinator(store, brokerInfo, nil),
-		s3Health:    health,
-		brokerInfo:  brokerInfo,
-		logger:      logger.With("component", "handler"),
+		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
+		s3Health:             health,
+		brokerInfo:           brokerInfo,
+		logger:               logger.With("component", "handler"),
+		autoCreateTopics:     autoCreate,
+		autoCreatePartitions: autoPartitions,
 	}
 }
 
@@ -679,6 +714,18 @@ func parseEnvFloat(name string, fallback float64) float64 {
 	if val := strings.TrimSpace(os.Getenv(name)); val != "" {
 		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
 			return parsed
+		}
+	}
+	return fallback
+}
+
+func parseEnvBool(name string, fallback bool) bool {
+	if val := strings.TrimSpace(os.Getenv(name)); val != "" {
+		switch strings.ToLower(val) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
 		}
 	}
 	return fallback

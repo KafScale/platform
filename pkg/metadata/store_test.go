@@ -103,8 +103,17 @@ func TestCloneMetadataIsolation(t *testing.T) {
 }
 
 func TestInMemoryStoreOffsets(t *testing.T) {
-	store := NewInMemoryStore(ClusterMetadata{})
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
+	})
 	ctx := context.Background()
+
+	if _, err := store.NextOffset(ctx, "orders", 0); !errors.Is(err, ErrUnknownTopic) {
+		t.Fatalf("expected unknown topic, got %v", err)
+	}
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
 
 	offset, err := store.NextOffset(ctx, "orders", 0)
 	if err != nil {

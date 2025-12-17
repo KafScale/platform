@@ -2,8 +2,6 @@ name: Docker Images
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -41,9 +39,7 @@ jobs:
         with:
           images: ghcr.io/novatechflow/kafscale-${{ matrix.component }}
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=ref,event=tag
-            type=sha
 
       - name: Build and push
         uses: docker/build-push-action@v5

@@ -31,6 +31,10 @@ docker-clean: ## Remove local dev images and prune dangling Docker data
 	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE)
 	docker system prune --force --volumes
 
+stop-containers: ## Stop lingering e2e containers (MinIO + kind control planes)
+	-ids=$$(docker ps -q --filter "name=kafscale-minio"); if [ -n "$$ids" ]; then docker stop $$ids; fi
+	-ids=$$(docker ps -q --filter "name=kafscale-e2e"); if [ -n "$$ids" ]; then docker stop $$ids; fi
+
 test-e2e: ## Run end-to-end tests (requires Docker; operator suite also needs kind/kubectl/helm). Run `make docker-build` first if code changed.
 	KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -v
 

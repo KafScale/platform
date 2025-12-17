@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +16,7 @@ func TestConsoleStatusEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newConsoleMux: %v", err)
 	}
-	srv := httptest.NewServer(mux)
+	srv := newIPv4Server(t, mux)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/ui/api/status")
@@ -37,7 +38,7 @@ func TestMetricsStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newConsoleMux: %v", err)
 	}
-	srv := httptest.NewServer(mux)
+	srv := newIPv4Server(t, mux)
 	defer srv.Close()
 
 	client := srv.Client()
@@ -58,4 +59,19 @@ func TestMetricsStream(t *testing.T) {
 	if !strings.Contains(string(buf), "data:") {
 		t.Fatalf("expected sse data, got %s", buf)
 	}
+}
+
+func newIPv4Server(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("skipping console HTTP test: %v", err)
+		}
+		t.Fatalf("listen: %v", err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = ln
+	server.Start()
+	return server
 }

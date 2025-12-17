@@ -508,6 +508,7 @@ Producer Request
 │    - Append to partition's in-memory write buffer                │
 │    - Assign offsets (atomic increment from etcd high watermark)  │
 │    - Start ack timer if acks=1                                   │
+│    - Auto-create topic/partition if metadata is missing          │
 └───────────────────────────────┬──────────────────────────────────┘
                                 │
                                 ▼
@@ -546,6 +547,8 @@ Producer Request
 │    - Ack waiting producers (acks=all)                            │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+If a client produces to a topic that does not yet exist, the broker mirrors Kafka's auto-create semantics by provisioning the topic on the fly whenever `topics.autoCreate` (or `KAFSCALE_AUTO_CREATE_TOPICS`) is enabled. The number of partitions created defaults to `topics.autoCreatePartitions` (env: `KAFSCALE_AUTO_CREATE_PARTITIONS`), but the broker will always create at least as many partitions as requested by the incoming produce request.
 
 ### Read Path Detail
 
@@ -1936,6 +1939,9 @@ cache:
   segmentCacheSize: "2Gi"
   indexCacheSize: "256Mi"
   readAheadSegments: 3
+topics:
+  autoCreate: true                # Create missing topics on first produce
+  autoCreatePartitions: 1         # Default partition count when auto-creating
 
 consumer:
   sessionTimeoutMs: 30000
@@ -1970,6 +1976,8 @@ KAFSCALE_FLUSH_INTERVAL_MS
 KAFSCALE_CACHE_SIZE
 KAFSCALE_CACHE_BYTES
 KAFSCALE_READAHEAD_SEGMENTS
+KAFSCALE_AUTO_CREATE_TOPICS       # "true"/"false"; defaults to true
+KAFSCALE_AUTO_CREATE_PARTITIONS   # integer >=1; defaults to 1
 KAFSCALE_LOG_LEVEL
 ```
 

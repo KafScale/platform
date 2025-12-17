@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,9 @@ func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
 
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("skipping etcd store tests: %v", err)
+		}
 		t.Fatalf("start embedded etcd: %v", err)
 	}
 	select {

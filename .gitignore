@@ -25,6 +25,7 @@ coverage*.out
 
 # e2e / smoke artifacts
 /test/pkg/
+/test/e2e/logs/
 
 # IDE/editor state
 .idea/
