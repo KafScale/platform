@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -35,6 +36,9 @@ func NewS3Client(ctx context.Context, cfg S3Config) (S3Client, error) {
 
 	loadOpts := []func(*config.LoadOptions) error{
 		config.WithRegion(cfg.Region),
+	}
+	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
+		loadOpts = append(loadOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
 	}
 	if cfg.Endpoint != "" {
 		customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {

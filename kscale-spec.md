@@ -2299,9 +2299,14 @@ logging:
 KAFSCALE_BROKER_ID
 KAFSCALE_BROKER_HOST
 KAFSCALE_BROKER_PORT
-KAFSCALE_S3_BUCKET
-KAFSCALE_S3_REGION
-KAFSCALE_S3_ENDPOINT
+KAFSCALE_S3_BUCKET         # default `kafscale` when targeting the local MinIO helper
+KAFSCALE_S3_REGION         # default `us-east-1`
+KAFSCALE_S3_ENDPOINT       # default `http://127.0.0.1:9000`
+KAFSCALE_S3_PATH_STYLE     # defaults to `true` for MinIO, set to `false` for real AWS
+KAFSCALE_USE_MEMORY_S3     # set to `1` to force the in-memory S3 client instead of hitting MinIO
+KAFSCALE_S3_ACCESS_KEY     # default `minioadmin` when using the bundled MinIO helper
+KAFSCALE_S3_SECRET_KEY     # default `minioadmin` when using the bundled MinIO helper
+KAFSCALE_S3_SESSION_TOKEN  # optional; pass session credentials when needed
 KAFSCALE_ETCD_ENDPOINTS          # Comma-separated
 KAFSCALE_SEGMENT_BYTES
 KAFSCALE_FLUSH_INTERVAL_MS

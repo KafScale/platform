@@ -44,7 +44,7 @@ func TestEncodeMetadataResponse(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("EncodeMetadataResponse: %v", err)
 	}

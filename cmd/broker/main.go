@@ -27,11 +27,16 @@ import (
 )
 
 const (
-	defaultKafkaAddr   = ":19092"
-	defaultKafkaPort   = 19092
-	defaultMetricsAddr = ":19093"
-	defaultControlAddr = ":19094"
-	brokerVersion      = "dev"
+	defaultKafkaAddr      = ":19092"
+	defaultKafkaPort      = 19092
+	defaultMetricsAddr    = ":19093"
+	defaultControlAddr    = ":19094"
+	defaultMinioBucket    = "kafscale"
+	defaultMinioRegion    = "us-east-1"
+	defaultMinioEndpoint  = "http://127.0.0.1:9000"
+	defaultMinioAccessKey = "minioadmin"
+	defaultMinioSecretKey = "minioadmin"
+	brokerVersion         = "dev"
 )
 
 type handler struct {
@@ -52,6 +57,9 @@ type handler struct {
 }
 
 func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
+	if h.traceKafka {
+		h.logger.Debug("received request", "api_key", header.APIKey, "api_version", header.APIVersion, "correlation", header.CorrelationID, "client_id", header.ClientID)
+	}
 	switch req.(type) {
 	case *protocol.ApiVersionsRequest:
 		errorCode := protocol.NONE
@@ -69,6 +77,9 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return protocol.EncodeApiVersionsResponse(resp)
 	case *protocol.MetadataRequest:
 		metaReq := req.(*protocol.MetadataRequest)
+		if h.traceKafka {
+			h.logger.Debug("metadata request", "topics", metaReq.Topics)
+		}
 		meta, err := h.store.Metadata(ctx, metaReq.Topics)
 		if err != nil {
 			return nil, fmt.Errorf("load metadata: %w", err)
@@ -85,9 +96,13 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			for _, topic := range meta.Topics {
 				topicSummaries = append(topicSummaries, fmt.Sprintf("%s(error=%d partitions=%d)", topic.Name, topic.ErrorCode, len(topic.Partitions)))
 			}
-			h.logger.Debug("metadata response", "topics", topicSummaries, "brokers", len(meta.Brokers))
+			brokerAddrs := make([]string, 0, len(meta.Brokers))
+			for _, broker := range meta.Brokers {
+				brokerAddrs = append(brokerAddrs, fmt.Sprintf("%s:%d", broker.Host, broker.Port))
+			}
+			h.logger.Debug("metadata response", "topics", topicSummaries, "brokers", brokerAddrs)
 		}
-		return protocol.EncodeMetadataResponse(resp)
+		return protocol.EncodeMetadataResponse(resp, header.APIVersion)
 	case *protocol.ProduceRequest:
 		return h.handleProduce(ctx, header, req.(*protocol.ProduceRequest))
 	case *protocol.FetchRequest:
@@ -577,23 +592,42 @@ func main() {
 }
 
 func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
-	bucket := os.Getenv("KAFSCALE_S3_BUCKET")
-	region := os.Getenv("KAFSCALE_S3_REGION")
-	if bucket == "" || region == "" {
-		logger.Warn("missing S3 configuration; falling back to in-memory client")
+	if parseEnvBool("KAFSCALE_USE_MEMORY_S3", false) {
+		logger.Info("using in-memory S3 client", "env", "KAFSCALE_USE_MEMORY_S3=1")
 		return storage.NewMemoryS3Client()
 	}
+
+	bucket := envOrDefault("KAFSCALE_S3_BUCKET", defaultMinioBucket)
+	region := envOrDefault("KAFSCALE_S3_REGION", defaultMinioRegion)
+	endpoint := envOrDefault("KAFSCALE_S3_ENDPOINT", defaultMinioEndpoint)
+	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", true)
+	kmsARN := os.Getenv("KAFSCALE_S3_KMS_ARN")
+	usingDefaultMinio := bucket == defaultMinioBucket && region == defaultMinioRegion && endpoint == defaultMinioEndpoint
+	accessKey := os.Getenv("KAFSCALE_S3_ACCESS_KEY")
+	secretKey := os.Getenv("KAFSCALE_S3_SECRET_KEY")
+	sessionToken := os.Getenv("KAFSCALE_S3_SESSION_TOKEN")
+	if accessKey == "" && secretKey == "" && usingDefaultMinio {
+		accessKey = defaultMinioAccessKey
+		secretKey = defaultMinioSecretKey
+	}
+	credsProvided := accessKey != "" && secretKey != ""
+
 	client, err := storage.NewS3Client(ctx, storage.S3Config{
-		Bucket:         bucket,
-		Region:         region,
-		Endpoint:       os.Getenv("KAFSCALE_S3_ENDPOINT"),
-		ForcePathStyle: os.Getenv("KAFSCALE_S3_PATH_STYLE") == "true",
-		KMSKeyARN:      os.Getenv("KAFSCALE_S3_KMS_ARN"),
+		Bucket:          bucket,
+		Region:          region,
+		Endpoint:        endpoint,
+		ForcePathStyle:  forcePathStyle,
+		AccessKeyID:     accessKey,
+		SecretAccessKey: secretKey,
+		SessionToken:    sessionToken,
+		KMSKeyARN:       kmsARN,
 	})
 	if err != nil {
-		logger.Error("failed to create S3 client; using in-memory", "error", err)
+		logger.Error("failed to create S3 client; using in-memory", "error", err, "bucket", bucket, "region", region, "endpoint", endpoint)
 		return storage.NewMemoryS3Client()
 	}
+
+	logger.Info("using AWS-compatible S3 client", "bucket", bucket, "region", region, "endpoint", endpoint, "force_path_style", forcePathStyle, "kms_configured", kmsARN != "", "default_minio", usingDefaultMinio, "credentials_provided", credsProvided)
 	return client
 }
 

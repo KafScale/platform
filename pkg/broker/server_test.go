@@ -35,7 +35,7 @@ func (h *testHandler) Handle(ctx context.Context, header *protocol.RequestHeader
 			Topics: []protocol.MetadataTopic{
 				{Name: "orders"},
 			},
-		})
+		}, header.APIVersion)
 	default:
 		return nil, errors.New("unsupported api")
 	}

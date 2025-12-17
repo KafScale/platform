@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,25 +15,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+const (
+	testS3Bucket    = "kafscale"
+	testS3Region    = "us-east-1"
+	testS3Endpoint  = "http://127.0.0.1:9000"
+	testS3PathStyle = "true"
+	testS3AccessKey = "minioadmin"
+	testS3SecretKey = "minioadmin"
 )
 
 func TestFranzGoProduceConsume(t *testing.T) {
 	if os.Getenv(enableEnv) != "1" {
 		t.Skipf("set %s=1 to run integration harness", enableEnv)
 	}
-	ensureBinary(t, "docker")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-
-	minio := startMinio(t, ctx)
-	t.Cleanup(func() { minio.Stop(t, context.Background()) })
-	minio.ensureBucket(t, ctx, "kafscale-e2e")
 
 	brokerAddr := "127.0.0.1:39092"
 	metricsAddr := "127.0.0.1:39093"
@@ -44,18 +43,17 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_LOG_LEVEL=debug",
 		"KAFSCALE_TRACE_KAFKA=true",
-		"KAFSCALE_S3_BUCKET=kafscale-e2e",
-		"KAFSCALE_S3_REGION=us-east-1",
-		fmt.Sprintf("KAFSCALE_S3_ENDPOINT=%s", minio.Endpoint),
-		"KAFSCALE_S3_PATH_STYLE=true",
-		"AWS_ACCESS_KEY_ID=minio",
-		"AWS_SECRET_ACCESS_KEY=minio123",
-		"AWS_EC2_METADATA_DISABLED=true",
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
 		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
 		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
+		fmt.Sprintf("KAFSCALE_S3_BUCKET=%s", testS3Bucket),
+		fmt.Sprintf("KAFSCALE_S3_REGION=%s", testS3Region),
+		fmt.Sprintf("KAFSCALE_S3_ENDPOINT=%s", testS3Endpoint),
+		fmt.Sprintf("KAFSCALE_S3_PATH_STYLE=%s", testS3PathStyle),
+		fmt.Sprintf("KAFSCALE_S3_ACCESS_KEY=%s", testS3AccessKey),
+		fmt.Sprintf("KAFSCALE_S3_SECRET_KEY=%s", testS3SecretKey),
 	)
 	var brokerLogs bytes.Buffer
 	var franzLogs bytes.Buffer
@@ -80,7 +78,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		}()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(2 * time.Second):
 			_ = brokerCmd.Process.Kill()
 		}
 	})
@@ -125,7 +123,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	defer consumer.Close()
 
 	received := make(map[string]struct{})
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(8 * time.Second)
 
 	for len(received) < 5 {
 		if time.Now().After(deadline) {
@@ -168,86 +166,9 @@ func mustLogFile(t *testing.T, name string) io.Writer {
 	return f
 }
 
-type minioInstance struct {
-	Endpoint string
-	id       string
-	managed  bool
-}
-
-func startMinio(t *testing.T, ctx context.Context) *minioInstance {
-	t.Helper()
-	if existing := findExistingMinio(t, ctx); existing != "" {
-		return &minioInstance{
-			Endpoint: "http://127.0.0.1:19000",
-			id:       existing,
-			managed:  false,
-		}
-	}
-	name := fmt.Sprintf("kafscale-minio-%d", time.Now().UnixNano())
-	args := []string{
-		"run", "-d", "--rm",
-		"-p", "19000:9000",
-		"-e", "MINIO_ROOT_USER=minio",
-		"-e", "MINIO_ROOT_PASSWORD=minio123",
-		"--name", name,
-		"minio/minio",
-		"server", "/data", "--address", ":9000", "--console-address", ":9001",
-	}
-	out := runCmdGetOutput(t, ctx, "docker", args...)
-	id := strings.TrimSpace(string(out))
-	inst := &minioInstance{
-		Endpoint: "http://127.0.0.1:19000",
-		id:       id,
-		managed:  true,
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	for {
-		req, _ := http.NewRequestWithContext(waitCtx, http.MethodGet, inst.Endpoint+"/minio/health/ready", nil)
-		resp, err := http.DefaultClient.Do(req)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			resp.Body.Close()
-			break
-		}
-		if waitCtx.Err() != nil {
-			t.Fatalf("minio not ready: %v", err)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	return inst
-}
-
-func (m *minioInstance) Stop(t *testing.T, ctx context.Context) {
-	t.Helper()
-	if m.id == "" || !m.managed {
-		return
-	}
-	runCmdIgnoreErr(t, ctx, "docker", "stop", m.id)
-}
-
-func (m *minioInstance) ensureBucket(t *testing.T, ctx context.Context, bucket string) {
-	t.Helper()
-	creds := credentials.NewStaticCredentialsProvider("minio", "minio123", "")
-	awsCfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("us-east-1"),
-		config.WithCredentialsProvider(creds),
-	)
-	if err != nil {
-		t.Fatalf("load aws config: %v", err)
-	}
-	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(m.Endpoint)
-		o.UsePathStyle = true
-	})
-	_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
-	if err != nil && !strings.Contains(err.Error(), "BucketAlreadyOwnedByYou") {
-		t.Fatalf("create bucket: %v", err)
-	}
-}
-
 func waitForPort(t *testing.T, addr string) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(2 * time.Second)
 	for {
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err == nil {
@@ -264,7 +185,7 @@ func waitForPort(t *testing.T, addr string) {
 
 func waitForBroker(t *testing.T, logs *bytes.Buffer, addr string) {
 	t.Helper()
-	deadline := time.After(30 * time.Second)
+	deadline := time.After(10 * time.Second)
 	msg := fmt.Sprintf("broker listening on %s", addr)
 	for {
 		if strings.Contains(logs.String(), msg) {
@@ -289,22 +210,4 @@ func runCmdGetOutput(t *testing.T, ctx context.Context, name string, args ...str
 		t.Fatalf("command %s %s failed: %v\n%s", name, strings.Join(args, " "), err, buf.String())
 	}
 	return buf.Bytes()
-}
-
-func findExistingMinio(t *testing.T, ctx context.Context) string {
-	t.Helper()
-	cmd := exec.CommandContext(ctx, "docker", "ps", "-q", "--filter", "ancestor=minio/minio", "--filter", "name=kafscale-minio")
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	id := strings.TrimSpace(string(output))
-	if id == "" {
-		return ""
-	}
-	lines := strings.Split(id, "\n")
-	if len(lines) > 0 {
-		return strings.TrimSpace(lines[0])
-	}
-	return ""
 }

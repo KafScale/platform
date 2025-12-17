@@ -28,9 +28,12 @@ type S3Client interface {
 
 // S3Config describes connection details for AWS S3 or compatible endpoints.
 type S3Config struct {
-	Bucket         string
-	Region         string
-	Endpoint       string
-	ForcePathStyle bool
-	KMSKeyARN      string
+	Bucket          string
+	Region          string
+	Endpoint        string
+	ForcePathStyle  bool
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+	KMSKeyARN       string
 }

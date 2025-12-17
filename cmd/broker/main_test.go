@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/novatechflow/kafscale/pkg/broker"
 	controlpb "github.com/novatechflow/kafscale/pkg/gen/control"
@@ -556,6 +560,92 @@ type failingMetadataStore struct {
 
 func (f failingMetadataStore) Metadata(ctx context.Context, topics []string) (*metadata.ClusterMetadata, error) {
 	return nil, f.err
+}
+
+func TestFranzGoProduceConsumeLocal(t *testing.T) {
+	if os.Getenv("KAFSCALE_LOCAL_FRANZ") != "1" {
+		t.Skip("set KAFSCALE_LOCAL_FRANZ=1 to run the local franz-go test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	clusterID := "franz-local"
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		ControllerID: 1,
+		ClusterID:    &clusterID,
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "127.0.0.1", Port: 39092},
+		},
+		Topics: []protocol.MetadataTopic{
+			{
+				ErrorCode: 0,
+				Name:      "orders",
+				Partitions: []protocol.MetadataPartition{
+					{
+						ErrorCode:      0,
+						PartitionIndex: 0,
+						LeaderID:       1,
+						ReplicaNodes:   []int32{1},
+						ISRNodes:       []int32{1},
+					},
+				},
+			},
+		},
+	})
+	handler := newHandler(store, storage.NewMemoryS3Client(), protocol.MetadataBroker{NodeID: 1, Host: "127.0.0.1", Port: 39092}, testLogger())
+	server := &broker.Server{Addr: "127.0.0.1:39092", Handler: handler}
+
+	go func() {
+		if err := server.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("broker listen failed: %v", err)
+		}
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+
+	topic := "orders"
+	producer, err := kgo.NewClient(
+		kgo.SeedBrokers("127.0.0.1:39092"),
+		kgo.AllowAutoTopicCreation(),
+		kgo.DisableIdempotentWrite(),
+		kgo.WithLogger(kgo.BasicLogger(io.Discard, kgo.LogLevelWarn, nil)),
+	)
+	if err != nil {
+		t.Fatalf("create producer: %v", err)
+	}
+	defer producer.Close()
+
+	for i := 0; i < 5; i++ {
+		if err := producer.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte(fmt.Sprintf("message-%d", i))}).FirstErr(); err != nil {
+			t.Fatalf("produce %d: %v", i, err)
+		}
+	}
+
+	consumer, err := kgo.NewClient(
+		kgo.SeedBrokers("127.0.0.1:39092"),
+		kgo.ConsumerGroup("franz-local-consumer"),
+		kgo.ConsumeTopics(topic),
+		kgo.WithLogger(kgo.BasicLogger(io.Discard, kgo.LogLevelWarn, nil)),
+	)
+	if err != nil {
+		t.Fatalf("create consumer: %v", err)
+	}
+	defer consumer.Close()
+
+	received := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for received < 5 {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for records (got %d)", received)
+		}
+		fetches := consumer.PollFetches(ctx)
+		if errs := fetches.Errors(); len(errs) > 0 {
+			t.Fatalf("fetch errors: %+v", errs)
+		}
+		fetches.EachRecord(func(record *kgo.Record) {
+			received++
+		})
+	}
 }
 
 func decodeProduceResponse(t *testing.T, payload []byte) *protocol.ProduceResponse {

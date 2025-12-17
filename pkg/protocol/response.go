@@ -206,8 +206,13 @@ func EncodeApiVersionsResponse(resp *ApiVersionsResponse) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-// EncodeMetadataResponse renders bytes for metadata responses.
-func EncodeMetadataResponse(resp *MetadataResponse) ([]byte, error) {
+// EncodeMetadataResponse renders bytes for metadata responses. version should match
+// the Metadata request version that triggered this response.
+func EncodeMetadataResponse(resp *MetadataResponse, version int16) ([]byte, error) {
+	if version < 0 {
+		version = 0
+	}
+
 	w := newByteWriter(256)
 	w.Int32(resp.CorrelationID)
 	w.Int32(int32(len(resp.Brokers)))
@@ -215,10 +220,16 @@ func EncodeMetadataResponse(resp *MetadataResponse) ([]byte, error) {
 		w.Int32(b.NodeID)
 		w.String(b.Host)
 		w.Int32(b.Port)
-		w.NullableString(b.Rack)
+		if version >= 1 {
+			w.NullableString(b.Rack)
+		}
 	}
-	w.NullableString(resp.ClusterID)
-	w.Int32(resp.ControllerID)
+	if version >= 2 {
+		w.NullableString(resp.ClusterID)
+	}
+	if version >= 1 {
+		w.Int32(resp.ControllerID)
+	}
 	w.Int32(int32(len(resp.Topics)))
 	for _, t := range resp.Topics {
 		w.Int16(t.ErrorCode)

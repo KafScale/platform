@@ -95,6 +95,10 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer in the spec backlog so we can track when to bring it online (e.g., DescribeGroups/ListGroups for Kafka UI parity, OffsetForLeaderEpoch for catch-up tooling).
 make tidy         # clean go.mod/go.sum
 make lint         # run golangci-lint (requires installation)
+
+### Local MinIO / S3 setup
+
+`make test-e2e` assumes there is an S3 endpoint in front of the broker; we keep a MinIO container (`kafscale-minio`) running locally so the e2e and operator suites exercise a production-like S3 stack. When the broker starts without overriding `KAFSCALE_USE_MEMORY_S3=1`, it points at MinIO at `http://127.0.0.1:9000`, bucket `kafscale`, region `us-east-1`, and uses path-style addressing by default. Set `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, and `KAFSCALE_S3_SESSION_TOKEN` to target a different S3-compatible endpoint, or flip `KAFSCALE_USE_MEMORY_S3=1` to skip MinIO entirely (the broker then uses the in-memory S3 client for faster, more deterministic runs). Keep `make stop-containers` handy to stop the MinIO / kind helper containers before you restart the suite.
 ```
 
 ## Coding Standards
