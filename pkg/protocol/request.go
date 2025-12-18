@@ -24,9 +24,10 @@ func (ApiVersionsRequest) APIKey() int16 { return APIKeyApiVersion }
 
 // ProduceRequest is a simplified representation of Kafka ProduceRequest v9.
 type ProduceRequest struct {
-	Acks      int16
-	TimeoutMs int32
-	Topics    []ProduceTopic
+	Acks            int16
+	TimeoutMs       int32
+	TransactionalID *string
+	Topics          []ProduceTopic
 }
 
 type ProduceTopic struct {
@@ -43,8 +44,14 @@ func (ProduceRequest) APIKey() int16 { return APIKeyProduce }
 
 // FetchRequest represents a subset of Kafka FetchRequest v13.
 type FetchRequest struct {
-	ReplicaID int32
-	Topics    []FetchTopicRequest
+	ReplicaID      int32
+	MaxWaitMs      int32
+	MinBytes       int32
+	MaxBytes       int32
+	IsolationLevel int8
+	SessionID      int32
+	SessionEpoch   int32
+	Topics         []FetchTopicRequest
 }
 
 type FetchTopicRequest struct {
@@ -86,8 +93,9 @@ type DeleteTopicsRequest struct {
 func (DeleteTopicsRequest) APIKey() int16 { return APIKeyDeleteTopics }
 
 type ListOffsetsPartition struct {
-	Partition int32
-	Timestamp int64
+	Partition     int32
+	Timestamp     int64
+	MaxNumOffsets int32
 }
 
 type ListOffsetsTopic struct {
@@ -144,6 +152,7 @@ type HeartbeatRequest struct {
 	GroupID      string
 	GenerationID int32
 	MemberID     string
+	InstanceID   *string
 }
 
 func (HeartbeatRequest) APIKey() int16 { return APIKeyHeartbeat }
@@ -170,6 +179,7 @@ type OffsetCommitRequest struct {
 	GroupID      string
 	GenerationID int32
 	MemberID     string
+	RetentionMs  int64
 	Topics       []OffsetCommitTopic
 }
 
@@ -191,6 +201,32 @@ type OffsetFetchRequest struct {
 
 func (OffsetFetchRequest) APIKey() int16 { return APIKeyOffsetFetch }
 
+func isFlexibleRequest(apiKey, version int16) bool {
+	switch apiKey {
+	case APIKeyProduce:
+		return version >= 9
+	case APIKeyFindCoordinator:
+		return version >= 3
+	case APIKeySyncGroup:
+		return version >= 4
+	case APIKeyHeartbeat:
+		return version >= 4
+	default:
+		return false
+	}
+}
+
+func compactArrayLenNonNull(r *byteReader) (int32, error) {
+	n, err := r.CompactArrayLen()
+	if err != nil {
+		return 0, err
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("compact array is null")
+	}
+	return n, nil
+}
+
 // ParseRequestHeader decodes the header portion from raw bytes.
 func ParseRequestHeader(b []byte) (*RequestHeader, *byteReader, error) {
 	reader := newByteReader(b)
@@ -210,6 +246,11 @@ func ParseRequestHeader(b []byte) (*RequestHeader, *byteReader, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("read client id: %w", err)
 	}
+	if isFlexibleRequest(apiKey, version) {
+		if err := reader.SkipTaggedFields(); err != nil {
+			return nil, nil, fmt.Errorf("skip header tags: %w", err)
+		}
+	}
 	return &RequestHeader{
 		APIKey:        apiKey,
 		APIVersion:    version,
@@ -224,12 +265,25 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	flexible := isFlexibleRequest(header.APIKey, header.APIVersion)
 
 	var req Request
 	switch header.APIKey {
 	case APIKeyApiVersion:
 		req = &ApiVersionsRequest{}
 	case APIKeyProduce:
+		var transactionalID *string
+		var err error
+		if header.APIVersion >= 3 {
+			if flexible {
+				transactionalID, err = reader.CompactNullableString()
+			} else {
+				transactionalID, err = reader.NullableString()
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("read produce transactional id: %w", err)
+			}
+		}
 		acks, err := reader.Int16()
 		if err != nil {
 			return nil, nil, fmt.Errorf("read produce acks: %w", err)
@@ -238,17 +292,38 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("read produce timeout: %w", err)
 		}
-		topicCount, err := reader.Int32()
+		var topicCount int32
+		if flexible {
+			topicCount, err = compactArrayLenNonNull(reader)
+		} else {
+			topicCount, err = reader.Int32()
+			if topicCount < 0 {
+				return nil, nil, fmt.Errorf("read produce topic count: invalid %d", topicCount)
+			}
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("read produce topic count: %w", err)
 		}
 		topics := make([]ProduceTopic, 0, topicCount)
 		for i := int32(0); i < topicCount; i++ {
-			name, err := reader.String()
+			var name string
+			if flexible {
+				name, err = reader.CompactString()
+			} else {
+				name, err = reader.String()
+			}
 			if err != nil {
 				return nil, nil, fmt.Errorf("read produce topic name: %w", err)
 			}
-			partitionCount, err := reader.Int32()
+			var partitionCount int32
+			if flexible {
+				partitionCount, err = compactArrayLenNonNull(reader)
+			} else {
+				partitionCount, err = reader.Int32()
+				if partitionCount < 0 {
+					return nil, nil, fmt.Errorf("read produce partition count: invalid %d", partitionCount)
+				}
+			}
 			if err != nil {
 				return nil, nil, fmt.Errorf("read produce partition count: %w", err)
 			}
@@ -258,7 +333,12 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if err != nil {
 					return nil, nil, fmt.Errorf("read produce partition index: %w", err)
 				}
-				records, err := reader.Bytes()
+				var records []byte
+				if flexible {
+					records, err = reader.CompactBytes()
+				} else {
+					records, err = reader.Bytes()
+				}
 				if err != nil {
 					return nil, nil, fmt.Errorf("read produce records: %w", err)
 				}
@@ -267,12 +347,28 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 					Records:   records,
 				})
 			}
+			if flexible {
+				if err := reader.SkipTaggedFields(); err != nil {
+					return nil, nil, fmt.Errorf("skip partition tags: %w", err)
+				}
+			}
+			if flexible {
+				if err := reader.SkipTaggedFields(); err != nil {
+					return nil, nil, fmt.Errorf("skip topic tags: %w", err)
+				}
+			}
 			topics = append(topics, ProduceTopic{Name: name, Partitions: partitions})
 		}
+		if flexible {
+			if err := reader.SkipTaggedFields(); err != nil {
+				return nil, nil, fmt.Errorf("skip produce tags: %w", err)
+			}
+		}
 		req = &ProduceRequest{
-			Acks:      acks,
-			TimeoutMs: timeout,
-			Topics:    topics,
+			Acks:            acks,
+			TimeoutMs:       timeout,
+			TransactionalID: transactionalID,
+			Topics:          topics,
 		}
 	case APIKeyMetadata:
 		var topics []string
@@ -369,46 +465,79 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if err != nil {
 					return nil, nil, err
 				}
-				parts = append(parts, ListOffsetsPartition{Partition: partition, Timestamp: timestamp})
+				maxOffsets := int32(1)
+				if header.APIVersion == 0 {
+					maxOffsets, err = reader.Int32()
+					if err != nil {
+						return nil, nil, err
+					}
+				}
+				parts = append(parts, ListOffsetsPartition{
+					Partition:     partition,
+					Timestamp:     timestamp,
+					MaxNumOffsets: maxOffsets,
+				})
 			}
 			topics = append(topics, ListOffsetsTopic{Name: name, Partitions: parts})
 		}
 		req = &ListOffsetsRequest{ReplicaID: replicaID, Topics: topics}
 	case APIKeyFetch:
+		version := header.APIVersion
 		replicaID, err := reader.Int32()
 		if err != nil {
 			return nil, nil, fmt.Errorf("read fetch replica id: %w", err)
 		}
-		// Skip max wait, min bytes, max bytes, isolation, session id/epoch.
-		if _, err := reader.Int32(); err != nil {
-			return nil, nil, err
-		}
-		if _, err := reader.Int32(); err != nil {
-			return nil, nil, err
-		}
-		if _, err := reader.Int32(); err != nil {
-			return nil, nil, err
-		}
-		if _, err := reader.Int8(); err != nil {
-			return nil, nil, err
-		}
-		if _, err := reader.Int32(); err != nil {
-			return nil, nil, err
-		}
-		if _, err := reader.Int32(); err != nil {
-			return nil, nil, err
-		}
-		topicCount, err := reader.Int32()
+		maxWaitMs, err := reader.Int32()
 		if err != nil {
 			return nil, nil, err
 		}
+		minBytes, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		maxBytes, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		isolationLevel, err := reader.Int8()
+		if err != nil {
+			return nil, nil, err
+		}
+		sessionID, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		sessionEpoch, err := reader.Int32()
+		if err != nil {
+			return nil, nil, err
+		}
+		var topicCount int32
+		if flexible {
+			topicCount, err = compactArrayLenNonNull(reader)
+		} else {
+			topicCount, err = reader.Int32()
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+
 		topics := make([]FetchTopicRequest, 0, topicCount)
 		for i := int32(0); i < topicCount; i++ {
-			name, err := reader.String()
+			var name string
+			if flexible {
+				name, err = reader.CompactString()
+			} else {
+				name, err = reader.String()
+			}
 			if err != nil {
 				return nil, nil, err
 			}
-			partCount, err := reader.Int32()
+			var partCount int32
+			if flexible {
+				partCount, err = compactArrayLenNonNull(reader)
+			} else {
+				partCount, err = reader.Int32()
+			}
 			if err != nil {
 				return nil, nil, err
 			}
@@ -418,18 +547,24 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, err := reader.Int32(); err != nil { // leader epoch
-					return nil, nil, err
+				if version >= 9 {
+					if _, err := reader.Int32(); err != nil { // leader epoch
+						return nil, nil, err
+					}
 				}
 				fetchOffset, err := reader.Int64()
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, err := reader.Int64(); err != nil { // last fetched epoch
-					return nil, nil, err
+				if version >= 12 {
+					if _, err := reader.Int32(); err != nil { // last fetched epoch
+						return nil, nil, err
+					}
 				}
-				if _, err := reader.Int64(); err != nil { // log start offset
-					return nil, nil, err
+				if version >= 5 {
+					if _, err := reader.Int64(); err != nil { // log start offset
+						return nil, nil, err
+					}
 				}
 				maxBytes, err := reader.Int32()
 				if err != nil {
@@ -445,19 +580,47 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				Name:       name,
 				Partitions: partitions,
 			})
+			if flexible {
+				if err := reader.SkipTaggedFields(); err != nil {
+					return nil, nil, fmt.Errorf("skip fetch topic tags: %w", err)
+				}
+			}
+		}
+		if flexible {
+			if err := reader.SkipTaggedFields(); err != nil {
+				return nil, nil, fmt.Errorf("skip fetch request tags: %w", err)
+			}
 		}
 		req = &FetchRequest{
-			ReplicaID: replicaID,
-			Topics:    topics,
+			ReplicaID:      replicaID,
+			MaxWaitMs:      maxWaitMs,
+			MinBytes:       minBytes,
+			MaxBytes:       maxBytes,
+			IsolationLevel: isolationLevel,
+			SessionID:      sessionID,
+			SessionEpoch:   sessionEpoch,
+			Topics:         topics,
 		}
 	case APIKeyFindCoordinator:
-		keyType, err := reader.Int8()
-		if err != nil {
-			return nil, nil, fmt.Errorf("read coordinator key type: %w", err)
+		var key string
+		if flexible {
+			key, err = reader.CompactString()
+		} else {
+			key, err = reader.String()
 		}
-		key, err := reader.String()
 		if err != nil {
 			return nil, nil, fmt.Errorf("read coordinator key: %w", err)
+		}
+		var keyType int8
+		if header.APIVersion >= 1 {
+			if keyType, err = reader.Int8(); err != nil {
+				return nil, nil, fmt.Errorf("read coordinator key type: %w", err)
+			}
+		}
+		if flexible {
+			if err := reader.SkipTaggedFields(); err != nil {
+				return nil, nil, fmt.Errorf("skip coordinator tags: %w", err)
+			}
 		}
 		req = &FindCoordinatorRequest{KeyType: keyType, Key: key}
 	case APIKeyJoinGroup:
@@ -506,7 +669,13 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			Protocols:          protocols,
 		}
 	case APIKeySyncGroup:
-		groupID, err := reader.String()
+		var groupID string
+		var err error
+		if flexible {
+			groupID, err = reader.CompactString()
+		} else {
+			groupID, err = reader.String()
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -514,25 +683,85 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		memberID, err := reader.String()
+		var memberID string
+		if flexible {
+			memberID, err = reader.CompactString()
+		} else {
+			memberID, err = reader.String()
+		}
 		if err != nil {
 			return nil, nil, err
 		}
-		assignCount, err := reader.Int32()
-		if err != nil {
-			return nil, nil, err
+		if header.APIVersion >= 3 {
+			if flexible {
+				if _, err := reader.CompactNullableString(); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				if _, err := reader.NullableString(); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		if header.APIVersion >= 5 {
+			if flexible {
+				if _, err := reader.CompactNullableString(); err != nil {
+					return nil, nil, err
+				}
+				if _, err := reader.CompactNullableString(); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				if _, err := reader.NullableString(); err != nil {
+					return nil, nil, err
+				}
+				if _, err := reader.NullableString(); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		var assignCount int32
+		if flexible {
+			if assignCount, err = compactArrayLenNonNull(reader); err != nil {
+				return nil, nil, err
+			}
+		} else {
+			assignCount, err = reader.Int32()
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		assignments := make([]SyncGroupAssignment, 0, assignCount)
 		for i := int32(0); i < assignCount; i++ {
-			mid, err := reader.String()
+			var mid string
+			if flexible {
+				mid, err = reader.CompactString()
+			} else {
+				mid, err = reader.String()
+			}
 			if err != nil {
 				return nil, nil, err
 			}
-			data, err := reader.Bytes()
+			var data []byte
+			if flexible {
+				data, err = reader.CompactBytes()
+			} else {
+				data, err = reader.Bytes()
+			}
 			if err != nil {
 				return nil, nil, err
+			}
+			if flexible {
+				if err := reader.SkipTaggedFields(); err != nil {
+					return nil, nil, fmt.Errorf("skip sync assignment tags: %w", err)
+				}
 			}
 			assignments = append(assignments, SyncGroupAssignment{MemberID: mid, Assignment: data})
+		}
+		if flexible {
+			if err := reader.SkipTaggedFields(); err != nil {
+				return nil, nil, fmt.Errorf("skip sync group tags: %w", err)
+			}
 		}
 		req = &SyncGroupRequest{
 			GroupID:      groupID,
@@ -541,22 +770,50 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			Assignments:  assignments,
 		}
 	case APIKeyHeartbeat:
-		groupID, err := reader.String()
+		var err error
+		var groupID string
+		if flexible {
+			groupID, err = reader.CompactString()
+		} else {
+			groupID, err = reader.String()
+		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("read heartbeat group id: %w", err)
 		}
 		generationID, err := reader.Int32()
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("read heartbeat generation: %w", err)
 		}
-		memberID, err := reader.String()
+		var memberID string
+		if flexible {
+			memberID, err = reader.CompactString()
+		} else {
+			memberID, err = reader.String()
+		}
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("read heartbeat member id: %w", err)
+		}
+		var instanceID *string
+		if header.APIVersion >= 3 {
+			if flexible {
+				instanceID, err = reader.CompactNullableString()
+			} else {
+				instanceID, err = reader.NullableString()
+			}
+			if err != nil {
+				return nil, nil, fmt.Errorf("read heartbeat group instance id: %w", err)
+			}
+		}
+		if flexible {
+			if err := reader.SkipTaggedFields(); err != nil {
+				return nil, nil, fmt.Errorf("skip heartbeat tags: %w", err)
+			}
 		}
 		req = &HeartbeatRequest{
 			GroupID:      groupID,
 			GenerationID: generationID,
 			MemberID:     memberID,
+			InstanceID:   instanceID,
 		}
 	case APIKeyLeaveGroup:
 		groupID, err := reader.String()
@@ -572,6 +829,10 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			MemberID: memberID,
 		}
 	case APIKeyOffsetCommit:
+		version := header.APIVersion
+		if version != 3 {
+			return nil, nil, fmt.Errorf("offset commit version %d not supported", version)
+		}
 		groupID, err := reader.String()
 		if err != nil {
 			return nil, nil, err
@@ -584,8 +845,12 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		if _, err := reader.Int64(); err != nil {
-			return nil, nil, err
+		var retentionMs int64
+		if version >= 2 && version <= 4 {
+			retentionMs, err = reader.Int64()
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		topicCount, err := reader.Int32()
 		if err != nil {
@@ -611,12 +876,13 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, err := reader.Int64(); err != nil {
-					return nil, nil, err
-				}
-				meta, err := reader.String()
+				metaPtr, err := reader.NullableString()
 				if err != nil {
 					return nil, nil, err
+				}
+				meta := ""
+				if metaPtr != nil {
+					meta = *metaPtr
 				}
 				partitions = append(partitions, OffsetCommitPartition{
 					Partition: partition,
@@ -630,6 +896,7 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 			GroupID:      groupID,
 			GenerationID: generationID,
 			MemberID:     memberID,
+			RetentionMs:  retentionMs,
 			Topics:       topics,
 		}
 	case APIKeyOffsetFetch:

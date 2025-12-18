@@ -90,6 +90,7 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 func (c *GroupCoordinator) FindCoordinatorResponse(correlationID int32, errorCode int16) *protocol.FindCoordinatorResponse {
 	return &protocol.FindCoordinatorResponse{
 		CorrelationID: correlationID,
+		ThrottleMs:    0,
 		ErrorCode:     errorCode,
 		NodeID:        c.broker.NodeID,
 		Host:          c.broker.Host,
@@ -159,6 +160,7 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *protocol.JoinGrou
 
 	resp := &protocol.JoinGroupResponse{
 		CorrelationID: correlationID,
+		ThrottleMs:    0,
 		GenerationID:  state.generationID,
 		ProtocolName:  state.protocolName,
 		LeaderID:      state.leaderID,
@@ -180,24 +182,28 @@ func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *protocol.SyncGrou
 	if state == nil {
 		return &protocol.SyncGroupResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
 		}, nil
 	}
 	if req.GenerationID != state.generationID {
 		return &protocol.SyncGroupResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.ILLEGAL_GENERATION,
 		}, nil
 	}
 	if _, ok := state.members[req.MemberID]; !ok {
 		return &protocol.SyncGroupResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
 		}, nil
 	}
 	if state.state == groupStatePreparingRebalance {
 		return &protocol.SyncGroupResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
 		}, nil
 	}
@@ -206,6 +212,7 @@ func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *protocol.SyncGrou
 		if req.MemberID != state.leaderID {
 			return &protocol.SyncGroupResponse{
 				CorrelationID: correlationID,
+				ThrottleMs:    0,
 				ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
 			}, nil
 		}
@@ -217,13 +224,27 @@ func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *protocol.SyncGrou
 	if assignments == nil && state.state != groupStateStable {
 		return &protocol.SyncGroupResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
 		}, nil
 	}
 
+	var protocolTypePtr *string
+	if state.protocolType != "" {
+		pt := state.protocolType
+		protocolTypePtr = &pt
+	}
+	var protocolNamePtr *string
+	if state.protocolName != "" {
+		pn := state.protocolName
+		protocolNamePtr = &pn
+	}
 	return &protocol.SyncGroupResponse{
 		CorrelationID: correlationID,
+		ThrottleMs:    0,
 		ErrorCode:     protocol.NONE,
+		ProtocolType:  protocolTypePtr,
+		ProtocolName:  protocolNamePtr,
 		Assignment:    encodeAssignment(assignments),
 	}, nil
 }
@@ -236,6 +257,7 @@ func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *protocol.Heartbea
 	if state == nil {
 		return &protocol.HeartbeatResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
 		}
 	}
@@ -243,24 +265,28 @@ func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *protocol.Heartbea
 	if member == nil {
 		return &protocol.HeartbeatResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
 		}
 	}
 	if req.GenerationID != state.generationID {
 		return &protocol.HeartbeatResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.ILLEGAL_GENERATION,
 		}
 	}
 	if state.state != groupStateStable {
 		return &protocol.HeartbeatResponse{
 			CorrelationID: correlationID,
+			ThrottleMs:    0,
 			ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
 		}
 	}
 	member.lastHeartbeat = time.Now()
 	return &protocol.HeartbeatResponse{
 		CorrelationID: correlationID,
+		ThrottleMs:    0,
 		ErrorCode:     protocol.NONE,
 	}
 }
@@ -352,11 +378,14 @@ func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *protocol.Offset
 			if err != nil {
 				code = protocol.UNKNOWN_SERVER_ERROR
 			}
+			leaderEpoch := int32(-1)
+			metaVal := metadataStr
 			partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
-				Partition: part.Partition,
-				Offset:    offset,
-				Metadata:  metadataStr,
-				ErrorCode: code,
+				Partition:   part.Partition,
+				Offset:      offset,
+				LeaderEpoch: leaderEpoch,
+				Metadata:    &metaVal,
+				ErrorCode:   code,
 			})
 		}
 		topicResponses = append(topicResponses, protocol.OffsetFetchTopicResponse{
@@ -366,6 +395,7 @@ func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *protocol.Offset
 	}
 	return &protocol.OffsetFetchResponse{
 		CorrelationID: correlationID,
+		ThrottleMs:    0,
 		Topics:        topicResponses,
 		ErrorCode:     protocol.NONE,
 	}, nil

@@ -6,6 +6,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -86,6 +87,7 @@ func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
 	cfg.Dir = t.TempDir()
 	cfg.Logger = "zap"
 	cfg.LogLevel = "error"
+	cfg.LogOutputs = []string{os.DevNull}
 
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {

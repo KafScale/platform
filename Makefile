@@ -1,4 +1,4 @@
-.PHONY: proto build test tidy lint generate docker-build docker-build-broker docker-build-operator docker-build-console ensure-minio start-minio stop-containers test-e2e
+.PHONY: proto build test tidy lint generate docker-build docker-build-broker docker-build-operator docker-build-console docker-containers ensure-minio start-minio stop-containers test-e2e test-e2e-debug
 
 REGISTRY ?= ghcr.io/novatechflow
 BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
@@ -39,6 +39,8 @@ docker-build-operator: $(OPERATOR_SRCS) ## Build operator container image
 CONSOLE_SRCS := $(shell find cmd/console ui go.mod go.sum)
 docker-build-console: $(CONSOLE_SRCS) ## Build console container image
 	docker build -t $(CONSOLE_IMAGE) -f deploy/docker/console.Dockerfile .
+
+docker-containers: docker-build ## Build broker/operator/console images for optional container workflows
 
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE)
@@ -93,7 +95,7 @@ release-broker-ports:
 		fi; \
 	done
 
-test-e2e: release-broker-ports ensure-minio ## Run end-to-end tests (requires Docker; operator suite also needs kind/kubectl/helm). Run `make docker-build` first if code changed.
+test-e2e: release-broker-ports ensure-minio ## Run e2e tests against local Go binaries (only MinIO/kind helpers require Docker).
 	KAFSCALE_E2E=1 \
 	KAFSCALE_S3_BUCKET=$(MINIO_BUCKET) \
 	KAFSCALE_S3_REGION=$(MINIO_REGION) \
@@ -102,6 +104,11 @@ test-e2e: release-broker-ports ensure-minio ## Run end-to-end tests (requires Do
 	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
 	go test -tags=e2e ./test/e2e -v
+
+test-e2e-debug: release-broker-ports ensure-minio ## Run e2e tests with broker trace logging enabled for debugging.
+	KAFSCALE_TRACE_KAFKA=true \
+	KAFSCALE_LOG_LEVEL=debug \
+	$(MAKE) test-e2e
 
 tidy:
 	go mod tidy

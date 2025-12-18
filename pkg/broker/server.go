@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log"
@@ -92,6 +93,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		header, req, err := protocol.ParseRequest(frame.Payload)
 		if err != nil {
 			log.Printf("parse request: %v", err)
+			log.Printf("payload hex:\n%s", hex.Dump(frame.Payload))
 			return
 		}
 		log.Printf("received api=%d version=%d correlation=%d", header.APIKey, header.APIVersion, header.CorrelationID)

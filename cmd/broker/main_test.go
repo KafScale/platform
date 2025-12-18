@@ -160,7 +160,7 @@ func TestHandleFetch(t *testing.T) {
 		},
 	}
 
-	resp, err := handler.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 2}, fetchReq)
+	resp, err := handler.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 2, APIVersion: 11}, fetchReq)
 	if err != nil {
 		t.Fatalf("handleFetch: %v", err)
 	}
@@ -261,16 +261,18 @@ func TestHandleListOffsets(t *testing.T) {
 			},
 		},
 	}
-	respBytes, err := handler.handleListOffsets(context.Background(), &protocol.RequestHeader{CorrelationID: 55}, req)
+	header := &protocol.RequestHeader{CorrelationID: 55, APIVersion: 0}
+	respBytes, err := handler.handleListOffsets(context.Background(), header, req)
 	if err != nil {
 		t.Fatalf("handleListOffsets: %v", err)
 	}
-	resp := decodeListOffsetsResponse(t, respBytes)
+	resp := decodeListOffsetsResponse(t, 0, respBytes)
 	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 		t.Fatalf("unexpected list offsets response: %#v", resp)
 	}
-	if resp.Topics[0].Partitions[0].Offset != 10 {
-		t.Fatalf("expected offset 10 got %d", resp.Topics[0].Partitions[0].Offset)
+	part := resp.Topics[0].Partitions[0]
+	if len(part.OldStyleOffsets) != 1 || part.OldStyleOffsets[0] != 10 {
+		t.Fatalf("expected old style offset 10 got %#v", part.OldStyleOffsets)
 	}
 }
 
@@ -433,7 +435,7 @@ func TestFetchBackpressureDegraded(t *testing.T) {
 			},
 		},
 	}
-	resp, err := handler.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 11}, req)
+	resp, err := handler.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 11, APIVersion: 11}, req)
 	if err != nil {
 		t.Fatalf("handleFetch: %v", err)
 	}
@@ -460,7 +462,7 @@ func TestFetchBackpressureUnavailable(t *testing.T) {
 			},
 		},
 	}
-	resp, err := handler.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 12}, req)
+	resp, err := handler.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 12, APIVersion: 11}, req)
 	if err != nil {
 		t.Fatalf("handleFetch: %v", err)
 	}
@@ -769,12 +771,17 @@ func decodeDeleteTopicsResponse(t *testing.T, payload []byte) *protocol.DeleteTo
 	return resp
 }
 
-func decodeListOffsetsResponse(t *testing.T, payload []byte) *protocol.ListOffsetsResponse {
+func decodeListOffsetsResponse(t *testing.T, version int16, payload []byte) *protocol.ListOffsetsResponse {
 	t.Helper()
 	reader := bytes.NewReader(payload)
 	resp := &protocol.ListOffsetsResponse{}
 	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
 		t.Fatalf("read correlation id: %v", err)
+	}
+	if version >= 2 {
+		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
+			t.Fatalf("read throttle: %v", err)
+		}
 	}
 	var topicCount int32
 	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
@@ -797,11 +804,29 @@ func decodeListOffsetsResponse(t *testing.T, payload []byte) *protocol.ListOffse
 			if err := binary.Read(reader, binary.BigEndian, &part.ErrorCode); err != nil {
 				t.Fatalf("read error code: %v", err)
 			}
-			if err := binary.Read(reader, binary.BigEndian, &part.Timestamp); err != nil {
-				t.Fatalf("read timestamp: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.Offset); err != nil {
-				t.Fatalf("read offset: %v", err)
+			if version == 0 {
+				var count int32
+				if err := binary.Read(reader, binary.BigEndian, &count); err != nil {
+					t.Fatalf("read offset count: %v", err)
+				}
+				part.OldStyleOffsets = make([]int64, count)
+				for k := 0; k < int(count); k++ {
+					if err := binary.Read(reader, binary.BigEndian, &part.OldStyleOffsets[k]); err != nil {
+						t.Fatalf("read offset[%d]: %v", k, err)
+					}
+				}
+			} else {
+				if err := binary.Read(reader, binary.BigEndian, &part.Timestamp); err != nil {
+					t.Fatalf("read timestamp: %v", err)
+				}
+				if err := binary.Read(reader, binary.BigEndian, &part.Offset); err != nil {
+					t.Fatalf("read offset: %v", err)
+				}
+				if version >= 4 {
+					if err := binary.Read(reader, binary.BigEndian, &part.LeaderEpoch); err != nil {
+						t.Fatalf("read leader epoch: %v", err)
+					}
+				}
 			}
 			topic.Partitions = append(topic.Partitions, part)
 		}
@@ -819,6 +844,12 @@ func decodeFetchResponse(t *testing.T, payload []byte) *protocol.FetchResponse {
 	}
 	if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
 		t.Fatalf("read throttle: %v", err)
+	}
+	if err := binary.Read(reader, binary.BigEndian, &resp.ErrorCode); err != nil {
+		t.Fatalf("read fetch error: %v", err)
+	}
+	if err := binary.Read(reader, binary.BigEndian, &resp.SessionID); err != nil {
+		t.Fatalf("read fetch session id: %v", err)
 	}
 	var topicCount int32
 	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {

@@ -81,6 +81,37 @@ func (r *byteReader) String() (string, error) {
 	return string(b), nil
 }
 
+func (r *byteReader) CompactString() (string, error) {
+	length, err := r.compactLength()
+	if err != nil {
+		return "", err
+	}
+	if length < 0 {
+		return "", fmt.Errorf("compact string is null")
+	}
+	b, err := r.read(length)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func (r *byteReader) CompactNullableString() (*string, error) {
+	length, err := r.compactLength()
+	if err != nil {
+		return nil, err
+	}
+	if length < 0 {
+		return nil, nil
+	}
+	b, err := r.read(length)
+	if err != nil {
+		return nil, err
+	}
+	str := string(b)
+	return &str, nil
+}
+
 func (r *byteReader) NullableString() (*string, error) {
 	l, err := r.Int16()
 	if err != nil {
@@ -170,6 +201,21 @@ func (w *byteWriter) NullableString(v *string) {
 	w.String(*v)
 }
 
+func (w *byteWriter) CompactString(v string) {
+	w.compactLength(len(v))
+	if len(v) > 0 {
+		w.write([]byte(v))
+	}
+}
+
+func (w *byteWriter) CompactNullableString(v *string) {
+	if v == nil {
+		w.compactLength(-1)
+		return
+	}
+	w.CompactString(*v)
+}
+
 func (r *byteReader) Bytes() ([]byte, error) {
 	length, err := r.Int32()
 	if err != nil {
@@ -185,11 +231,118 @@ func (r *byteReader) Bytes() ([]byte, error) {
 	return b, nil
 }
 
+func (r *byteReader) CompactBytes() ([]byte, error) {
+	length, err := r.compactLength()
+	if err != nil {
+		return nil, err
+	}
+	if length < 0 {
+		return nil, nil
+	}
+	return r.read(length)
+}
+
 func (w *byteWriter) BytesWithLength(b []byte) {
 	w.Int32(int32(len(b)))
 	w.write(b)
 }
 
+func (w *byteWriter) CompactBytes(b []byte) {
+	if b == nil {
+		w.compactLength(-1)
+		return
+	}
+	w.compactLength(len(b))
+	if len(b) > 0 {
+		w.write(b)
+	}
+}
+
 func (w *byteWriter) Bytes() []byte {
 	return w.buf
+}
+
+func (r *byteReader) UVarint() (uint64, error) {
+	val, n := binary.Uvarint(r.buf[r.pos:])
+	if n <= 0 {
+		return 0, fmt.Errorf("read uvarint: %d", n)
+	}
+	r.pos += n
+	return val, nil
+}
+
+func (w *byteWriter) UVarint(v uint64) {
+	var tmp [binary.MaxVarintLen64]byte
+	n := binary.PutUvarint(tmp[:], v)
+	w.write(tmp[:n])
+}
+
+func (r *byteReader) CompactArrayLen() (int32, error) {
+	val, err := r.UVarint()
+	if err != nil {
+		return 0, err
+	}
+	if val == 0 {
+		return -1, nil
+	}
+	return int32(val - 1), nil
+}
+
+func (w *byteWriter) CompactArrayLen(length int) {
+	if length < 0 {
+		w.UVarint(0)
+		return
+	}
+	w.UVarint(uint64(length) + 1)
+}
+
+func (r *byteReader) SkipTaggedFields() error {
+	count, err := r.UVarint()
+	if err != nil {
+		return err
+	}
+	for i := uint64(0); i < count; i++ {
+		if _, err := r.UVarint(); err != nil {
+			return err
+		}
+		size, err := r.UVarint()
+		if err != nil {
+			return err
+		}
+		if size == 0 {
+			continue
+		}
+		if _, err := r.read(int(size)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *byteWriter) WriteTaggedFields(count int) {
+	if count == 0 {
+		w.UVarint(0)
+		return
+	}
+	w.UVarint(uint64(count))
+}
+
+func (r *byteReader) compactLength() (int, error) {
+	val, err := r.UVarint()
+	if err != nil {
+		return 0, err
+	}
+	if val == 0 {
+		return -1, nil
+	}
+	length := int(val - 1)
+	return length, nil
+}
+
+func (w *byteWriter) compactLength(length int) {
+	if length < 0 {
+		w.UVarint(0)
+		return
+	}
+	w.UVarint(uint64(length) + 1)
 }

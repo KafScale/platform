@@ -80,6 +80,16 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		if h.traceKafka {
 			h.logger.Debug("metadata request", "topics", metaReq.Topics)
 		}
+		if h.autoCreateTopics && len(metaReq.Topics) > 0 {
+			for _, name := range metaReq.Topics {
+				if strings.TrimSpace(name) == "" {
+					continue
+				}
+				if err := h.ensureTopic(ctx, name, 0); err != nil {
+					return nil, fmt.Errorf("auto-create topic %s: %w", name, err)
+				}
+			}
+		}
 		meta, err := h.store.Metadata(ctx, metaReq.Topics)
 		if err != nil {
 			return nil, fmt.Errorf("load metadata: %w", err)
@@ -109,22 +119,22 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return h.handleFetch(ctx, header, req.(*protocol.FetchRequest))
 	case *protocol.FindCoordinatorRequest:
 		resp := h.coordinator.FindCoordinatorResponse(header.CorrelationID, protocol.NONE)
-		return protocol.EncodeFindCoordinatorResponse(resp)
+		return protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion)
 	case *protocol.JoinGroupRequest:
 		resp, err := h.coordinator.JoinGroup(ctx, req.(*protocol.JoinGroupRequest), header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
-		return protocol.EncodeJoinGroupResponse(resp)
+		return protocol.EncodeJoinGroupResponse(resp, header.APIVersion)
 	case *protocol.SyncGroupRequest:
 		resp, err := h.coordinator.SyncGroup(ctx, req.(*protocol.SyncGroupRequest), header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
-		return protocol.EncodeSyncGroupResponse(resp)
+		return protocol.EncodeSyncGroupResponse(resp, header.APIVersion)
 	case *protocol.HeartbeatRequest:
 		resp := h.coordinator.Heartbeat(ctx, req.(*protocol.HeartbeatRequest), header.CorrelationID)
-		return protocol.EncodeHeartbeatResponse(resp)
+		return protocol.EncodeHeartbeatResponse(resp, header.APIVersion)
 	case *protocol.LeaveGroupRequest:
 		resp := h.coordinator.LeaveGroup(ctx, req.(*protocol.LeaveGroupRequest), header.CorrelationID)
 		return protocol.EncodeLeaveGroupResponse(resp)
@@ -139,7 +149,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		if err != nil {
 			return nil, err
 		}
-		return protocol.EncodeOffsetFetchResponse(resp)
+		return protocol.EncodeOffsetFetchResponse(resp, header.APIVersion)
 	case *protocol.CreateTopicsRequest:
 		return h.handleCreateTopics(ctx, header, req.(*protocol.CreateTopicsRequest))
 	case *protocol.DeleteTopicsRequest:
@@ -247,7 +257,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				}
 				continue
 			}
-			if req.Acks == -1 {
+			if req.Acks != 0 {
 				if err := plog.Flush(ctx); err != nil {
 					h.logger.Error("flush failed", "error", err, "topic", topic.Name, "partition", part.Partition)
 					partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
@@ -282,7 +292,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 		CorrelationID: header.CorrelationID,
 		Topics:        topicResponses,
 		ThrottleMs:    0,
-	})
+	}, header.APIVersion)
 }
 
 func (h *handler) handleCreateTopics(ctx context.Context, header *protocol.RequestHeader, req *protocol.CreateTopicsRequest) ([]byte, error) {
@@ -340,12 +350,23 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 		partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
 			offset, err := h.store.NextOffset(ctx, topic.Name, part.Partition)
-			resp := protocol.ListOffsetsPartitionResponse{Partition: part.Partition}
+			resp := protocol.ListOffsetsPartitionResponse{
+				Partition:   part.Partition,
+				LeaderEpoch: -1,
+			}
 			if err != nil {
 				resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			} else {
 				resp.Timestamp = part.Timestamp
 				resp.Offset = offset
+				if header.APIVersion == 0 {
+					max := part.MaxNumOffsets
+					if max <= 0 {
+						max = 1
+					}
+					resp.OldStyleOffsets = make([]int64, 0, max)
+					resp.OldStyleOffsets = append(resp.OldStyleOffsets, offset)
+				}
 			}
 			partitions = append(partitions, resp)
 		}
@@ -354,18 +375,28 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 			Partitions: partitions,
 		})
 	}
-	return protocol.EncodeListOffsetsResponse(&protocol.ListOffsetsResponse{
+	return protocol.EncodeListOffsetsResponse(header.APIVersion, &protocol.ListOffsetsResponse{
 		CorrelationID: header.CorrelationID,
 		Topics:        topicResponses,
 	})
 }
 
 func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeader, req *protocol.FetchRequest) ([]byte, error) {
+	if header.APIVersion != 11 {
+		return nil, fmt.Errorf("fetch version %d not supported", header.APIVersion)
+	}
 	topicResponses := make([]protocol.FetchTopicResponse, 0, len(req.Topics))
+	maxWait := time.Duration(req.MaxWaitMs) * time.Millisecond
+	if maxWait < 0 {
+		maxWait = 0
+	}
 
 	for _, topic := range req.Topics {
 		partitionResponses := make([]protocol.FetchPartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
+			if h.traceKafka {
+				h.logger.Debug("fetch partition request", "topic", topic.Name, "partition", part.Partition, "fetch_offset", part.FetchOffset, "max_bytes", part.MaxBytes)
+			}
 			switch h.s3Health.State() {
 			case broker.S3StateDegraded, broker.S3StateUnavailable:
 				partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
@@ -382,32 +413,55 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 				})
 				continue
 			}
-			records, err := plog.Read(ctx, part.FetchOffset, part.MaxBytes)
-			errorCode := int16(0)
-			if err != nil {
-				if errors.Is(err, storage.ErrOffsetOutOfRange) {
-					errorCode = protocol.OFFSET_OUT_OF_RANGE
-				} else {
-					errorCode = h.backpressureErrorCode()
-				}
-			}
-			nextOffset, offsetErr := h.store.NextOffset(ctx, topic.Name, part.Partition)
+			nextOffset, offsetErr := h.waitForFetchData(ctx, topic.Name, part.Partition, part.FetchOffset, maxWait)
 			if offsetErr != nil {
+				if errors.Is(offsetErr, context.Canceled) || errors.Is(offsetErr, context.DeadlineExceeded) {
+					partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
+					})
+					continue
+				}
 				nextOffset = 0
 			}
-			highWatermark := nextOffset
-			if highWatermark > 0 {
-				highWatermark--
-			}
+			errorCode := int16(0)
 			var recordSet []byte
+			switch {
+			case part.FetchOffset > nextOffset:
+				errorCode = protocol.OFFSET_OUT_OF_RANGE
+			case part.FetchOffset == nextOffset:
+				// At the high watermark; Kafka returns an empty set rather than an error.
+				recordSet = nil
+			default:
+				recordSet, err = plog.Read(ctx, part.FetchOffset, part.MaxBytes)
+				if err != nil {
+					if errors.Is(err, storage.ErrOffsetOutOfRange) {
+						errorCode = protocol.OFFSET_OUT_OF_RANGE
+					} else {
+						errorCode = h.backpressureErrorCode()
+						if h.traceKafka {
+							h.logger.Debug("fetch read error", "topic", topic.Name, "partition", part.Partition, "error", err)
+						}
+					}
+				}
+			}
+
+			highWatermark := nextOffset
 			if errorCode == 0 {
-				recordSet = records
+				if h.traceKafka {
+					h.logger.Debug("fetch partition response", "topic", topic.Name, "partition", part.Partition, "records_bytes", len(recordSet), "high_watermark", highWatermark)
+				}
+			} else if h.traceKafka {
+				h.logger.Debug("fetch partition error", "topic", topic.Name, "partition", part.Partition, "error_code", errorCode)
 			}
 			partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
-				Partition:     part.Partition,
-				ErrorCode:     errorCode,
-				HighWatermark: highWatermark,
-				RecordSet:     recordSet,
+				Partition:            part.Partition,
+				ErrorCode:            errorCode,
+				HighWatermark:        highWatermark,
+				LastStableOffset:     highWatermark,
+				LogStartOffset:       0,
+				PreferredReadReplica: -1,
+				RecordSet:            recordSet,
 			})
 		}
 		topicResponses = append(topicResponses, protocol.FetchTopicResponse{
@@ -420,7 +474,42 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 		CorrelationID: header.CorrelationID,
 		Topics:        topicResponses,
 		ThrottleMs:    0,
-	})
+		ErrorCode:     0,
+		SessionID:     0,
+	}, header.APIVersion)
+}
+
+const fetchPollInterval = 10 * time.Millisecond
+
+func (h *handler) waitForFetchData(ctx context.Context, topic string, partition int32, fetchOffset int64, maxWait time.Duration) (int64, error) {
+	nextOffset, err := h.store.NextOffset(ctx, topic, partition)
+	if err != nil || maxWait == 0 || fetchOffset < nextOffset {
+		return nextOffset, err
+	}
+
+	deadline := time.Now().Add(maxWait)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nextOffset, err
+		}
+		sleep := fetchPollInterval
+		if remaining < sleep {
+			sleep = remaining
+		}
+		timer := time.NewTimer(sleep)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nextOffset, ctx.Err()
+		case <-timer.C:
+		}
+
+		nextOffset, err = h.store.NextOffset(ctx, topic, partition)
+		if err != nil || fetchOffset < nextOffset {
+			return nextOffset, err
+		}
+	}
 }
 
 func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32) error {
@@ -434,7 +523,10 @@ func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32
 		ReplicationFactor: 1,
 	}
 	_, err := h.store.CreateTopic(ctx, spec)
-	if err != nil && !errors.Is(err, metadata.ErrTopicExists) {
+	if err != nil {
+		if errors.Is(err, metadata.ErrTopicExists) {
+			return nil
+		}
 		return err
 	}
 	h.logger.Info("auto-created topic", "topic", topic, "partitions", desired)
@@ -793,7 +885,7 @@ func (h *handler) readiness() (bool, string) {
 }
 
 func newLogger() *slog.Logger {
-	level := slog.LevelInfo
+	level := slog.LevelWarn
 	switch strings.ToLower(os.Getenv("KAFSCALE_LOG_LEVEL")) {
 	case "debug":
 		level = slog.LevelDebug
@@ -855,7 +947,7 @@ func generateApiVersions() []protocol.ApiVersion {
 		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 0},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 0},
 		{key: protocol.APIKeyProduce, minVersion: 9, maxVersion: 9},
-		{key: protocol.APIKeyFetch, minVersion: 13, maxVersion: 13},
+		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 11},
 		{key: protocol.APIKeyFindCoordinator, minVersion: 3, maxVersion: 3},
 		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 0},
 		{key: protocol.APIKeyJoinGroup, minVersion: 4, maxVersion: 4},

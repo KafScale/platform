@@ -508,7 +508,7 @@ Fetch Request
 | 37 | CreatePartitions | 0-3 | ✅ Full | Scale partitions without topic recreation |
 | 42 | DeleteGroups | 0-2 | ✅ Full | Consumer group cleanup |
 
-### Planned APIs (v1.1+)
+### Future Releases
 
 | API Key | Name | Target | Notes |
 |---------|------|--------|-------|
@@ -521,6 +521,8 @@ Fetch Request
 | 39 | RenewDelegationToken | v2.0 | Enterprise SSO support |
 | 40 | ExpireDelegationToken | v2.0 | Enterprise SSO support |
 | 41 | DescribeDelegationToken | v2.0 | Enterprise SSO support |
+
+- Follow-up work is making sure the broker actually rebalances when the operator changes assignments (e.g., future work on a dedicated controller to rotate leaders rather than the current round-robin snapshot in `BuildClusterMetadata`).
 
 ### Explicitly Unsupported
 
@@ -2733,6 +2735,15 @@ ENTRYPOINT ["./broker"]
 - [ ] ListOffsets
 - [ ] etcd topic/partition management
 
+### Milestone 6.5: Ops & Scaling APIs
+
+- [ ] DescribeGroups (API 15) for ops debugging parity
+- [ ] ListGroups (API 16) for cluster-wide consumer visibility
+- [ ] OffsetForLeaderEpoch (API 23) to unblock recovery-aware consumers
+- [ ] DescribeConfigs (API 32) with full coverage of broker/topic configs
+- [ ] AlterConfigs (API 33) for runtime tuning without restarts
+- [ ] CreatePartitions (API 37) so partitions can scale without recreation
+
 ### Milestone 7: Kubernetes Operator
 
 - [ ] CRD definitions
@@ -2761,8 +2772,6 @@ ENTRYPOINT ["./broker"]
 - [ ] Documentation
 - [ ] CI/CD pipeline
 - [ ] Security review (TLS, auth)
-
----
 
 ## Appendix A: Kafka Protocol Wire Format Reference
 

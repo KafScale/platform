@@ -97,8 +97,17 @@ func (l *PartitionLog) Flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if artifact != nil && l.onFlush != nil {
-		l.onFlush(ctx, artifact)
+	if l.onFlush != nil {
+		target := artifact
+		if target == nil {
+			current := l.nextOffset - 1
+			if current >= 0 {
+				target = &SegmentArtifact{LastOffset: current}
+			}
+		}
+		if target != nil {
+			l.onFlush(ctx, target)
+		}
 	}
 	return nil
 }
@@ -191,7 +200,21 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 	}
 	l.startPrefetch(ctx, l.segmentIndex(seg.baseOffset)+1)
 
-	result := append([]byte(nil), data...)
+	const headerLen = 32
+	const footerLen = 16
+	start := headerLen
+	if start > len(data) {
+		start = len(data)
+	}
+	end := len(data)
+	if len(data) > footerLen {
+		end = len(data) - footerLen
+	}
+	if end < start {
+		end = len(data)
+	}
+	body := data[start:end]
+	result := append([]byte(nil), body...)
 	if maxBytes > 0 && len(result) > int(maxBytes) {
 		result = result[:maxBytes]
 	}

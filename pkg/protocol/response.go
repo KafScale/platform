@@ -66,6 +66,8 @@ type ProducePartitionResponse struct {
 type FetchResponse struct {
 	CorrelationID int32
 	ThrottleMs    int32
+	ErrorCode     int16
+	SessionID     int32
 	Topics        []FetchTopicResponse
 }
 
@@ -74,11 +76,20 @@ type FetchTopicResponse struct {
 	Partitions []FetchPartitionResponse
 }
 
+type FetchAbortedTransaction struct {
+	ProducerID  int64
+	FirstOffset int64
+}
+
 type FetchPartitionResponse struct {
-	Partition     int32
-	ErrorCode     int16
-	HighWatermark int64
-	RecordSet     []byte
+	Partition            int32
+	ErrorCode            int16
+	HighWatermark        int64
+	LastStableOffset     int64
+	LogStartOffset       int64
+	PreferredReadReplica int32
+	RecordSet            []byte
+	AbortedTransactions  []FetchAbortedTransaction
 }
 
 type CreateTopicResult struct {
@@ -104,10 +115,12 @@ type DeleteTopicsResponse struct {
 }
 
 type ListOffsetsPartitionResponse struct {
-	Partition int32
-	ErrorCode int16
-	Timestamp int64
-	Offset    int64
+	Partition       int32
+	ErrorCode       int16
+	Timestamp       int64
+	Offset          int64
+	LeaderEpoch     int32
+	OldStyleOffsets []int64
 }
 
 type ListOffsetsTopicResponse struct {
@@ -117,24 +130,29 @@ type ListOffsetsTopicResponse struct {
 
 type ListOffsetsResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	Topics        []ListOffsetsTopicResponse
 }
 
 type FindCoordinatorResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	ErrorCode     int16
+	ErrorMessage  *string
 	NodeID        int32
 	Host          string
 	Port          int32
 }
 
 type JoinGroupMember struct {
-	MemberID string
-	Metadata []byte
+	MemberID   string
+	InstanceID *string
+	Metadata   []byte
 }
 
 type JoinGroupResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	ErrorCode     int16
 	GenerationID  int32
 	ProtocolName  string
@@ -145,12 +163,16 @@ type JoinGroupResponse struct {
 
 type SyncGroupResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	ErrorCode     int16
+	ProtocolType  *string
+	ProtocolName  *string
 	Assignment    []byte
 }
 
 type HeartbeatResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	ErrorCode     int16
 }
 
@@ -171,14 +193,16 @@ type OffsetCommitTopicResponse struct {
 
 type OffsetCommitResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	Topics        []OffsetCommitTopicResponse
 }
 
 type OffsetFetchPartitionResponse struct {
-	Partition int32
-	Offset    int64
-	Metadata  string
-	ErrorCode int16
+	Partition   int32
+	Offset      int64
+	LeaderEpoch int32
+	Metadata    *string
+	ErrorCode   int16
 }
 
 type OffsetFetchTopicResponse struct {
@@ -188,6 +212,7 @@ type OffsetFetchTopicResponse struct {
 
 type OffsetFetchResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	Topics        []OffsetFetchTopicResponse
 	ErrorCode     int16
 }
@@ -253,13 +278,29 @@ func EncodeMetadataResponse(resp *MetadataResponse, version int16) ([]byte, erro
 }
 
 // EncodeProduceResponse renders bytes for produce responses.
-func EncodeProduceResponse(resp *ProduceResponse) ([]byte, error) {
+func EncodeProduceResponse(resp *ProduceResponse, version int16) ([]byte, error) {
 	w := newByteWriter(128)
+	flexible := version >= 9
 	w.Int32(resp.CorrelationID)
-	w.Int32(int32(len(resp.Topics)))
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+	if flexible {
+		w.CompactArrayLen(len(resp.Topics))
+	} else {
+		w.Int32(int32(len(resp.Topics)))
+	}
 	for _, topic := range resp.Topics {
-		w.String(topic.Name)
-		w.Int32(int32(len(topic.Partitions)))
+		if flexible {
+			w.CompactString(topic.Name)
+		} else {
+			w.String(topic.Name)
+		}
+		if flexible {
+			w.CompactArrayLen(len(topic.Partitions))
+		} else {
+			w.Int32(int32(len(topic.Partitions)))
+		}
 		for _, p := range topic.Partitions {
 			w.Int32(p.Partition)
 			w.Int16(p.ErrorCode)
@@ -267,17 +308,37 @@ func EncodeProduceResponse(resp *ProduceResponse) ([]byte, error) {
 			w.Int64(p.LogAppendTimeMs)
 			w.Int64(p.LogStartOffset)
 			w.Int32(0) // log_offset_delta (unused for v9)
+			if flexible {
+				w.WriteTaggedFields(0)
+			}
+		}
+		if flexible {
+			w.WriteTaggedFields(0)
 		}
 	}
 	w.Int32(resp.ThrottleMs)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
 	return w.Bytes(), nil
 }
 
 // EncodeFetchResponse renders bytes for fetch responses.
-func EncodeFetchResponse(resp *FetchResponse) ([]byte, error) {
+func EncodeFetchResponse(resp *FetchResponse, version int16) ([]byte, error) {
+	if version < 1 || version > 11 {
+		return nil, fmt.Errorf("fetch response version %d not supported", version)
+	}
 	w := newByteWriter(256)
 	w.Int32(resp.CorrelationID)
 	w.Int32(resp.ThrottleMs)
+	if version >= 7 {
+		w.Int16(resp.ErrorCode)
+		w.Int32(resp.SessionID)
+	} else {
+		if resp.ErrorCode != 0 || resp.SessionID != 0 {
+			return nil, fmt.Errorf("fetch version %d cannot include session fields", version)
+		}
+	}
 	w.Int32(int32(len(resp.Topics)))
 	for _, topic := range resp.Topics {
 		w.String(topic.Name)
@@ -286,8 +347,22 @@ func EncodeFetchResponse(resp *FetchResponse) ([]byte, error) {
 			w.Int32(part.Partition)
 			w.Int16(part.ErrorCode)
 			w.Int64(part.HighWatermark)
-			w.Int64(part.HighWatermark) // last stable offset placeholder
-			w.Int32(0)                  // log_start_offset
+			if version >= 4 {
+				w.Int64(part.LastStableOffset)
+			}
+			if version >= 5 {
+				w.Int64(part.LogStartOffset)
+			}
+			if version >= 4 {
+				w.Int32(int32(len(part.AbortedTransactions)))
+				for _, aborted := range part.AbortedTransactions {
+					w.Int64(aborted.ProducerID)
+					w.Int64(aborted.FirstOffset)
+				}
+			}
+			if version >= 11 {
+				w.Int32(part.PreferredReadReplica)
+			}
 			if part.RecordSet == nil {
 				w.Int32(0)
 			} else {
@@ -323,9 +398,15 @@ func EncodeDeleteTopicsResponse(resp *DeleteTopicsResponse) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-func EncodeListOffsetsResponse(resp *ListOffsetsResponse) ([]byte, error) {
+func EncodeListOffsetsResponse(version int16, resp *ListOffsetsResponse) ([]byte, error) {
+	if version < 0 || version > 4 {
+		return nil, fmt.Errorf("list offsets response version %d not supported", version)
+	}
 	w := newByteWriter(256)
 	w.Int32(resp.CorrelationID)
+	if version >= 2 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int32(int32(len(resp.Topics)))
 	for _, topic := range resp.Topics {
 		w.String(topic.Name)
@@ -333,26 +414,70 @@ func EncodeListOffsetsResponse(resp *ListOffsetsResponse) ([]byte, error) {
 		for _, part := range topic.Partitions {
 			w.Int32(part.Partition)
 			w.Int16(part.ErrorCode)
+			if version == 0 {
+				offsets := part.OldStyleOffsets
+				if offsets == nil {
+					offsets = []int64{}
+				}
+				w.Int32(int32(len(offsets)))
+				for _, off := range offsets {
+					w.Int64(off)
+				}
+				continue
+			}
 			w.Int64(part.Timestamp)
 			w.Int64(part.Offset)
+			if version >= 4 {
+				w.Int32(part.LeaderEpoch)
+			}
 		}
 	}
 	return w.Bytes(), nil
 }
 
-func EncodeFindCoordinatorResponse(resp *FindCoordinatorResponse) ([]byte, error) {
+func EncodeFindCoordinatorResponse(resp *FindCoordinatorResponse, version int16) ([]byte, error) {
+	if version >= 4 {
+		return nil, fmt.Errorf("find coordinator version %d not supported", version)
+	}
 	w := newByteWriter(64)
+	flexible := version >= 3
 	w.Int32(resp.CorrelationID)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+	if version >= 1 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int16(resp.ErrorCode)
+	if version >= 1 {
+		if flexible {
+			w.CompactNullableString(resp.ErrorMessage)
+		} else {
+			w.NullableString(resp.ErrorMessage)
+		}
+	}
 	w.Int32(resp.NodeID)
-	w.String(resp.Host)
+	if flexible {
+		w.CompactString(resp.Host)
+	} else {
+		w.String(resp.Host)
+	}
 	w.Int32(resp.Port)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
 	return w.Bytes(), nil
 }
 
-func EncodeJoinGroupResponse(resp *JoinGroupResponse) ([]byte, error) {
+func EncodeJoinGroupResponse(resp *JoinGroupResponse, version int16) ([]byte, error) {
+	if version >= 6 {
+		return nil, fmt.Errorf("join group response version %d not supported", version)
+	}
 	w := newByteWriter(256)
 	w.Int32(resp.CorrelationID)
+	if version >= 2 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int16(resp.ErrorCode)
 	w.Int32(resp.GenerationID)
 	w.String(resp.ProtocolName)
@@ -361,23 +486,67 @@ func EncodeJoinGroupResponse(resp *JoinGroupResponse) ([]byte, error) {
 	w.Int32(int32(len(resp.Members)))
 	for _, member := range resp.Members {
 		w.String(member.MemberID)
+		if version >= 5 {
+			if member.InstanceID == nil {
+				w.Int16(-1)
+			} else {
+				w.String(*member.InstanceID)
+			}
+		}
 		w.BytesWithLength(member.Metadata)
 	}
 	return w.Bytes(), nil
 }
 
-func EncodeSyncGroupResponse(resp *SyncGroupResponse) ([]byte, error) {
-	w := newByteWriter(128)
+func EncodeSyncGroupResponse(resp *SyncGroupResponse, version int16) ([]byte, error) {
+	if version > 5 {
+		return nil, fmt.Errorf("sync group response version %d not supported", version)
+	}
+	flexible := version >= 4
+	w := newByteWriter(192)
 	w.Int32(resp.CorrelationID)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+	if version >= 1 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int16(resp.ErrorCode)
-	w.BytesWithLength(resp.Assignment)
+	if version >= 5 {
+		if flexible {
+			w.CompactNullableString(resp.ProtocolType)
+			w.CompactNullableString(resp.ProtocolName)
+		} else {
+			w.NullableString(resp.ProtocolType)
+			w.NullableString(resp.ProtocolName)
+		}
+	}
+	if flexible {
+		w.CompactBytes(resp.Assignment)
+		w.WriteTaggedFields(0)
+	} else {
+		w.BytesWithLength(resp.Assignment)
+	}
 	return w.Bytes(), nil
 }
 
-func EncodeHeartbeatResponse(resp *HeartbeatResponse) ([]byte, error) {
-	w := newByteWriter(32)
+func EncodeHeartbeatResponse(resp *HeartbeatResponse, version int16) ([]byte, error) {
+	if version > 4 {
+		return nil, fmt.Errorf("heartbeat response version %d not supported", version)
+	}
+	flexible := version >= 4
+	w := newByteWriter(64)
 	w.Int32(resp.CorrelationID)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+	if version >= 1 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int16(resp.ErrorCode)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
 	return w.Bytes(), nil
 }
 
@@ -391,6 +560,7 @@ func EncodeLeaveGroupResponse(resp *LeaveGroupResponse) ([]byte, error) {
 func EncodeOffsetCommitResponse(resp *OffsetCommitResponse) ([]byte, error) {
 	w := newByteWriter(256)
 	w.Int32(resp.CorrelationID)
+	w.Int32(resp.ThrottleMs)
 	w.Int32(int32(len(resp.Topics)))
 	for _, topic := range resp.Topics {
 		w.String(topic.Name)
@@ -403,9 +573,15 @@ func EncodeOffsetCommitResponse(resp *OffsetCommitResponse) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-func EncodeOffsetFetchResponse(resp *OffsetFetchResponse) ([]byte, error) {
+func EncodeOffsetFetchResponse(resp *OffsetFetchResponse, version int16) ([]byte, error) {
+	if version < 3 || version > 5 {
+		return nil, fmt.Errorf("offset fetch response version %d not supported", version)
+	}
 	w := newByteWriter(256)
 	w.Int32(resp.CorrelationID)
+	if version >= 3 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int32(int32(len(resp.Topics)))
 	for _, topic := range resp.Topics {
 		w.String(topic.Name)
@@ -413,11 +589,16 @@ func EncodeOffsetFetchResponse(resp *OffsetFetchResponse) ([]byte, error) {
 		for _, part := range topic.Partitions {
 			w.Int32(part.Partition)
 			w.Int64(part.Offset)
-			w.String(part.Metadata)
+			if version >= 5 {
+				w.Int32(part.LeaderEpoch)
+			}
+			w.NullableString(part.Metadata)
 			w.Int16(part.ErrorCode)
 		}
 	}
-	w.Int16(resp.ErrorCode)
+	if version >= 2 {
+		w.Int16(resp.ErrorCode)
+	}
 	return w.Bytes(), nil
 }
 
