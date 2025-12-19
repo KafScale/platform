@@ -78,7 +78,7 @@ func TestOperatorConsoleEndToEnd(t *testing.T) {
 		Build()
 
 	publisher := operator.NewSnapshotPublisher(fakeClient)
-	if err := publisher.Publish(ctx, cluster); err != nil {
+	if err := publisher.Publish(ctx, cluster, endpoints); err != nil {
 		t.Fatalf("publish snapshot: %v", err)
 	}
 

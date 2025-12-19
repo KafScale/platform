@@ -32,8 +32,13 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	clusterName := envOrDefault("KAFSCALE_KIND_CLUSTER", "kafscale-e2e")
 	created := false
 	if os.Getenv("KAFSCALE_KIND_CLUSTER") == "" {
-		runCmdGetOutput(t, ctx, "kind", "create", "cluster", "--name", clusterName)
-		created = true
+		if parseBoolEnv("KAFSCALE_KIND_RECREATE") && kindClusterExists(ctx, clusterName) {
+			_ = execCommand(ctx, "kind", "delete", "cluster", "--name", clusterName)
+		}
+		if !kindClusterExists(ctx, clusterName) {
+			runCmdGetOutput(t, ctx, "kind", "create", "cluster", "--name", clusterName)
+			created = true
+		}
 	}
 	t.Cleanup(func() {
 		if created {
@@ -85,18 +90,61 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	applyS3Secret(t, ctx, kindNamespace)
 	applyClusterManifest(t, ctx, kindNamespace)
 
-	waitForResource(t, ctx, kindNamespace, "cronjob", "kafscale-etcd-snapshot", 2*time.Minute)
+	if err := waitForResource(t, ctx, kindNamespace, "cronjob", "kafscale-etcd-snapshot", 2*time.Minute); err != nil {
+		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
+		t.Fatalf("timeout waiting for cronjob/kafscale-etcd-snapshot: %v", err)
+	}
 	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
 
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "create", "job", "etcd-snapshot-manual", "--from=cronjob/kafscale-etcd-snapshot")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=complete", "job/etcd-snapshot-manual", "--timeout=180s")
 
-	minioPod := getPodByLabel(t, ctx, kindNamespace, "app=minio")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "exec", minioPod, "--", "sh", "-c",
-		"ls /data/kafscale-snapshots/etcd-snapshots/*.db >/dev/null")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "exec", minioPod, "--", "sh", "-c",
-		"ls /data/kafscale-snapshots/etcd-snapshots/*.db.sha256 >/dev/null")
+	listing := runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "run", "s3-list", "--rm", "-i", "--restart=Never",
+		"--image=amazon/aws-cli:2.15.0",
+		"--env", "AWS_ACCESS_KEY_ID=minioadmin",
+		"--env", "AWS_SECRET_ACCESS_KEY=minioadmin",
+		"--env", "AWS_DEFAULT_REGION=us-east-1",
+		"--env", "AWS_EC2_METADATA_DISABLED=true",
+		"--command", "--", "sh", "-c",
+		"aws --endpoint-url http://minio."+kindNamespace+".svc.cluster.local:9000 s3api list-objects-v2 --bucket kafscale-snapshots --prefix etcd-snapshots/ --query 'Contents[].Key' --output text")
+	t.Logf("minio snapshot objects:\n%s", string(listing))
+	if !bytes.Contains(listing, []byte(".db")) {
+		t.Fatalf("expected snapshot .db object in minio, got:\n%s", string(listing))
+	}
+	if !bytes.Contains(listing, []byte(".sha256")) {
+		t.Fatalf("expected snapshot .db.sha256 object in minio, got:\n%s", string(listing))
+	}
+
+	t.Log("testing operator HA: deleting leader pod and waiting for rollout")
+	operatorPod := getPodByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", operatorPod)
+	waitForRollout(t, ctx, kindNamespace, "deployment/"+operatorDeployment, 2*time.Minute)
+
+	t.Log("testing etcd HA: deleting one member and waiting for ready")
+	etcdPod := getPodByLabel(t, ctx, kindNamespace, "app=kafscale-etcd")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", etcdPod)
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=ready", "pod", "-l", "app=kafscale-etcd", "--timeout=180s")
+
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "create", "job", "etcd-snapshot-manual", "--from=cronjob/kafscale-etcd-snapshot")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=complete", "job/etcd-snapshot-manual", "--timeout=180s")
+
+	postFailoverListing := runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "run", "s3-list", "--rm", "-i", "--restart=Never",
+		"--image=amazon/aws-cli:2.15.0",
+		"--env", "AWS_ACCESS_KEY_ID=minioadmin",
+		"--env", "AWS_SECRET_ACCESS_KEY=minioadmin",
+		"--env", "AWS_DEFAULT_REGION=us-east-1",
+		"--env", "AWS_EC2_METADATA_DISABLED=true",
+		"--command", "--", "sh", "-c",
+		"aws --endpoint-url http://minio."+kindNamespace+".svc.cluster.local:9000 s3api list-objects-v2 --bucket kafscale-snapshots --prefix etcd-snapshots/ --query 'Contents[].Key' --output text")
+	t.Logf("minio snapshot objects after failover:\n%s", string(postFailoverListing))
+	if !bytes.Contains(postFailoverListing, []byte(".db")) {
+		t.Fatalf("expected snapshot .db object in minio after failover, got:\n%s", string(postFailoverListing))
+	}
+	if !bytes.Contains(postFailoverListing, []byte(".sha256")) {
+		t.Fatalf("expected snapshot .db.sha256 object in minio after failover, got:\n%s", string(postFailoverListing))
+	}
 }
 
 func requireBinaries(t *testing.T, names ...string) {
@@ -117,7 +165,8 @@ func execCommand(ctx context.Context, name string, args ...string) error {
 
 func ensureNamespace(t *testing.T, ctx context.Context, namespace string) {
 	t.Helper()
-	_ = execCommand(ctx, "kubectl", "create", "namespace", namespace)
+	manifest := runCmdWithOutput(t, ctx, "kubectl", "create", "namespace", namespace, "--dry-run=client", "-o", "yaml")
+	runCmdWithInput(t, ctx, "kubectl", string(manifest), "apply", "-f", "-")
 }
 
 func applyMinio(t *testing.T, ctx context.Context, namespace string) {
@@ -196,10 +245,11 @@ spec:
   s3:
     bucket: kafscale-snapshots
     region: us-east-1
+    endpoint: http://minio.%s.svc.cluster.local:9000
     credentialsSecretRef: kafscale-s3-credentials
   etcd:
     endpoints: []
-`, namespace)
+`, namespace, namespace)
 	runCmdWithInput(t, ctx, "kubectl", manifest, "apply", "-f", "-")
 }
 
@@ -220,19 +270,29 @@ func waitForRollout(t *testing.T, ctx context.Context, namespace, resource strin
 	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "rollout", "status", resource, fmt.Sprintf("--timeout=%s", timeout))
 }
 
-func waitForResource(t *testing.T, ctx context.Context, namespace, resource, name string, timeout time.Duration) {
+func waitForResource(t *testing.T, ctx context.Context, namespace, resource, name string, timeout time.Duration) error {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
-		out := runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "get", resource, name, "-o", "name")
+		out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", resource, name, "-o", "name", "--ignore-not-found")
 		if strings.TrimSpace(string(out)) != "" {
-			return
+			return nil
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("timeout waiting for %s/%s", resource, name)
+			return fmt.Errorf("timed out after %s", timeout)
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+func runCmdWithOutput(t *testing.T, ctx context.Context, name string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	_ = cmd.Run()
+	return buf.Bytes()
 }
 
 func waitForCondition(t *testing.T, ctx context.Context, namespace, resource, condition, status string, timeout time.Duration) {
@@ -271,6 +331,20 @@ func loadImage(t *testing.T, ctx context.Context, clusterName, image string) {
 	runCmdGetOutput(t, ctx, "kind", "load", "docker-image", image, "--name", clusterName)
 }
 
+func kindClusterExists(ctx context.Context, name string) bool {
+	cmd := exec.CommandContext(ctx, "kind", "get", "clusters")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(line) == name {
+			return true
+		}
+	}
+	return false
+}
+
 func getComponentDeployment(t *testing.T, ctx context.Context, namespace, component string) string {
 	t.Helper()
 	out := runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "get", "deployments",
@@ -295,4 +369,19 @@ func getPodByLabel(t *testing.T, ctx context.Context, namespace, selector string
 		t.Fatalf("unable to resolve pod for %s", selector)
 	}
 	return name
+}
+
+func dumpKindDebug(t *testing.T, ctx context.Context, namespace, operatorDeployment string) {
+	t.Helper()
+	t.Log("dumping operator debug state")
+	clusterOut := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "kafscalecluster", "kafscale", "-o", "yaml")
+	t.Logf("kafscalecluster:\n%s", string(clusterOut))
+	cronOut := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "cronjob", "-o", "wide")
+	t.Logf("cronjobs:\n%s", string(cronOut))
+	deployOut := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "deployment", operatorDeployment, "-o", "yaml")
+	t.Logf("operator deployment:\n%s", string(deployOut))
+	logsOut := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "logs", "deployment/"+operatorDeployment, "--tail=200")
+	t.Logf("operator logs:\n%s", string(logsOut))
+	eventsOut := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "events", "--sort-by=.lastTimestamp")
+	t.Logf("events:\n%s", string(eventsOut))
 }
