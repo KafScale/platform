@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KafScale Comparison | Kafka Alternatives</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --dark: #1e293b;
+      --light: #f8fafc;
+      --border: #e2e8f0;
+      --text: #334155;
+      --text-muted: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--light);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2rem;
+      color: var(--dark);
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+      font-size: 1.1rem;
+    }
+
+    /* Desktop Table */
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    .comparison-table th,
+    .comparison-table td {
+      padding: 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .comparison-table thead {
+      background: var(--dark);
+      color: white;
+    }
+
+    .comparison-table thead th {
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .comparison-table thead th.highlight {
+      background: var(--primary);
+    }
+
+    .comparison-table tbody tr:hover {
+      background: #f1f5f9;
+    }
+
+    .comparison-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .comparison-table td:first-child {
+      font-weight: 600;
+      color: var(--dark);
+      background: #f8fafc;
+      min-width: 140px;
+    }
+
+    .comparison-table td.highlight {
+      background: #eff6ff;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-success {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .badge-warning {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .badge-danger {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .badge-info {
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .badge-neutral {
+      background: #f1f5f9;
+      color: #475569;
+    }
+
+    /* Icons */
+    .icon-yes {
+      color: var(--success);
+      font-weight: bold;
+    }
+
+    .icon-no {
+      color: var(--danger);
+      font-weight: bold;
+    }
+
+    .icon-partial {
+      color: var(--warning);
+      font-weight: bold;
+    }
+
+    /* Mobile Cards */
+    .mobile-cards {
+      display: none;
+    }
+
+    .product-card {
+      background: white;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .product-card.highlight {
+      border: 2px solid var(--primary);
+    }
+
+    .product-card h3 {
+      font-size: 1.25rem;
+      color: var(--dark);
+      margin-bottom: 0.25rem;
+    }
+
+    .product-card .tagline {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .product-card .spec-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .product-card .spec-row:last-child {
+      border-bottom: none;
+    }
+
+    .product-card .spec-label {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+
+    .product-card .spec-value {
+      font-weight: 500;
+      text-align: right;
+    }
+
+    /* Section dividers */
+    .section-row td {
+      background: #f1f5f9 !important;
+      font-weight: 700;
+      color: var(--dark);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 0.75rem 1rem;
+    }
+
+    /* Notes */
+    .notes {
+      margin-top: 2rem;
+      padding: 1.5rem;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+
+    .notes h3 {
+      font-size: 1rem;
+      color: var(--dark);
+      margin-bottom: 1rem;
+    }
+
+    .notes ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .notes li {
+      padding: 0.5rem 0;
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .notes li:last-child {
+      border-bottom: none;
+    }
+
+    .notes li strong {
+      color: var(--text);
+    }
+
+    /* Small text */
+    .small {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .comparison-table {
+        display: none;
+      }
+
+      .mobile-cards {
+        display: block;
+      }
+    }
+
+    @media (max-width: 480px) {
+      body {
+        padding: 1rem 0.5rem;
+      }
+
+      h1 {
+        font-size: 1.5rem;
+      }
+
+      .subtitle {
+        font-size: 1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>How KafScale Compares</h1>
+    <p class="subtitle">Kafka-compatible streaming platforms: architecture, features, and trade-offs</p>
+
+    <!-- Desktop Table -->
+    <table class="comparison-table">
+      <thead>
+        <tr>
+          <th>Feature</th>
+          <th>Apache Kafka</th>
+          <th>Confluent Cloud</th>
+          <th>Redpanda</th>
+          <th>WarpStream</th>
+          <th>AutoMQ</th>
+          <th>Bufstream</th>
+          <th class="highlight">KafScale</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- Architecture Section -->
+        <tr class="section-row">
+          <td colspan="8">Architecture</td>
+        </tr>
+        <tr>
+          <td>Storage Backend</td>
+          <td>Local disk</td>
+          <td>Local disk + tiered</td>
+          <td>Local disk + tiered</td>
+          <td>S3 only</td>
+          <td>S3 + EBS WAL</td>
+          <td>S3 only</td>
+          <td class="highlight"><strong>S3 only</strong></td>
+        </tr>
+        <tr>
+          <td>Broker State</td>
+          <td><span class="badge badge-danger">Stateful</span></td>
+          <td><span class="badge badge-danger">Stateful</span></td>
+          <td><span class="badge badge-danger">Stateful</span></td>
+          <td><span class="badge badge-success">Stateless</span></td>
+          <td><span class="badge badge-success">Stateless</span></td>
+          <td><span class="badge badge-success">Stateless</span></td>
+          <td class="highlight"><span class="badge badge-success">Stateless</span></td>
+        </tr>
+        <tr>
+          <td>Metadata Store</td>
+          <td>ZooKeeper/KRaft</td>
+          <td>Managed KRaft</td>
+          <td>Internal Raft</td>
+          <td>Cloud control plane</td>
+          <td>KRaft</td>
+          <td>PostgreSQL/etcd</td>
+          <td class="highlight"><strong>etcd</strong></td>
+        </tr>
+        <tr>
+          <td>Language</td>
+          <td>Java/Scala</td>
+          <td>Java/Scala</td>
+          <td>C++</td>
+          <td>Go</td>
+          <td>Java</td>
+          <td>Go</td>
+          <td class="highlight"><strong>Go</strong></td>
+        </tr>
+        <tr>
+          <td>K8s Native</td>
+          <td><span class="icon-partial">◐</span> Community</td>
+          <td><span class="icon-no">✗</span> Managed</td>
+          <td><span class="icon-yes">✓</span> Operator</td>
+          <td><span class="icon-no">✗</span> BYOC</td>
+          <td><span class="icon-yes">✓</span> Operator</td>
+          <td><span class="icon-yes">✓</span> Helm</td>
+          <td class="highlight"><span class="icon-yes">✓</span> <strong>CRDs + Operator</strong></td>
+        </tr>
+
+        <!-- Performance Section -->
+        <tr class="section-row">
+          <td colspan="8">Performance</td>
+        </tr>
+        <tr>
+          <td>Typical Latency</td>
+          <td>&lt;10ms</td>
+          <td>&lt;10ms</td>
+          <td>&lt;10ms</td>
+          <td>~400ms</td>
+          <td>&lt;100ms</td>
+          <td>~200-400ms</td>
+          <td class="highlight"><strong>~500ms</strong></td>
+        </tr>
+        <tr>
+          <td>Scale to Zero</td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-partial">◐</span> Basic tier</td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td class="highlight"><span class="icon-yes">✓</span></td>
+        </tr>
+        <tr>
+          <td>Rebalancing</td>
+          <td><span class="badge badge-danger">Hours</span></td>
+          <td><span class="badge badge-warning">Minutes</span></td>
+          <td><span class="badge badge-warning">Minutes</span></td>
+          <td><span class="badge badge-success">Instant</span></td>
+          <td><span class="badge badge-success">Seconds</span></td>
+          <td><span class="badge badge-success">Instant</span></td>
+          <td class="highlight"><span class="badge badge-success">Instant</span></td>
+        </tr>
+
+        <!-- Features Section -->
+        <tr class="section-row">
+          <td colspan="8">Features</td>
+        </tr>
+        <tr>
+          <td>Protocol</td>
+          <td>Kafka (native)</td>
+          <td>Kafka (native)</td>
+          <td>Kafka compatible</td>
+          <td>Kafka compatible</td>
+          <td>Kafka compatible</td>
+          <td>Kafka compatible</td>
+          <td class="highlight">Kafka compatible</td>
+        </tr>
+        <tr>
+          <td>Transactions / EOS</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td class="highlight"><span class="icon-no">✗</span> <span class="small">by design</span></td>
+        </tr>
+        <tr>
+          <td>Compacted Topics</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td class="highlight"><span class="icon-no">✗</span> <span class="small">by design</span></td>
+        </tr>
+        <tr>
+          <td>Consumer Groups</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td class="highlight"><span class="icon-yes">✓</span></td>
+        </tr>
+        <tr>
+          <td>Schema Registry</td>
+          <td><span class="icon-partial">◐</span> Confluent</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-partial">◐</span> External</td>
+          <td><span class="icon-yes">✓</span> Native Protobuf</td>
+          <td class="highlight"><span class="icon-partial">◐</span> External</td>
+        </tr>
+        <tr>
+          <td>Iceberg Export</td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-yes">✓</span> Tableflow</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span> Tableflow</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span> Native</td>
+          <td class="highlight"><span class="icon-no">✗</span> <span class="small">v2.0</span></td>
+        </tr>
+
+        <!-- Cost & Licensing Section -->
+        <tr class="section-row">
+          <td colspan="8">Cost & Licensing</td>
+        </tr>
+        <tr>
+          <td>License</td>
+          <td><span class="badge badge-success">Apache 2.0</span></td>
+          <td><span class="badge badge-neutral">Proprietary</span></td>
+          <td><span class="badge badge-warning">BSL 1.1</span></td>
+          <td><span class="badge badge-neutral">Proprietary</span></td>
+          <td><span class="badge badge-warning">BSL</span></td>
+          <td><span class="badge badge-neutral">Proprietary</span></td>
+          <td class="highlight"><span class="badge badge-success">Apache 2.0</span></td>
+        </tr>
+        <tr>
+          <td>Self-Hosted</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-partial">◐</span> Platform</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span> BYOC</td>
+          <td><span class="icon-yes">✓</span></td>
+          <td><span class="icon-yes">✓</span></td>
+          <td class="highlight"><span class="icon-yes">✓</span></td>
+        </tr>
+        <tr>
+          <td>Cost (100GB/day)*</td>
+          <td>~$400/mo</td>
+          <td>~$200-500/mo</td>
+          <td>~$300/mo</td>
+          <td>~$150/mo + fees</td>
+          <td>~$150/mo</td>
+          <td>~$100/mo + fees</td>
+          <td class="highlight"><strong>~$100/mo</strong></td>
+        </tr>
+        <tr>
+          <td>Vendor Lock-in Risk</td>
+          <td><span class="badge badge-success">None</span></td>
+          <td><span class="badge badge-danger">High</span></td>
+          <td><span class="badge badge-warning">Medium</span></td>
+          <td><span class="badge badge-danger">High</span></td>
+          <td><span class="badge badge-warning">Medium</span></td>
+          <td><span class="badge badge-warning">Medium</span></td>
+          <td class="highlight"><span class="badge badge-success">None</span></td>
+        </tr>
+
+        <!-- Operational Section -->
+        <tr class="section-row">
+          <td colspan="8">Operations</td>
+        </tr>
+        <tr>
+          <td>Disk Management</td>
+          <td><span class="badge badge-danger">Required</span></td>
+          <td><span class="badge badge-success">Managed</span></td>
+          <td><span class="badge badge-danger">Required</span></td>
+          <td><span class="badge badge-success">None</span></td>
+          <td><span class="badge badge-warning">WAL only</span></td>
+          <td><span class="badge badge-success">None</span></td>
+          <td class="highlight"><span class="badge badge-success">None</span></td>
+        </tr>
+        <tr>
+          <td>ZooKeeper Required</td>
+          <td><span class="icon-partial">◐</span> KRaft optional</td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td><span class="icon-no">✗</span></td>
+          <td class="highlight"><span class="icon-no">✗</span></td>
+        </tr>
+        <tr>
+          <td>Cross-AZ Costs</td>
+          <td><span class="badge badge-danger">High</span></td>
+          <td><span class="badge badge-warning">Medium</span></td>
+          <td><span class="badge badge-danger">High</span></td>
+          <td><span class="badge badge-success">None</span></td>
+          <td><span class="badge badge-success">None</span></td>
+          <td><span class="badge badge-success">None</span></td>
+          <td class="highlight"><span class="badge badge-success">None</span></td>
+        </tr>
+
+        <!-- Use Cases Section -->
+        <tr class="section-row">
+          <td colspan="8">Best For</td>
+        </tr>
+        <tr>
+          <td>Target Use Case</td>
+          <td>General streaming</td>
+          <td>Enterprise, managed</td>
+          <td>Low-latency, perf</td>
+          <td>Cost-sensitive ETL</td>
+          <td>Cloud migration</td>
+          <td>Protobuf + Iceberg</td>
+          <td class="highlight"><strong>ETL, logs, async</strong></td>
+        </tr>
+        <tr>
+          <td>Team Size</td>
+          <td>Large (dedicated)</td>
+          <td>Any (managed)</td>
+          <td>Medium</td>
+          <td>Small-Medium</td>
+          <td>Medium</td>
+          <td>Small-Medium</td>
+          <td class="highlight"><strong>Small-Medium</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Mobile Cards -->
+    <div class="mobile-cards">
+      <!-- KafScale Card (First, highlighted) -->
+      <div class="product-card highlight">
+        <h3>KafScale</h3>
+        <p class="tagline">Stateless Kafka on S3 • Open Source</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">S3 only</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-success">Stateless</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">Go</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">~500ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-success">Apache 2.0</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value"><strong>~$100/mo</strong></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-yes">✓</span> CRDs + Operator</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">ETL, logs, async events</span>
+        </div>
+      </div>
+
+      <!-- Apache Kafka Card -->
+      <div class="product-card">
+        <h3>Apache Kafka</h3>
+        <p class="tagline">The original • Self-managed</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">Local disk</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-danger">Stateful</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">Java/Scala</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">&lt;10ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-success">Apache 2.0</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value">~$400/mo</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-partial">◐</span> Community operators</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">General streaming</span>
+        </div>
+      </div>
+
+      <!-- Confluent Cloud Card -->
+      <div class="product-card">
+        <h3>Confluent Cloud</h3>
+        <p class="tagline">Fully managed • Enterprise</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">Local + tiered</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-danger">Stateful</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">Java/Scala</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">&lt;10ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-neutral">Proprietary</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value">~$200-500/mo</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-no">✗</span> Managed only</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">Enterprise, managed</span>
+        </div>
+      </div>
+
+      <!-- Redpanda Card -->
+      <div class="product-card">
+        <h3>Redpanda</h3>
+        <p class="tagline">C++ rewrite • Low latency</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">Local + tiered</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-danger">Stateful</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">C++</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">&lt;10ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-warning">BSL 1.1</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value">~$300/mo</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-yes">✓</span> Operator</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">Low-latency, performance</span>
+        </div>
+      </div>
+
+      <!-- WarpStream Card -->
+      <div class="product-card">
+        <h3>WarpStream</h3>
+        <p class="tagline">S3-native • Confluent-owned</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">S3 only</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-success">Stateless</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">Go</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">~400ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-neutral">Proprietary</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value">~$150/mo + fees</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-no">✗</span> BYOC</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">Cost-sensitive ETL</span>
+        </div>
+      </div>
+
+      <!-- AutoMQ Card -->
+      <div class="product-card">
+        <h3>AutoMQ</h3>
+        <p class="tagline">Kafka fork • S3 + WAL</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">S3 + EBS WAL</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-success">Stateless</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">Java</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">&lt;100ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-warning">BSL</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value">~$150/mo</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-yes">✓</span> Operator</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">Cloud migration</span>
+        </div>
+      </div>
+
+      <!-- Bufstream Card -->
+      <div class="product-card">
+        <h3>Bufstream</h3>
+        <p class="tagline">S3-native • Protobuf + Iceberg</p>
+        <div class="spec-row">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">S3 only</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Broker State</span>
+          <span class="spec-value"><span class="badge badge-success">Stateless</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Language</span>
+          <span class="spec-value">Go</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Latency</span>
+          <span class="spec-value">~200-400ms</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">License</span>
+          <span class="spec-value"><span class="badge badge-neutral">Proprietary</span></span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Cost (100GB/day)</span>
+          <span class="spec-value">~$100/mo + fees</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">K8s Native</span>
+          <span class="spec-value"><span class="icon-yes">✓</span> Helm</span>
+        </div>
+        <div class="spec-row">
+          <span class="spec-label">Best For</span>
+          <span class="spec-value">Protobuf + Iceberg pipelines</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notes -->
+    <div class="notes">
+      <h3>Notes</h3>
+      <ul>
+        <li><strong>*Cost estimates</strong> are approximate for 100GB/day ingestion, 7-day retention, 3 brokers. Actual costs vary by region, traffic patterns, and configuration.</li>
+        <li><strong>WarpStream</strong> was acquired by Confluent (IBM) in September 2024. Future direction uncertain.</li>
+        <li><strong>BSL licenses</strong> (Business Source License) restrict commercial use as a managed service without a separate agreement.</li>
+        <li><strong>Tiered storage</strong> offloads cold data to S3 but still requires local disks for hot data and replication.</li>
+        <li><strong>S3-only storage</strong> means all data (hot and cold) is stored in object storage, eliminating disk management entirely.</li>
+        <li><strong>KafScale</strong> intentionally omits transactions and compacted topics to optimize for ETL, log aggregation, and async event workloads.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
