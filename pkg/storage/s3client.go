@@ -24,6 +24,7 @@ type S3Client interface {
 	UploadSegment(ctx context.Context, key string, body []byte) error
 	UploadIndex(ctx context.Context, key string, body []byte) error
 	DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error)
+	DownloadIndex(ctx context.Context, key string) ([]byte, error)
 	ListSegments(ctx context.Context, prefix string) ([]S3Object, error)
 	EnsureBucket(ctx context.Context) error
 }

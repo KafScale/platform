@@ -178,6 +178,23 @@ func (c *awsS3Client) DownloadSegment(ctx context.Context, key string, rng *Byte
 	return data, nil
 }
 
+func (c *awsS3Client) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}
+	resp, err := c.api.GetObject(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("get object %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body %s: %w", key, err)
+	}
+	return data, nil
+}
+
 func (c *awsS3Client) ListSegments(ctx context.Context, prefix string) ([]S3Object, error) {
 	paginator := s3.NewListObjectsV2Paginator(c.api, &s3.ListObjectsV2Input{
 		Bucket: aws.String(c.bucket),

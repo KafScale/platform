@@ -67,6 +67,15 @@ func (m *MemoryS3Client) DownloadSegment(ctx context.Context, key string, rng *B
 	return nil, fmt.Errorf("segment %s not found", key)
 }
 
+func (m *MemoryS3Client) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if data, ok := m.index[key]; ok {
+		return append([]byte(nil), data...), nil
+	}
+	return nil, fmt.Errorf("index %s not found", key)
+}
+
 func (m *MemoryS3Client) ListSegments(ctx context.Context, prefix string) ([]S3Object, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

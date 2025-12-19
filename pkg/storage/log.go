@@ -24,18 +24,19 @@ type PartitionLogConfig struct {
 
 // PartitionLog coordinates buffering, segment serialization, S3 uploads, and caching.
 type PartitionLog struct {
-	topic      string
-	partition  int32
-	s3         S3Client
-	cache      *cache.SegmentCache
-	cfg        PartitionLogConfig
-	buffer     *WriteBuffer
-	nextOffset int64
-	onFlush    func(context.Context, *SegmentArtifact)
-	onS3Op     func(string, time.Duration, error)
-	segments   []segmentRange
-	prefetchMu sync.Mutex
-	mu         sync.Mutex
+	topic        string
+	partition    int32
+	s3           S3Client
+	cache        *cache.SegmentCache
+	cfg          PartitionLogConfig
+	buffer       *WriteBuffer
+	nextOffset   int64
+	onFlush      func(context.Context, *SegmentArtifact)
+	onS3Op       func(string, time.Duration, error)
+	segments     []segmentRange
+	indexEntries map[int64][]*IndexEntry
+	prefetchMu   sync.Mutex
+	mu           sync.Mutex
 }
 
 type segmentRange struct {
@@ -49,16 +50,17 @@ var ErrOffsetOutOfRange = errors.New("offset out of range")
 // NewPartitionLog constructs a log for a topic partition.
 func NewPartitionLog(topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error)) *PartitionLog {
 	return &PartitionLog{
-		topic:      topic,
-		partition:  partition,
-		s3:         s3Client,
-		cache:      cache,
-		cfg:        cfg,
-		buffer:     NewWriteBuffer(cfg.Buffer),
-		nextOffset: startOffset,
-		onFlush:    onFlush,
-		onS3Op:     onS3Op,
-		segments:   make([]segmentRange, 0),
+		topic:        topic,
+		partition:    partition,
+		s3:           s3Client,
+		cache:        cache,
+		cfg:          cfg,
+		buffer:       NewWriteBuffer(cfg.Buffer),
+		nextOffset:   startOffset,
+		onFlush:      onFlush,
+		onS3Op:       onS3Op,
+		segments:     make([]segmentRange, 0),
+		indexEntries: make(map[int64][]*IndexEntry),
 	}
 }
 
@@ -108,16 +110,32 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 		return entries[i].base < entries[j].base
 	})
 	segments := make([]segmentRange, 0, len(entries))
+	indexByBase := make(map[int64][]*IndexEntry, len(entries))
 	for _, entry := range entries {
+		indexKey := l.indexKey(entry.base)
+		startTime := time.Now()
+		indexBytes, err := l.s3.DownloadIndex(ctx, indexKey)
+		if l.onS3Op != nil {
+			l.onS3Op("download_index", time.Since(startTime), err)
+		}
+		if err != nil {
+			return -1, err
+		}
+		parsedEntries, err := ParseIndex(indexBytes)
+		if err != nil {
+			return -1, fmt.Errorf("parse index %s: %w", indexKey, err)
+		}
 		segments = append(segments, segmentRange{
 			baseOffset: entry.base,
 			lastOffset: entry.last,
 		})
+		indexByBase[entry.base] = parsedEntries
 	}
 	last := entries[len(entries)-1].last
 
 	l.mu.Lock()
 	l.segments = segments
+	l.indexEntries = indexByBase
 	if last >= l.nextOffset {
 		l.nextOffset = last + 1
 	}
@@ -224,6 +242,9 @@ func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error
 		baseOffset: artifact.BaseOffset,
 		lastOffset: artifact.LastOffset,
 	})
+	if artifact.RelativeIndex != nil {
+		l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
+	}
 	l.startPrefetch(ctx, len(l.segments)-1)
 	return artifact, nil
 }

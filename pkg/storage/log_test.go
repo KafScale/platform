@@ -152,6 +152,9 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 	if earliest := recovered.EarliestOffset(); earliest != 0 {
 		t.Fatalf("expected earliest offset 0, got %d", earliest)
 	}
+	if entries, ok := recovered.indexEntries[0]; !ok || len(entries) == 0 {
+		t.Fatalf("expected index entries for base offset 0")
+	}
 
 	res, err := recovered.AppendBatch(context.Background(), batch)
 	if err != nil {
