@@ -7,61 +7,107 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>Kafscale Operations Console</h1>
-    <p id="cluster-summary">Loading cluster status…</p>
-  </header>
-  <main>
-    <section>
-      <h2>Cluster Health</h2>
-      <div id="health-cards" class="cards"></div>
-      <div id="alerts"></div>
+  <div id="login-screen" class="screen screen-active">
+    <div class="login-shell">
+      <div class="login-hero">
+        <p class="eyebrow">Kafscale Console</p>
+        <h1>S3-backed Kafka operations, without the chaos.</h1>
+        <p class="subhead">Sign in to monitor cluster health, topics, and live throughput.</p>
+        <div class="hero-panel">
+          <div>
+            <span>Cluster</span>
+            <strong>kafscale</strong>
+          </div>
+          <div>
+            <span>Mode</span>
+            <strong>Ops Console</strong>
+          </div>
+          <div>
+            <span>Region</span>
+            <strong>Auto</strong>
+          </div>
+        </div>
+      </div>
+      <div class="login-card">
+        <h2>Sign in</h2>
+        <p class="muted">Use the credentials provided by your operator.</p>
+        <form id="login-form">
+          <label>
+            <span>Username</span>
+            <input type="text" id="login-username" autocomplete="username" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input type="password" id="login-password" autocomplete="current-password" required />
+          </label>
+          <button type="submit" id="login-submit">Enter Console</button>
+        </form>
+        <div id="login-message" class="login-message"></div>
+        <div id="login-error" class="login-error" role="alert"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="screen">
+    <header>
       <div>
-        <h3>Broker Fleet</h3>
-        <div id="broker-grid" class="grid"></div>
+        <h1>Kafscale Operations Console</h1>
+        <p id="cluster-summary">Loading cluster status…</p>
       </div>
-    </section>
-    <section>
-      <h2>Topics</h2>
-      <table id="topic-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Partitions</th>
-            <th>State</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </section>
-    <section>
-      <h2>Topic Detail</h2>
-      <div id="topic-detail" class="detail-panel">
-        <p>Select a topic to inspect partition layout.</p>
-      </div>
-    </section>
-    <section>
-      <h2>Live Metrics</h2>
-      <div id="metric-cards" class="cards metrics">
-        <div class="card metric">
-          <h3>Produce (msg/s)</h3>
-          <strong id="produce-rps">0</strong>
+      <button id="logout-button" class="ghost-button" type="button">Sign out</button>
+    </header>
+    <main>
+      <section>
+        <h2>Cluster Health</h2>
+        <div id="health-cards" class="cards"></div>
+        <div id="alerts"></div>
+        <div>
+          <h3>Broker Fleet</h3>
+          <div id="broker-grid" class="grid"></div>
         </div>
-        <div class="card metric">
-          <h3>Fetch (msg/s)</h3>
-          <strong id="fetch-rps">0</strong>
+      </section>
+      <section>
+        <h2>Topics</h2>
+        <table id="topic-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Partitions</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+      <section>
+        <h2>Topic Detail</h2>
+        <div id="topic-detail" class="detail-panel">
+          <p>Select a topic to inspect partition layout.</p>
         </div>
-        <div class="card metric">
-          <h3>S3 Latency (ms)</h3>
-          <strong id="live-s3-latency">0</strong>
+      </section>
+      <section>
+        <h2>Live Metrics</h2>
+        <div id="metric-cards" class="cards metrics">
+          <div class="card metric">
+            <h3>Produce (msg/s)</h3>
+            <strong id="produce-rps">0</strong>
+          </div>
+          <div class="card metric">
+            <h3>Fetch (msg/s)</h3>
+            <strong id="fetch-rps">0</strong>
+          </div>
+          <div class="card metric">
+            <h3>S3 Latency (ms)</h3>
+            <strong id="live-s3-latency">0</strong>
+          </div>
         </div>
-      </div>
-      <p id="metrics-status" class="muted">Waiting for samples…</p>
-    </section>
-  </main>
-  <footer>
-    <small>Prototype UI &middot; data is real-time only</small>
-  </footer>
+        <p id="metrics-status" class="muted">Waiting for samples…</p>
+      </section>
+    </main>
+    <footer>
+      <small>Prototype UI &middot; data is real-time only</small>
+    </footer>
+  </div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

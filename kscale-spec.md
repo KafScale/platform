@@ -524,6 +524,15 @@ Fetch Request
 
 - Follow-up work is making sure the broker actually rebalances when the operator changes assignments (e.g., future work on a dedicated controller to rotate leaders rather than the current round-robin snapshot in `BuildClusterMetadata`).
 
+### v1.1 Auth
+```
+SASL/PLAIN + simple RBAC:
+- admin: Create, Delete, Alter, Describe
+- producer: Write, Describe  
+- consumer: Read, Describe
+```
+We store credentials in K8s secrets, roles in etcd, auth is disabled per default since most Kafka instances internally run without ACL / RBAC.
+
 ### Explicitly Unsupported
 
 | API Key | Name | Reason |
@@ -2315,6 +2324,13 @@ KAFSCALE_FLUSH_INTERVAL_MS
 KAFSCALE_CACHE_SIZE
 KAFSCALE_LOG_LEVEL
 ```
+
+### UI Authentication
+
+- `KAFSCALE_UI_USERNAME`
+- `KAFSCALE_UI_PASSWORD`
+
+The React SPA always renders a login screen inspired by MinIO’s aesthetic. Credentials are sourced exclusively from these environment variables—there are no baked-in defaults. If either variable is unset, the login form instead shows an inline warning that UI access is disabled until both values are configured, preventing accidental deployments that rely on hard-coded passwords. The API/auth middleware reads the same variables and rejects every login attempt until they are provided, keeping the UX and backend behavior in sync.
 
 ---
 

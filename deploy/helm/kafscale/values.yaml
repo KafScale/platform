@@ -28,6 +28,9 @@ console:
     repository: ghcr.io/novatechflow/kafscale-console
     tag: "latest"
     pullPolicy: IfNotPresent
+  auth:
+    username: ""
+    password: ""
   podAnnotations: {}
   resources: {}
   nodeSelector: {}

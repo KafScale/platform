@@ -100,9 +100,15 @@ func TestDemoStack(t *testing.T) {
 	consoleAddr := "127.0.0.1:48080"
 	releasePort(t, consoleAddr)
 	consoleLogger := log.New(io.Discard, "", 0)
+	consoleUser := strings.TrimSpace(os.Getenv("KAFSCALE_UI_USERNAME"))
+	consolePass := strings.TrimSpace(os.Getenv("KAFSCALE_UI_PASSWORD"))
 	consoleOpts := consolepkg.ServerOptions{
 		Store:  store,
 		Logger: consoleLogger,
+		Auth: consolepkg.AuthConfig{
+			Username: consoleUser,
+			Password: consolePass,
+		},
 	}
 	consoleOpts.Metrics = consolepkg.NewPromMetricsClient(fmt.Sprintf("http://%s/metrics", metricsAddr))
 	if err := consolepkg.StartServer(demoCtx, consoleAddr, consoleOpts); err != nil {

@@ -155,9 +155,6 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		}
 	}()
 
-	consumeCtx, consumeCancel := context.WithCancel(ctx)
-	defer consumeCancel()
-
 	received := make(map[string]struct{})
 	deadline := time.Now().Add(15 * time.Second)
 	consumedAll := false
@@ -166,7 +163,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for records (got %d). broker logs:\n%s\nfranz logs:\n%s", len(received), brokerLogs.String(), franzLogs.String())
 		}
-		fetches := consumer.PollFetches(consumeCtx)
+		fetches := consumer.PollFetches(ctx)
 		if errs := fetches.Errors(); len(errs) > 0 {
 			t.Fatalf("fetch errors: %+v\nbroker logs:\n%s\nfranz logs:\n%s", errs, brokerLogs.String(), franzLogs.String())
 		}
@@ -184,7 +181,6 @@ func TestFranzGoProduceConsume(t *testing.T) {
 			received[val] = struct{}{}
 			if len(received) >= messageCount {
 				consumedAll = true
-				consumeCancel()
 			}
 		})
 		if consumedAll {
@@ -193,7 +189,6 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	}
 	t.Logf("received %d/%d unique records", len(received), messageCount)
 	bucket := envOrDefault("KAFSCALE_S3_BUCKET", "kafscale")
-	cancel()
 	closeWithTimeout(t, "consumer", func() { consumer.CloseAllowingRebalance() })
 	consumerClosed = true
 	closeWithTimeout(t, "producer", func() { producer.Close() })

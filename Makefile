@@ -114,6 +114,8 @@ demo: release-broker-ports ensure-minio ## Launch the broker + console demo stac
 	KAFSCALE_E2E=1 \
 	KAFSCALE_E2E_DEMO=1 \
 	KAFSCALE_E2E_OPEN_UI=1 \
+	KAFSCALE_UI_USERNAME=kafscaleadmin \
+	KAFSCALE_UI_PASSWORD=kafscale \
 	KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics \
 	KAFSCALE_S3_BUCKET=$(MINIO_BUCKET) \
 	KAFSCALE_S3_REGION=$(MINIO_REGION) \

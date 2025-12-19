@@ -32,6 +32,14 @@ spec:
           env:
             - name: KAFSCALE_CONSOLE_HTTP_ADDR
               value: ":8080"
+{{- if .Values.console.auth.username }}
+            - name: KAFSCALE_UI_USERNAME
+              value: "{{ .Values.console.auth.username }}"
+{{- end }}
+{{- if .Values.console.auth.password }}
+            - name: KAFSCALE_UI_PASSWORD
+              value: "{{ .Values.console.auth.password }}"
+{{- end }}
           ports:
             - name: http
               containerPort: 8080

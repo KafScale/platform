@@ -24,6 +24,10 @@ func main() {
 	opts := consolepkg.ServerOptions{
 		Store:  store,
 		Logger: log.Default(),
+		Auth: consolepkg.AuthConfig{
+			Username: strings.TrimSpace(os.Getenv("KAFSCALE_UI_USERNAME")),
+			Password: strings.TrimSpace(os.Getenv("KAFSCALE_UI_PASSWORD")),
+		},
 	}
 	if metricsProvider := buildMetricsProvider(); metricsProvider != nil {
 		opts.Metrics = metricsProvider

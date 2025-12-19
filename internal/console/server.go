@@ -32,6 +32,7 @@ type ServerOptions struct {
 	Store   metadata.Store
 	Metrics MetricsProvider
 	Logger  *log.Logger
+	Auth    AuthConfig
 }
 
 // StartServer launches the HTTP console on the provided address. When store is
@@ -68,16 +69,21 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	auth := newAuthManager(opts.Auth)
 	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
 	mux.Handle("/ui/", http.StripPrefix("/ui/", staticHandler))
 
 	handlers := &consoleHandlers{store: opts.Store, metrics: opts.Metrics}
-	mux.HandleFunc("/ui/api/status", handlers.handleStatus)
-	mux.HandleFunc("/ui/api/status/topics", handlers.handleCreateTopic)
-	mux.HandleFunc("/ui/api/status/topics/", handlers.handleDeleteTopic)
-	mux.HandleFunc("/ui/api/metrics", handlers.handleMetrics)
+	mux.HandleFunc("/ui/api/auth/config", auth.handleConfig)
+	mux.HandleFunc("/ui/api/auth/session", auth.handleSession)
+	mux.HandleFunc("/ui/api/auth/login", auth.handleLogin)
+	mux.HandleFunc("/ui/api/auth/logout", auth.handleLogout)
+	mux.HandleFunc("/ui/api/status", auth.requireAuth(handlers.handleStatus))
+	mux.HandleFunc("/ui/api/status/topics", auth.requireAuth(handlers.handleCreateTopic))
+	mux.HandleFunc("/ui/api/status/topics/", auth.requireAuth(handlers.handleDeleteTopic))
+	mux.HandleFunc("/ui/api/metrics", auth.requireAuth(handlers.handleMetrics))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

@@ -29,6 +29,7 @@ The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator c
 | `operator.replicaCount` | Number of operator replicas (default `2`).  Operators use etcd to elect a leader and stay HA. |
 | `operator.leaderKey` | etcd prefix used for the HA lock.  Multiple clusters can coexist by using different prefixes. |
 | `console.service.*` | Type/port used to expose the UI.  Combine with `.console.ingress` to publish via an ingress controller. |
+| `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
 | `imagePullSecrets` | Provide if your container registry (e.g., GHCR) is private. |
 
 ## Post-install Steps
@@ -41,10 +42,19 @@ The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator c
 
 - **RBAC** – The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
 - **S3 credentials** – Credentials live in user-managed Kubernetes secrets.  The operator never writes them to etcd.
+- **Console auth** – The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, set `console.auth.username` and `console.auth.password`, for example:
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --set console.auth.username=kafscaleadmin \
+  --set console.auth.password='use-a-secret'
+```
+
 - **TLS** – Brokers and the console ship HTTPS/TLS flags (`KAFSCALE_BROKER_TLS_*`, `KAFSCALE_CONSOLE_TLS_*`).  Mount certs as secrets via the Helm values and set the env vars to force TLS for client connections.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
 - **Health / metrics** – Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes.  The console also renders the health state for on-call staff.
 - **Startup gating** – Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
+- **Leader IDs** – Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
 ## Upgrades & Rollbacks
 
