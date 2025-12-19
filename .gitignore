@@ -15,6 +15,7 @@
 *.crt
 *.key
 coverage*.out
+.build/
 
 # Local Go cache (use GOCACHE=.gocache for hermetic builds/tests)
 .gocache/
