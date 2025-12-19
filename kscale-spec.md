@@ -2816,10 +2816,10 @@ ENTRYPOINT ["./broker"]
 - [ ] Align fetch request support with v13 (spec) or update spec to v11
 - [ ] Align S3 key layout with namespace support and use index-based range reads
 - [ ] Persist consumer group metadata (not just offsets) in etcd or document in-memory limitations
-- [ ] Define etcd HA requirements (dedicated cluster, SSD storage, odd quorum) and reflect in ops docs
-- [ ] Honor `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` when cluster spec omits endpoints
-- [ ] Auto-provision a 3-node etcd StatefulSet when no endpoints are configured
-- [ ] Add etcd snapshot backups to S3 + surface snapshot status
+- [x] Define etcd HA requirements (dedicated cluster, SSD storage, odd quorum) and reflect in ops docs
+- [x] Honor `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` when cluster spec omits endpoints
+- [x] Auto-provision a 3-node etcd StatefulSet when no endpoints are configured
+- [x] Add etcd snapshot backups to S3 + surface snapshot status
 - [ ] Decide on etcd schema (snapshot vs per-key) and implement broker registrations/assignments if needed
 - [ ] Fix env var mismatches (`KAFSCALE_CACHE_SIZE` vs `KAFSCALE_CACHE_BYTES`, segment/flush vars)
 - [ ] Implement Milestone 6.5 Ops APIs (DescribeGroups/ListGroups/OffsetForLeaderEpoch/DescribeConfigs/AlterConfigs/CreatePartitions)

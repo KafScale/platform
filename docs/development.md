@@ -42,12 +42,28 @@ make test-e2e         # run the minio/franz + operator e2e suites (images from d
 make test-e2e-debug   # same as above but with broker trace logging enabled
 KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestOperatorManagedEtcdResources -v # operator envtest (no kind)
 KAFSCALE_E2E=1 KAFSCALE_E2E_KIND=1 go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v # kind + helm integration
+make test-operator-kind # same as above, wrapped in Makefile (set KAFSCALE_KIND_RECREATE=1 for clean clusters)
+make demo-platform # kind-based platform demo (operator HA + managed etcd + console)
 make docker-clean # delete dev images and prune Docker caches when you need a fresh slate
 make stop-containers # stop leftover kafscale-minio/kind containers from previous e2e runs
 make help         # list available Makefile targets
 ```
 
-The Makefile defines these as `.PHONY`: `proto`, `build`, `test`, `tidy`, `lint`, `generate`, `docker-build`, `docker-build-broker`, `docker-build-operator`, `docker-build-console`, `docker-containers`, `docker-clean`, `ensure-minio`, `start-minio`, `stop-containers`, `release-broker-ports`, `test-e2e`, `test-e2e-debug`, `demo`, `help`.
+The Makefile defines these as `.PHONY`: `proto`, `build`, `test`, `tidy`, `lint`, `generate`, `docker-build`, `docker-build-broker`, `docker-build-operator`, `docker-build-console`, `docker-clean`, `ensure-minio`, `start-minio`, `stop-containers`, `release-broker-ports`, `test-e2e`, `test-e2e-debug`, `test-operator-kind`, `demo`, `demo-platform`, `help`.
+
+### Development/Test Environment Variables
+
+- `KAFSCALE_E2E` – Enable e2e tests.
+- `KAFSCALE_E2E_KIND` – Enable kind-based e2e.
+- `KAFSCALE_KIND_CLUSTER` – Kind cluster name.
+- `KAFSCALE_KIND_RECREATE` – Force kind cluster recreation.
+- `KAFSCALE_E2E_DEMO` – Run demo stack test.
+- `KAFSCALE_E2E_OPEN_UI` – Open UI during demo test.
+- `KAFSCALE_E2E_DEBUG` – Enable debug output in e2e tests.
+- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE` – Image overrides for kind e2e.
+- `KAFSCALE_DEMO_BROKER_ADDR`, `KAFSCALE_DEMO_TOPICS`, `KAFSCALE_DEMO_MESSAGES_PER_SEC`, `KAFSCALE_DEMO_GROUP` – Demo workload tuning.
+- `KAFSCALE_LOCAL_FRANZ` – Use local franz-go build in tests.
+
 ## Kafka Compatibility Tracking
 
 To stay Kafka-compatible we track every protocol key + version that upstream exposes. Upstream Kafka 3.7.0 currently advertises the following highest ApiVersions (see `kafka-protocol` docs):
