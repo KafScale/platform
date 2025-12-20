@@ -34,6 +34,7 @@ import (
 
 	"github.com/novatechflow/kafscale/pkg/broker"
 	controlpb "github.com/novatechflow/kafscale/pkg/gen/control"
+	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
 	"github.com/novatechflow/kafscale/pkg/metadata"
 	"github.com/novatechflow/kafscale/pkg/protocol"
 	"github.com/novatechflow/kafscale/pkg/storage"
@@ -339,6 +340,104 @@ func TestHandleCreatePartitions(t *testing.T) {
 	}
 	if len(meta.Topics) != 1 || len(meta.Topics[0].Partitions) != 2 {
 		t.Fatalf("expected 2 partitions, got: %+v", meta.Topics)
+	}
+}
+
+func TestHandleCreatePartitionsErrors(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+
+	run := func(req *protocol.CreatePartitionsRequest) *kmsg.CreatePartitionsResponse {
+		t.Helper()
+		payload, err := handler.handleCreatePartitions(context.Background(), &protocol.RequestHeader{
+			CorrelationID: 52,
+			APIVersion:    3,
+		}, req)
+		if err != nil {
+			t.Fatalf("handleCreatePartitions: %v", err)
+		}
+		return decodeCreatePartitionsResponse(t, payload, 3)
+	}
+
+	resp := run(&protocol.CreatePartitionsRequest{
+		Topics:       []protocol.CreatePartitionsTopic{{Name: "", Count: 2}},
+		ValidateOnly: true,
+	})
+	if resp.Topics[0].ErrorCode != protocol.INVALID_TOPIC_EXCEPTION {
+		t.Fatalf("expected invalid topic error, got %d", resp.Topics[0].ErrorCode)
+	}
+
+	resp = run(&protocol.CreatePartitionsRequest{
+		Topics: []protocol.CreatePartitionsTopic{
+			{Name: "orders", Count: 2},
+			{Name: "orders", Count: 3},
+		},
+		ValidateOnly: true,
+	})
+	if resp.Topics[0].ErrorCode != protocol.NONE {
+		t.Fatalf("expected success for first orders, got %d", resp.Topics[0].ErrorCode)
+	}
+	if resp.Topics[1].ErrorCode != protocol.INVALID_REQUEST {
+		t.Fatalf("expected duplicate topic error, got %d", resp.Topics[1].ErrorCode)
+	}
+
+	resp = run(&protocol.CreatePartitionsRequest{
+		Topics: []protocol.CreatePartitionsTopic{
+			{Name: "assignments", Count: 2, Assignments: []protocol.CreatePartitionsAssignment{{Replicas: []int32{1}}}},
+		},
+		ValidateOnly: true,
+	})
+	if resp.Topics[0].ErrorCode != protocol.INVALID_REQUEST {
+		t.Fatalf("expected assignment error, got %d", resp.Topics[0].ErrorCode)
+	}
+
+	resp = run(&protocol.CreatePartitionsRequest{
+		Topics:       []protocol.CreatePartitionsTopic{{Name: "orders", Count: 1}},
+		ValidateOnly: true,
+	})
+	if resp.Topics[0].ErrorCode != protocol.INVALID_PARTITIONS {
+		t.Fatalf("expected invalid partitions error, got %d", resp.Topics[0].ErrorCode)
+	}
+
+	resp = run(&protocol.CreatePartitionsRequest{
+		Topics:       []protocol.CreatePartitionsTopic{{Name: "missing", Count: 2}},
+		ValidateOnly: true,
+	})
+	if resp.Topics[0].ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+		t.Fatalf("expected unknown topic error, got %d", resp.Topics[0].ErrorCode)
+	}
+}
+
+func TestHandleDeleteGroups(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	group := &metadatapb.ConsumerGroup{GroupId: "group-1", State: "stable"}
+	if err := store.PutConsumerGroup(context.Background(), group); err != nil {
+		t.Fatalf("PutConsumerGroup: %v", err)
+	}
+	handler := newTestHandler(store)
+
+	req := &protocol.DeleteGroupsRequest{Groups: []string{"group-1", "missing", ""}}
+	header := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyDeleteGroups,
+		APIVersion:    2,
+		CorrelationID: 53,
+	}
+	payload, err := handler.Handle(context.Background(), header, req)
+	if err != nil {
+		t.Fatalf("Handle DeleteGroups: %v", err)
+	}
+	resp := decodeDeleteGroupsResponse(t, payload, 2)
+	if len(resp.Groups) != 3 {
+		t.Fatalf("expected 3 delete group results, got %d", len(resp.Groups))
+	}
+	if resp.Groups[0].ErrorCode != protocol.NONE {
+		t.Fatalf("expected success for group-1, got %d", resp.Groups[0].ErrorCode)
+	}
+	if resp.Groups[1].ErrorCode != protocol.GROUP_ID_NOT_FOUND {
+		t.Fatalf("expected not found for missing, got %d", resp.Groups[1].ErrorCode)
+	}
+	if resp.Groups[2].ErrorCode != protocol.INVALID_REQUEST {
+		t.Fatalf("expected invalid request for empty group, got %d", resp.Groups[2].ErrorCode)
 	}
 }
 
@@ -717,10 +816,11 @@ func TestFranzGoProduceConsumeLocal(t *testing.T) {
 	})
 	handler := newHandler(store, storage.NewMemoryS3Client(), protocol.MetadataBroker{NodeID: 1, Host: "127.0.0.1", Port: 39092}, testLogger())
 	server := &broker.Server{Addr: "127.0.0.1:39092", Handler: handler}
+	errCh := make(chan error, 1)
 
 	go func() {
 		if err := server.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			t.Fatalf("broker listen failed: %v", err)
+			errCh <- err
 		}
 	}()
 
@@ -768,6 +868,12 @@ func TestFranzGoProduceConsumeLocal(t *testing.T) {
 		fetches.EachRecord(func(record *kgo.Record) {
 			received++
 		})
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("broker listen failed: %v", err)
+	default:
 	}
 }
 
@@ -914,6 +1020,28 @@ func decodeCreatePartitionsResponse(t *testing.T, payload []byte, version int16)
 	resp.Version = version
 	if err := resp.ReadFrom(body); err != nil {
 		t.Fatalf("decode create partitions response: %v", err)
+	}
+	return resp
+}
+
+func decodeDeleteGroupsResponse(t *testing.T, payload []byte, version int16) *kmsg.DeleteGroupsResponse {
+	t.Helper()
+	reader := bytes.NewReader(payload)
+	var corr int32
+	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
+		t.Fatalf("read correlation id: %v", err)
+	}
+	if version >= 2 {
+		skipTaggedFields(t, reader)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	resp := kmsg.NewPtrDeleteGroupsResponse()
+	resp.Version = version
+	if err := resp.ReadFrom(body); err != nil {
+		t.Fatalf("decode delete groups response: %v", err)
 	}
 	return resp
 }

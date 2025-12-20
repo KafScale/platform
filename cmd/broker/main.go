@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -620,7 +621,7 @@ func (h *handler) handleAlterConfigs(ctx context.Context, header *protocol.Reque
 			})
 			continue
 		}
-		updated := *cfg
+		updated := proto.Clone(cfg).(*metadatapb.TopicConfig)
 		if updated.Config == nil {
 			updated.Config = make(map[string]string)
 		}
@@ -660,7 +661,7 @@ func (h *handler) handleAlterConfigs(ctx context.Context, header *protocol.Reque
 			}
 		}
 		if errorCode == protocol.NONE && !req.ValidateOnly {
-			if err := h.store.UpdateTopicConfig(ctx, &updated); err != nil {
+			if err := h.store.UpdateTopicConfig(ctx, updated); err != nil {
 				errorCode = protocol.UNKNOWN_SERVER_ERROR
 			}
 		}
