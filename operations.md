@@ -1,14 +1,15 @@
 ---
 layout: doc
 title: Operations Guide
-description: Production operations guidance: monitoring, scaling, backups, upgrades, and troubleshooting.
+description: "Production operations guidance: monitoring, scaling, backups, upgrades, and troubleshooting for KafScale."
+permalink: /operations/
 ---
 
 # Operations Guide
 
 ## Monitoring with Prometheus
 
-Kafscale exposes Prometheus metrics on `/metrics` from both brokers and the operator:
+KafScale exposes Prometheus metrics on `/metrics` from both brokers and the operator:
 
 - Broker metrics: `http://<broker-host>:9093/metrics`
 - Operator metrics: `http://<operator-host>:8080/metrics`
@@ -42,7 +43,7 @@ The operator can manage etcd snapshots to S3. Recommended alerts:
 - `KafscaleSnapshotStale` – last successful snapshot older than threshold
 - `KafscaleSnapshotNeverSucceeded` – no successful snapshots recorded
 
-## Upgrading Kafscale versions
+## Upgrading KafScale versions
 
 Use `helm upgrade --install` with pinned image tags. The operator drains brokers through the gRPC control plane before restarting pods. Rollbacks use `helm rollback`.
 

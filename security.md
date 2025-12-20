@@ -1,12 +1,12 @@
 ---
 layout: doc
 title: Security Overview
-description: Current security posture, hardening guidance, and roadmap for Kafscale.
+description: Current security posture, hardening guidance, and roadmap for KafScale.
 ---
 
 # Security Overview
 
-Kafscale is a Kubernetes-native platform focused on Kafka protocol parity and operational stability. This document summarizes the current security posture and the boundaries of what is and is not supported in v1.
+KafScale is a Kubernetes-native platform focused on Kafka protocol parity and operational stability. This document summarizes the current security posture and the boundaries of what is and is not supported in v1.
 
 ## Current security posture (v1)
 
@@ -41,4 +41,4 @@ Kafscale is a Kubernetes-native platform focused on Kafka protocol parity and op
 
 ## Reporting security issues
 
-Follow the process in `SECURITY.md`.
+Follow the process in [SECURITY.md](https://github.com/novatechflow/kafscale/blob/main/SECURITY.md).

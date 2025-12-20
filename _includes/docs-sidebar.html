@@ -1,0 +1,8 @@
+<aside class="doc-sidebar" aria-label="Docs navigation">
+  <div class="doc-sidebar-title">Docs</div>
+  <nav class="doc-sidebar-nav">
+    {% for item in site.data.docs_nav %}
+      <a href="{{ item.url }}" {% if page.url == item.url %}aria-current="page"{% endif %}>{{ item.title }}</a>
+    {% endfor %}
+  </nav>
+</aside>

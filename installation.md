@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: Installation
-description: Install Kafscale with Helm, review CRD examples, and prepare local dev tooling.
+description: Install KafScale with Helm, review CRD examples, and prepare local dev tooling.
 ---
 
 # Installation
@@ -68,7 +68,7 @@ spec:
 
 ## Environment variables reference
 
-See `/configuration/` for broker, S3, etcd, and operator settings.
+See [Configuration](/configuration/) for broker, S3, etcd, and operator settings.
 
 ## Minimum resource requirements
 

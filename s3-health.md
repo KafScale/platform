@@ -1,12 +1,12 @@
 ---
 layout: doc
 title: S3 Health States
-description: Definitions, metrics, and alert thresholds for Kafscale S3 health state transitions.
+description: Definitions, metrics, and alert thresholds for KafScale S3 health state transitions.
 ---
 
 # S3 Health States
 
-Kafscale brokers publish a live S3 health state based on latency and error-rate sampling windows.
+KafScale brokers publish a live S3 health state based on latency and error-rate sampling windows.
 
 ## State definitions
 

@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: Configuration Reference
-description: Broker, S3, etcd, consumer group, and operator configuration for Kafscale.
+description: Broker, S3, etcd, consumer group, and operator configuration for KafScale.
 ---
 
 # Configuration Reference
@@ -53,4 +53,4 @@ Session timeout and heartbeat intervals are negotiated by Kafka clients, followi
 
 ## Security posture
 
-Security details live in `/security/`. TLS and auth are operator-configured; brokers default to plaintext until TLS env vars are set.
+Security details live in [Security](/security/). TLS and auth are operator-configured; brokers default to plaintext until TLS env vars are set.

@@ -1,6 +1,8 @@
 <nav class="site-nav">
-  <a class="brand" href="/">Kafscale</a>
-  <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+  <a class="brand" href="/">
+    <img src="/assets/img/kafscale-logo.png" alt="KafScale logo" />
+    <span>KafScale</span>
+  </a>
   <div id="nav-links" class="nav-links">
     {% for item in site.data.nav %}
       <a href="{{ item.url }}" {% if page.url == item.url %}aria-current="page"{% endif %}>{{ item.title }}</a>
@@ -9,5 +11,8 @@
   <button class="theme-toggle" type="button" aria-label="Toggle theme">
     <span class="sun">Light</span>
     <span class="moon">Dark</span>
+  </button>
+  <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-links" aria-label="Toggle navigation">
+    <span class="burger" aria-hidden="true"></span>
   </button>
 </nav>

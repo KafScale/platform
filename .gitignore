@@ -27,3 +27,5 @@
 # Ignore build/cache directories even if extensions match
 /.gocache/
 /.build/
+/_site/
+/.jekyll-cache/

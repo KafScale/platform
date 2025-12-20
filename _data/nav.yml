@@ -1,26 +1,8 @@
 - title: Home
   url: /
-- title: Quickstart
-  url: /quickstart/
-- title: Install
-  url: /installation/
-- title: Config
-  url: /configuration/
-- title: API
-  url: /api/
-- title: Ops
-  url: /operations/
-- title: Security
-  url: /security/
-- title: Storage
-  url: /storage-format/
-- title: S3 Health
-  url: /s3-health/
-- title: Roadmap
-  url: /roadmap/
-- title: FAQ
-  url: /faq/
-- title: Contribute
-  url: /contributing/
+- title: Docs
+  url: /docs/
+- title: Architecture
+  url: /architecture/
 - title: Comparison
   url: /comparison/

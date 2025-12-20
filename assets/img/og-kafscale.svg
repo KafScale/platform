@@ -18,7 +18,7 @@
   <rect width="1200" height="630" fill="url(#mint)" />
   <rect width="1200" height="630" fill="url(#ember)" />
   <g fill="#f8fafc" font-family="Space Grotesk, Arial, sans-serif">
-    <text x="90" y="230" font-size="54" font-weight="700">Kafscale</text>
+    <text x="90" y="230" font-size="54" font-weight="700">KafScale</text>
     <text x="90" y="300" font-size="30" opacity="0.9">Stateless Kafka on S3</text>
     <text x="90" y="355" font-size="22" opacity="0.75">Kafka-compatible streaming with stateless brokers</text>
     <text x="90" y="392" font-size="22" opacity="0.75">and S3-native durability.</text>

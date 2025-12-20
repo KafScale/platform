@@ -41,7 +41,7 @@
       },
       {
         "@type": "SoftwareApplication",
-        "name": "Kafscale",
+        "name": "KafScale",
         "description": "{{ site.description | escape }}",
         "url": "{{ site.url }}",
         "applicationCategory": "DeveloperApplication",
@@ -61,7 +61,9 @@
   <div class="page">
     {% include nav.html %}
     <main class="content">
-      {{ content }}
+      <div class="content-inner">
+        {{ content }}
+      </div>
     </main>
     {% include footer.html %}
   </div>

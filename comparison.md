@@ -1,191 +1,394 @@
 ---
 layout: doc
 title: Comparison
-description: Compare Kafscale with Kafka-compatible alternatives across architecture, performance, and operations.
+description: Compare KafScale with Kafka-compatible alternatives across architecture, performance, licensing, and cost.
+sidebar: false
 ---
 
-# Comparison
+<div class="comparison-hero">
+  <h1>KafScale vs Kafka alternatives</h1>
+  <p>An honest comparison of Kafka-compatible streaming platforms. We highlight the architectural and licensing tradeoffs that matter most—including where KafScale isn't the right fit.</p>
+</div>
 
-Kafka-compatible streaming platforms differ in storage architecture, operational footprint, and performance tradeoffs. This view keeps the focus on architecture and operational reality.
+# License comparison
 
-<div class="comparison">
-  <table class="comparison-table">
-    <thead>
-      <tr>
-        <th>Feature</th>
-        <th>Apache Kafka</th>
-        <th>Redpanda</th>
-        <th>WarpStream</th>
-        <th>AutoMQ</th>
-        <th class="highlight">Kafscale</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr class="section-row">
-        <td colspan="6">Architecture</td>
-      </tr>
-      <tr>
-        <td>Storage backend</td>
-        <td>Local disk</td>
-        <td>Local disk + tiered</td>
-        <td>S3 only</td>
-        <td>S3 + EBS WAL</td>
-        <td class="highlight"><strong>S3 only</strong></td>
-      </tr>
-      <tr>
-        <td>Broker state</td>
-        <td><span class="badge badge-danger">Stateful</span></td>
-        <td><span class="badge badge-danger">Stateful</span></td>
-        <td><span class="badge badge-success">Stateless</span></td>
-        <td><span class="badge badge-success">Stateless</span></td>
-        <td class="highlight"><span class="badge badge-success">Stateless</span></td>
-      </tr>
-      <tr>
-        <td>Metadata store</td>
-        <td>ZooKeeper/KRaft</td>
-        <td>Internal Raft</td>
-        <td>Cloud control plane</td>
-        <td>KRaft</td>
-        <td class="highlight"><strong>etcd</strong></td>
-      </tr>
-      <tr>
-        <td>Kubernetes native</td>
-        <td>Community operators</td>
-        <td>Operator</td>
-        <td>BYOC</td>
-        <td>Operator</td>
-        <td class="highlight"><strong>CRDs + Operator</strong></td>
-      </tr>
-      <tr class="section-row">
-        <td colspan="6">Performance</td>
-      </tr>
-      <tr>
-        <td>Typical latency</td>
-        <td>&lt;10ms</td>
-        <td>&lt;10ms</td>
-        <td>~400ms</td>
-        <td>&lt;100ms</td>
-        <td class="highlight"><strong>~500ms</strong></td>
-      </tr>
-      <tr>
-        <td>Rebalancing</td>
-        <td><span class="badge badge-danger">Hours</span></td>
-        <td><span class="badge badge-warning">Minutes</span></td>
-        <td><span class="badge badge-success">Instant</span></td>
-        <td><span class="badge badge-success">Seconds</span></td>
-        <td class="highlight"><span class="badge badge-success">Instant</span></td>
-      </tr>
-      <tr class="section-row">
-        <td colspan="6">Features</td>
-      </tr>
-      <tr>
-        <td>Kafka protocol</td>
-        <td>Native</td>
-        <td>Compatible</td>
-        <td>Compatible</td>
-        <td>Compatible</td>
-        <td class="highlight">Compatible</td>
-      </tr>
-      <tr>
-        <td>Transactions / EOS</td>
-        <td>Yes</td>
-        <td>Yes</td>
-        <td>No</td>
-        <td>Yes</td>
-        <td class="highlight">No (by design)</td>
-      </tr>
-      <tr>
-        <td>Compacted topics</td>
-        <td>Yes</td>
-        <td>Yes</td>
-        <td>No</td>
-        <td>Yes</td>
-        <td class="highlight">No (by design)</td>
-      </tr>
-      <tr class="section-row">
-        <td colspan="6">Cost & licensing</td>
-      </tr>
-      <tr>
-        <td>License</td>
-        <td><span class="badge badge-success">Apache 2.0</span></td>
-        <td><span class="badge badge-warning">BSL 1.1</span></td>
-        <td><span class="badge badge-neutral">Proprietary</span></td>
-        <td><span class="badge badge-warning">BSL</span></td>
-        <td class="highlight"><span class="badge badge-success">Apache 2.0</span></td>
-      </tr>
-      <tr>
-        <td>Self-hosted</td>
-        <td>Yes</td>
-        <td>Yes</td>
-        <td>BYOC</td>
-        <td>Yes</td>
-        <td class="highlight">Yes</td>
-      </tr>
-      <tr>
-        <td>Best for</td>
-        <td>General streaming</td>
-        <td>Low latency</td>
-        <td>Cost-sensitive ETL</td>
-        <td>Cloud migration</td>
-        <td class="highlight"><strong>ETL, logs, async</strong></td>
-      </tr>
-    </tbody>
-  </table>
+Licensing determines your long-term flexibility. This matters more than most vendors admit.
 
-  <div class="mobile-cards">
-    <div class="product-card highlight">
-      <h3>Kafscale</h3>
-      <p class="tagline">Stateless Kafka on S3 • Open Source</p>
-      <div class="spec-row"><span class="spec-label">Storage</span><span class="spec-value">S3 only</span></div>
-      <div class="spec-row"><span class="spec-label">Broker state</span><span class="spec-value">Stateless</span></div>
-      <div class="spec-row"><span class="spec-label">Latency</span><span class="spec-value">~500ms</span></div>
-      <div class="spec-row"><span class="spec-label">License</span><span class="spec-value">Apache 2.0</span></div>
-      <div class="spec-row"><span class="spec-label">Best for</span><span class="spec-value">ETL, logs, async</span></div>
-    </div>
-
-    <div class="product-card">
-      <h3>Apache Kafka</h3>
-      <p class="tagline">The original • Self-managed</p>
-      <div class="spec-row"><span class="spec-label">Storage</span><span class="spec-value">Local disk</span></div>
-      <div class="spec-row"><span class="spec-label">Broker state</span><span class="spec-value">Stateful</span></div>
-      <div class="spec-row"><span class="spec-label">Latency</span><span class="spec-value">&lt;10ms</span></div>
-      <div class="spec-row"><span class="spec-label">License</span><span class="spec-value">Apache 2.0</span></div>
-      <div class="spec-row"><span class="spec-label">Best for</span><span class="spec-value">General streaming</span></div>
-    </div>
-
-    <div class="product-card">
-      <h3>Redpanda</h3>
-      <p class="tagline">C++ rewrite • Low latency</p>
-      <div class="spec-row"><span class="spec-label">Storage</span><span class="spec-value">Local + tiered</span></div>
-      <div class="spec-row"><span class="spec-label">Broker state</span><span class="spec-value">Stateful</span></div>
-      <div class="spec-row"><span class="spec-label">Latency</span><span class="spec-value">&lt;10ms</span></div>
-      <div class="spec-row"><span class="spec-label">License</span><span class="spec-value">BSL 1.1</span></div>
-      <div class="spec-row"><span class="spec-label">Best for</span><span class="spec-value">Low latency</span></div>
-    </div>
-
-    <div class="product-card">
-      <h3>WarpStream</h3>
-      <p class="tagline">S3-native • Confluent-owned</p>
-      <div class="spec-row"><span class="spec-label">Storage</span><span class="spec-value">S3 only</span></div>
-      <div class="spec-row"><span class="spec-label">Broker state</span><span class="spec-value">Stateless</span></div>
-      <div class="spec-row"><span class="spec-label">Latency</span><span class="spec-value">~400ms</span></div>
-      <div class="spec-row"><span class="spec-label">License</span><span class="spec-value">Proprietary</span></div>
-      <div class="spec-row"><span class="spec-label">Best for</span><span class="spec-value">Cost-sensitive ETL</span></div>
-    </div>
-
-    <div class="product-card">
-      <h3>AutoMQ</h3>
-      <p class="tagline">Kafka fork • S3 + WAL</p>
-      <div class="spec-row"><span class="spec-label">Storage</span><span class="spec-value">S3 + EBS WAL</span></div>
-      <div class="spec-row"><span class="spec-label">Broker state</span><span class="spec-value">Stateless</span></div>
-      <div class="spec-row"><span class="spec-label">Latency</span><span class="spec-value">&lt;100ms</span></div>
-      <div class="spec-row"><span class="spec-label">License</span><span class="spec-value">BSL</span></div>
-      <div class="spec-row"><span class="spec-label">Best for</span><span class="spec-value">Cloud migration</span></div>
-    </div>
+<div class="format-card">
+  <div class="format-row header">
+    <span>Platform</span>
+    <span>License</span>
+    <span>What it means</span>
+  </div>
+  <div class="format-row" style="background: rgba(14, 165, 233, 0.08);">
+    <span><strong>KafScale</strong></span>
+    <span><span class="badge badge-success">Apache 2.0</span></span>
+    <span>Use, modify, redistribute freely. No restrictions ever.</span>
+  </div>
+  <div class="format-row">
+    <span>Apache Kafka</span>
+    <span><span class="badge badge-success">Apache 2.0</span></span>
+    <span>Fully open source. No restrictions.</span>
+  </div>
+  <div class="format-row">
+    <span>Redpanda</span>
+    <span><span class="badge badge-warning">BSL 1.1</span></span>
+    <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
+  </div>
+  <div class="format-row">
+    <span>AutoMQ</span>
+    <span><span class="badge badge-warning">BSL</span></span>
+    <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
+  </div>
+  <div class="format-row">
+    <span>WarpStream</span>
+    <span><span class="badge badge-danger">Proprietary</span></span>
+    <span>Closed source. Owned by Confluent (acquired Sept 2024). Vendor lock-in risk.</span>
+  </div>
+  <div class="format-row">
+    <span>Bufstream</span>
+    <span><span class="badge badge-danger">Proprietary</span></span>
+    <span>Closed source. Usage-based licensing fee per GiB. Self-hosted but not open.</span>
   </div>
 </div>
 
-## Notes
+**Why license matters:** BSL and proprietary licenses restrict how you can use the software. If you're building a platform, offering managed services, or want to avoid vendor dependency, Apache 2.0 is the only safe choice.
 
-- Cost and latency ranges are approximate and depend on workload, region, and buffering policy.
-- Kafscale intentionally omits transactions and compacted topics to optimize for ETL, log aggregation, and async event workloads.
+# Vertical comparison
+
+<div class="comparison-stack">
+  <section class="product-card highlight">
+    <h3>KafScale</h3>
+    <p class="tagline">Stateless Kafka on S3 · Apache 2.0</p>
+    <div class="spec-row"><span class="spec-label">Language</span><span>Go</span></div>
+    <div class="spec-row"><span class="spec-label">Storage</span><span>S3 only (no local disk)</span></div>
+    <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateless</span></div>
+    <div class="spec-row"><span class="spec-label">Metadata</span><span>etcd</span></div>
+    <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>CRDs + Operator + HPA</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>~400ms p99</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>No (by design)</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No (by design)</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-success">Apache 2.0</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>ETL, logs, async events, cost-sensitive</span></div>
+  </section>
+
+  <section class="product-card">
+    <h3>Apache Kafka</h3>
+    <p class="tagline">The original · Self-managed</p>
+    <div class="spec-row"><span class="spec-label">Language</span><span>Java/Scala</span></div>
+    <div class="spec-row"><span class="spec-label">Storage</span><span>Local disk (stateful)</span></div>
+    <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateful</span></div>
+    <div class="spec-row"><span class="spec-label">Metadata</span><span>ZooKeeper / KRaft</span></div>
+    <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>Community operators (Strimzi)</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>&lt;10ms p99</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-success">Apache 2.0</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>General streaming, low latency</span></div>
+  </section>
+
+  <section class="product-card">
+    <h3>Redpanda</h3>
+    <p class="tagline">C++ rewrite · Low latency</p>
+    <div class="spec-row"><span class="spec-label">Language</span><span>C++</span></div>
+    <div class="spec-row"><span class="spec-label">Storage</span><span>Local disk + tiered to S3</span></div>
+    <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateful</span></div>
+    <div class="spec-row"><span class="spec-label">Metadata</span><span>Internal Raft</span></div>
+    <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>Operator</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>&lt;10ms p99</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">BSL 1.1</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>Low latency, Kafka replacement</span></div>
+  </section>
+
+  <section class="product-card">
+    <h3>WarpStream</h3>
+    <p class="tagline">S3-native · Confluent-owned</p>
+    <div class="spec-row"><span class="spec-label">Language</span><span>Go</span></div>
+    <div class="spec-row"><span class="spec-label">Storage</span><span>S3 only</span></div>
+    <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateless</span></div>
+    <div class="spec-row"><span class="spec-label">Metadata</span><span>Cloud control plane (Confluent)</span></div>
+    <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>BYOC (agents in your VPC)</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>~400-600ms p99</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>No</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-danger">Proprietary</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>BYOC logging, observability</span></div>
+  </section>
+
+  <section class="product-card">
+    <h3>AutoMQ</h3>
+    <p class="tagline">Kafka fork · S3 + EBS WAL</p>
+    <div class="spec-row"><span class="spec-label">Language</span><span>Java (Kafka fork)</span></div>
+    <div class="spec-row"><span class="spec-label">Storage</span><span>S3 + EBS write-ahead log</span></div>
+    <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateless (WAL on EBS)</span></div>
+    <div class="spec-row"><span class="spec-label">Metadata</span><span>KRaft</span></div>
+    <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>Operator</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>~10ms p99 (with EBS WAL)</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">BSL</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>Kafka migration, low latency + S3</span></div>
+  </section>
+
+  <section class="product-card">
+    <h3>Bufstream</h3>
+    <p class="tagline">S3-native · Iceberg-first</p>
+    <div class="spec-row"><span class="spec-label">Language</span><span>Go</span></div>
+    <div class="spec-row"><span class="spec-label">Storage</span><span>S3 + PostgreSQL metadata</span></div>
+    <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateless</span></div>
+    <div class="spec-row"><span class="spec-label">Metadata</span><span>PostgreSQL / Spanner</span></div>
+    <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>Helm chart</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>~260ms median, ~500ms p99</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes (EOS)</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-danger">Proprietary</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>Data lakehouse, Protobuf/Iceberg</span></div>
+  </section>
+</div>
+
+# Architecture comparison
+
+<div class="format-card">
+  <div class="format-row header">
+    <span>Platform</span>
+    <span>Storage model</span>
+    <span>Tradeoff</span>
+  </div>
+  <div class="format-row" style="background: rgba(14, 165, 233, 0.08);">
+    <span><strong>KafScale</strong></span>
+    <span>S3 only, etcd metadata</span>
+    <span>Higher latency, zero disk ops</span>
+  </div>
+  <div class="format-row">
+    <span>Apache Kafka</span>
+    <span>Local disk, replicated</span>
+    <span>Low latency, high ops burden</span>
+  </div>
+  <div class="format-row">
+    <span>Redpanda</span>
+    <span>Local disk + S3 tiering</span>
+    <span>Low latency, still stateful</span>
+  </div>
+  <div class="format-row">
+    <span>WarpStream</span>
+    <span>S3 only, cloud control plane</span>
+    <span>Stateless, but control plane dependency</span>
+  </div>
+  <div class="format-row">
+    <span>AutoMQ</span>
+    <span>EBS WAL + S3</span>
+    <span>Low latency, requires EBS</span>
+  </div>
+  <div class="format-row">
+    <span>Bufstream</span>
+    <span>S3 + PostgreSQL</span>
+    <span>Transactions supported, requires Postgres</span>
+  </div>
+</div>
+
+# When to use what
+
+| Use case | Recommended | Why |
+|----------|-------------|-----|
+| **ETL pipelines, logs, async events** | KafScale | ~400ms latency is fine, lowest cost, truly open |
+| **Low-latency trading, real-time** | Kafka, Redpanda, AutoMQ | Need <10ms latency |
+| **Kafka migration with S3 cost savings** | AutoMQ | Kafka-compatible, EBS WAL for low latency |
+| **Data lakehouse / Iceberg integration** | Bufstream | Native Iceberg, Protobuf validation |
+| **BYOC with Confluent ecosystem** | WarpStream | Confluent-backed, integrates with their tooling |
+| **Avoid vendor lock-in at all costs** | KafScale, Apache Kafka | Only Apache 2.0 options |
+
+# Cost snapshot
+
+Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster:
+
+<div class="pricing-table">
+  <table>
+    <thead>
+      <tr>
+        <th>Platform</th>
+        <th>Estimated cost</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="kafscale">
+        <td><strong>KafScale</strong></td>
+        <td><strong>~$100/mo</strong></td>
+        <td>S3 + 3× t3.medium, no license fees</td>
+      </tr>
+      <tr>
+        <td>Bufstream</td>
+        <td>~$120/mo</td>
+        <td>S3 + compute + usage-based license</td>
+      </tr>
+      <tr>
+        <td>WarpStream</td>
+        <td>~$150/mo + fees</td>
+        <td>S3 + agents + control plane fees</td>
+      </tr>
+      <tr>
+        <td>AutoMQ</td>
+        <td>~$150/mo</td>
+        <td>S3 + EBS WAL + compute</td>
+      </tr>
+      <tr>
+        <td>Redpanda</td>
+        <td>~$300/mo</td>
+        <td>EBS volumes + compute</td>
+      </tr>
+      <tr>
+        <td>Apache Kafka</td>
+        <td>~$400/mo</td>
+        <td>EBS volumes + ZK/KRaft + compute</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+## Cost notes
+
+- Costs vary significantly by region, instance type, and workload pattern
+- S3-native platforms (KafScale, WarpStream, Bufstream) have lowest storage costs but higher API costs at very high throughput
+- AutoMQ's EBS WAL adds ~$20-50/mo but enables low latency
+- WarpStream and Bufstream have license/usage fees on top of infrastructure
+- Apache Kafka and Redpanda require more compute for replication overhead
+
+# Feature matrix
+
+<div class="format-card">
+  <div class="format-row header">
+    <span>Feature</span>
+    <span>KafScale</span>
+    <span>Kafka</span>
+    <span>Redpanda</span>
+    <span>WarpStream</span>
+    <span>AutoMQ</span>
+    <span>Bufstream</span>
+  </div>
+  <div class="format-row">
+    <span>Kafka protocol</span>
+    <span>✓ Core</span>
+    <span>✓ Full</span>
+    <span>✓ Full</span>
+    <span>✓ Core</span>
+    <span>✓ Full</span>
+    <span>✓ Full</span>
+  </div>
+  <div class="format-row">
+    <span>Transactions</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>Compacted topics</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✗</span>
+  </div>
+  <div class="format-row">
+    <span>Consumer groups</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>Stateless brokers</span>
+    <span>✓</span>
+    <span>✗</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>S3 as primary storage</span>
+    <span>✓</span>
+    <span>✗</span>
+    <span>◐ Tiered</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>K8s CRDs</span>
+    <span>✓</span>
+    <span>◐ Strimzi</span>
+    <span>✓</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✗</span>
+  </div>
+  <div class="format-row">
+    <span>Native Iceberg</span>
+    <span>✗</span>
+    <span>✗</span>
+    <span>✗</span>
+    <span>✗</span>
+    <span>✓</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>Jepsen tested</span>
+    <span>Planned</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✗</span>
+    <span>✗</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>Self-hostable</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>◐ BYOC</span>
+    <span>✓</span>
+    <span>✓</span>
+  </div>
+  <div class="format-row">
+    <span>No vendor dependency</span>
+    <span>✓</span>
+    <span>✓</span>
+    <span>◐</span>
+    <span>✗</span>
+    <span>◐</span>
+    <span>◐</span>
+  </div>
+</div>
+
+**Legend:** ✓ = Yes | ✗ = No | ◐ = Partial
+
+# The honest tradeoffs
+
+**KafScale is NOT for you if:**
+
+- You need <100ms latency (use Kafka, Redpanda, or AutoMQ)
+- You need exactly-once transactions (use Kafka, AutoMQ, or Bufstream)
+- You need compacted topics for CDC (use Kafka, Redpanda, or AutoMQ)
+- You need native Iceberg integration (use Bufstream or AutoMQ)
+
+**KafScale IS for you if:**
+
+- ~500ms latency is acceptable (ETL, logs, async events)
+- You want the lowest possible cost
+- You want true Apache 2.0 open source with no restrictions
+- You want stateless brokers that scale with HPA
+- You want to avoid vendor lock-in and control plane dependencies
+
+## Why we built KafScale
+
+The IBM acquisition of Confluent (and with it, WarpStream) in late 2024 highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
+
+KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.

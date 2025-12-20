@@ -41,7 +41,7 @@
       },
       {
         "@type": "SoftwareApplication",
-        "name": "Kafscale",
+        "name": "KafScale",
         "description": "{{ site.description | escape }}",
         "url": "{{ site.url }}",
         "applicationCategory": "DeveloperApplication",
@@ -61,21 +61,20 @@
   <div class="page">
     {% include nav.html %}
     <main class="content">
-      <div class="doc-layout">
-        <aside class="doc-sidebar">
-          <h2>Docs</h2>
-          <nav>
-            {% for item in site.data.nav %}
-              {% if item.url != "/" %}
-                <a href="{{ item.url }}" {% if page.url == item.url %}aria-current="page"{% endif %}>{{ item.title }}</a>
-              {% endif %}
-            {% endfor %}
-          </nav>
-        </aside>
+      {% if page.sidebar == false %}
+      <div class="content-inner">
         <article class="doc-content">
           {{ content }}
         </article>
       </div>
+      {% else %}
+      <div class="content-inner doc-shell">
+        {% include docs-sidebar.html %}
+        <article class="doc-content">
+          {{ content }}
+        </article>
+      </div>
+      {% endif %}
     </main>
     {% include footer.html %}
   </div>

@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: Contributing
-description: Development setup, testing, and PR process for Kafscale.
+description: Development setup, testing, and PR process for KafScale.
 ---
 
 # Contributing

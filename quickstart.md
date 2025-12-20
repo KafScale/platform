@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: Quickstart
-description: Install the Kafscale operator, create your first topic, and stream messages in minutes.
+description: Install the KafScale operator, create your first topic, and stream messages in minutes.
 ---
 
 # Quickstart
@@ -16,13 +16,16 @@ This guide covers a minimal installation on a cloud Kubernetes cluster using the
 - An S3-compatible bucket and credentials
 - Optional: external etcd endpoints (or let the operator manage etcd)
 
-## 1) Create a namespace
+<div class="step-grid">
+  <div class="step-card" markdown="1">
+### 1) Create a namespace
 
 ```bash
 kubectl create namespace kafscale
 ```
-
-## 2) Create an S3 credentials secret
+  </div>
+  <div class="step-card" markdown="1">
+### 2) Create an S3 credentials secret
 
 ```bash
 kubectl -n kafscale create secret generic kafscale-s3 \
@@ -34,12 +37,11 @@ Optional session token:
 
 ```bash
 kubectl -n kafscale patch secret kafscale-s3 -p \
-  '{"data":{"AWS_SESSION_TOKEN":"'$(printf %s "YOUR_SESSION_TOKEN" | base64)'"}}'
+  '{"data":{"AWS_SESSION_TOKEN":"'"'"'$(printf %s "YOUR_SESSION_TOKEN" | base64)'"'"'"}}'
 ```
-
-## 3) Install the operator
-
-### Option A: operator-managed etcd
+  </div>
+  <div class="step-card" markdown="1">
+### 3) Install the operator (managed etcd)
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
@@ -49,7 +51,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set console.image.tag=latest
 ```
 
-### Option B: external etcd
+External etcd option:
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
@@ -58,8 +60,9 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set operator.image.tag=latest \
   --set console.image.tag=latest
 ```
-
-## 4) Create a KafscaleCluster
+  </div>
+  <div class="step-card" markdown="1">
+### 4) Create a KafScaleCluster
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
@@ -106,8 +109,9 @@ For S3-compatible endpoints (MinIO, etc), add:
 s3:
   endpoint: http://minio.kafscale.svc:9000
 ```
-
-## 5) Create a topic
+  </div>
+  <div class="step-card" markdown="1">
+### 5) Create a topic
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
@@ -120,8 +124,9 @@ spec:
   partitions: 3
 EOF
 ```
-
-## 6) Produce and consume
+  </div>
+  <div class="step-card" markdown="1">
+### 6) Produce and consume
 
 ```bash
 kubectl -n kafscale port-forward svc/demo-broker 9092:9092
@@ -131,15 +136,18 @@ kubectl -n kafscale port-forward svc/demo-broker 9092:9092
 kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders
 kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning
 ```
-
-## 7) Verify messages in S3
+  </div>
+  <div class="step-card" markdown="1">
+### 7) Verify messages in S3
 
 ```bash
 aws s3 ls s3://kafscale-demo/
 ```
+  </div>
+</div>
 
 ## Next steps
 
-- `/operations/` for production hardening
-- `/configuration/` for full env var reference
-- `/api/` for protocol support
+- [Operations](/operations/) for production hardening
+- [Configuration](/configuration/) for full env var reference
+- [API](/api/) for protocol support
