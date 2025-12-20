@@ -63,3 +63,8 @@ config/crd/bases/*.yaml
 deploy/helm/kafscale/charts/
 proto/**/*.pb.go
 proto/**/*.swagger.json
+
+# GitHub Pages (Jekyll) artifacts
+_site/
+Gemfile
+Gemfile.lock
