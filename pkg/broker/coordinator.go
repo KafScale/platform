@@ -407,8 +407,8 @@ func (c *GroupCoordinator) LeaveGroup(ctx context.Context, req *protocol.LeaveGr
 func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *protocol.OffsetCommitRequest, correlationID int32) (*protocol.OffsetCommitResponse, error) {
 	c.mu.Lock()
 	state, err := c.loadGroupIfMissing(ctx, req.GroupID)
-	c.mu.Unlock()
 	if err != nil {
+		c.mu.Unlock()
 		return nil, err
 	}
 
@@ -420,6 +420,7 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *protocol.Offse
 	} else if req.GenerationID != state.generationID {
 		groupErr = protocol.ILLEGAL_GENERATION
 	}
+	c.mu.Unlock()
 
 	results := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
 	for _, topic := range req.Topics {
