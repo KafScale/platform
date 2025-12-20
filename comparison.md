@@ -257,118 +257,175 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 
 # Feature matrix
 
-<div class="format-card">
-  <div class="format-row header">
-    <span>Feature</span>
-    <span>KafScale</span>
-    <span>Kafka</span>
-    <span>Redpanda</span>
-    <span>WarpStream</span>
-    <span>AutoMQ</span>
-    <span>Bufstream</span>
-  </div>
-  <div class="format-row">
-    <span>Kafka protocol</span>
-    <span>✓ Core</span>
-    <span>✓ Full</span>
-    <span>✓ Full</span>
-    <span>✓ Core</span>
-    <span>✓ Full</span>
-    <span>✓ Full</span>
-  </div>
-  <div class="format-row">
-    <span>Transactions</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>Compacted topics</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✗</span>
-  </div>
-  <div class="format-row">
-    <span>Consumer groups</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>Stateless brokers</span>
-    <span>✓</span>
-    <span>✗</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>S3 as primary storage</span>
-    <span>✓</span>
-    <span>✗</span>
-    <span>◐ Tiered</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>K8s CRDs</span>
-    <span>✓</span>
-    <span>◐ Strimzi</span>
-    <span>✓</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✗</span>
-  </div>
-  <div class="format-row">
-    <span>Native Iceberg</span>
-    <span>✗</span>
-    <span>✗</span>
-    <span>✗</span>
-    <span>✗</span>
-    <span>✓</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>Jepsen tested</span>
-    <span>Planned</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✗</span>
-    <span>✗</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>Self-hostable</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>◐ BYOC</span>
-    <span>✓</span>
-    <span>✓</span>
-  </div>
-  <div class="format-row">
-    <span>No vendor dependency</span>
-    <span>✓</span>
-    <span>✓</span>
-    <span>◐</span>
-    <span>✗</span>
-    <span>◐</span>
-    <span>◐</span>
-  </div>
+<div class="comparison-table-wrapper">
+<table class="comparison-table">
+  <thead>
+    <tr>
+      <th>Feature</th>
+      <th class="kafscale">KafScale</th>
+      <th>Kafka</th>
+      <th>Redpanda</th>
+      <th>WarpStream</th>
+      <th>AutoMQ</th>
+      <th>Bufstream</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="section-row">
+      <td colspan="7">Protocol &amp; Compatibility</td>
+    </tr>
+    <tr>
+      <td>Kafka protocol</td>
+      <td class="kafscale">Core APIs</td>
+      <td>Full</td>
+      <td>Full</td>
+      <td>Core APIs</td>
+      <td>Full</td>
+      <td>Full</td>
+    </tr>
+    <tr>
+      <td>Transactions (EOS)</td>
+      <td class="kafscale">✗</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Compacted topics</td>
+      <td class="kafscale">✗</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✗</td>
+    </tr>
+    <tr>
+      <td>Consumer groups</td>
+      <td class="kafscale">✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr class="section-row">
+      <td colspan="7">Architecture</td>
+    </tr>
+    <tr>
+      <td>Stateless brokers</td>
+      <td class="kafscale">✓</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>S3 primary storage</td>
+      <td class="kafscale">✓</td>
+      <td>✗</td>
+      <td>◐ Tiered</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>No local disk required</td>
+      <td class="kafscale">✓</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>◐ EBS WAL</td>
+      <td>✓</td>
+    </tr>
+    <tr class="section-row">
+      <td colspan="7">Kubernetes</td>
+    </tr>
+    <tr>
+      <td>Native CRDs</td>
+      <td class="kafscale">✓</td>
+      <td>◐ Strimzi</td>
+      <td>✓</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✗</td>
+    </tr>
+    <tr>
+      <td>HPA autoscaling</td>
+      <td class="kafscale">✓</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr class="section-row">
+      <td colspan="7">Data &amp; Integrations</td>
+    </tr>
+    <tr>
+      <td>Native Iceberg</td>
+      <td class="kafscale">✗</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Schema registry</td>
+      <td class="kafscale">External</td>
+      <td>External</td>
+      <td>Built-in</td>
+      <td>External</td>
+      <td>External</td>
+      <td>Built-in</td>
+    </tr>
+    <tr class="section-row">
+      <td colspan="7">Trust &amp; Licensing</td>
+    </tr>
+    <tr>
+      <td>Jepsen tested</td>
+      <td class="kafscale">Planned</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Fully self-hostable</td>
+      <td class="kafscale">✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>◐ BYOC</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>No control plane dependency</td>
+      <td class="kafscale">✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Apache 2.0 license</td>
+      <td class="kafscale">✓</td>
+      <td>✓</td>
+      <td>✗ BSL</td>
+      <td>✗ Prop.</td>
+      <td>✗ BSL</td>
+      <td>✗ Prop.</td>
+    </tr>
+  </tbody>
+</table>
 </div>
 
-**Legend:** ✓ = Yes | ✗ = No | ◐ = Partial
+**Legend:** ✓ Yes &nbsp;&nbsp; ✗ No &nbsp;&nbsp; ◐ Partial
 
 # The honest tradeoffs
 
@@ -389,6 +446,6 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 
 ## Why we built KafScale
 
-The IBM acquisition of Confluent (and with it, WarpStream) in late 2024 highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
+The IBM acquisition of Confluent (and with it, WarpStream) in late 2025 highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
 
 KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
