@@ -58,6 +58,9 @@ make docker-build # build broker/operator/console images (run locally whenever t
 make test-produce-consume         # run the MinIO/franz produce+consume suite only (images from docker-build are reused)
 make test-produce-consume-debug   # same as above but with broker trace logging enabled
 make test-consumer-group          # run consumer group persistence e2e (embedded etcd + in-memory S3)
+make test-ops-api                 # run ops/admin API e2e (embedded etcd + in-memory S3)
+make test-multi-segment-durability # run multi-segment restart durability e2e (embedded etcd + MinIO)
+make test-full                    # run unit tests + local e2e suites
 KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestOperatorManagedEtcdResources -v # operator envtest (no kind)
 KAFSCALE_E2E=1 KAFSCALE_E2E_KIND=1 go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v # kind + helm integration
 make test-operator # same as above, wrapped in Makefile (set KAFSCALE_KIND_RECREATE=1 for clean clusters)
@@ -90,7 +93,7 @@ To add headers to new files, run:
 python3 hack/license_headers.py
 ```
 
-The Makefile defines these as `.PHONY`: `proto`, `build`, `test`, `tidy`, `lint`, `generate`, `docker-build`, `docker-build-broker`, `docker-build-operator`, `docker-build-console`, `docker-build-e2e-client`, `docker-clean`, `ensure-minio`, `start-minio`, `stop-containers`, `release-broker-ports`, `test-produce-consume`, `test-produce-consume-debug`, `test-consumer-group`, `test-operator`, `demo`, `demo-platform`, `help`.
+The Makefile defines these as `.PHONY`: `proto`, `build`, `test`, `tidy`, `lint`, `generate`, `docker-build`, `docker-build-broker`, `docker-build-operator`, `docker-build-console`, `docker-build-e2e-client`, `docker-clean`, `ensure-minio`, `start-minio`, `stop-containers`, `release-broker-ports`, `test-produce-consume`, `test-produce-consume-debug`, `test-consumer-group`, `test-ops-api`, `test-multi-segment-durability`, `test-full`, `test-operator`, `demo`, `demo-platform`, `help`.
 
 ### Development/Test Environment Variables
 
@@ -126,15 +129,15 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 12 | Heartbeat | 4 | ✅ Implemented |
 | 13 | LeaveGroup | 4 | ✅ Implemented |
 | 14 | SyncGroup | 4 | ✅ Implemented |
-| 15 | DescribeGroups | 5 | 🔜 Planned |
-| 16 | ListGroups | 5 | 🔜 Planned |
+| 15 | DescribeGroups | 5 | ✅ Implemented |
+| 16 | ListGroups | 5 | ✅ Implemented |
 | 17 | SaslHandshake | 1 | ❌ Authentication not in scope yet |
 | 18 | ApiVersions | 3 | ✅ Implemented (v0 only) |
 | 19 | CreateTopics | 7 | ✅ Implemented (v0 only) |
 | 20 | DeleteTopics | 6 | ✅ Implemented (v0 only) |
 | 21 | DeleteRecords | 2 | ❌ Rely on S3 lifecycle |
 | 22 | InitProducerId | 4 | ❌ Transactions out of scope |
-| 23 | OffsetForLeaderEpoch | 3 | 🔜 Needed for catch-up tooling |
+| 23 | OffsetForLeaderEpoch | 3 | ✅ Implemented |
 | 24 | AddPartitionsToTxn | 3 | ❌ Transactions out of scope |
 | 25 | AddOffsetsToTxn | 3 | ❌ Transactions out of scope |
 | 26 | EndTxn | 3 | ❌ Transactions out of scope |
@@ -143,25 +146,26 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 29 | DescribeAcls | 1 | ❌ Auth not in v1 |
 | 30 | CreateAcls | 1 | ❌ Auth not in v1 |
 | 31 | DeleteAcls | 1 | ❌ Auth not in v1 |
-| 32 | DescribeConfigs | 4 | 🔜 Planned |
-| 33 | AlterConfigs | 1 | 🔜 Planned |
+| 32 | DescribeConfigs | 4 | ✅ Implemented |
+| 33 | AlterConfigs | 1 | ✅ Implemented |
 | 34 | AlterReplicaLogDirs | 1 | ❌ Not relevant (S3 backed) |
 | 35 | DescribeLogDirs | 1 | ❌ Not relevant (S3 backed) |
 | 36 | SaslAuthenticate | 2 | ❌ Auth not in v1 |
-| 37 | CreatePartitions | 3 | 🔜 Requires S3 layout changes |
+| 37 | CreatePartitions | 0-3 | ✅ Implemented |
 | 38 | CreateDelegationToken | 2 | ❌ Auth not in v1 |
 | 39 | RenewDelegationToken | 2 | ❌ Auth not in v1 |
 | 40 | ExpireDelegationToken | 2 | ❌ Auth not in v1 |
 | 41 | DescribeDelegationToken | 2 | ❌ Auth not in v1 |
-| 42 | DeleteGroups | 2 | 🔜 Planned |
+| 42 | DeleteGroups | 0-2 | ✅ Implemented |
 
 We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer in the spec backlog so we can track when to bring it online (e.g., DescribeGroups/ListGroups for Kafka UI parity, OffsetForLeaderEpoch for catch-up tooling).
+
 make tidy         # clean go.mod/go.sum
 make lint         # run golangci-lint (requires installation)
 
 ### Local MinIO / S3 setup
 
-`make test-produce-consume` assumes there is an S3 endpoint in front of the broker; we keep a MinIO container (`kafscale-minio`) running locally so the produce/consume suite exercises a production-like S3 stack. When the broker starts without overriding `KAFSCALE_USE_MEMORY_S3=1`, it points at MinIO at `http://127.0.0.1:9000`, bucket `kafscale`, region `us-east-1`, and uses path-style addressing by default. Set `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_NAMESPACE`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, and `KAFSCALE_S3_SESSION_TOKEN` to target a different S3-compatible endpoint, or flip `KAFSCALE_USE_MEMORY_S3=1` to skip MinIO entirely (the broker then uses the in-memory S3 client for faster, more deterministic runs). Keep `make stop-containers` handy to stop the MinIO / kind helper containers before you restart the suite. If you need to inspect every protocol message, run `make test-produce-consume-debug`; it sets `KAFSCALE_LOG_LEVEL=debug` and `KAFSCALE_TRACE_KAFKA=true` before chaining into the standard target so the extra noise stays opt-in. `make test-consumer-group` runs with embedded etcd + in-memory S3 so it does not require MinIO; it validates group metadata persistence, not full Kafka consumer group feature parity (static membership, cooperative rebalancing, etc.).
+`make test-produce-consume` assumes there is an S3 endpoint in front of the broker; we keep a MinIO container (`kafscale-minio`) running locally so the produce/consume suite exercises a production-like S3 stack. When the broker starts without overriding `KAFSCALE_USE_MEMORY_S3=1`, it points at MinIO at `http://127.0.0.1:9000`, bucket `kafscale`, region `us-east-1`, and uses path-style addressing by default. Set `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_NAMESPACE`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, and `KAFSCALE_S3_SESSION_TOKEN` to target a different S3-compatible endpoint, or flip `KAFSCALE_USE_MEMORY_S3=1` to skip MinIO entirely (the broker then uses the in-memory S3 client for faster, more deterministic runs). Keep `make stop-containers` handy to stop the MinIO / kind helper containers before you restart the suite. If you need to inspect every protocol message, run `make test-produce-consume-debug`; it sets `KAFSCALE_LOG_LEVEL=debug` and `KAFSCALE_TRACE_KAFKA=true` before chaining into the standard target so the extra noise stays opt-in. `make test-consumer-group` and `make test-ops-api` run with embedded etcd + in-memory S3 so they do not require MinIO; they validate group metadata persistence and admin APIs, respectively. `make test-multi-segment-durability` exercises a broker restart across multiple segment flushes and uses MinIO for realistic S3 persistence.
 
 Need an interactive run? `make demo` chains into the same helpers, boots embedded etcd plus the broker + console, opens `http://127.0.0.1:48080/ui/`, and keeps everything running until you hit `Ctrl+C`. It’s the quickest way to click around the UI while real messages flow through the broker/MinIO stack. That target already wires `KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics` so the console scrapes the broker’s Prometheus endpoint and populates the S3/metrics cards with live data. Any other process starting `cmd/console` can set the same env var (e.g., `go run ./cmd/console`), and the UI will render the broker-reported S3 state/latency instead of the mock placeholders.
 

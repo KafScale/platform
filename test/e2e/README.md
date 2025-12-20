@@ -31,6 +31,16 @@ These tests spin up a full cluster (via [kind](https://kind.sigs.k8s.io)), insta
 KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -v
 ```
 
+For local developer workflows, prefer the Makefile targets:
+
+```bash
+make test-consumer-group          # embedded etcd + in-memory S3
+make test-ops-api                 # embedded etcd + in-memory S3
+make test-multi-segment-durability # embedded etcd + MinIO
+make test-produce-consume         # MinIO-backed produce/consume suite
+make test-full                    # unit tests + local e2e suites
+```
+
 Optional environment variables:
 
 - `KAFSCALE_KIND_CLUSTER`: reuse an existing kind cluster without creating/deleting one.

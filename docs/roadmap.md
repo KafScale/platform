@@ -34,10 +34,10 @@ This roadmap tracks completed work and open gaps. It is intentionally high level
 - End-to-end tests for broker durability and operator resilience
 - Admin ops API e2e coverage
 - Security review (TLS/auth)
+- End-to-end tests multi-segment restart durability
 
 ## Open
 
 ### Testing and Hardening
 
 - Performance benchmarks
-- Multi-segment restart durability e2e

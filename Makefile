@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-operator demo demo-platform help
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-multi-segment-durability test-full test-operator demo demo-platform help
 
 REGISTRY ?= ghcr.io/novatechflow
 STAMP_DIR ?= .build
@@ -164,6 +164,21 @@ test-produce-consume-debug: release-broker-ports ensure-minio ## Run produce/con
 test-consumer-group: release-broker-ports ## Run consumer group persistence e2e (embedded etcd + in-memory S3).
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestConsumerGroupMetadataPersistsInEtcd -v
+
+test-ops-api: release-broker-ports ## Run ops/admin API e2e (embedded etcd + in-memory S3).
+	KAFSCALE_E2E=1 \
+	go test -tags=e2e ./test/e2e -run TestOpsAPI -v
+
+test-multi-segment-durability: release-broker-ports ensure-minio ## Run multi-segment restart durability e2e (embedded etcd + MinIO).
+	KAFSCALE_E2E=1 \
+	go test -tags=e2e ./test/e2e -run TestMultiSegmentRestartDurability -v
+
+test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
+	$(MAKE) test
+	$(MAKE) test-consumer-group
+	$(MAKE) test-ops-api
+	$(MAKE) test-multi-segment-durability
+	$(MAKE) test-produce-consume
 
 test-operator: docker-build ## Run operator kind+helm snapshot e2e (requires kind/kubectl/helm).
 	KAFSCALE_E2E=1 \
