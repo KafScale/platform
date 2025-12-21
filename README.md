@@ -23,7 +23,7 @@ limitations under the License.
 [![Release](https://img.shields.io/github/v/release/novatechflow/kafscale?include_prereleases&sort=semver)](https://github.com/novatechflow/kafscale/releases)
 [![GHCR Broker](https://img.shields.io/badge/ghcr.io-kafscale--broker-blue)](https://github.com/novatechflow/kafscale/pkgs/container/kafscale-broker)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/novatechflow/kafscale)](https://goreportcard.com/report/github.com/novatechflow/kafscale)
+[![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen)](https://goreportcard.com/report/github.com/novatechflow/kafscale)
 
 Kafscale™ is a Apache Kafka-protocol compatible streaming platform built for durable message transport without the operational complexity of stateful Kafka clusters. It is open source under the Apache 2.0 license and implemented in Go. (Kafscale is not a registered trademark.)
 
