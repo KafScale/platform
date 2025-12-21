@@ -24,12 +24,14 @@ on:
       - main
   workflow_dispatch:
 
+permissions: read-all
+
 jobs:
   license-check:
     name: License Header Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Validate Apache 2.0 headers
         run: python3 hack/check_license_headers.py
 
@@ -39,9 +41,9 @@ jobs:
     env:
       GOCACHE: ${{ github.workspace }}/.gocache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -61,9 +63,9 @@ jobs:
     env:
       GOCACHE: ${{ github.workspace }}/.gocache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -74,21 +76,14 @@ jobs:
       - name: Enforce coverage floor
         run: bash hack/check_coverage.sh 1
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          files: coverage.out
-          flags: unittests
-          fail_ci_if_error: false
-
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Lint chart
         run: helm lint deploy/helm/kafscale

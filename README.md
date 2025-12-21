@@ -18,7 +18,7 @@ limitations under the License.
 # Kafscale
 
 [![CI](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/novatechflow/kafscale/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/novatechflow/kafscale/actions/workflows/codeql.yml)
+[![CodeQL](https://img.shields.io/github/codeql/alerts/novatechflow/kafscale?label=codeql)](https://github.com/novatechflow/kafscale/security/code-scanning)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/novatechflow/kafscale/badge)](https://securityscorecards.dev/viewer/?uri=github.com/novatechflow/kafscale)
 [![Release](https://img.shields.io/github/v/release/novatechflow/kafscale?include_prereleases&sort=semver)](https://github.com/novatechflow/kafscale/releases)
 [![GHCR Broker](https://img.shields.io/badge/ghcr.io-kafscale--broker-blue)](https://github.com/novatechflow/kafscale/pkgs/container/kafscale-broker)
