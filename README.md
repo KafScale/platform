@@ -15,10 +15,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Kafscale
+# KafScale
 
 [![CI](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/novatechflow/kafscale/actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/github/codeql/alerts/novatechflow/kafscale?label=codeql)](https://github.com/novatechflow/kafscale/security/code-scanning)
+[![CodeQL](https://img.shields.io/badge/codeql-enabled-2ea44f?logo=github)](https://github.com/novatechflow/kafscale/security/code-scanning)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/novatechflow/kafscale/badge)](https://securityscorecards.dev/viewer/?uri=github.com/novatechflow/kafscale)
 [![Release](https://img.shields.io/github/v/release/novatechflow/kafscale?include_prereleases&sort=semver)](https://github.com/novatechflow/kafscale/releases)
 [![GHCR Broker](https://img.shields.io/badge/ghcr.io-kafscale--broker-blue)](https://github.com/novatechflow/kafscale/pkgs/container/kafscale-broker)
@@ -27,7 +27,7 @@ limitations under the License.
 
 Kafscale™ is a Apache Kafka-protocol compatible streaming platform built for durable message transport without the operational complexity of stateful Kafka clusters. It is open source under the Apache 2.0 license and implemented in Go. (Kafscale is not a registered trademark.)
 
-## Why Kafscale Exists
+## Why KafScale Exists
 
 Most Kafka deployments act as durable pipes: producers write, consumers read, teams rely on replay when something breaks. Very few workloads require sub-millisecond latency, exactly-once transactions, or compacted topics, yet traditional Kafka clusters still demand stateful brokers, disk management, and continuous operational effort.
 
