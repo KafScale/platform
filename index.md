@@ -115,15 +115,15 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   <div class="quickstart-flow">
     <div class="quickstart-card">
       <h3>1. Install operator</h3>
-      <pre class="code-block"><code>helm upgrade --install kafscale deploy/helm/kafscale \
+      <div class="highlight"><pre><code>helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints={} \
   --set operator.image.tag=latest \
-  --set console.image.tag=latest</code></pre>
+  --set console.image.tag=latest</code></pre></div>
     </div>
     <div class="quickstart-card">
       <h3>2. Create your first topic</h3>
-      <pre class="code-block"><code>kubectl apply -n kafscale -f - &lt;&lt;'EOF'
+      <div class="highlight"><pre><code>kubectl apply -n kafscale -f - &lt;&lt;'EOF'
 apiVersion: kafscale.novatechflow.io/v1alpha1
 kind: KafscaleTopic
 metadata:
@@ -131,12 +131,12 @@ metadata:
 spec:
   clusterRef: demo
   partitions: 3
-EOF</code></pre>
+EOF</code></pre></div>
     </div>
     <div class="quickstart-card">
       <h3>3. Produce and consume</h3>
-      <pre class="code-block"><code>kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders
-kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning</code></pre>
+      <div class="highlight"><pre><code>kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders
+kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning</code></pre></div>
     </div>
   </div>
   <div class="hero-actions">
