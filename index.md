@@ -59,6 +59,27 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   </div>
 </section>
 
+<section class="section manifesto">
+  <h2>The Rationale: Kafka brokers are a legacy artifact</h2>
+  <p>
+    Kafka brokers were designed for a disk-centric world where durability lived on local machines.
+    Replication and rebalancing were necessary because broker state was the source of truth.
+  </p>
+  <p>
+    Object storage changes this model.
+    Once log segments are durable, immutable, and external, long-lived broker state stops adding resilience
+    and starts adding operational cost.
+  </p>
+  <p>
+    Stateless brokers backed by object storage simplify failure, scaling, and recovery.
+    Brokers become ephemeral compute. Data remains durable.
+  </p>
+  <p>
+    KafScale is built on this assumption.
+    The Kafka protocol still matters. Broker-centric storage does not.
+  </p>
+</section>
+
 <section class="section tradeoffs">
   <h2>What You Should Consider</h2>
   <p>KafScale is not a drop-in replacement for every Kafka workload. Here's when it fits and when it doesn't.</p>
@@ -92,103 +113,80 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 <section class="section">
   <h2>How KafScale works</h2>
   <div class="diagram">
-    <svg viewBox="0 0 900 370" role="img" aria-label="KafScale architecture diagram">
+    <svg viewBox="0 0 900 410" role="img" aria-label="KafScale architecture diagram">
       <defs>
         <marker id="arrow" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
           <path d="M0,0 L0,6 L6,3 z" fill="var(--diagram-stroke)"></path>
         </marker>
       </defs>
-      <rect x="20" y="20" width="860" height="220" rx="18" ry="18" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="2"></rect>
-      <text x="40" y="55" font-size="16" font-weight="600" fill="var(--diagram-text)">Kubernetes cluster</text>
-      <text x="70" y="82" font-size="12" fill="var(--diagram-label)">Stateless brokers (HPA, scale out/in)</text>
 
-      <rect x="70" y="100" width="120" height="55" rx="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
-      <text x="100" y="133" font-size="13" fill="var(--diagram-text)">Broker 0</text>
+      <!-- Clients -->
+      <rect x="20" y="95" width="170" height="80" rx="12" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"></rect>
+      <text x="35" y="120" font-size="13" font-weight="600" fill="var(--diagram-text)">Kafka clients</text>
+      <text x="35" y="142" font-size="11" fill="var(--diagram-label)">Producers, consumers</text>
+      <text x="35" y="160" font-size="11" fill="var(--diagram-label)">CLI tools, Connect</text>
 
-      <rect x="210" y="100" width="120" height="55" rx="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
-      <text x="240" y="133" font-size="13" fill="var(--diagram-text)">Broker 1</text>
+      <!-- Kubernetes -->
+      <rect x="210" y="20" width="670" height="230" rx="18" ry="18" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="2"></rect>
+      <text x="230" y="55" font-size="16" font-weight="600" fill="var(--diagram-text)">Kubernetes cluster</text>
+      <text x="260" y="82" font-size="12" fill="var(--diagram-label)">Stateless brokers (HPA, scale out/in)</text>
 
-      <rect x="350" y="100" width="120" height="55" rx="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
-      <text x="380" y="133" font-size="13" fill="var(--diagram-text)">Broker N</text>
+      <!-- Arrow: clients -> brokers (drawn after k8s box so it stays on top) -->
+      <line x1="190" y1="135" x2="245" y2="135" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
+      <text x="195" y="126" font-size="10" fill="var(--diagram-label)">Kafka protocol</text>
 
-      <rect x="550" y="85" width="280" height="90" rx="12" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"></rect>
-      <text x="565" y="108" font-size="13" font-weight="600" fill="var(--diagram-text)">etcd cluster</text>
-      <text x="565" y="158" font-size="11" fill="var(--diagram-label)">Topics, offsets, group state</text>
-      <circle cx="600" cy="130" r="12" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"/>
-      <circle cx="660" cy="130" r="12" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"/>
-      <circle cx="720" cy="130" r="12" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"/>
+      <!-- Brokers -->
+      <rect x="260" y="105" width="120" height="55" rx="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
+      <text x="290" y="138" font-size="13" fill="var(--diagram-text)">Broker 0</text>
 
-      <rect x="70" y="175" width="180" height="50" rx="10" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)"></rect>
-      <text x="115" y="205" font-size="12" font-weight="600" fill="var(--diagram-text)">Operator</text>
+      <rect x="400" y="105" width="120" height="55" rx="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
+      <text x="430" y="138" font-size="13" fill="var(--diagram-text)">Broker 1</text>
 
-      <line x1="470" y1="127" x2="545" y2="127" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
-      <text x="480" y="118" font-size="10" fill="var(--diagram-label)">metadata</text>
+      <rect x="540" y="105" width="120" height="55" rx="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
+      <text x="570" y="138" font-size="13" fill="var(--diagram-text)">Broker N</text>
 
-      <line x1="280" y1="155" x2="280" y2="250" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
-      <text x="290" y="210" font-size="10" fill="var(--diagram-label)">segments</text>
+      <!-- etcd -->
+      <rect x="690" y="90" width="170" height="95" rx="12" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"></rect>
+      <text x="705" y="113" font-size="13" font-weight="600" fill="var(--diagram-text)">etcd cluster</text>
+      <text x="705" y="134" font-size="11" fill="var(--diagram-label)">Topic map, offsets,</text>
+      <text x="705" y="150" font-size="11" fill="var(--diagram-label)">consumer group state</text>
+      <circle cx="720" cy="165" r="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></circle>
+      <circle cx="755" cy="165" r="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></circle>
+      <circle cx="790" cy="165" r="10" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></circle>
 
-      <rect x="20" y="260" width="860" height="90" rx="16" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="2"></rect>
-      <text x="40" y="290" font-size="14" font-weight="600" fill="var(--diagram-text)">Amazon S3 (11 nines durability)</text>
+      <!-- Operator -->
+      <rect x="260" y="185" width="180" height="50" rx="10" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)"></rect>
+      <text x="305" y="215" font-size="12" font-weight="600" fill="var(--diagram-text)">Operator</text>
 
-      <rect x="60" y="300" width="300" height="40" rx="8" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
-      <text x="80" y="325" font-size="12" fill="var(--diagram-text)">Log segments + indexes</text>
+      <!-- Brokers -> etcd (control plane) -->
+      <line x1="660" y1="132" x2="688" y2="132" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
+      <text x="615" y="121" font-size="10" fill="var(--diagram-label)">control plane</text>
 
-      <rect x="540" y="300" width="300" height="40" rx="8" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
-      <text x="560" y="325" font-size="12" fill="var(--diagram-text)">etcd snapshots (backup)</text>
+      <!-- Brokers -> S3 (data plane) -->
+      <line x1="470" y1="160" x2="470" y2="280" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
+      <text x="482" y="225" font-size="10" fill="var(--diagram-label)">data plane (segments)</text>
 
-      <line x1="690" y1="175" x2="690" y2="295" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
-      <text x="700" y="240" font-size="10" fill="var(--diagram-label)">snapshots</text>
+      <!-- S3 -->
+      <rect x="20" y="290" width="860" height="110" rx="16" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="2"></rect>
+      <text x="40" y="322" font-size="14" font-weight="600" fill="var(--diagram-text)">Amazon S3 (11 nines durability)</text>
+      <text x="40" y="342" font-size="11" fill="var(--diagram-label)">Source of truth for log data</text>
+
+      <rect x="60" y="350" width="300" height="40" rx="8" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
+      <text x="80" y="375" font-size="12" fill="var(--diagram-text)">Log segments + indexes</text>
+
+      <rect x="540" y="350" width="300" height="40" rx="8" fill="var(--diagram-accent)" stroke="var(--diagram-stroke)"></rect>
+      <text x="560" y="375" font-size="12" fill="var(--diagram-text)">etcd snapshots (backup)</text>
+
+      <!-- Operator -> S3 snapshots -->
+      <line x1="780" y1="185" x2="780" y2="345" stroke="var(--diagram-stroke)" stroke-width="1.5" marker-end="url(#arrow)"></line>
+      <text x="792" y="270" font-size="10" fill="var(--diagram-label)">snapshots</text>
     </svg>
+    <p class="diagram-caption">
+      S3 is the source of truth for log data. Brokers are ephemeral. etcd stores coordination state.
+    </p>
   </div>
   <div class="hero-actions">
     <a class="button secondary" href="/architecture/">See detailed architecture flows</a>
-  </div>
-</section>
-
-<section class="section">
-  <h2>Get running in minutes</h2>
-  <div class="quickstart-flow">
-    <div class="quickstart-card" markdown="1">
-
-### 1. Install the operator
-
-```bash
-helm upgrade --install kafscale deploy/helm/kafscale \
-  --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints={} \
-  --set operator.image.tag=latest
-```
-
-</div>
-    <div class="quickstart-card" markdown="1">
-
-### 2. Create a topic
-
-```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafscaleTopic
-metadata:
-  name: orders
-spec:
-  clusterRef: demo
-  partitions: 3
-```
-
-</div>
-    <div class="quickstart-card" markdown="1">
-
-### 3. Produce and consume
-
-```bash
-kafka-console-producer \
-  --bootstrap-server 127.0.0.1:9092 \
-  --topic orders
-```
-
-</div>
-  </div>
-  <div class="hero-actions">
-    <a class="button secondary" href="/quickstart/">Full quickstart guide</a>
   </div>
 </section>
 
@@ -235,6 +233,22 @@ kafka-console-producer \
       <p>TLS configuration, S3 IAM policies, and the roadmap for SASL and ACLs.</p>
       <a class="button secondary" href="/security/">Security guide</a>
     </div>
+  </div>
+</section>
+
+<section class="section">
+  <h2>Get started</h2>
+  <p>
+    KafScale is designed to be operationally simple from day one.
+    If you already run Kubernetes and Kafka clients, you can deploy a cluster
+    and start producing data in minutes.
+  </p>
+  <p>
+    Install the operator, define a topic, produce with existing Kafka tools.
+  </p>
+  <div class="hero-actions">
+    <a class="button" href="/quickstart/">Quickstart guide</a>
+    <a class="button secondary" href="https://github.com/novatechflow/kafscale" target="_blank" rel="noreferrer">View on GitHub</a>
   </div>
 </section>
 
