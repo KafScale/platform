@@ -43,6 +43,9 @@ type S3Spec struct {
 	Bucket               string `json:"bucket"`
 	Region               string `json:"region"`
 	Endpoint             string `json:"endpoint,omitempty"`
+	ReadBucket           string `json:"readBucket,omitempty"`
+	ReadRegion           string `json:"readRegion,omitempty"`
+	ReadEndpoint         string `json:"readEndpoint,omitempty"`
 	KMSKeyARN            string `json:"kmsKeyArn,omitempty"`
 	CredentialsSecretRef string `json:"credentialsSecretRef"`
 }

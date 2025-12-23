@@ -43,6 +43,10 @@ For a dev/latest install, set `operator.image.useLatest=true`, `console.image.us
 
 After the chart is running you can create a cluster by applying a `KafscaleCluster` resource (see `config/samples/` for an example).  The console service is exposed as a ClusterIP by default; enable ingress by toggling `.Values.console.ingress`.
 
+### MCP 
+
+The MCP service is optional and disabled by default. Enable it with `mcp.enabled=true`; it will deploy into the dedicated namespace defined by `mcp.namespace.name`.
+
 ### Values Overview
 
 | Key | Description | Default |
@@ -52,5 +56,8 @@ After the chart is running you can create a cluster by applying a `KafscaleClust
 | `operator.etcdEndpoints` | List of etcd endpoints the operator will connect to. | `["http://etcd:2379"]` |
 | `console.service.type` | Kubernetes service type for the console. | `ClusterIP` |
 | `console.ingress.*` | Optional ingress configuration for exposing the console. | disabled |
+| `mcp.enabled` | Deploy the MCP service. | `false` |
+| `mcp.namespace.name` | Namespace to deploy the MCP service into. | `kafscale-mcp` |
+| `mcp.ingress.*` | Optional ingress configuration for exposing the MCP service. | disabled |
 
 Consult `values.yaml` for all tunables, including resource requests, node selectors, and pull secrets.

@@ -13,13 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-multi-segment-durability test-full test-operator demo demo-platform help
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform help
 
 REGISTRY ?= ghcr.io/novatechflow
 STAMP_DIR ?= .build
 BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
+MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
@@ -46,7 +47,7 @@ test: ## Run unit tests + vet + race
 	go vet ./...
 	go test -race ./...
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-e2e-client ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-mcp docker-build-e2e-client ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -80,6 +81,13 @@ $(STAMP_DIR)/console.image: $(CONSOLE_SRCS)
 	$(DOCKER_BUILD_CMD) -t $(CONSOLE_IMAGE) -f deploy/docker/console.Dockerfile .
 	@touch $(STAMP_DIR)/console.image
 
+MCP_SRCS := $(shell find cmd/mcp internal/mcpserver go.mod go.sum)
+docker-build-mcp: $(STAMP_DIR)/mcp.image ## Build MCP container image
+$(STAMP_DIR)/mcp.image: $(MCP_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) -t $(MCP_IMAGE) -f deploy/docker/mcp.Dockerfile .
+	@touch $(STAMP_DIR)/mcp.image
+
 E2E_CLIENT_SRCS := $(shell find cmd/e2e-client go.mod go.sum)
 docker-build-e2e-client: $(STAMP_DIR)/e2e-client.image ## Build e2e client container image
 $(STAMP_DIR)/e2e-client.image: $(E2E_CLIENT_SRCS)
@@ -90,7 +98,7 @@ $(STAMP_DIR)/e2e-client.image: $(E2E_CLIENT_SRCS)
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
 	@printf "Type YES to continue: "; read ans; [ "$$ans" = "YES" ] || { echo "aborted"; exit 1; }
-	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(E2E_CLIENT_IMAGE)
+	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE)
 	-rm -rf $(STAMP_DIR)
 	docker system prune --force --volumes
 	docker buildx prune --force
@@ -170,6 +178,10 @@ test-ops-api: release-broker-ports ## Run ops/admin API e2e (embedded etcd + in-
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestOpsAPI -v
 
+test-mcp: ## Run MCP e2e tests (in-memory metadata store + streamable HTTP).
+	KAFSCALE_E2E=1 \
+	go test -tags=e2e ./test/e2e -run TestMCP -v
+
 test-multi-segment-durability: release-broker-ports ensure-minio ## Run multi-segment restart durability e2e (embedded etcd + MinIO).
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestMultiSegmentRestartDurability -v
@@ -178,6 +190,7 @@ test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test
 	$(MAKE) test-consumer-group
 	$(MAKE) test-ops-api
+	$(MAKE) test-mcp
 	$(MAKE) test-multi-segment-durability
 	$(MAKE) test-produce-consume
 

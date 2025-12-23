@@ -71,6 +71,12 @@ spec:
                       type: string
                     endpoint:
                       type: string
+                    readBucket:
+                      type: string
+                    readRegion:
+                      type: string
+                    readEndpoint:
+                      type: string
                     kmsKeyArn:
                       type: string
                     credentialsSecretRef:

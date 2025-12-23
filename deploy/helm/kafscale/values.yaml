@@ -83,3 +83,45 @@ console:
           - path: /
             pathType: Prefix
     tls: []
+
+mcp:
+  enabled: false
+  namespace:
+    name: kafscale-mcp
+    create: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/novatechflow/kafscale-mcp
+    tag: ""
+    useLatest: false
+    pullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+    name: ""
+  auth:
+    token: ""
+  etcdEndpoints: []
+  etcd:
+    username: ""
+    password: ""
+  metrics:
+    brokerMetricsURL: ""
+  sessionTimeout: ""
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP
+    port: 80
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: mcp.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []

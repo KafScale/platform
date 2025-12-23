@@ -55,3 +55,36 @@ If caches miss, the broker fetches from S3.
 ## S3 Health Backpressure
 
 When the broker detects degraded or unavailable S3 health, it rejects Produce and Fetch requests with backpressure error codes. Producers fail fast so clients can retry; consumers receive fetch errors until S3 recovers.
+
+## Multi-Region S3 Reads (CRR)
+
+```
+                +-----------------------+
+                |  Producers (Any RG)   |
+                +-----------+-----------+
+                            |
+                            v
+                +-----------------------+
+                | Brokers (US-East-1)   |
+                | writes -> S3 primary  |
+                +-----------+-----------+
+                            |
+                            v
+                +-----------------------+
+                | S3 Primary (us-east-1)|
+                +-----------+-----------+
+                            |
+          +-----------------+-----------------+
+          |                                   |
+          v                                   v
++-----------------------+         +----------------------------+
+| S3 Replica (eu-west-1)|         | S3 Replica (ap-southeast-1)|
++-----------+-----------+         +-----------+----------------+
+            |                                   |
+            v                                   v
++-----------------------+         +-----------------------+
+| Brokers (EU)          |         | Brokers (Asia)        |
+| read -> local replica |         | read -> local replica |
+| fallback -> primary   |         | fallback -> primary   |
++-----------------------+         +-----------------------+
+```

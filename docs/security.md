@@ -60,6 +60,8 @@ Planned security milestones (order may change as requirements evolve):
 - SASL/PLAIN and SASL/SCRAM for Kafka client authentication.
 - Authorization / ACL layer for broker admin and data plane APIs.
 - Optional mTLS for broker and console endpoints.
+- MCP services (if deployed) must be secured with strong auth, RBAC, and audit
+  logging; see `docs/mcp.md`.
 
 ## Reporting Security Issues
 

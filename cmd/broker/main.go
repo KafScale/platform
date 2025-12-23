@@ -1305,6 +1305,38 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 	}
 
 	logger.Info("using AWS-compatible S3 client", "bucket", bucket, "region", region, "endpoint", endpoint, "force_path_style", forcePathStyle, "kms_configured", kmsARN != "", "default_minio", usingDefaultMinio, "credentials_provided", credsProvided)
+
+	readBucket := os.Getenv("KAFSCALE_S3_READ_BUCKET")
+	readRegion := os.Getenv("KAFSCALE_S3_READ_REGION")
+	readEndpoint := os.Getenv("KAFSCALE_S3_READ_ENDPOINT")
+	if readBucket != "" || readRegion != "" || readEndpoint != "" {
+		if readBucket == "" {
+			readBucket = bucket
+		}
+		if readRegion == "" {
+			readRegion = region
+		}
+		if readEndpoint == "" {
+			readEndpoint = endpoint
+		}
+		readClient, err := storage.NewS3Client(ctx, storage.S3Config{
+			Bucket:          readBucket,
+			Region:          readRegion,
+			Endpoint:        readEndpoint,
+			ForcePathStyle:  forcePathStyle,
+			AccessKeyID:     accessKey,
+			SecretAccessKey: secretKey,
+			SessionToken:    sessionToken,
+			KMSKeyARN:       kmsARN,
+		})
+		if err != nil {
+			logger.Error("failed to create read S3 client; using write client", "error", err, "bucket", readBucket, "region", readRegion, "endpoint", readEndpoint)
+			return client
+		}
+		logger.Info("using S3 read replica", "bucket", readBucket, "region", readRegion, "endpoint", readEndpoint)
+		return newDualS3Client(client, readClient)
+	}
+
 	return client
 }
 

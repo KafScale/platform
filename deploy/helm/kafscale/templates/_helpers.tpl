@@ -35,6 +35,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 {{- end -}}
 
+{{- define "kafscale.mcpServiceAccountName" -}}
+{{- if .Values.mcp.serviceAccount.create -}}
+{{- default (printf "%s-mcp" (include "kafscale.fullname" .)) .Values.mcp.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.mcp.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "kafscale.componentName" -}}
 {{- printf "%s-%s" (include "kafscale.fullname" .root) .component | trunc 63 | trimSuffix "-" -}}
 {{- end -}}

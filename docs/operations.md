@@ -150,7 +150,7 @@ The operator performs an S3 write preflight before enabling snapshots. If the ch
 
 Minimal env + spec checklist for a smooth run:
 - Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET`, `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
-- Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS).
+- Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS). Optional read replica: `spec.s3.readBucket`, `spec.s3.readRegion`, `spec.s3.readEndpoint`.
 - Secret keys: `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`.
 - Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
 
@@ -195,6 +195,9 @@ Recommended operator alerting (when using Prometheus Operator):
 - `KAFSCALE_S3_BUCKET` – S3 bucket for segments/snapshots.
 - `KAFSCALE_S3_REGION` – S3 region.
 - `KAFSCALE_S3_ENDPOINT` – S3 endpoint override.
+- `KAFSCALE_S3_READ_BUCKET` – Optional read replica bucket (CRR/MRAP).
+- `KAFSCALE_S3_READ_REGION` – Optional read replica region.
+- `KAFSCALE_S3_READ_ENDPOINT` – Optional read replica endpoint override.
 - `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
 - `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
 - `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
@@ -243,3 +246,67 @@ Monthly costs (US-East-1):
 | GET requests | 100,000/day x 30 x $0.0004/1000 | $1.20 |
 | Data transfer (in-region) | Free | $0 |
 | **Total S3** | | **~$21/month** |
+
+## Multi-Region S3 (CRR) for Global Reads
+
+Kafscale writes to a primary bucket and can optionally read from a replica bucket in the broker region. With S3 Cross-Region Replication (CRR), objects written to the primary are asynchronously copied to replica buckets in other regions. Brokers attempt reads from their local replica and fall back to the primary if the replica is missing an object (for example, due to CRR lag).
+
+### CRR Setup (AWS)
+
+1. **Create buckets in each region**:
+   - Primary: `kafscale-prod-us-east-1`
+   - Replica: `kafscale-prod-eu-west-1`
+   - Replica: `kafscale-prod-ap-southeast-1`
+
+2. **Enable versioning on all buckets** (required for CRR).
+
+3. **Create a replication rule** on the primary bucket:
+   - Replicate all objects (or the Kafscale prefix) to both replica buckets.
+   - Use an IAM role that can write to the replica buckets.
+
+4. **Optional**: Enable encryption (SSE-KMS) on all buckets with compatible keys.
+
+### Kafscale Configuration (Per Region)
+
+Primary region (writers and primary readers):
+```yaml
+spec:
+  s3:
+    bucket: kafscale-prod-us-east-1
+    region: us-east-1
+    credentialsSecretRef: kafscale-s3-creds
+```
+
+EU read replica:
+```yaml
+spec:
+  s3:
+    bucket: kafscale-prod-us-east-1
+    region: us-east-1
+    readBucket: kafscale-prod-eu-west-1
+    readRegion: eu-west-1
+    credentialsSecretRef: kafscale-s3-creds
+```
+
+Asia read replica:
+```yaml
+spec:
+  s3:
+    bucket: kafscale-prod-us-east-1
+    region: us-east-1
+    readBucket: kafscale-prod-ap-southeast-1
+    readRegion: ap-southeast-1
+    credentialsSecretRef: kafscale-s3-creds
+```
+
+### How Reads and Writes Work
+
+- **Writes** always go to the primary bucket.
+- **Reads** go to the local `readBucket` first; on miss or error, the broker retries against the primary bucket.
+- **List/restore** operations use the primary bucket to avoid missing newly written segments.
+
+### Latency and Consistency Impact
+
+- **Lower read latency** for consumers in EU/Asia when objects are already replicated.
+- **CRR lag** means the newest segments may not appear immediately in the replica; the broker will fall back to the primary for those reads.
+- **Extra cross-region traffic** occurs only on replica misses; steady-state reads stay in-region once replication catches up.

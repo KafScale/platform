@@ -55,6 +55,8 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
          namespace: kafscale
    ```
 
+   Optional for CRR: set `spec.s3.readBucket`, `spec.s3.readRegion`, and `spec.s3.readEndpoint` to point brokers at the replica bucket in their region. Brokers will attempt reads from the replica and fall back to the primary on misses.
+
 4. **Mount credentials into brokers**  
    The operator projects the secret into broker pods and sets env vars (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, etc.). Credential rotation is automatic—update the secret and the operator will restart brokers through the drain RPC.
 
@@ -62,7 +64,7 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
    The operator validates bucket access (list + put) during reconciliation. Check operator logs if the CRD status reports `S3ValidationFailed`.
 
 6. **Broker overrides (optional)**  
-   Brokers can read overrides from environment variables if you need different values per pod: `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_CACHE_BYTES`, `KAFSCALE_READAHEAD_SEGMENTS`, `KAFSCALE_SEGMENT_BYTES`, and `KAFSCALE_FLUSH_INTERVAL_MS`.
+   Brokers can read overrides from environment variables if you need different values per pod: `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_READ_BUCKET`, `KAFSCALE_S3_READ_REGION`, `KAFSCALE_S3_READ_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_CACHE_BYTES`, `KAFSCALE_READAHEAD_SEGMENTS`, `KAFSCALE_SEGMENT_BYTES`, and `KAFSCALE_FLUSH_INTERVAL_MS`.
 
 ## Metadata Store (etcd)
 

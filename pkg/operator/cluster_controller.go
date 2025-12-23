@@ -146,6 +146,15 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_PATH_STYLE", Value: "true"})
 	}
+	if strings.TrimSpace(cluster.Spec.S3.ReadBucket) != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_READ_BUCKET", Value: cluster.Spec.S3.ReadBucket})
+	}
+	if strings.TrimSpace(cluster.Spec.S3.ReadRegion) != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_READ_REGION", Value: cluster.Spec.S3.ReadRegion})
+	}
+	if strings.TrimSpace(cluster.Spec.S3.ReadEndpoint) != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_READ_ENDPOINT", Value: cluster.Spec.S3.ReadEndpoint})
+	}
 	if cluster.Spec.Config.SegmentBytes > 0 {
 		env = append(env, corev1.EnvVar{
 			Name:  "KAFSCALE_SEGMENT_BYTES",
