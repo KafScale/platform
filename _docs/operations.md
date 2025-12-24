@@ -287,7 +287,6 @@ The operator does not orchestrate cross-region scaling—it only manages brokers
 1. Create buckets in each region and enable versioning on all of them (required for CRR).
 2. Configure CRR rules from the primary bucket to each replica bucket.
 3. Update the cluster spec to include the replica details:
-
 ```yaml
 apiVersion: kafscale.io/v1alpha1
 kind: KafscaleCluster
@@ -301,11 +300,115 @@ spec:
     readRegion: eu-west-1
 ```
 
-Notes:
+> **Note:** Versioning is required for CRR but increases storage costs (retains delete markers and old versions). Configure lifecycle rules to expire non-current versions after a retention period.
 
-- CRR lag means the newest segments may not appear immediately in the replica; the broker will fall back to the primary for those reads.
+### Configure read access for satellite clusters
+
+Use IAM and bucket policies to make replica buckets read-only from regional clusters.
+
+**Practical approach:**
+
+- **Primary bucket:** allow `PutObject`, `DeleteObject`, and `ListBucket` from the writer cluster's IAM role.
+- **Replica buckets:** allow only `GetObject` and `ListBucket` for regional cluster roles, and explicitly deny writes.
+
+**Example replica bucket policy:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowReadOnlyFromRegionalCluster",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::<acct>:role/kafscale-broker-eu"},
+      "Action": ["s3:GetObject", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::kafscale-prod-eu-west-1",
+        "arn:aws:s3:::kafscale-prod-eu-west-1/*"
+      ]
+    },
+    {
+      "Sid": "DenyWritesFromAllClusters",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::kafscale-prod-eu-west-1/*"
+    }
+  ]
+}
+```
+
+**KafScale configuration:**
+
+- Configure all regions with `spec.s3.bucket` pointing to the primary (write) bucket.
+- Configure `spec.s3.readBucket` to the local replica.
+- Give regional broker pods read-only credentials for replica buckets; only the primary writer role can write to the primary bucket.
+- This prevents accidental writes if a read bucket is misconfigured as a write target.
+
+### Verify CRR before go-live
+```bash
+# Write a test object to primary
+aws s3 cp test.txt s3://kafscale-prod-us-east-1/crr-test/
+
+# Check replication status (should be COMPLETED within seconds)
+aws s3api head-object \
+  --bucket kafscale-prod-us-east-1 \
+  --key crr-test/test.txt \
+  --query 'ReplicationStatus'
+
+# Confirm object exists in replica
+aws s3 ls s3://kafscale-prod-eu-west-1/crr-test/
+```
+
+### Monitor CRR and fallback
+
+**Key metrics:**
+
+| Metric | Description | Alert threshold |
+|--------|-------------|-----------------|
+| `kafscale_s3_replica_fallback_total` | Reads that fell back to primary | Rate > 0.1/s for 10m |
+| `kafscale_s3_read_latency_ms` | Read latency (high = cross-region) | p99 > 200ms |
+| `kafscale_s3_replica_miss_ratio` | Ratio of replica misses to total reads | > 5% sustained |
+
+**Prometheus alerts:**
+```yaml
+groups:
+  - name: kafscale-crr
+    rules:
+      - alert: S3ReplicaFallbackHigh
+        expr: rate(kafscale_s3_replica_fallback_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High replica fallback rate in {{ $labels.region }}"
+          description: "Brokers falling back to primary bucket - check CRR lag"
+
+      - alert: S3CrossRegionLatency
+        expr: histogram_quantile(0.99, kafscale_s3_read_latency_ms_bucket) > 200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High S3 read latency - possible CRR issues"
+```
+
+**AWS-side CRR monitoring:**
+```bash
+# Check replication status on recent segments
+aws s3api head-object \
+  --bucket kafscale-prod-us-east-1 \
+  --key production/orders/0/segment-00000000000000000042.kfs \
+  --query 'ReplicationStatus'
+# Expected: "COMPLETED", "PENDING", or "FAILED"
+```
+
+Enable S3 Replication Metrics in AWS for CloudWatch visibility into replication lag and failure rates.
+
+### Notes
+
+- CRR lag means the newest segments may not appear immediately in the replica (typically seconds, up to minutes under heavy load). The broker falls back to the primary for those reads.
 - Extra cross-region traffic occurs only on replica misses; steady-state reads stay in-region once replication catches up.
-- For non-AWS endpoints, set `spec.s3.readEndpoint` and/or `KAFSCALE_S3_READ_ENDPOINT`.
+- For non-AWS S3-compatible endpoints, set `spec.s3.readEndpoint` and/or `KAFSCALE_S3_READ_ENDPOINT`.
 
 ## Upgrades
 
