@@ -1,0 +1,34 @@
+server:
+  port: 8083
+
+spring:
+  kafka:
+    bootstrap-servers: 127.0.0.1:39093
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      properties:
+        linger.ms: 10
+        batch.size: 16384
+        enable.idempotence: false
+    consumer:
+      group-id: kafscale-demo-group-${random.uuid}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+      enable-auto-commit: true
+      auto-commit-interval: 1
+    listener:
+      ack-mode: batch
+      concurrency: 3
+    admin:
+      properties:
+        bootstrap.servers: localhost:9092
+
+app:
+  kafka:
+    topic: orders

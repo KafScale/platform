@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KafScale Demo</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            background-color: #f8f9fa;
+        }
+
+        .card {
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+
+        .header {
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header text-center">
+            <h1>🚀 KafScale Demo App</h1>
+            <p class="lead">Spring Boot + Kafka Producer/Consumer</p>
+        </div>
+
+        <div class="row">
+            <div class="col-md-5">
+                <div class="card">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0">Create Order</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="orderForm">
+                            <div class="mb-3">
+                                <label for="product" class="form-label">Product Name</label>
+                                <input type="text" class="form-control" id="product" required
+                                    placeholder="e.g. Flux Capacitor">
+                            </div>
+                            <div class="mb-3">
+                                <label for="quantity" class="form-label">Quantity</label>
+                                <input type="number" class="form-control" id="quantity" required value="1" min="1">
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Send Order</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-7">
+                <div class="card">
+                    <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Received Orders</h5>
+                        <button class="btn btn-sm btn-light" onclick="fetchOrders()">Refresh</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Order ID</th>
+                                        <th>Product</th>
+                                        <th>Qty</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ordersTableBody">
+                                    <tr>
+                                        <td colspan="3" class="text-center text-muted">No orders received yet...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Kafka Configuration</h5>
+                        <button class="btn btn-sm btn-light" onclick="testConnection()">Test Connection</button>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6 class="d-flex align-items-center">
+                                    <span id="producerLed" class="badge rounded-pill bg-secondary me-2"
+                                        style="width: 12px; height: 12px; padding: 0;">&nbsp;</span>
+                                    Broadcaster Settings (Producer)
+                                </h6>
+                                <pre id="producerConfig" class="bg-light p-3 border rounded">Loading...</pre>
+                            </div>
+                            <div class="col-md-6">
+                                <h6 class="d-flex align-items-center">
+                                    <span id="consumerLed" class="badge rounded-pill bg-secondary me-2"
+                                        style="width: 12px; height: 12px; padding: 0;">&nbsp;</span>
+                                    Receiver Settings (Consumer)
+                                </h6>
+                                <pre id="consumerConfig" class="bg-light p-3 border rounded">Loading...</pre>
+                            </div>
+                        </div>
+                        <div class="mt-3">
+                            <h6>Full Configuration Dump</h6>
+                            <button class="btn btn-outline-secondary btn-sm mb-2" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#fullConfigCollapse">
+                                Toggle Details
+                            </button>
+                            <div class="collapse" id="fullConfigCollapse">
+                                <pre id="fullConfig" class="bg-light p-3 border rounded">Loading...</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        const API_URL = '/api/orders';
+
+        document.getElementById('orderForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const product = document.getElementById('product').value;
+            const quantity = parseInt(document.getElementById('quantity').value);
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ product, quantity })
+                });
+
+                if (response.ok) {
+                    // Success alert - simplified or use a toast
+                    const successAlert = document.createElement('div');
+                    successAlert.className = 'alert alert-success alert-dismissible fade show fixed-top m-3';
+                    successAlert.innerHTML = `
+                        <strong>Success!</strong> Order sent.
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    `;
+                    document.body.appendChild(successAlert);
+                    setTimeout(() => successAlert.remove(), 3000);
+
+                    document.getElementById('orderForm').reset();
+                    fetchOrders();
+                } else {
+                    const errorText = await response.text();
+                    alert(errorText || 'Error sending order');
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Connection error: ' + err.message);
+            }
+        });
+
+        async function fetchOrders() {
+            try {
+                const response = await fetch(API_URL);
+                const orders = await response.json();
+                const tbody = document.getElementById('ordersTableBody');
+
+                if (orders.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No orders received yet...</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = orders.map(order => `
+                    <tr>
+                        <td><small class="font-monospace">${order.orderId || 'N/A'}</small></td>
+                        <td>${order.product}</td>
+                        <td><span class="badge bg-secondary">${order.quantity}</span></td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                console.error("Failed to fetch orders", err);
+            }
+        }
+
+        // Poll for new orders every 3 seconds
+        setInterval(fetchOrders, 3000);
+        fetchOrders(); // Initial load
+        fetchConfig(); // Load config
+
+        async function fetchConfig() {
+            try {
+                const response = await fetch('/api/orders/config');
+                const config = await response.json();
+
+                // Helper to format JSON
+                const format = (ur) => JSON.stringify(ur, null, 2);
+
+                // Helper to remove null values
+                const clean = (obj) => {
+                    if (!obj) return {};
+                    return Object.fromEntries(
+                        Object.entries(obj).filter(([_, v]) => v !== null && v !== 'null')
+                    );
+                };
+
+                // Prepare Producer Display
+                // Use global bootstrapServers as default, assume overrides in args
+                const producerDisplay = {
+                    bootstrapServers: config.bootstrapServers,
+                    ...clean(config.producerArgs)
+                };
+
+                // Prepare Consumer Display
+                const consumerDisplay = {
+                    bootstrapServers: config.bootstrapServers,
+                    ...clean(config.consumerArgs)
+                };
+
+                document.getElementById('producerConfig').textContent = format(producerDisplay);
+                document.getElementById('consumerConfig').textContent = format(consumerDisplay);
+                document.getElementById('fullConfig').textContent = format(config);
+            } catch (err) {
+                console.error("Failed to fetch config", err);
+                document.getElementById('fullConfig').textContent = "Error loading configuration.";
+            }
+        }
+
+        async function testConnection() {
+            const producerLed = document.getElementById('producerLed');
+            const consumerLed = document.getElementById('consumerLed');
+
+            // Set to yellow while testing
+            producerLed.className = 'badge rounded-pill bg-warning me-2';
+            consumerLed.className = 'badge rounded-pill bg-warning me-2';
+
+            try {
+                const response = await fetch('/api/orders/test-connection', { method: 'POST' });
+                if (response.ok) {
+                    producerLed.className = 'badge rounded-pill bg-success me-2';
+                    consumerLed.className = 'badge rounded-pill bg-success me-2';
+                    // alert("Connection Successful!"); // Optional: alert user
+                } else {
+                    throw new Error(await response.text());
+                }
+            } catch (err) {
+                console.error("Connection test failed", err);
+                producerLed.className = 'badge rounded-pill bg-danger me-2';
+                consumerLed.className = 'badge rounded-pill bg-danger me-2';
+                alert("Connection Failed: " + err.message);
+            }
+        }
+
+        // Test connection on load
+        testConnection();
+    </script>
+</body>
+
+</html>
