@@ -39,10 +39,7 @@ This chart deploys the Kafscale operator (which in turn manages broker pods) and
 ### Quickstart
 
 ```bash
-helm repo add novatechflow https://charts.novatechflow.dev
-helm repo update
-
-helm upgrade --install kafscale deploy/helm/kafscale \
+helm upgrade --install kafscale ./deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
   --set operator.image.tag=v0.1.0 \
