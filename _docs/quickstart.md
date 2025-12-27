@@ -169,13 +169,12 @@ segment-00000000000000000000.kfs
 segment-00000000000000000000.index
 ```
 
----
+## External broker access
 
-## Next steps
-
-- [Installation](/installation/) for Helm values, CRDs, and local dev options
-- [User Guide](/user-guide/) for post-install workflows
-- [Runtime Settings](/configuration/) for environment variables
+External clients: configure `spec.brokers.advertisedHost` / `advertisedPort` and
+`spec.brokers.service` in your `KafscaleCluster` so Kafka clients learn a
+reachable endpoint. See `docs/operations.md` and `deploy/helm/README.md` for
+examples.
 
 ---
 

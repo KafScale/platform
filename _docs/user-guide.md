@@ -4,7 +4,7 @@ title: User Guide
 description: How to interact with KafScale once it is deployed.
 permalink: /user-guide/
 nav_title: User Guide
-nav_order: 4
+nav_order: 3
 ---
 
 <!--
@@ -24,9 +24,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# KafScale User Guide
+# Kafscale User Guide
 
-KafScale is a Kafka-compatible, S3-backed message transport system. It keeps brokers stateless, stores data in S3, and relies on Kubernetes for scheduling and scaling. This guide summarizes how to interact with the platform once it is deployed.
+Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps brokers stateless, stores data in S3, and relies on Kubernetes for scheduling and scaling. This guide summarizes how to interact with the platform once it is deployed.
 
 ## Concepts
 
@@ -36,32 +36,135 @@ KafScale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 - **Storage**: message segments live in S3 buckets; brokers only keep in-memory caches.
 - **Operator**: Kubernetes controller that provisions brokers, topics, and wiring based on CRDs.
 
-## Before you start
+## Client Examples
 
-The User Guide assumes you already have a cluster deployed. If you still need to deploy or configure the platform, use:
+Use this section to copy/paste a minimal example for your client. If you do not control client config (managed apps, hosted integrations), ask the operator team to confirm idempotence/transactions are disabled for Kafscale.
 
-- [Quickstart](/quickstart/) for the shortest path to a working cluster
-- [Installation](/installation/) for Helm values, CRDs, and environment setup
+For install + bootstrap steps, follow [Quickstart](/quickstart/).
 
-## Day-2 usage
+### Java (plain)
 
-Once the platform is up, day-2 operations typically include:
+Start with a minimal set of producer properties. We disable idempotence because Kafscale does not support transactional semantics.
+```properties
+# Java producer properties
+bootstrap.servers=kafscale-broker:9092
+enable.idempotence=false
+acks=1
+```
+This is the smallest working producer in Java:
+```java
+// Java producer
+Properties props = new Properties();
+props.put("bootstrap.servers", "kafscale-broker:9092");
+props.put("enable.idempotence", "false");
+props.put("acks", "1");
+try (KafkaProducer<String, String> producer = new KafkaProducer<>(props, new StringSerializer(), new StringSerializer())) {
+    producer.send(new ProducerRecord<>("orders", "key-1", "value-1")).get();
+}
+```
+Consumers can be as simple as:
+```java
+// Java consumer
+Properties props = new Properties();
+props.put("bootstrap.servers", "kafscale-broker:9092");
+props.put("group.id", "orders-consumer");
+props.put("auto.offset.reset", "earliest");
+try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer())) {
+    consumer.subscribe(Collections.singletonList("orders"));
+    ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(5));
+    for (ConsumerRecord<String, String> record : records) {
+        System.out.println(record.value());
+    }
+}
+```
 
-- Connecting existing Kafka clients to the broker service
-- Monitoring broker health and metrics
-- Planning scaling and maintenance workflows with the operator
+If you use Spring Boot, drop this into `application.yml`:
+```yaml
+# Spring Boot (application.yml)
+spring:
+  kafka:
+    bootstrap-servers: kafscale-broker:9092
+    producer:
+      properties:
+        enable.idempotence: false
+        acks: 1
+    consumer:
+      group-id: orders-consumer
+      auto-offset-reset: earliest
+```
 
-For operational workflows, see [Operations](/operations/).
+### Go (franz-go)
 
-## Multi-Region S3 Reads (CRR)
+Franz-go is the most feature-complete Kafka client in Go. These examples are minimal and production-safe for Kafscale.
+```go
+// franz-go producer
+client, _ := kgo.NewClient(
+	kgo.SeedBrokers("kafscale-broker:9092"),
+	kgo.AllowAutoTopicCreation(),
+)
+defer client.Close()
+client.ProduceSync(ctx, &kgo.Record{Topic: "orders", Value: []byte("hello")})
+```
+Consumer example:
+```go
+// franz-go consumer
+consumer, _ := kgo.NewClient(
+	kgo.SeedBrokers("kafscale-broker:9092"),
+	kgo.ConsumerGroup("orders-consumer"),
+	kgo.ConsumeTopics("orders"),
+)
+defer consumer.CloseAllowingRebalance()
+fetches := consumer.PollFetches(ctx)
+fetches.EachRecord(func(record *kgo.Record) {
+	fmt.Println(string(record.Value))
+})
+```
 
-If you run brokers in multiple regions, configure a read replica bucket per region so brokers read locally and fall back to the primary on CRR lag. Configure `spec.s3.readBucket`, `spec.s3.readRegion`, and `spec.s3.readEndpoint` in the cluster spec, or use the corresponding `KAFSCALE_S3_READ_*` environment variables.
+### Go (kafka-go)
 
-For setup details, see [Operations](/operations/) and [Runtime Settings](/configuration/).
+If you already use `segmentio/kafka-go`, these are the smallest working snippets:
+```go
+// kafka-go producer
+w := &kafka.Writer{Addr: kafka.TCP("kafscale-broker:9092"), Topic: "orders"}
+defer w.Close()
+_ = w.WriteMessages(ctx, kafka.Message{Value: []byte("hello")})
+```
+Consumer example:
+```go
+// kafka-go consumer
+r := kafka.NewReader(kafka.ReaderConfig{
+	Brokers: []string{"kafscale-broker:9092"},
+	GroupID: "orders-consumer",
+	Topic:   "orders",
+})
+defer r.Close()
+m, _ := r.ReadMessage(ctx)
+fmt.Println(string(m.Value))
+```
+
+### Kafka CLI
+
+If you just want to test from a shell:
+```bash
+# Kafka CLI
+kafka-console-producer --bootstrap-server kafscale-broker:9092 --topic orders --producer-property enable.idempotence=false
+kafka-console-consumer --bootstrap-server kafscale-broker:9092 --topic orders --from-beginning
+```
+
+## Monitoring
+
+- Metrics via Prometheus on port 9093 (`/metrics`)
+- Structured JSON logs from brokers/operators
+- Control-plane queries via the gRPC service defined in `proto/control/broker.proto`
+
+## Scaling / Maintenance
+
+The operator uses Kubernetes HPA and the BrokerControl gRPC API to safely drain partitions before restarts. Users can request manual drains or flushes by invoking those RPCs (CLI tooling TBD).
 
 ## Limits / Non-Goals
 
-- No embedded stream processing features—pair KafScale with Flink, Wayang, Spark, etc.
+- No embedded stream processing features—pair Kafscale with Flink, Wayang, Spark, etc.
 - Transactions, idempotent producers, and log compaction are out of scope for the MVP.
 
-For deeper architectural details or development guidance, read `kafscale-spec.md` and `docs/development.md`.
+For deployment and operations, read [Operations](/operations/).
+For deeper architectural details or development guidance, read `kafscale-spec.md` and [Development](/development/).

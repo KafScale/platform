@@ -59,7 +59,7 @@ The MCP service is optional and disabled by default. Enable it with `mcp.enabled
 | Key | Description | Default |
 |-----|-------------|---------|
 | `operator.replicaCount` | Number of operator replicas (each performs leader election via etcd). | `2` |
-| `operator.leaderKey` | etcd prefix used for operator HA leader election. | `/kafscale/operator/leader` |
+| `operator.leaderKey` | Kubernetes leader election lock name. | `kafscale-operator` |
 | `operator.etcdEndpoints` | List of etcd endpoints the operator will connect to. | `["http://etcd:2379"]` |
 | `console.service.type` | Kubernetes service type for the console. | `ClusterIP` |
 | `console.ingress.*` | Optional ingress configuration for exposing the console. | disabled |

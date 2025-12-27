@@ -31,12 +31,70 @@ Before operating a production cluster:
 - **Startup gating**: Broker pods exit if they cannot read metadata or write a probe object to S3, so Kubernetes restarts them instead of leaving a stuck listener in place.
 - **Leader IDs**: Each broker advertises a numeric NodeID in etcd. In a single-node demo you’ll always see `Leader=0` in the Console’s topic detail.
 
-## External access
+## External Broker Access
 
-Expose the console UI only when needed:
+By default, brokers advertise the in-cluster service DNS name. That works for
+clients running inside Kubernetes, but external clients must connect to a
+reachable address. Configure both the broker Service exposure and the advertised
+address so clients learn the external endpoint from metadata responses.
 
-- Enable console ingress in Helm values (`console.ingress.*`), or
-- Set `console.service.type=LoadBalancer` for a managed endpoint.
+Broker exposure settings (KafscaleCluster `spec.brokers`):
+- `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
+- `service.type` – `ClusterIP`, `LoadBalancer`, or `NodePort`.
+- `service.annotations` – Cloud provider LB annotations.
+- `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
+- `service.externalTrafficPolicy` – `Cluster` or `Local`.
+- `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
+
+Helm chart docs: `deploy/helm/README.md`.
+
+Example (GKE/AWS/Azure load balancer):
+
+```yaml
+apiVersion: kafscale.io/v1alpha1
+kind: KafscaleCluster
+metadata:
+  name: kafscale
+  namespace: kafscale
+spec:
+  brokers:
+    advertisedHost: kafka.example.com
+    advertisedPort: 9092
+    service:
+      type: LoadBalancer
+      annotations:
+        networking.gke.io/load-balancer-type: "External"
+      loadBalancerSourceRanges:
+        - 203.0.113.0/24
+  s3:
+    bucket: kafscale
+    region: us-east-1
+    credentialsSecretRef: kafscale-s3-credentials
+  etcd:
+    endpoints: []
+```
+TLS note: brokers speak plaintext today. If you need TLS for Kafka traffic,
+terminate TLS at your load balancer, ingress TCP proxy, or service mesh and
+advertise that endpoint in `advertisedHost`/`advertisedPort`. See `docs/security.md`
+for the current transport security posture.
+
+Example certificate (cert-manager) for a TCP proxy or load balancer that uses a
+Kubernetes TLS secret:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kafscale-kafka-cert
+  namespace: kafscale
+spec:
+  secretName: kafscale-kafka-tls
+  dnsNames:
+    - kafka.example.com
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+```
 
 For full Helm values and deployment notes, see [Helm](/helm/).
 

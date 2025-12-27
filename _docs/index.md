@@ -14,8 +14,8 @@ Everything you need to run, operate, and extend KafScale.
 ## Get started
 
 - [Quickstart](/quickstart/)
-- [Installation](/installation/)
 - [User guide](/user-guide/)
+- [Installation](/installation/)
 - [Architecture](/architecture/)
 
 ## Configure and operate
