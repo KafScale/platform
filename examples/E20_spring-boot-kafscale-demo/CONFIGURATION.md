@@ -15,6 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+
 # Spring Boot Demo Configuration
 
 This document describes how to configure the Spring Boot application to connect to the KafScale broker in different environments.

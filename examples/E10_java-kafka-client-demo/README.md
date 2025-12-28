@@ -15,6 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
+
 # Java Kafka Client Demo (E10)
 
 This example demonstrates a basic Java application using the standard `kafka-clients` library to interact with a KafScale cluster.

@@ -78,19 +78,14 @@ kubectl -n kafscale-demo logs deployment/kafscale-operator
 
 1. **Verify etcd is healthy**:
 ```bash
-docker-compose logs etcd
+docker logs kafscale-etcd
 curl http://localhost:2379/health
 ```
 
 2. **Verify MinIO is healthy**:
 ```bash
-docker-compose logs minio
+docker logs kafscale-minio
 curl http://localhost:9000/minio/health/live
-```
-
-3. **Check bucket was created**:
-```bash
-docker-compose logs minio-setup
 ```
 
 ## Topic Issues
@@ -127,11 +122,6 @@ Add to broker environment in `docker-compose.yml`:
 ## Consumer Group Issues
 
 ### Problem: Consumer not receiving messages
-
-**Possible Causes**:
-1. Offset already committed past available messages
-2. Wrong consumer group ID
-3. Consumer started after messages were produced
 
 **Solutions**:
 
@@ -325,24 +315,8 @@ does not support `INIT_PRODUCER_ID`, so the producer fails.
 ### Problem: Spring Boot application won't start
 
 **Check**:
-
-1. **Java version**:
-```bash
-java -version  # Should be 17+
-```
-
-2. **Maven build**:
-```bash
-mvn clean package
-```
-
-3. **Dependencies**:
-```bash
-mvn dependency:tree
-```
-
-4. **Application logs**:
-Look for stack traces in console output
+1. **Bootstrap Servers**: Ensure `application.properties` uses `localhost:39092`.
+2. **Port Conflicts**: The app runs on `8083`. Ensure it's free.
 
 5. **Bootstrap Servers**: Ensure `application.properties` uses `localhost:39092`.
 6. **Port Conflicts**: The app runs on `8093`. Ensure it's free.
@@ -350,20 +324,15 @@ Look for stack traces in console output
 ### Problem: Messages sent but not consumed
 
 **Check**:
-
-1. **Consumer is running**:
-Look for `@KafkaListener` startup logs
-
-2. **Topic name matches**:
+1. **Topic name matches**:
 ```properties
 # Producer
 app.kafka.topic=orders
-
 # Consumer
 @KafkaListener(topics = "${app.kafka.topic}")
 ```
 
-3. **Consumer group is active**:
+2. **Consumer group is active**:
 ```bash
 kafka-consumer-groups --bootstrap-server localhost:39092 --list
 ```
@@ -432,11 +401,7 @@ kafka-console-consumer --bootstrap-server localhost:39092 \
 ### Check etcd Data
 
 ```bash
-# List all keys
 docker exec kafscale-etcd etcdctl get "" --prefix --keys-only
-
-# Get specific key
-docker exec kafscale-etcd etcdctl get /kafscale/topics/orders
 ```
 
 ### Inspect MinIO Bucket
@@ -444,7 +409,6 @@ docker exec kafscale-etcd etcdctl get /kafscale/topics/orders
 1. Open [http://localhost:9001](http://localhost:9001)
 2. Login with `minioadmin` / `minioadmin`
 3. Browse `kafscale` bucket
-4. Check for segment files under `default/your-topic/`
 
 ## What You Should Know Now
 

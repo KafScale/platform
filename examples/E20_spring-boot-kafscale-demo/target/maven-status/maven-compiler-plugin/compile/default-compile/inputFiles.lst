@@ -1,5 +1,5 @@
-/Users/kamir/GITHUB.kamir/kafscale/docs/guide/examples/spring-boot-kafscale-demo/src/main/java/com/example/kafscale/KafScaleDemoApplication.java
-/Users/kamir/GITHUB.kamir/kafscale/docs/guide/examples/spring-boot-kafscale-demo/src/main/java/com/example/kafscale/service/OrderConsumerService.java
-/Users/kamir/GITHUB.kamir/kafscale/docs/guide/examples/spring-boot-kafscale-demo/src/main/java/com/example/kafscale/service/OrderProducerService.java
-/Users/kamir/GITHUB.kamir/kafscale/docs/guide/examples/spring-boot-kafscale-demo/src/main/java/com/example/kafscale/model/Order.java
-/Users/kamir/GITHUB.kamir/kafscale/docs/guide/examples/spring-boot-kafscale-demo/src/main/java/com/example/kafscale/controller/OrderController.java
+/Users/kamir/GITHUB.kamir/kafscale/examples/E20_spring-boot-kafscale-demo/src/main/java/com/example/kafscale/model/Order.java
+/Users/kamir/GITHUB.kamir/kafscale/examples/E20_spring-boot-kafscale-demo/src/main/java/com/example/kafscale/KafScaleDemoApplication.java
+/Users/kamir/GITHUB.kamir/kafscale/examples/E20_spring-boot-kafscale-demo/src/main/java/com/example/kafscale/service/OrderProducerService.java
+/Users/kamir/GITHUB.kamir/kafscale/examples/E20_spring-boot-kafscale-demo/src/main/java/com/example/kafscale/service/OrderConsumerService.java
+/Users/kamir/GITHUB.kamir/kafscale/examples/E20_spring-boot-kafscale-demo/src/main/java/com/example/kafscale/controller/OrderController.java

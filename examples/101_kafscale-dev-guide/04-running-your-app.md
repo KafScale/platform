@@ -27,6 +27,7 @@ Now that you have verified the local demo in [Chapter 2](02-quick-start.md), we 
 
 This command builds the local images, creates a kind cluster, installs the Helm chart, and deploys the Spring Boot demo app:
 
+### 1. Run the Demo
 ```bash
 make demo-guide-pf
 ```
@@ -91,14 +92,14 @@ To connect your own apps to the platform demo:
 spring.kafka.bootstrap-servers=localhost:39092
 ```
 
-## Running Your Own Application
+## Connecting Your Own Application
 
-If you have your own Spring Boot + Kafka application, follow these steps:
+To connect your own apps to the local KafScale cluster:
 
-### Step 1: Update Configuration
+- **Bootstrap Server**: `localhost:39092`
+- **Security Protocol**: `PLAINTEXT`
 
-Update your `application.properties` or `application.yml` to point to KafScale:
-
+**Example `application.properties`:**
 ```properties
 spring.kafka.bootstrap-servers=localhost:39092
 ```
