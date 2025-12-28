@@ -19,6 +19,8 @@ KafScale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 
 **TLS:** If TLS is enabled, it's configured at the Kubernetes Ingress or LoadBalancer level by your operator—not in KafScale itself. Check with your platform team for connection details.
 
+**Idempotent producers:** KafScale does not support idempotent producers (Kafka API 22). Since Kafka clients 3.0+, idempotence is enabled by default. You **must** set `enable.idempotence=false` in all producer configurations.
+
 ## Concepts
 
 | Concept | Description |
@@ -37,7 +39,8 @@ For install and bootstrap steps, see [Quickstart](/quickstart/).
 
 ### Java (plain)
 
-Disable idempotence—KafScale does not support transactional semantics.
+Disable idempotence—KafScale does not support transactional semantics or idempotent producers.
+
 ```properties
 # Java producer properties
 bootstrap.servers=kafscale-broker:9092
@@ -46,6 +49,7 @@ acks=1
 ```
 
 **Producer:**
+
 ```java
 Properties props = new Properties();
 props.put("bootstrap.servers", "kafscale-broker:9092");
@@ -60,6 +64,7 @@ try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
 ```
 
 **Consumer:**
+
 ```java
 Properties props = new Properties();
 props.put("bootstrap.servers", "kafscale-broker:9092");
@@ -78,6 +83,7 @@ try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
 ```
 
 ### Spring Boot
+
 ```yaml
 # application.yml
 spring:
@@ -93,11 +99,15 @@ spring:
 ```
 
 ### Python (confluent-kafka)
+
 ```python
 from confluent_kafka import Producer, Consumer
 
 # Producer
-producer = Producer({'bootstrap.servers': 'kafscale-broker:9092'})
+producer = Producer({
+    'bootstrap.servers': 'kafscale-broker:9092',
+    'enable.idempotence': False
+})
 producer.produce('orders', key='key-1', value='value-1')
 producer.flush()
 
@@ -124,10 +134,12 @@ while True:
 Franz-go is the most feature-complete Kafka client in Go.
 
 **Producer:**
+
 ```go
 client, _ := kgo.NewClient(
     kgo.SeedBrokers("kafscale-broker:9092"),
     kgo.AllowAutoTopicCreation(),
+    kgo.DisableIdempotentWrite(),
 )
 defer client.Close()
 
@@ -135,6 +147,7 @@ client.ProduceSync(ctx, &kgo.Record{Topic: "orders", Value: []byte("hello")})
 ```
 
 **Consumer:**
+
 ```go
 client, _ := kgo.NewClient(
     kgo.SeedBrokers("kafscale-broker:9092"),
@@ -150,6 +163,7 @@ fetches.EachRecord(func(r *kgo.Record) {
 ```
 
 ### Go (kafka-go)
+
 ```go
 // Producer
 w := &kafka.Writer{
@@ -171,6 +185,7 @@ fmt.Println(string(m.Value))
 ```
 
 ### Kafka CLI
+
 ```bash
 # Produce
 kafka-console-producer \
@@ -191,9 +206,10 @@ KafScale is a transport layer—it doesn't include embedded stream processing. T
 
 ### Apache Flink
 
-Flink's Kafka connector works with KafScale out of the box. Disable exactly-once semantics since KafScale does not support transactions.
+Flink's Kafka connector works with KafScale. Disable idempotence and exactly-once semantics since KafScale does not support transactions or idempotent producers.
 
 **Maven dependency:**
+
 ```xml
 <dependency>
   <groupId>org.apache.flink</groupId>
@@ -203,6 +219,7 @@ Flink's Kafka connector works with KafScale out of the box. Disable exactly-once
 ```
 
 **Source (read from KafScale):**
+
 ```java
 KafkaSource<String> source = KafkaSource.<String>builder()
     .setBootstrapServers("kafscale-broker:9092")
@@ -221,9 +238,14 @@ DataStream<String> stream = env.fromSource(
 ```
 
 **Sink (write to KafScale):**
+
 ```java
+Properties producerConfig = new Properties();
+producerConfig.setProperty("enable.idempotence", "false");
+
 KafkaSink<String> sink = KafkaSink.<String>builder()
     .setBootstrapServers("kafscale-broker:9092")
+    .setKafkaProducerConfig(producerConfig)
     .setRecordSerializer(KafkaRecordSerializationSchema.builder()
         .setTopic("orders-processed")
         .setValueSerializationSchema(new SimpleStringSchema())
@@ -235,13 +257,14 @@ stream.sinkTo(sink);
 env.execute("Order Processing");
 ```
 
-> **Note:** Use `DeliveryGuarantee.AT_LEAST_ONCE`, not `EXACTLY_ONCE`. KafScale does not support Kafka transactions.
+> **Note:** You must explicitly set `enable.idempotence=false` via `setKafkaProducerConfig()`. Since Kafka 3.0, idempotence defaults to true, which requires API 22 that KafScale does not support.
 
 ### Apache Wayang
 
 Wayang provides a platform-agnostic API that can run on Java or Spark backends. Kafka source/sink support was added in 2024.
 
 **Maven dependencies:**
+
 ```xml
 <dependency>
   <groupId>org.apache.wayang</groupId>
@@ -256,6 +279,7 @@ Wayang provides a platform-agnostic API that can run on Java or Spark backends. 
 ```
 
 **Read from KafScale, process, write back:**
+
 ```java
 Configuration configuration = new Configuration();
 WayangContext wayangContext = new WayangContext(configuration)
@@ -280,17 +304,22 @@ planBuilder
 ```
 
 To switch from Java to Spark backend, change one line:
+
 ```java
 .withPlugin(Spark.basicPlugin());  // instead of Java.basicPlugin()
 ```
 
-> **Note:** Wayang's Kafka connector requires Java 17. See [wayang.apache.org](https://wayang.apache.org/blog/kafka-meets-wayang-2/) for full implementation details.
+> **Important:** Wayang uses the Kafka Java client internally but does not expose producer configuration through its API. Since Kafka 3.0+ defaults to `enable.idempotence=true`, you must disable it via JVM argument:
+> ```bash
+> java -Denable.idempotence=false -jar your-wayang-app.jar
+> ```
+> Requires Java 17. See [wayang.apache.org](https://wayang.apache.org/blog/kafka-meets-wayang-2/) for full implementation details.
 
 ### Other compatible engines
 
 | Engine | Notes |
 |--------|-------|
-| Spark Structured Streaming | Use `kafka` format, set `kafka.bootstrap.servers` |
+| Spark Structured Streaming | Use `kafka` format, set `kafka.enable.idempotence=false` |
 | Kafka Streams | Disable EOS: `processing.guarantee=at_least_once` |
 | Redpanda Console / Kowl | Compatible for topic browsing |
 | Conduktor | Compatible for admin UI |
@@ -298,6 +327,7 @@ To switch from Java to Spark backend, change one line:
 ## Monitoring
 
 KafScale exposes Prometheus metrics on port 9093.
+
 ```bash
 # Scrape metrics
 curl http://kafscale-broker:9093/metrics
@@ -321,21 +351,25 @@ Brokers also emit structured JSON logs. The operator exposes its own metrics for
 ## Troubleshooting
 
 **Test broker connectivity:**
+
 ```bash
 kafka-broker-api-versions --bootstrap-server kafscale-broker:9092
 ```
 
 **List topics:**
+
 ```bash
 kafka-topics --bootstrap-server kafscale-broker:9092 --list
 ```
 
 **Describe a topic:**
+
 ```bash
 kafka-topics --bootstrap-server kafscale-broker:9092 --describe --topic orders
 ```
 
 **Check consumer group lag:**
+
 ```bash
 kafka-consumer-groups \
   --bootstrap-server kafscale-broker:9092 \
@@ -348,6 +382,7 @@ kafka-consumer-groups \
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `NOT_LEADER_FOR_PARTITION` | Normal during rebalance | Retry; client handles this |
+| `CLUSTER_AUTHORIZATION_FAILED` | Idempotence enabled, API 22 not supported | Set `enable.idempotence=false` |
 | High produce latency | S3 flush taking long | Check S3 health, increase buffer |
 | Consumer lag growing | Slow processing or S3 reads | Scale consumers, check cache hit ratio |
 | `UNKNOWN_TOPIC` | Topic not created | Create via CRD or enable auto-create |
@@ -365,7 +400,7 @@ The operator uses Kubernetes HPA and the BrokerControl gRPC API to safely drain 
 KafScale intentionally does not support:
 
 - **Transactions / exactly-once semantics** — use at-least-once with idempotent consumers
-- **Idempotent producers** — disable `enable.idempotence`
+- **Idempotent producers (API 22)** — disable `enable.idempotence` in all clients
 - **Log compaction** — out of scope for MVP
 - **Embedded stream processing** — pair with Flink, Wayang, Spark, etc.
 - **Sub-100ms latency** — S3 flush semantics add ~500ms
