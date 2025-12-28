@@ -163,7 +163,7 @@ test-produce-consume: release-broker-ports ensure-minio ## Run produce/consume t
 	KAFSCALE_S3_PATH_STYLE=true \
 	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
-	go test -tags=e2e ./test/e2e -run TestFranzGoProduceConsume -v
+	go test -tags=e2e ./test/e2e -run 'TestFranzGoProduceConsume|TestKafkaCliProduce' -v
 
 test-produce-consume-debug: release-broker-ports ensure-minio ## Run produce/consume tests with broker trace logging enabled for debugging.
 	KAFSCALE_TRACE_KAFKA=true \

@@ -218,6 +218,28 @@ func TestEncodeProduceResponse(t *testing.T) {
 	if corr != 7 {
 		t.Fatalf("unexpected correlation id %d", corr)
 	}
+	topicCount, _ := reader.Int32()
+	if topicCount != 1 {
+		t.Fatalf("expected 1 topic got %d", topicCount)
+	}
+	if name, _ := reader.String(); name != "orders" {
+		t.Fatalf("unexpected topic %q", name)
+	}
+	partCount, _ := reader.Int32()
+	if partCount != 1 {
+		t.Fatalf("expected 1 partition got %d", partCount)
+	}
+	reader.Int32() // partition
+	reader.Int16() // error code
+	reader.Int64() // base offset
+	reader.Int64() // log append time
+	reader.Int64() // log start offset
+	if errCount, _ := reader.Int32(); errCount != 0 {
+		t.Fatalf("expected 0 record errors got %d", errCount)
+	}
+	if msg, _ := reader.NullableString(); msg != nil {
+		t.Fatalf("expected nil record error message got %v", msg)
+	}
 }
 
 func TestEncodeProduceResponseFlexible(t *testing.T) {
@@ -267,7 +289,12 @@ func TestEncodeProduceResponseFlexible(t *testing.T) {
 	}
 	reader.Int64() // log append time
 	reader.Int64() // log start offset
-	reader.Int32() // log_offset_delta placeholder
+	if errCount, _ := reader.CompactArrayLen(); errCount != 0 {
+		t.Fatalf("expected 0 record errors got %d", errCount)
+	}
+	if msg, _ := reader.CompactNullableString(); msg != nil {
+		t.Fatalf("expected nil record error message got %v", msg)
+	}
 	if tags, _ := reader.UVarint(); tags != 0 {
 		t.Fatalf("expected zero partition tags got %d", tags)
 	}

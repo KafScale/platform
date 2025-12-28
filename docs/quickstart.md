@@ -151,9 +151,10 @@ kubectl -n kafscale port-forward svc/demo-broker 9092:9092
 ```
 
 ```bash
-kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders
+kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders --producer-property enable.idempotence=false
 kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning
 ```
+Note: Kafka clients that default to idempotent producers or transactions must disable them explicitly.
 
 External clients: configure `spec.brokers.advertisedHost` / `advertisedPort` and
 `spec.brokers.service` in your `KafscaleCluster` so Kafka clients learn a

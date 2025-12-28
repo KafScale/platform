@@ -51,7 +51,7 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 |---------|---------|
 | `make build` | Compile all Go binaries. |
 | `make test` | Run unit tests (includes `go vet` and race detector). |
-| `make test-produce-consume` | MinIO + Franz produce/consume e2e suite. |
+| `make test-produce-consume` | MinIO + Franz produce/consume e2e suite plus Kafka CLI producer smoke test (Docker image required). |
 | `make test-consumer-group` | Consumer group persistence e2e (embedded etcd + memory S3). |
 | `make test-ops-api` | Ops/admin API e2e (embedded etcd + memory S3). |
 | `make test-multi-segment-durability` | Multi-segment restart durability e2e (embedded etcd + MinIO). |
@@ -116,7 +116,7 @@ Default MinIO settings (used when `KAFSCALE_USE_MEMORY_S3=1` is not set):
 To point at a different S3-compatible endpoint, set the `KAFSCALE_S3_*` variables listed under Environment Variables. To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
 
 Related targets:
-- `make test-produce-consume` runs the MinIO-backed produce/consume suite.
+- `make test-produce-consume` runs the MinIO-backed produce/consume suite plus a Kafka CLI producer smoke test (configure `KAFSCALE_KAFKA_CLI_IMAGE` / `KAFSCALE_KAFKA_CLI_CMD` if needed).
 - `make test-produce-consume-debug` adds Kafka trace logging (`KAFSCALE_LOG_LEVEL=debug`, `KAFSCALE_TRACE_KAFKA=true`).
 - `make test-consumer-group` and `make test-ops-api` use embedded etcd + in-memory S3.
 - `make test-multi-segment-durability` uses MinIO and restarts the broker across multiple segment flushes.

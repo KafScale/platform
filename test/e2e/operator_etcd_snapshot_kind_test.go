@@ -78,6 +78,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	requireImage(t, ctx, operatorImage)
 	requireImage(t, ctx, consoleImage)
 	requireImage(t, ctx, e2eClientImage)
+	kafkaCliImage := envOrDefault("KAFSCALE_KAFKA_CLI_IMAGE", "confluentinc/cp-kafka:7.6.0")
+	requireImageOrPull(t, ctx, kafkaCliImage)
 
 	loadImage(t, ctx, clusterName, brokerImage)
 	loadImage(t, ctx, clusterName, operatorImage)
@@ -133,6 +135,11 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	t.Log("testing broker port sanity (9092/9093 reachable via service DNS)")
 	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-broker."+kindNamespace+".svc.cluster.local", []int{9092, 9093}); err != nil {
 		t.Fatalf("broker port sanity: %v", err)
+	}
+	t.Log("testing kafka CLI producer (idempotence disabled)")
+	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
+	if err := runKafkaCliProducer(t, ctx, kindNamespace, kafkaCliImage, "kafscale-broker."+kindNamespace+".svc.cluster.local:9092", cliTopic, "cli-smoke"); err != nil {
+		t.Fatalf("kafka CLI producer failed: %v", err)
 	}
 
 	externalPort := findFreePort(t)
@@ -579,6 +586,25 @@ func runHostE2EClient(t *testing.T, ctx context.Context, brokerAddr, topic strin
 	return nil
 }
 
+func runKafkaCliProducer(t *testing.T, ctx context.Context, namespace, image, brokerAddr, topic, message string) error {
+	t.Helper()
+	podName := fmt.Sprintf("kafscale-kafka-cli-%d", time.Now().UnixNano())
+	cliCmd := envOrDefault("KAFSCALE_KAFKA_CLI_CMD", "/usr/bin/kafka-console-producer")
+	script := fmt.Sprintf("printf '%%s\\n' %q | %s --bootstrap-server %s --topic %s --producer-property enable.idempotence=false", message, cliCmd, brokerAddr, topic)
+	if err := execCommand(ctx, "kubectl", "-n", namespace, "run", podName, "--restart=Never",
+		"--image", image,
+		"--command", "--", "sh", "-c", script); err != nil {
+		return fmt.Errorf("start kafka cli pod: %w", err)
+	}
+	if err := waitForPodPhase(ctx, namespace, podName, "Succeeded", 60*time.Second); err != nil {
+		logs := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "logs", "pod/"+podName)
+		_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
+		return fmt.Errorf("kafka cli pod failed: %w\nlogs:\n%s", err, string(logs))
+	}
+	_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
+	return nil
+}
+
 func runCmdWithInput(t *testing.T, ctx context.Context, name, input string, args ...string) {
 	t.Helper()
 	if name == "kubectl" {
@@ -663,6 +689,17 @@ func requireImage(t *testing.T, ctx context.Context, image string) {
 	t.Helper()
 	if err := execCommand(ctx, "docker", "image", "inspect", image); err != nil {
 		t.Fatalf("docker image %s not found; run `make docker-build` or set KAFSCALE_*_IMAGE envs", image)
+	}
+}
+
+func requireImageOrPull(t *testing.T, ctx context.Context, image string) {
+	t.Helper()
+	if err := execCommand(ctx, "docker", "image", "inspect", image); err == nil {
+		return
+	}
+	t.Logf("docker image %s not found; pulling...", image)
+	if err := execCommand(ctx, "docker", "pull", image); err != nil {
+		t.Fatalf("docker image %s not found and pull failed", image)
 	}
 }
 

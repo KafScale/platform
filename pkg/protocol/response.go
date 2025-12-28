@@ -552,7 +552,13 @@ func EncodeProduceResponse(resp *ProduceResponse, version int16) ([]byte, error)
 				w.Int64(p.LogStartOffset)
 			}
 			if version >= 8 {
-				w.Int32(0) // log_offset_delta (unused)
+				if flexible {
+					w.CompactArrayLen(0) // error_records
+					w.CompactNullableString(nil)
+				} else {
+					w.Int32(0) // error_records
+					w.NullableString(nil)
+				}
 			}
 			if flexible {
 				w.WriteTaggedFields(0)

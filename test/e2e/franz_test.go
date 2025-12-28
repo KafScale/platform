@@ -43,9 +43,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	brokerAddr := "127.0.0.1:39092"
-	metricsAddr := "127.0.0.1:39093"
-	controlAddr := "127.0.0.1:39094"
+	brokerAddr, metricsAddr, controlAddr := brokerAddrs(t)
 
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
 	brokerCmd.Env = append(os.Environ(),
@@ -203,6 +201,15 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		}
 	}
 	t.Logf("received %d/%d unique records", len(received), messageCount)
+	if len(received) != messageCount {
+		missing := make([]string, 0, messageCount-len(received))
+		for _, msg := range messages {
+			if _, ok := received[msg.value]; !ok {
+				missing = append(missing, msg.value)
+			}
+		}
+		t.Fatalf("missing %d records: %s", len(missing), strings.Join(missing, ", "))
+	}
 	bucket := envOrDefault("KAFSCALE_S3_BUCKET", "kafscale")
 	closeWithTimeout(t, "consumer", func() { consumer.CloseAllowingRebalance() })
 	consumerClosed = true
