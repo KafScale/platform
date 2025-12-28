@@ -25,12 +25,12 @@ Welcome to the KafScale Quickstart Guide! This tutorial will help you quickly se
 
 By the end of this guide, you will:
 
-- ✅ Understand what KafScale is and when to use it
-- ✅ Run a local KafScale demo with `make demo` (no Docker Compose)
-- ✅ Run a full platform demo on kind with `make demo-guide-pf`
-- ✅ Configure your Spring Boot application to connect to KafScale
-- ✅ Produce and consume messages successfully
-- ✅ Troubleshoot common issues
+- Understand what KafScale is and when to use it
+- Run a local KafScale demo with `make demo` (no Docker Compose)
+- Run a full platform demo on kind with `make demo-guide-pf`
+- Configure your Spring Boot application to connect to KafScale
+- Produce and consume messages successfully
+- Troubleshoot common issues
 
 ## Prerequisites
 
@@ -60,7 +60,7 @@ docker ps
 ## Glossary
 
 **Core Concepts:**
-- **[Stateless Broker](https://kafscale.io/architecture/)**: Broker pod that doesn't retain data persistently, enabling horizontal scaling from 0→N instances instantly
+- **[Stateless Broker](https://kafscale.io/architecture/)**: Broker pod that doesn't retain data persistently, enabling horizontal scaling from 0->N instances instantly
 - **[S3 (Object Storage)](https://kafscale.io/architecture/)**: Amazon S3 or compatible storage (MinIO) serving as the source of truth for immutable segment files with 11 nines durability (99.999999999% for S3 Standard, single region)
 - **[etcd](https://kafscale.io/architecture/)**: Distributed key-value store for cluster metadata including topic configuration, consumer offsets, and group assignments
 - **[Segment](https://kafscale.io/storage-format/)**: Immutable log file (~4MB default, configurable via `KAFSCALE_SEGMENT_BYTES`) containing batched records with headers, data, and checksums, stored as `segment-{offset}.kfs` in S3

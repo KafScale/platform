@@ -25,17 +25,17 @@ The good news: **KafScale is Kafka-compatible**, so your existing Spring Boot + 
 
 ### What Stays the Same
 
-- ✅ Spring Kafka dependencies
-- ✅ Serializers and deserializers
-- ✅ Consumer group configuration
-- ✅ Producer and consumer properties
-- ✅ `@KafkaListener` annotations
-- ✅ `KafkaTemplate` usage
+- Spring Kafka dependencies
+- Serializers and deserializers
+- Consumer group configuration
+- Producer and consumer properties
+- `@KafkaListener` annotations
+- `KafkaTemplate` usage
 
 ### What Changes
 
-- 🔄 **Bootstrap servers**: Point to KafScale instead of Kafka (`localhost:39092` for local demos)
-- 🔄 **Topic creation**: May need to create topics manually (or enable auto-creation)
+- **Bootstrap servers**: Point to KafScale instead of Kafka (`localhost:39092` for local demos)
+- **Topic creation**: May need to create topics manually (or enable auto-creation)
 
 That's it! Everything else works as-is.
 
@@ -84,7 +84,7 @@ If you prefer YAML configuration:
 spring:
   kafka:
     bootstrap-servers: localhost:39092
-    
+
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -93,7 +93,7 @@ spring:
       properties:
         linger.ms: 10
         batch.size: 16384
-    
+
     consumer:
       group-id: my-consumer-group
       auto-offset-reset: earliest
@@ -103,11 +103,11 @@ spring:
       auto-commit-interval: 1000
       properties:
         spring.json.trusted.packages: "*"
-    
+
     listener:
       ack-mode: batch
       concurrency: 3
-    
+
     admin:
       properties:
         bootstrap.servers: localhost:39092
@@ -210,9 +210,9 @@ spring.kafka.producer.compression-type=snappy
 
 KafScale does not support some advanced Kafka features:
 
-- ❌ **Transactions**: No exactly-once semantics
-- ❌ **Idempotent producers**: `enable.idempotence=true` will be ignored
-- ❌ **Log compaction**: Compacted topics not supported
+- **Transactions**: No exactly-once semantics
+- **Idempotent producers**: `enable.idempotence=true` will be ignored
+- **Log compaction**: Compacted topics not supported
 
 If your application relies on these features, you'll need to use traditional Kafka or refactor your application.
 
@@ -243,4 +243,4 @@ Before moving to the next chapter, ensure you understand:
 
 Now that you've configured your Spring Boot application, let's run it and verify it works with KafScale!
 
-**Next**: [Running Your Application](04-running-your-app.md) →
+**Next**: [Running Your Application](04-running-your-app.md) ->

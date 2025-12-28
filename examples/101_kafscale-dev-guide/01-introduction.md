@@ -19,10 +19,10 @@ limitations under the License.
 
 KafScale is a **Kafka-protocol compatible streaming platform** that separates compute from storage. Unlike traditional Kafka, KafScale uses **stateless brokers** and stores all data in **S3-compatible object storage**, making it simpler to operate and more cost-effective for many use cases.
 
-KafScale is Kafka protocol compatible for producers and consumers  
+KafScale is Kafka protocol compatible for producers and consumers
 (see claim: **KS-COMP-001**).
 
-Note: Kafka transactions are not supported  
+Note: Kafka transactions are not supported
 (see claim: **KS-LIMIT-001**).
 
 ## Key Characteristics
@@ -46,7 +46,7 @@ Note: Kafka transactions are not supported
 
 ## When to Use KafScale
 
-### ✅ Good Use Cases
+### Good Use Cases
 
 - **Development and Testing**: Quick setup without complex infrastructure
 - **Cost-Sensitive Workloads**: Reduce storage costs by using S3 instead of provisioned disks
@@ -54,7 +54,7 @@ Note: Kafka transactions are not supported
 - **Replay-Heavy Workloads**: S3 storage makes long-term retention affordable
 - **Event Sourcing**: Durable, immutable event logs with cost-effective storage
 
-### ❌ Not Suitable For
+### Not Suitable For
 
 - **Transactional Workloads**: KafScale does not support exactly-once semantics or transactions (see claim: **KS-LIMIT-001**)
 - **Log Compaction**: Compacted topics are not supported
@@ -66,24 +66,24 @@ Note: Kafka transactions are not supported
 Here's how KafScale works at a high level:
 
 ```
-┌─────────────────────┐
-│   Spring Boot App   │
-│  (Kafka Producer/   │
-│     Consumer)       │
-└──────────┬──────────┘
-           │ Kafka Protocol (port 9092)
-           ▼
-┌─────────────────────┐
-│  KafScale Broker    │
-│   (Stateless)       │
-└────┬───────────┬────┘
-     │           │
-     │           │
-     ▼           ▼
-┌─────────┐  ┌─────────┐
-│  etcd   │  │   S3    │
-│ Metadata│  │  Data   │
-└─────────┘  └─────────┘
++-----------------------+
+|   Spring Boot App     |
+|  (Kafka Producer/     |
+|     Consumer)         |
++----------+------------+
+           | Kafka Protocol (port 9092)
+           v
++-----------------------+
+|  KafScale Broker      |
+|   (Stateless)         |
++----+-----------+------+
+     |           |
+     |           |
+     v           v
++---------+  +---------+
+|  etcd   |  |   S3    |
+| Metadata|  |  Data   |
++---------+  +---------+
 ```
 
 ### Components
@@ -111,13 +111,13 @@ This means:
 
 KafScale implements the core Kafka APIs:
 
-- ✅ **Produce** (API Key 0)
-- ✅ **Fetch** (API Key 1)
-- ✅ **Consumer Groups** (JoinGroup, SyncGroup, Heartbeat, etc.)
-- ✅ **Offset Management** (OffsetCommit, OffsetFetch)
-- ✅ **Topic Management** (CreateTopics, DeleteTopics)
-- ✅ **Metadata** (topic/broker discovery)
-- ✅ **Proto-compat**: Compatible with Kafka clients 2.x and 3.x (recommended: 3.4.x or older for best compatibility)
+- **Produce** (API Key 0)
+- **Fetch** (API Key 1)
+- **Consumer Groups** (JoinGroup, SyncGroup, Heartbeat, etc.)
+- **Offset Management** (OffsetCommit, OffsetFetch)
+- **Topic Management** (CreateTopics, DeleteTopics)
+- **Metadata** (topic/broker discovery)
+- **Proto-compat**: Compatible with Kafka clients 2.x and 3.x (recommended: 3.4.x or older for best compatibility)
 
 ### Client Compatibility Notes
 
@@ -129,10 +129,10 @@ KafScale is compatible with standard Kafka clients, but stricter schema validati
 - **Transactions**: Config `isolation.level=read_uncommitted` (default) as transactions are not supported.
 
 **Not supported** (by design):
-- ❌ Transactions and exactly-once semantics (see claim: **KS-LIMIT-001**)
-- ❌ Log compaction
-- ❌ Kafka Streams applications that rely on transactions or exactly-once semantics (stateless Streams processing without these features may work)
-- ❌ Flexible versions in some RPCs (may cause `recordErrors` serialization issues in newer clients)
+- Transactions and exactly-once semantics (see claim: **KS-LIMIT-001**)
+- Log compaction
+- Kafka Streams applications that rely on transactions or exactly-once semantics (stateless Streams processing without these features may work)
+- Flexible versions in some RPCs (may cause `recordErrors` serialization issues in newer clients)
 
 For stream processing, use external engines like [Apache Flink](https://flink.apache.org), [Apache Spark Streaming](https://spark.apache.org/streaming/), or [Apache Wayang](https://wayang.apache.org).
 
@@ -152,4 +152,4 @@ If you're unsure about any of these, review the relevant sections above before c
 
 Now that you understand what KafScale is and when to use it, let's get it running on your local machine!
 
-**Next**: [Quick Start with Docker](02-quick-start.md) →
+**Next**: [Quick Start with Docker](02-quick-start.md) ->

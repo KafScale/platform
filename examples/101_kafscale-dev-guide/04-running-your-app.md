@@ -84,11 +84,117 @@ To connect your own apps to the platform demo:
 - **Bootstrap Server**: `localhost:39092`
 - **Security Protocol**: `PLAINTEXT`
 
-> **Note:** The demo currently exposes a single listener, so choose one network context at a time (in-cluster or local port-forward/LB). That’s why the Spring Boot app uses distinct profiles.
+> **Note:** The demo currently exposes a single listener, so choose one network context at a time (in-cluster or local port-forward/LB). That's why the Spring Boot app uses distinct profiles.
 
 **Example `application.properties`:**
 ```properties
 spring.kafka.bootstrap-servers=localhost:39092
+```
+
+## Running Your Own Application
+
+If you have your own Spring Boot + Kafka application, follow these steps:
+
+### Step 1: Update Configuration
+
+Update your `application.properties` or `application.yml` to point to KafScale:
+
+```properties
+spring.kafka.bootstrap-servers=localhost:39092
+```
+
+### Step 2: Ensure Topics Exist
+
+Create the topics your application needs:
+
+```bash
+kafka-topics --bootstrap-server localhost:39092 \
+  --create \
+  --topic your-topic-name \
+  --partitions 3
+```
+
+Or enable auto-topic creation (not recommended for production).
+
+### Step 3: Run Your Application
+
+```bash
+mvn spring-boot:run
+# or
+./gradlew bootRun
+```
+
+## Monitoring and Observability
+
+### Check Consumer Group Status
+
+View consumer group details:
+
+```bash
+kafka-consumer-groups --bootstrap-server localhost:39092 \
+  --describe \
+  --group kafscale-demo-group
+```
+
+You'll see output like:
+
+```
+GROUP                TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
+kafscale-demo-group  orders          0          10              10              0
+kafscale-demo-group  orders          1          8               8               0
+kafscale-demo-group  orders          2          12              12              0
+```
+
+### View Data in MinIO
+
+Open the MinIO console at [http://localhost:9001](http://localhost:9001) (username: `minioadmin`, password: `minioadmin`).
+
+Navigate to the `kafscale` bucket and browse to see the log segments:
+
+```
+kafscale/
+  +-- default/
+      +-- orders/
+          +-- 0/
+          |   +-- segment-00000000000000000000.kfs
+          |   +-- segment-00000000000000000000.index
+          +-- 1/
+          +-- 2/
+```
+
+### Check Broker Metrics
+
+KafScale exposes Prometheus metrics on port 9093:
+
+```bash
+curl http://localhost:9093/metrics
+```
+
+## Performance Considerations
+
+### Expected Latency
+
+KafScale adds some latency compared to traditional Kafka due to S3 storage:
+
+- **Produce latency**: ~10-50ms additional (depends on MinIO/S3 performance)
+- **Consume latency**: Similar to traditional Kafka for recent data
+- **Replay latency**: May be higher when consuming old data from S3
+
+### Tuning for Performance
+
+If you need better performance, tune these settings:
+
+```properties
+# Increase batch size for higher throughput
+spring.kafka.producer.properties.batch.size=32768
+spring.kafka.producer.properties.linger.ms=100
+
+# Increase fetch size for consumers
+spring.kafka.consumer.properties.fetch.min.bytes=1024
+spring.kafka.consumer.properties.fetch.max.wait.ms=500
+
+# Enable compression
+spring.kafka.producer.compression-type=snappy
 ```
 
 ## Which Deployment Mode Fits?
@@ -113,4 +219,4 @@ Before moving to the next chapter, verify you can:
 
 **Checkpoint**: If you successfully saw "Received order:" in the logs, your Spring Boot app is working with KafScale!
 
-**Next**: [Troubleshooting](05-troubleshooting.md) →
+**Next**: [Troubleshooting](05-troubleshooting.md) ->

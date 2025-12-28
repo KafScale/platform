@@ -1,0 +1,9 @@
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/AwsS3Reader.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/Checksum.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/LfsCodec.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/LfsConsumer.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/LfsEnvelope.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/LfsHttpException.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/LfsProducer.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/LfsResolver.java
+/Users/kamir/GITHUB.scalytics/platform/lfs-client-sdk/java/src/main/java/org/kafscale/lfs/S3Reader.java

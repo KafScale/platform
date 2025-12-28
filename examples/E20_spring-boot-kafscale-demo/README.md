@@ -41,10 +41,10 @@ curl -X POST http://localhost:8093/api/orders \
 ```
 
 **The Web UI provides:**
-- 📝 Order creation form
-- 📊 Real-time view of received orders (auto-refreshes every 3s)
-- ⚙️ Kafka producer/consumer configuration inspection
-- 🌐 Cluster info with nodes and topics
+- Order creation form
+- Real-time view of received orders (auto-refreshes every 3s)
+- Kafka producer/consumer configuration inspection
+- Cluster info with nodes and topics
 
 ## Features
 
@@ -109,8 +109,8 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local-lb
 - `GET /api/orders/health` - Simple health check
 
 ### Diagnostics & Monitoring
-- `GET /api/orders/config` - View Kafka configuration (⚠️ should not be public in production)
-- `GET /api/orders/cluster-info` - View cluster metadata and topics (⚠️ should not be public in production)
+- `GET /api/orders/config` - View Kafka configuration (should not be public in production)
+- `GET /api/orders/cluster-info` - View cluster metadata and topics (should not be public in production)
 - `POST /api/orders/test-connection` - Test Kafka connectivity
 - `GET /actuator/prometheus` - Prometheus metrics
 - `GET /actuator/health` - Spring Boot health endpoint
@@ -166,7 +166,7 @@ The application includes a browser-based UI at [http://localhost:8093](http://lo
 **Kafka Client Configs Tab:**
 - View producer settings (bootstrap servers, acks, serializers)
 - View consumer settings (group ID, offset reset, deserializers)
-- Test Kafka connectivity with LED indicators (🟢 connected, 🔴 failed, 🟡 testing)
+- Test Kafka connectivity with LED indicators (green connected, red failed, yellow testing)
 - Inspect full configuration dump including active Spring profile
 
 **Cluster Infos Tab:**
@@ -186,19 +186,19 @@ The UI is built with Bootstrap 5 and provides a responsive, modern interface for
 
 ```
 src/main/java/com/example/kafscale/
-├── KafScaleDemoApplication.java           # Main Spring Boot application
-├── controller/
-│   └── OrderController.java               # REST endpoints for orders & diagnostics
-├── model/
-│   └── Order.java                         # Order domain model (uses Lombok)
-└── service/
-    ├── OrderProducerService.java          # Kafka producer service
-    └── OrderConsumerService.java          # Kafka consumer service (in-memory storage)
++-- KafScaleDemoApplication.java           # Main Spring Boot application
++-- controller/
+|   +-- OrderController.java               # REST endpoints for orders & diagnostics
++-- model/
+|   +-- Order.java                         # Order domain model (uses Lombok)
++-- service/
+    +-- OrderProducerService.java          # Kafka producer service
+    +-- OrderConsumerService.java          # Kafka consumer service (in-memory storage)
 
 src/main/resources/
-├── application.yml                        # Multi-profile Spring configuration
-└── static/
-    └── index.html                         # Web UI (Bootstrap 5, vanilla JS)
++-- application.yml                        # Multi-profile Spring configuration
++-- static/
+    +-- index.html                         # Web UI (Bootstrap 5, vanilla JS)
 
 pom.xml                                     # Maven dependencies (Spring Boot 3.1.6, Kafka 3.9.1, OpenTelemetry)
 ```
@@ -220,19 +220,19 @@ See [application.yml](src/main/resources/application.yml) for complete configura
 |---------|------------------|----------|
 | `default` | `localhost:39092` | Local development with `make demo` |
 | `cluster` | `kafscale-broker:9092` | In-cluster Kubernetes deployment |
-| `local-lb`| `localhost:59092` | Local app → remote cluster via LB |
+| `local-lb`| `localhost:59092` | Local app -> remote cluster via LB |
 
 ### Key Kafka Settings
 
 **Producer:**
-- `acks: 0` - No acknowledgment (⚠️ weak delivery guarantees, may lose messages)
+- `acks: 0` - No acknowledgment (weak delivery guarantees, may lose messages)
 - `retries: 3`
 - `enable.idempotence: false` - Disabled for KafScale compatibility
 - `key-serializer: StringSerializer`
 - `value-serializer: JsonSerializer`
 
 **Consumer:**
-- `group-id: kafscale-demo-group-${random.uuid}` - Random UUID (⚠️ offsets not persisted across restarts)
+- `group-id: kafscale-demo-group-${random.uuid}` - Random UUID (offsets not persisted across restarts)
 - `auto-offset-reset: earliest` - Read from beginning if no committed offset
 - `enable-auto-commit: true` - Commits offsets every 1ms
 - `key-deserializer: StringDeserializer`
@@ -274,7 +274,7 @@ Available metrics include JVM stats, HTTP requests, and Kafka producer/consumer 
 **Fix:**
 1. Verify KafScale is running: `docker ps | grep kafscale` or check process list
 2. Confirm bootstrap server matches profile (default: `localhost:39092`)
-3. Test connectivity via UI: Open [http://localhost:8093](http://localhost:8093) → "Kafka Client Configs" tab → "Test Connection" button
+3. Test connectivity via UI: Open [http://localhost:8093](http://localhost:8093) -> "Kafka Client Configs" tab -> "Test Connection" button
 4. Or via API: `curl -X POST http://localhost:8093/api/orders/test-connection`
 
 ### No Messages Consumed
@@ -361,3 +361,12 @@ For dual connectivity, configure multiple advertised listeners in KafScale.
 - **Custom metrics**: Add Micrometer counters for business KPIs (orders/sec, avg processing time)
 - **Distributed tracing**: Add TraceID to all log statements and HTTP responses
 - **Alerting**: Configure Prometheus alerts for consumer lag and error rates
+
+## Next Steps
+
+- Modify the `Order` model to include additional fields
+- Add more REST endpoints
+- Implement error handling and retry logic
+- Add integration tests
+
+See the [Running Your Application](../../examples/101_kafscale-dev-guide/04-running-your-app.md) guide for more details.

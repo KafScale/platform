@@ -17,7 +17,7 @@ limitations under the License.
 
 # Next Steps
 
-Congratulations! 🎉 You've successfully set up KafScale locally and connected your Spring Boot application to it.
+Congratulations! You've successfully set up KafScale locally and connected your Spring Boot application to it.
 
 **Recommended next steps** (in order):
 
@@ -272,24 +272,24 @@ Both use S3-backed storage, but:
 
 ### Use KafScale
 
-- ✅ Cost-sensitive workloads
-- ✅ Long-term retention and replay
-- ✅ Cloud-native deployments
-- ✅ Development and testing
-- ✅ Event sourcing
+- Cost-sensitive workloads
+- Long-term retention and replay
+- Cloud-native deployments
+- Development and testing
+- Event sourcing
 
 ### Use Traditional Kafka
 
-- ✅ Ultra-low latency requirements
-- ✅ Exactly-once semantics needed
-- ✅ Log compaction required
-- ✅ Very high single-partition throughput
+- Ultra-low latency requirements
+- Exactly-once semantics needed
+- Log compaction required
+- Very high single-partition throughput
 
 ### Use Managed Services
 
-- ✅ Don't want to manage infrastructure
-- ✅ Need enterprise support
-- ✅ Compliance requirements
+- Don't want to manage infrastructure
+- Need enterprise support
+- Compliance requirements
 
 ## Roadmap
 
@@ -345,13 +345,13 @@ Congratulations! After completing this tutorial, you should be able to:
 
 You've completed the KafScale Quickstart Guide! You should now be able to:
 
-- ✅ Run KafScale locally with Docker
-- ✅ Configure Spring Boot applications for KafScale
-- ✅ Produce and consume messages
-- ✅ Troubleshoot common issues
-- ✅ Understand production deployment options
+- Run KafScale locally with Docker
+- Configure Spring Boot applications for KafScale
+- Produce and consume messages
+- Troubleshoot common issues
+- Understand production deployment options
 
-**Happy streaming with KafScale!** 🚀
+**Happy streaming with KafScale!**
 
 ---
 

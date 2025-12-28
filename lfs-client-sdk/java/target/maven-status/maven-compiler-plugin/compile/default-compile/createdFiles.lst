@@ -1,0 +1,11 @@
+org/kafscale/lfs/LfsResolver$ResolvedRecord.class
+org/kafscale/lfs/LfsProducer$ErrorResponse.class
+org/kafscale/lfs/AwsS3Reader.class
+org/kafscale/lfs/LfsProducer.class
+org/kafscale/lfs/LfsEnvelope.class
+org/kafscale/lfs/LfsResolver.class
+org/kafscale/lfs/Checksum.class
+org/kafscale/lfs/LfsCodec.class
+org/kafscale/lfs/S3Reader.class
+org/kafscale/lfs/LfsHttpException.class
+org/kafscale/lfs/LfsConsumer.class

@@ -78,9 +78,9 @@ What it does:
 
 **Verify success**:
 You should see:
-- ✅ "Sent message: key=key-0 value=message-0 partition=0 offset=0"
-- ✅ "Received message: key=key-0 value=message-0 partition=0 offset=0"
-- ✅ "Successfully consumed 5 messages."
+- "Sent message: key=key-0 value=message-0 partition=0 offset=0"
+- "Received message: key=key-0 value=message-0 partition=0 offset=0"
+- "Successfully consumed 5 messages."
 
 If you see connection errors, check [Troubleshooting](05-troubleshooting.md).
 
@@ -102,6 +102,14 @@ This stops the MinIO helper and frees broker ports.
 - **Prometheus Metrics**: [http://localhost:39093/metrics](http://localhost:39093/metrics)
 
 > **Note**: The platform demo (Chapter 4) uses port 8080 for the console instead of 48080 to avoid conflicts with common development ports.
+
+## Step 5: Verify Data in S3
+
+If you want to verify persistence:
+
+1. Access the MinIO Console at [http://localhost:9001](http://localhost:9001).
+2. Login with `minioadmin` / `minioadmin`.
+3. Browse the `kafscale` bucket to see the stored log segments.
 
 ## Troubleshooting
 
@@ -125,4 +133,4 @@ Before moving to the next chapter, verify you can:
 
 Next, we'll configure a Spring Boot application and run the platform demo on kind (E20).
 
-**Next**: [Spring Boot Configuration](03-spring-boot-configuration.md) →
+**Next**: [Spring Boot Configuration](03-spring-boot-configuration.md) ->

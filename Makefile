@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-long demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo demo-guide-pf demo-guide-pf-clean help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -571,6 +571,84 @@ demo-long: release-broker-ports ensure-minio ## Launch the broker + console demo
 	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
 	go test -count=1 -timeout 0 -tags=e2e ./test/e2e -run TestDemoStack -v
+
+demo-guide-pf: docker-build ## Launch a full platform demo on kind.
+	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
+	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
+	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
+	@command -v helm >/dev/null 2>&1 || { echo "helm is required"; exit 1; }
+
+	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
+	@kind create cluster --name $(KAFSCALE_KIND_CLUSTER)
+
+	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+
+	kubectl apply -f deploy/demo/namespace.yaml
+	kubectl apply -f deploy/demo/minio.yaml
+
+	kubectl -n kafscale-demo rollout status deployment/minio --timeout=120s
+
+	kubectl apply -f deploy/demo/s3-secret.yaml
+
+	@OPERATOR_IMAGE=$(OPERATOR_IMAGE); \
+	CONSOLE_IMAGE=$(CONSOLE_IMAGE); \
+	OPERATOR_REPO=$${OPERATOR_IMAGE%:*}; OPERATOR_TAG=$${OPERATOR_IMAGE##*:}; \
+	CONSOLE_REPO=$${CONSOLE_IMAGE%:*}; CONSOLE_TAG=$${CONSOLE_IMAGE##*:}; \
+	helm upgrade --install kafscale deploy/helm/kafscale \
+	  --namespace kafscale-demo \
+	  --create-namespace \
+	  --set operator.replicaCount=1 \
+	  --set operator.image.repository=$$OPERATOR_REPO \
+	  --set operator.image.tag=$$OPERATOR_TAG \
+	  --set operator.image.pullPolicy=IfNotPresent \
+	  --set console.image.repository=$$CONSOLE_REPO \
+	  --set console.image.tag=$$CONSOLE_TAG \
+	  --set console.auth.username=admin \
+	  --set console.auth.password=admin \
+	  --set operator.etcdEndpoints[0]=
+
+	@echo "[CONSOLE_REPO]   CONSOLE_REPO  =$(CONSOLE_REPO)"
+	@echo "[OPERATOR_REPO]  OPERATOR_REPO =$(OPERATOR_REPO)"
+
+	@echo "[IMAGENAME]   BROKER_IMAGE.  =$(BROKER_IMAGE)"
+	@echo "[IMAGENAME]   OPERATOR_IMAGE =$(OPERATOR_IMAGE)"
+	@echo "[IMAGENAME]   CONSOLE_IMAGE  =$(CONSOLE_IMAGE)"
+
+	@echo "[CONSOLE_TAG] CONSOLE_TAG    =$(CONSOLE_TAG)"
+
+	@bash -c 'set -e; \
+		OPERATOR_DEPLOY=$$(kubectl -n kafscale-demo get deployments \
+		  -l app.kubernetes.io/component=operator \
+		  -o jsonpath="{.items[0].metadata.name}"); \
+		echo "Using operator deployment: $$OPERATOR_DEPLOY"; \
+		kubectl -n kafscale-demo set env deployment/$$OPERATOR_DEPLOY \
+		  BROKER_IMAGE=$(BROKER_IMAGE) \
+		  KAFSCALE_OPERATOR_ETCD_ENDPOINTS= \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET=kafscale-snapshots \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1 \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
+		  KAFSCALE_OPERATOR_LEADER_KEY=kafscale-operator-leader \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.kafscale-demo.svc.cluster.local:9000; \
+		kubectl -n kafscale-demo rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s; \
+		kubectl apply -f deploy/demo/kafscale-cluster.yaml; \
+		kubectl apply -f deploy/demo/kafscale-topics.yaml; \
+		echo "Waiting for broker deployment to be created..."; \
+		while ! kubectl -n kafscale-demo get deployment kafscale-broker >/dev/null 2>&1; do sleep 1; done; \
+		kubectl -n kafscale-demo wait --for=condition=available deployment/kafscale-broker --timeout=180s; \
+		console_svc=$$(kubectl -n kafscale-demo get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
+		echo "Exposing Console at http://localhost:8080"; \
+		nohup kubectl -n kafscale-demo port-forward svc/$$console_svc 8080:80 >/tmp/kafscale-demo-console.log 2>&1 & \
+		echo "Exposing Metrics at localhost:9093"; \
+		nohup kubectl -n kafscale-demo port-forward svc/kafscale-broker 9093:9093 >/tmp/kafscale-demo-metrics.log 2>&1 & \
+		echo "Services exposed in background. Logs at /tmp/kafscale-demo-*.log"'
+
+demo-guide-pf-clean: ## Clean up the platform demo environment
+	@echo "Cleaning up demo-platform2..."
+	@pkill -f 'kubectl -n kafscale-demo port-forward' || true
+	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
+	@echo "Cleanup complete. \nKIND CLUSTER: [$(KAFSCALE_KIND_CLUSTER)] removed."
 
 tidy:
 	go mod tidy
