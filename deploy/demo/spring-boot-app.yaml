@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spring-demo-app
+  namespace: kafscale-demo
+  labels:
+    app: spring-demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spring-demo-app
+  template:
+    metadata:
+      labels:
+        app: spring-demo-app
+    spec:
+      containers:
+        - name: spring-demo-app
+          image: ghcr.io/novatechflow/kafscale-spring-demo:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: cluster
+            # Add any other configuration environment variables here
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spring-demo-app
+  namespace: kafscale-demo
+  labels:
+    app: spring-demo-app
+spec:
+  selector:
+    app: spring-demo-app
+  ports:
+    - protocol: TCP
+      port: 8083
+      targetPort: 8083
+  type: ClusterIP

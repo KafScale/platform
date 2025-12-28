@@ -22,6 +22,7 @@ import com.example.kafscale.service.OrderProducerService;
 import com.example.kafscale.service.OrderConsumerService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.core.env.Environment;
 
 import java.util.UUID;
 
@@ -33,14 +34,16 @@ public class OrderController {
     private final OrderConsumerService consumerService;
     private final org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties;
     private final org.springframework.kafka.core.KafkaAdmin kafkaAdmin;
+    private final Environment env;
 
     public OrderController(OrderProducerService producerService, OrderConsumerService consumerService,
             org.springframework.boot.autoconfigure.kafka.KafkaProperties kafkaProperties,
-            org.springframework.kafka.core.KafkaAdmin kafkaAdmin) {
+            org.springframework.kafka.core.KafkaAdmin kafkaAdmin, Environment env) {
         this.producerService = producerService;
         this.consumerService = consumerService;
         this.kafkaProperties = kafkaProperties;
         this.kafkaAdmin = kafkaAdmin;
+        this.env = env;
     }
 
     @PostMapping("/test-connection")
@@ -92,6 +95,47 @@ public class OrderController {
         // Add specific key fields for visibility
         config.put("producerArgs", kafkaProperties.getProducer());
         config.put("consumerArgs", kafkaProperties.getConsumer());
+        config.put("activeProfiles", env.getActiveProfiles());
         return ResponseEntity.ok(config);
+    }
+
+    @GetMapping("/cluster-info")
+    public ResponseEntity<java.util.Map<String, Object>> getClusterInfo() {
+        java.util.Map<String, Object> info = new java.util.HashMap<>();
+        try (org.apache.kafka.clients.admin.AdminClient client = org.apache.kafka.clients.admin.AdminClient
+                .create(kafkaAdmin.getConfigurationProperties())) {
+
+            org.apache.kafka.clients.admin.DescribeClusterResult cluster = client.describeCluster();
+
+            info.put("clusterId", cluster.clusterId().get());
+            info.put("controller", mapNode(cluster.controller().get()));
+
+            java.util.List<java.util.Map<String, Object>> nodeList = new java.util.ArrayList<>();
+            for (org.apache.kafka.common.Node node : cluster.nodes().get()) {
+                nodeList.add(mapNode(node));
+            }
+            info.put("nodes", nodeList);
+
+            // Fetch topics
+            java.util.Set<String> topics = client.listTopics().names().get();
+            info.put("topics", topics);
+
+            return ResponseEntity.ok(info);
+        } catch (Exception e) {
+            info.put("error", e.getMessage());
+            return ResponseEntity.status(500).body(info);
+        }
+    }
+
+    private java.util.Map<String, Object> mapNode(org.apache.kafka.common.Node node) {
+        java.util.Map<String, Object> map = new java.util.HashMap<>();
+        if (node != null) {
+            map.put("id", node.id());
+            map.put("idString", node.idString());
+            map.put("host", node.host());
+            map.put("port", node.port());
+            map.put("rack", node.rack());
+        }
+        return map;
     }
 }

@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: kafscale-demo
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 1024; }
+    stream {
+        server {
+            listen 59092;
+            proxy_pass kafscale-broker:9092;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-lb
+  namespace: kafscale-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-lb
+  template:
+    metadata:
+      labels:
+        app: nginx-lb
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 59092
+        volumeMounts:
+        - name: config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+      volumes:
+      - name: config
+        configMap:
+          name: nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-lb
+  namespace: kafscale-demo
+spec:
+  selector:
+    app: nginx-lb
+  ports:
+  - port: 59092
+    targetPort: 59092

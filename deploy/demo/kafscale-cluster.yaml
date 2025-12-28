@@ -20,10 +20,12 @@ metadata:
   namespace: kafscale-demo
 spec:
   brokers:
+    advertisedHost: kafscale-broker
+    advertisedPort: 9092
     image:
       repository: ghcr.io/novatechflow/kafscale-broker
       tag: ""
-    replicas: 1
+    replicas: 3
   s3:
     bucket: kafscale-snapshots
     region: us-east-1

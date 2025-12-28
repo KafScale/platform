@@ -24,7 +24,8 @@ logging:
 
 spring:
   kafka:
-    bootstrap-servers: 127.0.0.1:39092
+    # Default profile: Connect to localhost:39092 (port-forwarded broker)
+    bootstrap-servers: localhost:39092
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -48,8 +49,34 @@ spring:
       concurrency: 1
     admin:
       properties:
-        bootstrap.servers: 127.0.0.1:39092
+        bootstrap.servers: localhost:39092
 
 app:
   kafka:
     topic: orders-springboot
+
+---
+# Profile: cluster
+# Connect to in-cluster service name
+spring:
+  config:
+    activate:
+      on-profile: cluster
+  kafka:
+    bootstrap-servers: kafscale-broker:9092
+    admin:
+      properties:
+        bootstrap.servers: kafscale-broker:9092
+
+---
+# Profile: local-lb
+# Connect to Nginx Load Balancer on localhost:59092
+spring:
+  config:
+    activate:
+      on-profile: local-lb
+  kafka:
+    bootstrap-servers: localhost:59092
+    admin:
+      properties:
+        bootstrap.servers: localhost:59092

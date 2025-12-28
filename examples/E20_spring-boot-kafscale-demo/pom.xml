@@ -20,7 +20,7 @@
 
     <properties>
         <java.version>17</java.version>
-        <kafka.version>2.4.0</kafka.version>
+        <kafka.version>3.9.1</kafka.version>
     </properties>
 
     <dependencies>

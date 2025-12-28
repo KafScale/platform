@@ -35,18 +35,40 @@ mvn clean package
 
 ### 3. Run the Application
 
+You can run the application with different profiles depending on your environment.
+
+#### Local Development (Default)
+
+Connects to `localhost:39092` (Port-forwarded broker).
+
 ```bash
 mvn spring-boot:run
 ```
 
-The application will start on `http://localhost:8080`.
+#### Kubernetes Cluster
+
+Connects to `kafscale-broker:9092` (Internal service). Use this when deploying the app as a Pod.
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=cluster
+```
+
+#### Local Load Balancer
+
+Connects to `localhost:59092` (Nginx LB).
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=local-lb
+```
+
+The application will start on `http://localhost:8083`.
 
 ## Testing the Application
 
 ### Create an Order via REST API
 
 ```bash
-curl -X POST http://localhost:8080/api/orders \
+curl -X POST http://localhost:8083/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "product": "Widget",
@@ -61,7 +83,7 @@ You should see:
 ### Check Application Health
 
 ```bash
-curl http://localhost:8080/api/orders/health
+curl http://localhost:8083/api/orders/health
 ```
 
 ## Project Structure
@@ -70,25 +92,28 @@ curl http://localhost:8080/api/orders/health
 src/main/java/com/example/kafscale/
 ├── KafScaleDemoApplication.java     # Main application class
 ├── controller/
-│   └── OrderController.java         # REST API endpoints
 ├── model/
-│   └── Order.java                   # Order data model
 └── service/
-    ├── OrderProducerService.java    # Kafka producer
-    └── OrderConsumerService.java    # Kafka consumer
 
 src/main/resources/
-└── application.properties            # Application configuration
+└── application.yml                  # Application configuration & Profiles
 ```
 
-## Configuration
+## Configuration & Profiles
 
-The application is configured to connect to KafScale at `localhost:9092`. See `application.properties` for details.
+The application uses Spring Profiles to switch between environments. See `src/main/resources/application.yml` for details.
 
-Key configuration:
-- **Bootstrap servers**: `localhost:9092`
-- **Topic**: `orders`
-- **Consumer group**: `kafscale-demo-group`
+### Available Profiles
+
+| Profile | Description | Bootstrap Servers |
+|---------|-------------|-------------------|
+| `default` | Local development with port-forwarding | `localhost:39092` |
+| `cluster` | Running inside Kubernetes | `kafscale-broker:9092` |
+| `local-lb`| Local development via LoadBalancer | `localhost:59092` |
+
+### Key Settings
+- **Topic**: `orders-springboot`
+- **Consumer Group**: `kafscale-demo-group-${random.uuid}` (Randomized for uniqueness)
 
 ## Logs
 

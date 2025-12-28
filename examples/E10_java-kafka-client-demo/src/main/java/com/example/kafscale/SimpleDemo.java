@@ -46,6 +46,7 @@ public class SimpleDemo {
     private static final String BOOTSTRAP_SERVERS = "127.0.0.1:39092";
 
     public static void main(String[] args) {
+
         logger.info("Starting SimpleDemo...");
 
         // 0. Show all topics
@@ -64,6 +65,13 @@ public class SimpleDemo {
 
         // 2. Produce 5 messages
         produceMessages();
+
+        // 3. Show Cluster Metadata
+        try {
+            showClusterMetadata();
+        } catch (Exception e) {
+            logger.warn("Skipping showClusterMetadata due to error: {}", e.getMessage());
+        }
 
         // 3. Consume 5 messages
         consumeMessages();
@@ -107,7 +115,7 @@ public class SimpleDemo {
         props.put("default.api.timeout.ms", "5000");
 
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
-            for (int i = 0; i < 5; i++) {
+            for (int i = 0; i < 25; i++) {
                 String key = "key-" + i;
                 String value = "message-" + i;
                 ProducerRecord<String, String> record = new ProducerRecord<>(TOPIC_NAME, key, value);
@@ -145,7 +153,7 @@ public class SimpleDemo {
             // Poll for a limited time to get the 5 messages
             long endTime = System.currentTimeMillis() + 10000; // 10 seconds timeout
 
-            while (messagesReceived < 5 && System.currentTimeMillis() < endTime) {
+            while (messagesReceived < 25 && System.currentTimeMillis() < endTime) {
                 ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(100));
                 for (ConsumerRecord<String, String> record : records) {
                     logger.info("Received message: key={} value={} partition={} offset={}",
@@ -177,6 +185,24 @@ public class SimpleDemo {
         try (AdminClient adminClient = AdminClient.create(props)) {
             logger.info("Listing topics...");
             adminClient.listTopics().names().get(5, TimeUnit.SECONDS).forEach(name -> logger.info("Topic: {}", name));
+        }
+    }
+
+    private static void showClusterMetadata() throws Exception {
+        Properties props = new Properties();
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
+        props.put("client.dns.lookup", "use_all_dns_ips");
+        props.put("request.timeout.ms", "2000");
+        props.put("default.api.timeout.ms", "5000");
+
+        try (AdminClient adminClient = AdminClient.create(props)) {
+            org.apache.kafka.clients.admin.DescribeClusterResult result = adminClient.describeCluster();
+            logger.info("Cluster Metadata:");
+            logger.info("  Cluster ID: {}", result.clusterId().get());
+            logger.info("  Controller: {}", result.controller().get());
+            logger.info("  Nodes (Advertised Listeners):");
+            result.nodes().get().forEach(node -> logger.info("    Node ID: {}, Host: {}, Port: {}, Rack: {}",
+                    node.id(), node.host(), node.port(), node.hasRack() ? node.rack() : "null"));
         }
     }
 }
