@@ -1,0 +1,49 @@
+s3:
+  bucket: kafscale-data
+  namespace: production
+  region: us-east-1
+  path_style: false
+
+iceberg:
+  catalog:
+    type: rest
+    uri: https://iceberg-catalog.example.com
+    token: ""
+  warehouse: s3://iceberg-warehouse/production
+
+offsets:
+  backend: etcd
+  lease_ttl_seconds: 30
+  key_prefix: processors
+
+processor:
+  poll_interval_seconds: 5
+
+discovery:
+  mode: auto
+
+etcd:
+  endpoints:
+    - http://etcd.kafscale.svc.cluster.local:2379
+
+schema:
+  mode: "off"
+  registry:
+    base_url: https://schemas.example.com
+    timeout_seconds: 5
+    cache_seconds: 300
+
+mappings:
+  - topic: orders
+    table: prod.orders
+    mode: append
+    create_table_if_missing: true
+    schema:
+      columns:
+        - name: order_id
+          type: long
+          required: true
+        - name: status
+          type: string
+          required: false
+      allow_type_widening: true

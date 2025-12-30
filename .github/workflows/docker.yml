@@ -31,7 +31,23 @@ jobs:
       packages: write
     strategy:
       matrix:
-        component: [broker, operator, console]
+        include:
+          - name: broker
+            image: kafscale-broker
+            context: .
+            file: deploy/docker/broker.Dockerfile
+          - name: operator
+            image: kafscale-operator
+            context: .
+            file: deploy/docker/operator.Dockerfile
+          - name: console
+            image: kafscale-console
+            context: .
+            file: deploy/docker/console.Dockerfile
+          - name: iceberg-processor
+            image: kafscale-iceberg-processor
+            context: addons/processors/iceberg-processor
+            file: addons/processors/iceberg-processor/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -53,15 +69,15 @@ jobs:
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
-          images: ghcr.io/novatechflow/kafscale-${{ matrix.component }}
+          images: ghcr.io/novatechflow/${{ matrix.image }}
           tags: |
             type=ref,event=tag
 
       - name: Build and push
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
-          context: .
-          file: deploy/docker/${{ matrix.component }}.Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}

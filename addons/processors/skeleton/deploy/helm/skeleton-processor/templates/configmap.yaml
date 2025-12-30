@@ -1,0 +1,12 @@
+{{- if not .Values.config.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "skeleton-processor.configMapName" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "skeleton-processor.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  config.yaml: |
+{{ .Files.Get "config/config.yaml" | indent 4 }}
+{{- end }}

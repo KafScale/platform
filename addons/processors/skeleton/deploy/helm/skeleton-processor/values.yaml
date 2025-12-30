@@ -1,0 +1,24 @@
+image:
+  repository: skeleton-processor
+  tag: dev
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: false
+  rules: []
+
+env: []
+envFromSecret: ""
+
+resources: {}
+
+config:
+  existingConfigMap: ""
+  path: /config/config.yaml

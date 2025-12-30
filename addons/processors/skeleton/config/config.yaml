@@ -1,0 +1,13 @@
+s3:
+  bucket: kafscale-data
+  namespace: production
+  region: us-east-1
+
+offsets:
+  backend: etcd
+
+mappings:
+  - topic: orders
+    sink: iceberg.prod.orders
+    mode: append
+    create_table_if_missing: true

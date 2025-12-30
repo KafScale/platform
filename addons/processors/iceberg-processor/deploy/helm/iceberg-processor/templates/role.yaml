@@ -1,0 +1,11 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "iceberg-processor.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "iceberg-processor.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+{{- toYaml .Values.rbac.rules | nindent 2 }}
+{{- end }}

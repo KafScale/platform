@@ -51,6 +51,14 @@ coverage*.out
 *.swo
 .DS_Store
 
+# Addon processor artifacts
+addons/processors/**/bin/
+addons/processors/**/dist/
+addons/processors/**/out/
+addons/processors/**/tmp/
+addons/processors/**/.cache/
+addons/processors/**/coverage*.out
+
 # Environment/config
 .env
 .env.*
