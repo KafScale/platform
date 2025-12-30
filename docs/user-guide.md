@@ -27,6 +27,10 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 - **Storage**: message segments live in S3 buckets; brokers only keep in-memory caches.
 - **Operator**: Kubernetes controller that provisions brokers, topics, and wiring based on CRDs.
 
+## Local Demo
+
+For a kind-based demo environment run `make demo-platform`. The Makefile applies the demo resources via `scripts/demo-platform-apply.sh`; if your environment blocks inline heredocs, ensure the script is executable and run the target again.
+
 ## Client Examples
 
 Use this section to copy/paste a minimal example for your client. If you do not control client config (managed apps, hosted integrations), ask the operator team to confirm idempotence/transactions are disabled for Kafscale.

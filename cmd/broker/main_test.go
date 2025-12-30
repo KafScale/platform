@@ -454,12 +454,20 @@ func TestHandleListOffsets(t *testing.T) {
 		t.Fatalf("UpdateOffsets: %v", err)
 	}
 	tests := []struct {
-		name      string
-		timestamp int64
-		expected  int64
+		name        string
+		version     int16
+		timestamp   int64
+		expected    int64
+		leaderEpoch int32
 	}{
-		{name: "latest", timestamp: -1, expected: 10},
-		{name: "earliest", timestamp: -2, expected: 0},
+		{name: "latest-v0", version: 0, timestamp: -1, expected: 10},
+		{name: "earliest-v0", version: 0, timestamp: -2, expected: 0},
+		{name: "latest-v1", version: 1, timestamp: -1, expected: 10},
+		{name: "earliest-v1", version: 1, timestamp: -2, expected: 0},
+		{name: "latest-v2", version: 2, timestamp: -1, expected: 10},
+		{name: "earliest-v2", version: 2, timestamp: -2, expected: 0},
+		{name: "latest-v4", version: 4, timestamp: -1, expected: 10, leaderEpoch: -1},
+		{name: "earliest-v4", version: 4, timestamp: -2, expected: 0, leaderEpoch: -1},
 	}
 
 	for _, tc := range tests {
@@ -473,20 +481,49 @@ func TestHandleListOffsets(t *testing.T) {
 					},
 				},
 			}
-			header := &protocol.RequestHeader{CorrelationID: 55, APIVersion: 0}
+			if tc.version >= 2 {
+				req.IsolationLevel = 1
+			}
+			header := &protocol.RequestHeader{CorrelationID: 55, APIVersion: tc.version}
 			respBytes, err := handler.handleListOffsets(context.Background(), header, req)
 			if err != nil {
 				t.Fatalf("handleListOffsets: %v", err)
 			}
-			resp := decodeListOffsetsResponse(t, 0, respBytes)
+			resp := decodeListOffsetsResponse(t, tc.version, respBytes)
 			if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 				t.Fatalf("unexpected list offsets response: %#v", resp)
 			}
 			part := resp.Topics[0].Partitions[0]
-			if len(part.OldStyleOffsets) != 1 || part.OldStyleOffsets[0] != tc.expected {
-				t.Fatalf("expected old style offset %d got %#v", tc.expected, part.OldStyleOffsets)
+			if tc.version == 0 {
+				if len(part.OldStyleOffsets) != 1 || part.OldStyleOffsets[0] != tc.expected {
+					t.Fatalf("expected old style offset %d got %#v", tc.expected, part.OldStyleOffsets)
+				}
+				return
+			}
+			if part.Offset != tc.expected || part.Timestamp != tc.timestamp {
+				t.Fatalf("expected offset %d timestamp %d got offset %d timestamp %d", tc.expected, tc.timestamp, part.Offset, part.Timestamp)
+			}
+			if tc.version >= 4 && part.LeaderEpoch != tc.leaderEpoch {
+				t.Fatalf("expected leader epoch %d got %d", tc.leaderEpoch, part.LeaderEpoch)
 			}
 		})
+	}
+}
+
+func TestHandleListOffsetsRejectsUnsupportedVersion(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+	req := &protocol.ListOffsetsRequest{
+		Topics: []protocol.ListOffsetsTopic{
+			{
+				Name:       "orders",
+				Partitions: []protocol.ListOffsetsPartition{{Partition: 0, Timestamp: -1}},
+			},
+		},
+	}
+	header := &protocol.RequestHeader{CorrelationID: 55, APIVersion: 5}
+	if _, err := handler.handleListOffsets(context.Background(), header, req); err == nil {
+		t.Fatalf("expected error for unsupported list offsets version")
 	}
 }
 

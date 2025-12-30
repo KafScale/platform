@@ -199,7 +199,7 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 |---------|------|-------------------|-----------------|
 | 0 | Produce | 9 | ✅ Implemented |
 | 1 | Fetch | 13 | ✅ Implemented |
-| 2 | ListOffsets | 7 | ✅ Implemented (v0 only) |
+| 2 | ListOffsets | 7 | ✅ Implemented (v0-4) |
 | 3 | Metadata | 12 | ✅ Implemented |
 | 4 | LeaderAndIsr | 5 | ❌ Not needed (internal) |
 | 5 | StopReplica | 3 | ❌ Not needed (internal) |

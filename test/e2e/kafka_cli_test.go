@@ -33,7 +33,19 @@ import (
 	"time"
 )
 
-func TestKafkaCliProduce(t *testing.T) {
+type kafkaCliHarness struct {
+	ctx              context.Context
+	brokerAddr       string
+	brokerPort       string
+	brokerListenAddr string
+	brokerLogs       *bytes.Buffer
+	image            string
+	bootstrap        string
+	producerCmd      string
+	consumerCmd      string
+}
+
+func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 	const enableEnv = "KAFSCALE_E2E"
 	if os.Getenv(enableEnv) != "1" {
 		t.Skipf("set %s=1 to run integration harness", enableEnv)
@@ -42,7 +54,7 @@ func TestKafkaCliProduce(t *testing.T) {
 	requireBinaries(t, "docker")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	brokerPort := pickFreePort(t)
 	brokerListenAddr := ":" + brokerPort
@@ -103,6 +115,27 @@ func TestKafkaCliProduce(t *testing.T) {
 	consumerCmd := envOrDefault("KAFSCALE_KAFKA_CLI_CONSUMER_CMD", "/opt/kafka/bin/kafka-console-consumer.sh")
 	bootstrap := envOrDefault("KAFSCALE_KAFKA_CLI_BOOTSTRAP", defaultDockerBootstrap("127.0.0.1:"+brokerPort))
 	t.Logf("kafka cli bootstrap: %s", bootstrap)
+
+	return &kafkaCliHarness{
+		ctx:              ctx,
+		brokerAddr:       brokerAddr,
+		brokerPort:       brokerPort,
+		brokerListenAddr: brokerListenAddr,
+		brokerLogs:       &brokerLogs,
+		image:            image,
+		bootstrap:        bootstrap,
+		producerCmd:      producerCmd,
+		consumerCmd:      consumerCmd,
+	}
+}
+
+func TestKafkaCliProduce(t *testing.T) {
+	harness := newKafkaCliHarness(t)
+	ctx := harness.ctx
+	image := harness.image
+	producerCmd := harness.producerCmd
+	consumerCmd := harness.consumerCmd
+	bootstrap := harness.bootstrap
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	topic := fmt.Sprintf("cli-%08x", rng.Uint32())
 	messageCount := 10
@@ -175,6 +208,66 @@ func TestKafkaCliProduce(t *testing.T) {
 	}
 	t.Log("\n" + table.String())
 	printS3Layout(t, bucket, []string{topic})
+}
+
+func TestKafkaCliListOffsets(t *testing.T) {
+	harness := newKafkaCliHarness(t)
+	ctx := harness.ctx
+	image := harness.image
+	producerCmd := harness.producerCmd
+	bootstrap := harness.bootstrap
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	topic := fmt.Sprintf("cli-offsets-%08x", rng.Uint32())
+	messageCount := 3
+	quoted := make([]string, messageCount)
+	for i := 0; i < messageCount; i++ {
+		quoted[i] = strconv.Quote(fmt.Sprintf("offset-%08x-%02d", rng.Uint32(), i))
+	}
+
+	args := []string{"run", "--rm"}
+	if runtime.GOOS == "linux" {
+		args = append(args, "--network=host")
+	}
+	produceScript := fmt.Sprintf("printf '%%s\\n' %s | %s --bootstrap-server %s --topic %s --producer-property enable.idempotence=false", strings.Join(quoted, " "), producerCmd, bootstrap, topic)
+	args = append(args, image, "sh", "-c", produceScript)
+	t.Log("kafka cli: producing messages for list offsets")
+	runCmdGetOutput(t, ctx, "docker", args...)
+
+	offsetCmd := envOrDefault("KAFSCALE_KAFKA_GET_OFFSETS_CMD", "/opt/kafka/bin/kafka-get-offsets.sh")
+	offsetScript := fmt.Sprintf("%s --bootstrap-server %s --topic %s --time -1", offsetCmd, bootstrap, topic)
+	offsetArgs := []string{"run", "--rm"}
+	if runtime.GOOS == "linux" {
+		offsetArgs = append(offsetArgs, "--network=host")
+	}
+	offsetArgs = append(offsetArgs, image, "sh", "-c", offsetScript)
+	t.Log("kafka cli: fetching latest offsets")
+	output := strings.TrimSpace(string(runCmdGetOutput(t, ctx, "docker", offsetArgs...)))
+	if output == "" {
+		t.Fatalf("expected offset output, got empty response")
+	}
+
+	found := false
+	for _, line := range strings.Split(output, "\n") {
+		parts := strings.Split(strings.TrimSpace(line), ":")
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[0] != topic {
+			continue
+		}
+		offset, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			t.Fatalf("parse offset from %q: %v", line, err)
+		}
+		if offset != int64(messageCount) {
+			t.Fatalf("expected latest offset %d got %d (line %q)", messageCount, offset, line)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("no offsets for topic %s in output:\n%s", topic, output)
+	}
 }
 
 func defaultDockerBootstrap(addr string) string {

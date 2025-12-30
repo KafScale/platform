@@ -843,6 +843,9 @@ func parseConfigInt64(value string) (int64, error) {
 }
 
 func (h *handler) handleListOffsets(ctx context.Context, header *protocol.RequestHeader, req *protocol.ListOffsetsRequest) ([]byte, error) {
+	if header.APIVersion < 0 || header.APIVersion > 4 {
+		return nil, fmt.Errorf("list offsets version %d not supported", header.APIVersion)
+	}
 	topicResponses := make([]protocol.ListOffsetsTopicResponse, 0, len(req.Topics))
 	for _, topic := range req.Topics {
 		partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
@@ -1612,7 +1615,7 @@ func generateApiVersions() []protocol.ApiVersion {
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
 		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},
 		{key: protocol.APIKeyFindCoordinator, minVersion: 3, maxVersion: 3},
-		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 0},
+		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 4},
 		{key: protocol.APIKeyJoinGroup, minVersion: 4, maxVersion: 4},
 		{key: protocol.APIKeySyncGroup, minVersion: 4, maxVersion: 4},
 		{key: protocol.APIKeyHeartbeat, minVersion: 4, maxVersion: 4},

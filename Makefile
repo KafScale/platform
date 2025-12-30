@@ -163,7 +163,7 @@ test-produce-consume: release-broker-ports ensure-minio ## Run produce/consume t
 	KAFSCALE_S3_PATH_STYLE=true \
 	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
-	go test -tags=e2e ./test/e2e -run 'TestFranzGoProduceConsume|TestKafkaCliProduce' -v
+	go test -tags=e2e ./test/e2e -run 'TestFranzGoProduceConsume|TestKafkaCliProduce|TestKafkaCliListOffsets' -v
 
 test-produce-consume-debug: release-broker-ports ensure-minio ## Run produce/consume tests with broker trace logging enabled for debugging.
 	KAFSCALE_TRACE_KAFKA=true \
@@ -236,47 +236,12 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
-	@cat <<-EOF | kubectl apply -f -
-	apiVersion: apps/v1
-	kind: Deployment
-	metadata:
-	  name: minio
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  replicas: 1
-	  selector:
-	    matchLabels:
-	      app: minio
-	  template:
-	    metadata:
-	      labels:
-	        app: minio
-	    spec:
-	      containers:
-	        - name: minio
-	          image: $(MINIO_IMAGE)
-	          args: ["server", "/data", "--console-address", ":9001"]
-	          env:
-	            - name: MINIO_ROOT_USER
-	              value: $(MINIO_ROOT_USER)
-	            - name: MINIO_ROOT_PASSWORD
-	              value: $(MINIO_ROOT_PASSWORD)
-	          ports:
-	            - containerPort: 9000
-	---
-	apiVersion: v1
-	kind: Service
-	metadata:
-	  name: minio
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  selector:
-	    app: minio
-	  ports:
-	    - name: api
-	      port: 9000
-	      targetPort: 9000
-	EOF
+	@KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	MINIO_IMAGE=$(MINIO_IMAGE) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	MINIO_REGION=$(MINIO_REGION) \
+	./scripts/demo-platform-apply.sh minio
 	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/minio --timeout=120s
 	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) create secret generic kafscale-s3-credentials \
 	  --from-literal=KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
@@ -302,44 +267,9 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
 	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9000
 	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s
-	@cat <<-EOF | kubectl apply -f -
-	apiVersion: kafscale.io/v1alpha1
-	kind: KafscaleCluster
-	metadata:
-	  name: kafscale
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  brokers:
-	    advertisedHost: 127.0.0.1
-	    advertisedPort: 39092
-	    replicas: 1
-	  s3:
-	    bucket: kafscale-snapshots
-	    region: $(MINIO_REGION)
-	    endpoint: http://minio.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9000
-	    credentialsSecretRef: kafscale-s3-credentials
-	  etcd:
-	    endpoints: []
-	EOF
-	@cat <<-EOF | kubectl apply -f -
-	apiVersion: kafscale.io/v1alpha1
-	kind: KafscaleTopic
-	metadata:
-	  name: demo-topic-1
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  clusterRef: kafscale
-	  partitions: 3
-	---
-	apiVersion: kafscale.io/v1alpha1
-	kind: KafscaleTopic
-	metadata:
-	  name: demo-topic-2
-	  namespace: $(KAFSCALE_DEMO_NAMESPACE)
-	spec:
-	  clusterRef: kafscale
-	  partitions: 2
-	EOF
+	@KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	MINIO_REGION=$(MINIO_REGION) \
+	./scripts/demo-platform-apply.sh cluster
 	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) wait --for=condition=available deployment/kafscale-broker --timeout=180s
 	@bash -c 'set -euo pipefail; \
 		console_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \

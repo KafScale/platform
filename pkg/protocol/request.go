@@ -113,9 +113,10 @@ type DeleteTopicsRequest struct {
 func (DeleteTopicsRequest) APIKey() int16 { return APIKeyDeleteTopics }
 
 type ListOffsetsPartition struct {
-	Partition     int32
-	Timestamp     int64
-	MaxNumOffsets int32
+	Partition          int32
+	Timestamp          int64
+	MaxNumOffsets      int32
+	CurrentLeaderEpoch int32
 }
 
 type ListOffsetsTopic struct {
@@ -124,8 +125,9 @@ type ListOffsetsTopic struct {
 }
 
 type ListOffsetsRequest struct {
-	ReplicaID int32
-	Topics    []ListOffsetsTopic
+	ReplicaID      int32
+	IsolationLevel int8
+	Topics         []ListOffsetsTopic
 }
 
 func (ListOffsetsRequest) APIKey() int16 { return APIKeyListOffsets }
@@ -641,6 +643,12 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		isolationLevel := int8(0)
+		if header.APIVersion >= 2 {
+			if isolationLevel, err = reader.Int8(); err != nil {
+				return nil, nil, err
+			}
+		}
 		topicCount, err := reader.Int32()
 		if err != nil {
 			return nil, nil, err
@@ -672,15 +680,22 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 						return nil, nil, err
 					}
 				}
+				leaderEpoch := int32(-1)
+				if header.APIVersion >= 4 {
+					if leaderEpoch, err = reader.Int32(); err != nil {
+						return nil, nil, err
+					}
+				}
 				parts = append(parts, ListOffsetsPartition{
-					Partition:     partition,
-					Timestamp:     timestamp,
-					MaxNumOffsets: maxOffsets,
+					Partition:          partition,
+					Timestamp:          timestamp,
+					MaxNumOffsets:      maxOffsets,
+					CurrentLeaderEpoch: leaderEpoch,
 				})
 			}
 			topics = append(topics, ListOffsetsTopic{Name: name, Partitions: parts})
 		}
-		req = &ListOffsetsRequest{ReplicaID: replicaID, Topics: topics}
+		req = &ListOffsetsRequest{ReplicaID: replicaID, IsolationLevel: isolationLevel, Topics: topics}
 	case APIKeyFetch:
 		version := header.APIVersion
 		replicaID, err := reader.Int32()

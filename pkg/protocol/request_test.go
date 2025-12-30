@@ -67,6 +67,97 @@ func TestParseMetadataRequest(t *testing.T) {
 	}
 }
 
+func TestParseListOffsetsRequestV0(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyListOffsets)
+	w.Int16(0)
+	w.Int32(23)
+	w.NullableString(nil)
+	w.Int32(-1)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(1)
+	w.Int32(0)
+	w.Int64(-1)
+	w.Int32(1)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*ListOffsetsRequest)
+	if !ok {
+		t.Fatalf("expected ListOffsetsRequest got %T", req)
+	}
+	if parsed.ReplicaID != -1 || len(parsed.Topics) != 1 {
+		t.Fatalf("unexpected list offsets request: %#v", parsed)
+	}
+	part := parsed.Topics[0].Partitions[0]
+	if part.Partition != 0 || part.Timestamp != -1 || part.MaxNumOffsets != 1 {
+		t.Fatalf("unexpected list offsets partition: %#v", part)
+	}
+}
+
+func TestParseListOffsetsRequestV2(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyListOffsets)
+	w.Int16(2)
+	w.Int32(24)
+	w.NullableString(nil)
+	w.Int32(-1)
+	w.Int8(1)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(1)
+	w.Int32(0)
+	w.Int64(-2)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*ListOffsetsRequest)
+	if !ok {
+		t.Fatalf("expected ListOffsetsRequest got %T", req)
+	}
+	if parsed.ReplicaID != -1 || parsed.IsolationLevel != 1 {
+		t.Fatalf("unexpected list offsets request: %#v", parsed)
+	}
+	part := parsed.Topics[0].Partitions[0]
+	if part.Partition != 0 || part.Timestamp != -2 || part.MaxNumOffsets != 1 || part.CurrentLeaderEpoch != -1 {
+		t.Fatalf("unexpected list offsets partition: %#v", part)
+	}
+}
+
+func TestParseListOffsetsRequestV4(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyListOffsets)
+	w.Int16(4)
+	w.Int32(25)
+	w.NullableString(nil)
+	w.Int32(-1)
+	w.Int8(0)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(1)
+	w.Int32(0)
+	w.Int64(-1)
+	w.Int32(3)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*ListOffsetsRequest)
+	if !ok {
+		t.Fatalf("expected ListOffsetsRequest got %T", req)
+	}
+	part := parsed.Topics[0].Partitions[0]
+	if part.CurrentLeaderEpoch != 3 || part.Timestamp != -1 {
+		t.Fatalf("unexpected list offsets partition: %#v", part)
+	}
+}
+
 func TestParseProduceRequest(t *testing.T) {
 	w := newByteWriter(128)
 	w.Int16(APIKeyProduce)

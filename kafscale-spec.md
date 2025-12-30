@@ -188,7 +188,7 @@ Versions reflect what the broker advertises in ApiVersions today.
 |---------|------|---------|--------|-------|
 | 0 | Produce | 0-9 | ✅ Full | Core produce path |
 | 1 | Fetch | 11-13 | ✅ Full | Core consume path |
-| 2 | ListOffsets | 0 | ✅ Full | Required for consumers (v0 only) |
+| 2 | ListOffsets | 0-4 | ✅ Full | Required for consumers |
 | 3 | Metadata | 0-12 | ✅ Full | Topic/broker discovery |
 | 8 | OffsetCommit | 3 | ✅ Full | Consumer group tracking (v3 only) |
 | 9 | OffsetFetch | 5 | ✅ Full | Consumer group tracking (v5 only) |
