@@ -85,6 +85,103 @@ KafScale brokers are stateless pods on Kubernetes. Metadata lives in etcd, while
   </svg>
 </div>
 
+## Decoupled processing (addons)
+
+KafScale keeps brokers focused on Kafka protocol and storage. Add-on processors handle downstream tasks by reading completed segments directly from S3, bypassing brokers entirely. Processors are stateless: offsets and leases live in etcd, input lives in S3, output goes to external catalogs.
+
+<div class="diagram">
+  <div class="diagram-label">Processor addon architecture</div>
+  <svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="KafScale processor addon architecture">
+    <defs>
+      <marker id="ap1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--diagram-stroke)"/>
+      </marker>
+      <marker id="ap2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#ffb347"/>
+      </marker>
+      <marker id="ap3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
+      </marker>
+      <marker id="ap4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4ab7f1"/>
+      </marker>
+      <marker id="ap5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/>
+      </marker>
+    </defs>
+
+    <!-- Row 1: KafScale layer (source) -->
+    <text x="30" y="28" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">KAFSCALE</text>
+    
+    <rect x="30" y="40" width="130" height="60" rx="10" fill="rgba(106, 167, 255, 0.2)" stroke="#6aa7ff" stroke-width="1.5"/>
+    <text x="95" y="65" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Brokers</text>
+    <text x="95" y="82" font-size="9" fill="var(--diagram-label)" text-anchor="middle">Kafka protocol</text>
+
+    <rect x="190" y="40" width="130" height="60" rx="10" fill="rgba(255, 179, 71, 0.12)" stroke="#ffb347" stroke-width="2"/>
+    <text x="255" y="65" font-size="11" font-weight="700" fill="#ffb347" text-anchor="middle">S3</text>
+    <text x="255" y="82" font-size="9" fill="var(--diagram-label)" text-anchor="middle">.kfs segments</text>
+
+    <rect x="350" y="40" width="130" height="60" rx="10" fill="rgba(74, 183, 241, 0.15)" stroke="#4ab7f1" stroke-width="1.5"/>
+    <text x="415" y="65" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">etcd</text>
+    <text x="415" y="82" font-size="9" fill="var(--diagram-label)" text-anchor="middle">metadata · offsets</text>
+
+    <!-- Broker to S3 arrow -->
+    <path d="M160,70 L185,70" stroke="#ffb347" stroke-width="1.5" fill="none" marker-end="url(#ap2)"/>
+
+    <!-- Row 2: Processor layer -->
+    <text x="30" y="138" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">PROCESSOR</text>
+
+    <rect x="130" y="150" width="260" height="70" rx="12" fill="rgba(52, 211, 153, 0.12)" stroke="#34d399" stroke-width="2"/>
+    <text x="260" y="175" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Iceberg Processor</text>
+    <text x="260" y="195" font-size="9" fill="var(--diagram-label)" text-anchor="middle">stateless pods · topic-scoped leases · HPA</text>
+
+    <!-- S3 to Processor arrow -->
+    <path d="M255,100 L255,145" stroke="#ffb347" stroke-width="2" fill="none" marker-end="url(#ap2)"/>
+    <text x="268" y="125" font-size="9" fill="#ffb347">read segments</text>
+
+    <!-- etcd to Processor arrow -->
+    <path d="M415,100 L415,130 L360,130 L360,145" stroke="#4ab7f1" stroke-width="1.5" fill="none" marker-end="url(#ap4)"/>
+    <text x="420" y="125" font-size="9" fill="#4ab7f1">offsets · leases</text>
+
+    <!-- Row 3: Output layer -->
+    <text x="30" y="258" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">OUTPUT</text>
+
+    <rect x="80" y="270" width="150" height="40" rx="10" fill="rgba(167, 139, 250, 0.15)" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="155" y="295" font-size="10" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Iceberg REST Catalog</text>
+
+    <rect x="260" y="270" width="130" height="40" rx="10" fill="rgba(255, 179, 71, 0.12)" stroke="#ffb347" stroke-width="1.5"/>
+    <text x="325" y="295" font-size="10" font-weight="600" fill="#ffb347" text-anchor="middle">S3 Warehouse</text>
+
+    <!-- Processor to Catalog arrow -->
+    <path d="M200,220 L155,265" stroke="#a78bfa" stroke-width="2" fill="none" marker-end="url(#ap5)"/>
+    <text x="145" y="245" font-size="9" fill="#a78bfa">metadata</text>
+
+    <!-- Processor to Warehouse arrow -->
+    <path d="M310,220 L325,265" stroke="#ffb347" stroke-width="2" fill="none" marker-end="url(#ap2)"/>
+    <text x="340" y="245" font-size="9" fill="#ffb347">parquet</text>
+
+    <!-- Consumers on right side -->
+    <text x="520" y="258" font-size="10" font-weight="600" fill="var(--diagram-label)" letter-spacing="0.5px">CONSUMERS</text>
+
+    <rect x="520" y="270" width="130" height="40" rx="10" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
+    <text x="585" y="290" font-size="9" fill="var(--diagram-text)" text-anchor="middle">Unity Catalog</text>
+    <text x="585" y="302" font-size="9" fill="var(--diagram-label)" text-anchor="middle">Spark · Trino · etc</text>
+
+    <!-- Catalog/Warehouse to Consumers -->
+    <path d="M390,290 L515,290" stroke="var(--diagram-stroke)" stroke-width="1.5" stroke-dasharray="4,2" fill="none" marker-end="url(#ap1)"/>
+    <text x="452" y="282" font-size="9" fill="var(--diagram-label)">query</text>
+
+    <!-- Caption -->
+    <text x="400" y="30" font-size="10" fill="var(--diagram-label)" text-anchor="middle" font-style="italic">
+      Processors bypass brokers entirely · State lives in etcd · Output to any Iceberg catalog
+    </text>
+  </svg>
+</div>
+
+The processor reads .kfs segments from S3, tracks progress in etcd, and writes Parquet files to an Iceberg warehouse. Any Iceberg-compatible catalog (Unity Catalog, Polaris, AWS Glue, etc.) can serve the tables to downstream consumers.
+
+For deployment and configuration, see the [Iceberg Processor](/processors/iceberg/) docs.
+
 ---
 
 ## Key design decisions

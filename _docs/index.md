@@ -11,6 +11,8 @@ nav_order: 1
 
 Everything you need to run, operate, and extend KafScale.
 
+KafScale keeps brokers stateless and moves processing into add-on services, so you can scale processors independently and keep broker fleets lean. See the [Iceberg Processor](/processors/iceberg/) for a concrete example.
+
 ## Get started
 
 - [Quickstart](/quickstart/)
@@ -34,6 +36,10 @@ Everything you need to run, operate, and extend KafScale.
 - [MCP Server](/mcp-server/)
 - [Storage format](/storage-format/)
 - [S3 health](/s3-health/)
+
+## Processors
+
+- [Iceberg Processor](/processors/iceberg/)
 
 ## Project
 

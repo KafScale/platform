@@ -377,6 +377,24 @@ a:visited {
   margin-top: 2rem;
 }
 
+.grid-3x2 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+
+@media (max-width: 900px) {
+  .grid-3x2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .grid-3x2 {
+    grid-template-columns: 1fr;
+  }
+}
+
 .card {
   padding: 1.4rem;
   border-radius: 16px;

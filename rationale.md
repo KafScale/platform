@@ -130,6 +130,97 @@ This model matches how modern infrastructure platforms already operate.
 
 ---
 
+## Why the storage format is open
+
+Most streaming platforms treat their storage format as an internal implementation detail. KafScale takes a different approach: the .kfs segment format is documented as part of the public specification.
+
+This is a deliberate architectural choice with specific consequences:
+
+- Any processor that understands the format can read directly from S3 without connecting to a broker
+- The streaming path and the analytical path can share the same data without competing for the same resources
+- Users can build custom processors without waiting for vendors to ship features
+- The format outlives any particular implementation
+
+When the storage format is open, the platform becomes a building block rather than a boundary.
+
+---
+
+## Why processors should bypass brokers
+
+Traditional Kafka architectures force all reads through brokers. Streaming consumers and batch analytics compete for the same resources. Backfills spike broker CPU. AI training jobs block production consumers.
+
+KafScale separates these concerns by design.
+
+Brokers handle the Kafka protocol: accepting writes from producers, serving reads to streaming consumers, managing consumer groups. Processors read completed segments directly from S3, bypassing brokers entirely.
+
+<div class="diagram">
+  <div class="diagram-label">Two read paths, one data source</div>
+  <svg viewBox="0 0 700 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Streaming vs analytical read paths">
+    <defs>
+      <marker id="ar-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#6aa7ff"/>
+      </marker>
+      <marker id="ar-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
+      </marker>
+    </defs>
+
+    <!-- S3 (center) -->
+    <rect x="270" y="55" width="160" height="50" rx="10" fill="rgba(255, 179, 71, 0.12)" stroke="#ffb347" stroke-width="2"/>
+    <text x="350" y="85" font-size="12" font-weight="600" fill="#ffb347" text-anchor="middle">S3 (.kfs segments)</text>
+
+    <!-- Streaming path (top) -->
+    <rect x="40" y="20" width="140" height="40" rx="8" fill="rgba(106, 167, 255, 0.2)" stroke="#6aa7ff" stroke-width="1.5"/>
+    <text x="110" y="45" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Brokers</text>
+
+    <rect x="520" y="20" width="140" height="40" rx="8" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
+    <text x="590" y="45" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Consumers</text>
+
+    <path d="M180,40 L265,70" stroke="#6aa7ff" stroke-width="2" fill="none" marker-end="url(#ar-blue)"/>
+    <path d="M430,70 L515,40" stroke="#6aa7ff" stroke-width="2" fill="none" marker-end="url(#ar-blue)"/>
+    <text x="350" y="28" font-size="10" font-weight="600" fill="#6aa7ff" text-anchor="middle">STREAMING</text>
+
+    <!-- Analytical path (bottom) -->
+    <rect x="40" y="100" width="140" height="40" rx="8" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1.5"/>
+    <text x="110" y="125" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Processors</text>
+
+    <rect x="520" y="100" width="140" height="40" rx="8" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
+    <text x="590" y="120" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Iceberg / Analytics</text>
+    <text x="590" y="132" font-size="9" fill="var(--diagram-label)" text-anchor="middle">AI agents</text>
+
+    <path d="M180,120 L265,95" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#ar-green)"/>
+    <path d="M430,95 L515,120" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#ar-green)"/>
+    <text x="350" y="148" font-size="10" font-weight="600" fill="#34d399" text-anchor="middle">ANALYTICAL</text>
+  </svg>
+</div>
+
+This separation has practical consequences:
+
+- Historical replays do not affect streaming latency
+- AI agents get complete context without degrading production workloads
+- Iceberg materialization scales independently from Kafka consumers
+- Processor development does not require broker changes
+
+The architecture enables use cases that broker-mediated systems cannot serve efficiently.
+
+---
+
+## Why AI agents need this architecture
+
+AI agents making decisions need context. That context comes from historical events: what happened, in what order, and why the current state exists.
+
+Traditional stream processing optimizes for latency. Milliseconds matter for fraud detection or trading systems. But AI agents reasoning over business context have different requirements. They need completeness. They need replay capability. They need to reconcile current state with historical actions.
+
+Storage-native streaming makes this practical:
+
+- The immutable log in S3 becomes the source of truth that agents query, replay, and reason over
+- Processors convert that log to tables that analytical tools understand
+- Agents get complete historical context without competing with streaming workloads for broker resources
+
+Two-second latency for analytical access is acceptable when the alternative is incomplete context or degraded streaming performance. AI agents do not need sub-millisecond reads. They need the full picture.
+
+---
+
 ## Why self-hosted control planes still matter
 
 Some systems that adopt stateless brokers rely on vendor-managed control planes for metadata and coordination. That can be a good tradeoff for teams that want a fully managed service.
@@ -168,6 +259,13 @@ KafScale focuses on the common case: durable message transport, replayability, p
 
 Stateless brokers backed by object storage are not a trend. They are a correction.
 
-Once durability moves out of the broker, the system can be simpler, cheaper to operate, and easier to scale. KafScale is built on that assumption, while preserving Kafka protocol compatibility and self-hosted operation.
+Once durability moves out of the broker, the system can be simpler, cheaper to operate, and easier to scale. When the storage format is open, processors can bypass brokers entirely, separating streaming and analytical workloads by design.
+
+KafScale is built on these assumptions, while preserving Kafka protocol compatibility and self-hosted operation.
 
 The architecture is inevitable. The design choices are deliberate.
+
+## Further reading
+
+- [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) explores the broader industry shift and why AI agents need this architecture.
+- [Data Processing Does Not Belong in the Message Broker](https://www.novatechflow.com/2025/12/data-processing-does-not-belong-in.html) explains why KafScale keeps processing separate from the broker layer.

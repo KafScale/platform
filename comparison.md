@@ -7,7 +7,7 @@ description: Compare KafScale with Kafka-compatible alternatives across architec
 
 <div class="comparison-hero">
   <h1>KafScale vs Kafka alternatives</h1>
-  <p>An honest comparison of Kafka-compatible streaming platforms. We highlight the architectural and licensing tradeoffs that matter most—including where KafScale isn't the right fit.</p>
+  <p>An honest comparison of Kafka-compatible streaming platforms. We highlight the architectural and licensing tradeoffs that matter most, including where KafScale isn't the right fit.</p>
 </div>
 
 ## License comparison
@@ -69,7 +69,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Transactions</span><span>No (by design)</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No (by design)</span></div>
     <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-success">Apache 2.0</span></div>
-    <div class="spec-row"><span class="spec-label">Best for</span><span>ETL, logs, async events, cost-sensitive</span></div>
+    <div class="spec-row"><span class="spec-label">Best for</span><span>ETL, logs, async events, AI agents</span></div>
   </section>
 
   <section class="product-card">
@@ -188,11 +188,56 @@ Licensing determines your long-term flexibility. This matters more than most ven
   </div>
 </div>
 
+## Storage format and direct access
+
+This is where KafScale differs architecturally from every alternative. Most platforms treat their storage format as an internal implementation detail. KafScale documents the .kfs segment format as part of the public specification, enabling processors to read directly from S3 without going through brokers.
+
+<div class="format-card">
+  <div class="format-row header">
+    <span>Platform</span>
+    <span>Segment format</span>
+    <span>Broker-bypass reads</span>
+  </div>
+  <div class="format-row" style="background: rgba(14, 165, 233, 0.08);">
+    <span><strong>KafScale</strong></span>
+    <span><span class="badge badge-success">.kfs (documented, open)</span></span>
+    <span><span class="badge badge-success">Yes</span></span>
+  </div>
+  <div class="format-row">
+    <span>Apache Kafka</span>
+    <span>Kafka log segments</span>
+    <span><span class="badge badge-danger">No</span></span>
+  </div>
+  <div class="format-row">
+    <span>Redpanda</span>
+    <span>Internal</span>
+    <span><span class="badge badge-danger">No</span></span>
+  </div>
+  <div class="format-row">
+    <span>WarpStream</span>
+    <span>Unknown (proprietary)</span>
+    <span><span class="badge badge-danger">No</span></span>
+  </div>
+  <div class="format-row">
+    <span>AutoMQ</span>
+    <span>Kafka log segments</span>
+    <span><span class="badge badge-danger">No</span></span>
+  </div>
+  <div class="format-row">
+    <span>Bufstream</span>
+    <span>Internal</span>
+    <span><span class="badge badge-danger">No</span></span>
+  </div>
+</div>
+
+**Why this matters:** With KafScale, analytical workloads (AI agents, batch processing, Iceberg materialization) read segments directly from S3. Brokers handle streaming traffic only. The two paths share data but never compete for the same resources. With other platforms, all reads go through brokers, meaning streaming and analytics contend for the same compute.
+
 ## When to use what
 
 | Use case | Recommended | Why |
 |----------|-------------|-----|
 | **ETL pipelines, logs, async events** | KafScale | ~400ms latency is fine, lowest cost, truly open |
+| **AI agents needing replay and context** | KafScale | Broker-bypass reads, immutable logs, open format |
 | **Low-latency trading, real-time** | Kafka, Redpanda, AutoMQ | Need <10ms latency |
 | **Kafka migration with S3 cost savings** | AutoMQ | Kafka-compatible, EBS WAL for low latency |
 | **Data lakehouse / Iceberg integration** | Bufstream | Native Iceberg, Protobuf validation |
@@ -340,6 +385,24 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
       <td>◐ EBS WAL</td>
       <td>✓</td>
     </tr>
+    <tr>
+      <td>Open segment format</td>
+      <td class="kafscale">✓ .kfs</td>
+      <td>✓</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✓</td>
+      <td>✗</td>
+    </tr>
+    <tr>
+      <td>Broker-bypass reads</td>
+      <td class="kafscale">✓</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✗</td>
+      <td>✗</td>
+    </tr>
     <tr class="section-row">
       <td colspan="7">Kubernetes</td>
     </tr>
@@ -365,13 +428,13 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
       <td colspan="7">Data &amp; Integrations</td>
     </tr>
     <tr>
-      <td>Native Iceberg</td>
-      <td class="kafscale">✗</td>
+      <td>Iceberg processor</td>
+      <td class="kafscale">✓ Addon</td>
       <td>✗</td>
-      <td>✗</td>
-      <td>✗</td>
+      <td>✓ Native</td>
+      <td>✓ Tableflow</td>
       <td>✓</td>
-      <td>✓</td>
+      <td>✓ Native</td>
     </tr>
     <tr>
       <td>Schema registry</td>
@@ -434,7 +497,6 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 - You need <100ms latency (use Kafka, Redpanda, or AutoMQ)
 - You need exactly-once transactions (use Kafka, AutoMQ, or Bufstream)
 - You need compacted topics for CDC (use Kafka, Redpanda, or AutoMQ)
-- You need native Iceberg integration (use Bufstream or AutoMQ)
 
 **KafScale IS for you if:**
 
@@ -442,10 +504,13 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 - You want the lowest possible cost
 - You want true Apache 2.0 open source with no restrictions
 - You want stateless brokers that scale with HPA
+- You want processors that bypass brokers (AI agents, analytics, Iceberg)
 - You want to avoid vendor lock-in and control plane dependencies
 
 ## Why we built KafScale
 
-The IBM acquisition of Confluent (and with it, WarpStream) in late 2025 highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
+The Confluent acquisition of WarpStream in late 2024 highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
 
-KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
+KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. The documented .kfs segment format means you can build processors that read directly from S3 without going through brokers. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
+
+For deeper analysis, see [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) and [Data Processing Does Not Belong in the Message Broker](https://www.novatechflow.com/2025/12/data-processing-does-not-belong-in.html).

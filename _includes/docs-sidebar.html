@@ -8,6 +8,26 @@
       {% endif %}
     {% endfor %}
 
+    {% assign processors = items | where: "nav_group", "Processors" %}
+    {% if processors.size > 0 %}
+      {% assign processors_current = false %}
+      {% for item in processors %}
+        {% if page.url == item.url %}
+          {% assign processors_current = true %}
+        {% endif %}
+      {% endfor %}
+      <details class="doc-sidebar-group" {% if processors_current %}open{% endif %}>
+        <summary class="doc-sidebar-group-title">Processors</summary>
+        <div class="doc-sidebar-group-links">
+          {% for item in processors %}
+            {% if item.nav_title %}
+            <a href="{{ item.url }}" {% if page.url == item.url %}aria-current="page"{% endif %}>{{ item.nav_title }}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
     {% assign refs = items | where: "nav_group", "References" %}
     {% if refs.size > 0 %}
       {% assign refs_current = false %}
