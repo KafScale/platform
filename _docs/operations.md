@@ -293,6 +293,13 @@ When the operator manages etcd, each pod runs restore init containers before etc
 2. Restore container runs `etcdctl snapshot restore` if data directory is empty
 3. If no snapshot is available, etcd starts fresh
 
+### Consumer Offsets After Restore
+
+Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:
+
+- Ensure consumers commit offsets (default for most Kafka clients).
+- Set `auto.offset.reset=earliest` as a safety net for new or uncommitted consumers.
+
 ### Snapshot alerts
 
 | Alert | Condition | Severity |
