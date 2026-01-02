@@ -40,6 +40,8 @@ MINIO_ROOT_PASSWORD ?= minioadmin
 MINIO_BUCKET ?= kafscale
 KAFSCALE_KIND_CLUSTER ?= kafscale-demo
 KAFSCALE_DEMO_NAMESPACE ?= kafscale-demo
+KAFSCALE_UI_USERNAME ?= kafscaleadmin
+KAFSCALE_UI_PASSWORD ?= kafscale
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
 
@@ -178,7 +180,7 @@ test-produce-consume: release-broker-ports ensure-minio ## Run produce/consume t
 	KAFSCALE_S3_PATH_STYLE=true \
 	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
-	go test -tags=e2e ./test/e2e -run 'TestFranzGoProduceConsume|TestKafkaCliProduce' -v
+	go test -tags=e2e ./test/e2e -run 'TestFranzGoProduceConsume|TestKafkaCliProduce|TestKafkaCliAdminTopics' -v
 
 test-produce-consume-debug: release-broker-ports ensure-minio ## Run produce/consume tests with broker trace logging enabled for debugging.
 	KAFSCALE_TRACE_KAFKA=true \
@@ -307,6 +309,8 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  --set operator.image.tag=$$OPERATOR_TAG \
 	  --set console.image.repository=$$CONSOLE_REPO \
 	  --set console.image.tag=$$CONSOLE_TAG \
+	  --set console.auth.username=$(KAFSCALE_UI_USERNAME) \
+	  --set console.auth.password=$(KAFSCALE_UI_PASSWORD) \
 	  --set operator.etcdEndpoints[0]=
 	@OPERATOR_DEPLOY=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployments -l app.kubernetes.io/component=operator -o jsonpath='{.items[0].metadata.name}'); \
 	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/$$OPERATOR_DEPLOY \

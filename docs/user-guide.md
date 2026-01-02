@@ -27,6 +27,10 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 - **Storage**: message segments live in S3 buckets; brokers only keep in-memory caches.
 - **Operator**: Kubernetes controller that provisions brokers, topics, and wiring based on CRDs.
 
+## Local Demo
+
+For a kind-based demo environment run `make demo-platform`. The Makefile applies the demo resources via `scripts/demo-platform-apply.sh`; if your environment blocks inline heredocs, ensure the script is executable and run the target again.
+
 ## Client Examples
 
 Use this section to copy/paste a minimal example for your client. If you do not control client config (managed apps, hosted integrations), ask the operator team to confirm idempotence/transactions are disabled for Kafscale.
@@ -155,7 +159,7 @@ The operator uses Kubernetes HPA and the BrokerControl gRPC API to safely drain 
 ## Limits / Non-Goals
 
 - No embedded stream processing features—pair Kafscale with Flink, Wayang, Spark, etc.
-- Transactions, idempotent producers, and log compaction are out of scope for the MVP.
+- Transactions, idempotent producers, and log compaction are out of scope for KafScale.
 
 For deployment and operations, read `docs/operations.md`.
 For deeper architectural details or development guidance, read `kafscale-spec.md` and `docs/development.md`.

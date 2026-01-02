@@ -39,7 +39,7 @@ func (h *testHandler) Handle(ctx context.Context, header *protocol.RequestHeader
 			Versions: []protocol.ApiVersion{
 				{APIKey: protocol.APIKeyApiVersion, MinVersion: 0, MaxVersion: 0},
 			},
-		})
+		}, header.APIVersion)
 	case *protocol.MetadataRequest:
 		return protocol.EncodeMetadataResponse(&protocol.MetadataResponse{
 			CorrelationID: header.CorrelationID,

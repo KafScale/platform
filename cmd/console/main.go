@@ -56,7 +56,19 @@ func envOrDefault(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
 	}
+	warnDefaultEnv(key, fallback)
 	return fallback
+}
+
+func warnDefaultEnv(key, fallback string) {
+	if !isProdEnv() {
+		return
+	}
+	log.Printf("using default for unset env %s=%s", key, fallback)
+}
+
+func isProdEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("KAFSCALE_ENV")), "prod")
 }
 
 func buildMetadataStore(ctx context.Context) (metadata.Store, error) {

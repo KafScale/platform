@@ -21,6 +21,7 @@ import "fmt"
 type ApiVersionsResponse struct {
 	CorrelationID int32
 	ErrorCode     int16
+	ThrottleMs    int32
 	Versions      []ApiVersion
 }
 
@@ -123,6 +124,7 @@ type CreateTopicResult struct {
 
 type CreateTopicsResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	Topics        []CreateTopicResult
 }
 
@@ -134,6 +136,7 @@ type DeleteTopicResult struct {
 
 type DeleteTopicsResponse struct {
 	CorrelationID int32
+	ThrottleMs    int32
 	Topics        []DeleteTopicResult
 }
 
@@ -366,15 +369,31 @@ type DeleteGroupsResponse struct {
 }
 
 // EncodeApiVersionsResponse renders bytes ready to send on the wire.
-func EncodeApiVersionsResponse(resp *ApiVersionsResponse) ([]byte, error) {
+func EncodeApiVersionsResponse(resp *ApiVersionsResponse, version int16) ([]byte, error) {
+	if version < 0 || version > 3 {
+		return nil, fmt.Errorf("api versions response version %d not supported", version)
+	}
 	w := newByteWriter(64)
 	w.Int32(resp.CorrelationID)
 	w.Int16(resp.ErrorCode)
-	w.Int32(int32(len(resp.Versions)))
+	if version >= 3 {
+		w.CompactArrayLen(len(resp.Versions))
+	} else {
+		w.Int32(int32(len(resp.Versions)))
+	}
 	for _, v := range resp.Versions {
 		w.Int16(v.APIKey)
 		w.Int16(v.MinVersion)
 		w.Int16(v.MaxVersion)
+		if version >= 3 {
+			w.WriteTaggedFields(0)
+		}
+	}
+	if version >= 1 {
+		w.Int32(resp.ThrottleMs)
+	}
+	if version >= 3 {
+		w.WriteTaggedFields(0)
 	}
 	return w.Bytes(), nil
 }
@@ -659,26 +678,39 @@ func EncodeFetchResponse(resp *FetchResponse, version int16) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-func EncodeCreateTopicsResponse(resp *CreateTopicsResponse) ([]byte, error) {
+func EncodeCreateTopicsResponse(resp *CreateTopicsResponse, version int16) ([]byte, error) {
+	if version < 0 || version > 2 {
+		return nil, fmt.Errorf("create topics response version %d not supported", version)
+	}
 	w := newByteWriter(128)
 	w.Int32(resp.CorrelationID)
+	if version >= 2 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int32(int32(len(resp.Topics)))
 	for _, topic := range resp.Topics {
 		w.String(topic.Name)
 		w.Int16(topic.ErrorCode)
-		w.String(topic.ErrorMessage)
+		if version >= 1 {
+			w.String(topic.ErrorMessage)
+		}
 	}
 	return w.Bytes(), nil
 }
 
-func EncodeDeleteTopicsResponse(resp *DeleteTopicsResponse) ([]byte, error) {
+func EncodeDeleteTopicsResponse(resp *DeleteTopicsResponse, version int16) ([]byte, error) {
+	if version < 0 || version > 2 {
+		return nil, fmt.Errorf("delete topics response version %d not supported", version)
+	}
 	w := newByteWriter(128)
 	w.Int32(resp.CorrelationID)
+	if version >= 1 {
+		w.Int32(resp.ThrottleMs)
+	}
 	w.Int32(int32(len(resp.Topics)))
 	for _, topic := range resp.Topics {
 		w.String(topic.Name)
 		w.Int16(topic.ErrorCode)
-		w.String(topic.ErrorMessage)
 	}
 	return w.Bytes(), nil
 }

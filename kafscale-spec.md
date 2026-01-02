@@ -188,7 +188,7 @@ Versions reflect what the broker advertises in ApiVersions today.
 |---------|------|---------|--------|-------|
 | 0 | Produce | 0-9 | ✅ Full | Core produce path |
 | 1 | Fetch | 11-13 | ✅ Full | Core consume path |
-| 2 | ListOffsets | 0 | ✅ Full | Required for consumers (v0 only) |
+| 2 | ListOffsets | 0-4 | ✅ Full | Required for consumers |
 | 3 | Metadata | 0-12 | ✅ Full | Topic/broker discovery |
 | 8 | OffsetCommit | 3 | ✅ Full | Consumer group tracking (v3 only) |
 | 9 | OffsetFetch | 5 | ✅ Full | Consumer group tracking (v5 only) |
@@ -200,9 +200,9 @@ Versions reflect what the broker advertises in ApiVersions today.
 | 15 | DescribeGroups | 5 | ✅ Full | Ops debugging - `kafka-consumer-groups.sh --describe` |
 | 16 | ListGroups | 5 | ✅ Full | Ops debugging - enumerate all consumer groups |
 | 23 | OffsetForLeaderEpoch | 3 | ✅ Full | Safe consumer recovery after broker failover |
-| 18 | ApiVersions | 0 | ✅ Full | Client capability negotiation (v0 only) |
-| 19 | CreateTopics | 0 | ✅ Full | Topic management (v0 only) |
-| 20 | DeleteTopics | 0 | ✅ Full | Topic management (v0 only) |
+| 18 | ApiVersions | 0-3 | ✅ Full | Client capability negotiation |
+| 19 | CreateTopics | 0-2 | ✅ Full | Topic management |
+| 20 | DeleteTopics | 0-2 | ✅ Full | Topic management |
 | 32 | DescribeConfigs | 4 | ✅ Full | Read topic/broker config |
 | 33 | AlterConfigs | 1 | ✅ Full | Runtime config changes (whitelist) |
 | 37 | CreatePartitions | 0-3 | ✅ Full | Scale partitions without topic recreation |

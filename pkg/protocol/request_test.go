@@ -40,6 +40,33 @@ func TestParseApiVersionsRequest(t *testing.T) {
 	}
 }
 
+func TestParseApiVersionsRequestV3(t *testing.T) {
+	w := newByteWriter(32)
+	w.Int16(APIKeyApiVersion)
+	w.Int16(3)
+	w.Int32(7)
+	w.NullableString(nil)
+	w.WriteTaggedFields(0)
+	w.CompactString("kgo")
+	w.CompactString("1.0.0")
+	w.WriteTaggedFields(0)
+
+	header, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	apiReq, ok := req.(*ApiVersionsRequest)
+	if !ok {
+		t.Fatalf("expected ApiVersionsRequest got %T", req)
+	}
+	if header.APIVersion != 3 {
+		t.Fatalf("unexpected api versions request version %d", header.APIVersion)
+	}
+	if apiReq.ClientSoftwareName != "kgo" || apiReq.ClientSoftwareVersion != "1.0.0" {
+		t.Fatalf("unexpected client info: %#v", apiReq)
+	}
+}
+
 func TestParseMetadataRequest(t *testing.T) {
 	w := newByteWriter(64)
 	w.Int16(APIKeyMetadata)
@@ -64,6 +91,151 @@ func TestParseMetadataRequest(t *testing.T) {
 	}
 	if header.ClientID == nil || *header.ClientID != "client-1" {
 		t.Fatalf("client id mismatch: %#v", header.ClientID)
+	}
+}
+
+func TestParseListOffsetsRequestV0(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyListOffsets)
+	w.Int16(0)
+	w.Int32(23)
+	w.NullableString(nil)
+	w.Int32(-1)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(1)
+	w.Int32(0)
+	w.Int64(-1)
+	w.Int32(1)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*ListOffsetsRequest)
+	if !ok {
+		t.Fatalf("expected ListOffsetsRequest got %T", req)
+	}
+	if parsed.ReplicaID != -1 || len(parsed.Topics) != 1 {
+		t.Fatalf("unexpected list offsets request: %#v", parsed)
+	}
+	part := parsed.Topics[0].Partitions[0]
+	if part.Partition != 0 || part.Timestamp != -1 || part.MaxNumOffsets != 1 {
+		t.Fatalf("unexpected list offsets partition: %#v", part)
+	}
+}
+
+func TestParseListOffsetsRequestV2(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyListOffsets)
+	w.Int16(2)
+	w.Int32(24)
+	w.NullableString(nil)
+	w.Int32(-1)
+	w.Int8(1)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(1)
+	w.Int32(0)
+	w.Int64(-2)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*ListOffsetsRequest)
+	if !ok {
+		t.Fatalf("expected ListOffsetsRequest got %T", req)
+	}
+	if parsed.ReplicaID != -1 || parsed.IsolationLevel != 1 {
+		t.Fatalf("unexpected list offsets request: %#v", parsed)
+	}
+	part := parsed.Topics[0].Partitions[0]
+	if part.Partition != 0 || part.Timestamp != -2 || part.MaxNumOffsets != 1 || part.CurrentLeaderEpoch != -1 {
+		t.Fatalf("unexpected list offsets partition: %#v", part)
+	}
+}
+
+func TestParseListOffsetsRequestV4(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyListOffsets)
+	w.Int16(4)
+	w.Int32(25)
+	w.NullableString(nil)
+	w.Int32(-1)
+	w.Int8(0)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(1)
+	w.Int32(0)
+	w.Int64(-1)
+	w.Int32(3)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*ListOffsetsRequest)
+	if !ok {
+		t.Fatalf("expected ListOffsetsRequest got %T", req)
+	}
+	part := parsed.Topics[0].Partitions[0]
+	if part.CurrentLeaderEpoch != 3 || part.Timestamp != -1 {
+		t.Fatalf("unexpected list offsets partition: %#v", part)
+	}
+}
+
+func TestParseCreateTopicsRequestV1(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyCreateTopics)
+	w.Int16(1)
+	w.Int32(11)
+	w.NullableString(nil)
+	w.Int32(1)
+	w.String("orders")
+	w.Int32(3)
+	w.Int16(1)
+	w.Int32(0)
+	w.Int32(15000)
+	w.Bool(true)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*CreateTopicsRequest)
+	if !ok {
+		t.Fatalf("expected CreateTopicsRequest got %T", req)
+	}
+	if parsed.TimeoutMs != 15000 || !parsed.ValidateOnly {
+		t.Fatalf("unexpected create topics request: %#v", parsed)
+	}
+	if len(parsed.Topics) != 1 || parsed.Topics[0].Name != "orders" {
+		t.Fatalf("unexpected create topics: %#v", parsed.Topics)
+	}
+}
+
+func TestParseDeleteTopicsRequestV1(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyDeleteTopics)
+	w.Int16(1)
+	w.Int32(12)
+	w.NullableString(nil)
+	w.Int32(2)
+	w.String("orders")
+	w.String("payments")
+	w.Int32(12000)
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*DeleteTopicsRequest)
+	if !ok {
+		t.Fatalf("expected DeleteTopicsRequest got %T", req)
+	}
+	if parsed.TimeoutMs != 12000 || len(parsed.TopicNames) != 2 {
+		t.Fatalf("unexpected delete topics request: %#v", parsed)
 	}
 }
 

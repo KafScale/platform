@@ -71,6 +71,7 @@ type handler struct {
 	logger               *slog.Logger
 	autoCreateTopics     bool
 	autoCreatePartitions int32
+	allowAdminAPIs       bool
 	traceKafka           bool
 	produceRate          *throughputTracker
 	fetchRate            *throughputTracker
@@ -88,8 +89,10 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	switch req.(type) {
 	case *protocol.ApiVersionsRequest:
 		errorCode := protocol.NONE
-		if header.APIVersion != 0 {
+		responseVersion := header.APIVersion
+		if responseVersion > 3 {
 			errorCode = protocol.UNSUPPORTED_VERSION
+			responseVersion = 0
 		}
 		resp := &protocol.ApiVersionsResponse{
 			CorrelationID: header.CorrelationID,
@@ -99,7 +102,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		if h.traceKafka {
 			h.logger.Debug("api versions response", "versions", resp.Versions)
 		}
-		return protocol.EncodeApiVersionsResponse(resp)
+		return protocol.EncodeApiVersionsResponse(resp, responseVersion)
 	case *protocol.MetadataRequest:
 		metaReq := req.(*protocol.MetadataRequest)
 		if h.traceKafka {
@@ -422,8 +425,42 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 }
 
 func (h *handler) handleCreateTopics(ctx context.Context, header *protocol.RequestHeader, req *protocol.CreateTopicsRequest) ([]byte, error) {
+	if header.APIVersion < 0 || header.APIVersion > 2 {
+		return nil, fmt.Errorf("create topics version %d not supported", header.APIVersion)
+	}
 	results := make([]protocol.CreateTopicResult, 0, len(req.Topics))
+	if !h.allowAdminAPIs {
+		for _, topic := range req.Topics {
+			results = append(results, protocol.CreateTopicResult{
+				Name:         topic.Name,
+				ErrorCode:    protocol.TOPIC_AUTHORIZATION_FAILED,
+				ErrorMessage: "admin APIs disabled",
+			})
+		}
+		return protocol.EncodeCreateTopicsResponse(&protocol.CreateTopicsResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			Topics:        results,
+		}, header.APIVersion)
+	}
 	for _, topic := range req.Topics {
+		if req.ValidateOnly {
+			err := h.validateCreateTopic(ctx, topic)
+			result := protocol.CreateTopicResult{Name: topic.Name}
+			if err != nil {
+				switch {
+				case errors.Is(err, metadata.ErrTopicExists):
+					result.ErrorCode = protocol.TOPIC_ALREADY_EXISTS
+				case errors.Is(err, metadata.ErrInvalidTopic):
+					result.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				default:
+					result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				}
+				result.ErrorMessage = err.Error()
+			}
+			results = append(results, result)
+			continue
+		}
 		_, err := h.store.CreateTopic(ctx, metadata.TopicSpec{
 			Name:              topic.Name,
 			NumPartitions:     topic.NumPartitions,
@@ -445,12 +482,30 @@ func (h *handler) handleCreateTopics(ctx context.Context, header *protocol.Reque
 	}
 	return protocol.EncodeCreateTopicsResponse(&protocol.CreateTopicsResponse{
 		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
 		Topics:        results,
-	})
+	}, header.APIVersion)
 }
 
 func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.RequestHeader, req *protocol.DeleteTopicsRequest) ([]byte, error) {
+	if header.APIVersion < 0 || header.APIVersion > 2 {
+		return nil, fmt.Errorf("delete topics version %d not supported", header.APIVersion)
+	}
 	results := make([]protocol.DeleteTopicResult, 0, len(req.TopicNames))
+	if !h.allowAdminAPIs {
+		for _, name := range req.TopicNames {
+			results = append(results, protocol.DeleteTopicResult{
+				Name:         name,
+				ErrorCode:    protocol.TOPIC_AUTHORIZATION_FAILED,
+				ErrorMessage: "admin APIs disabled",
+			})
+		}
+		return protocol.EncodeDeleteTopicsResponse(&protocol.DeleteTopicsResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			Topics:        results,
+		}, header.APIVersion)
+	}
 	for _, name := range req.TopicNames {
 		result := protocol.DeleteTopicResult{Name: name}
 		if err := h.store.DeleteTopic(ctx, name); err != nil {
@@ -466,8 +521,32 @@ func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.Reque
 	}
 	return protocol.EncodeDeleteTopicsResponse(&protocol.DeleteTopicsResponse{
 		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
 		Topics:        results,
-	})
+	}, header.APIVersion)
+}
+
+func (h *handler) validateCreateTopic(ctx context.Context, topic protocol.CreateTopicConfig) error {
+	if topic.Name == "" || topic.NumPartitions <= 0 {
+		return metadata.ErrInvalidTopic
+	}
+	replicationFactor := topic.ReplicationFactor
+	if replicationFactor <= 0 {
+		replicationFactor = 1
+	}
+	meta, err := h.store.Metadata(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for _, existing := range meta.Topics {
+		if existing.Name == topic.Name {
+			return metadata.ErrTopicExists
+		}
+	}
+	if int(replicationFactor) > len(meta.Brokers) {
+		return metadata.ErrInvalidTopic
+	}
+	return nil
 }
 
 const (
@@ -843,6 +922,9 @@ func parseConfigInt64(value string) (int64, error) {
 }
 
 func (h *handler) handleListOffsets(ctx context.Context, header *protocol.RequestHeader, req *protocol.ListOffsetsRequest) ([]byte, error) {
+	if header.APIVersion < 0 || header.APIVersion > 4 {
+		return nil, fmt.Errorf("list offsets version %d not supported", header.APIVersion)
+	}
 	topicResponses := make([]protocol.ListOffsetsTopicResponse, 0, len(req.Topics))
 	for _, topic := range req.Topics {
 		partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
@@ -1140,6 +1222,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	}
 	autoCreate := parseEnvBool("KAFSCALE_AUTO_CREATE_TOPICS", true)
 	autoPartitions := parseEnvInt32("KAFSCALE_AUTO_CREATE_PARTITIONS", 1)
+	allowAdminAPIs := parseEnvBool("KAFSCALE_ALLOW_ADMIN_APIS", true)
 	traceKafka := parseEnvBool("KAFSCALE_TRACE_KAFKA", false)
 	throughputWindow := time.Duration(parseEnvInt("KAFSCALE_THROUGHPUT_WINDOW_SEC", 60)) * time.Second
 	s3Namespace := envOrDefault("KAFSCALE_S3_NAMESPACE", "default")
@@ -1173,6 +1256,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		logger:               logger.With("component", "handler"),
 		autoCreateTopics:     autoCreate,
 		autoCreatePartitions: autoPartitions,
+		allowAdminAPIs:       allowAdminAPIs,
 		traceKafka:           traceKafka,
 		produceRate:          newThroughputTracker(throughputWindow),
 		fetchRate:            newThroughputTracker(throughputWindow),
@@ -1550,7 +1634,10 @@ func parseEnvInt(name string, fallback int) int {
 		if parsed, err := strconv.Atoi(val); err == nil {
 			return parsed
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%d", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%d", fallback))
 	return fallback
 }
 
@@ -1559,7 +1646,10 @@ func parseEnvInt32(name string, fallback int32) int32 {
 		if parsed, err := strconv.ParseInt(val, 10, 32); err == nil {
 			return int32(parsed)
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%d", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%d", fallback))
 	return fallback
 }
 
@@ -1576,6 +1666,7 @@ func envOrDefault(name, fallback string) string {
 	if val := strings.TrimSpace(os.Getenv(name)); val != "" {
 		return val
 	}
+	warnDefaultEnv(name, "", fallback)
 	return fallback
 }
 
@@ -1584,7 +1675,10 @@ func parseEnvFloat(name string, fallback float64) float64 {
 		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
 			return parsed
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%g", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%g", fallback))
 	return fallback
 }
 
@@ -1596,8 +1690,26 @@ func parseEnvBool(name string, fallback bool) bool {
 		case "0", "false", "no", "off":
 			return false
 		}
+		warnDefaultEnv(name, val, fmt.Sprintf("%t", fallback))
+		return fallback
 	}
+	warnDefaultEnv(name, "", fmt.Sprintf("%t", fallback))
 	return fallback
+}
+
+func warnDefaultEnv(name, value, fallback string) {
+	if !isProdEnv() {
+		return
+	}
+	if value == "" {
+		slog.Warn("using default for unset env", "env", name, "default", fallback)
+		return
+	}
+	slog.Warn("using default for invalid env", "env", name, "value", value, "default", fallback)
+}
+
+func isProdEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("KAFSCALE_ENV")), "prod")
 }
 
 type apiVersionSupport struct {
@@ -1607,12 +1719,12 @@ type apiVersionSupport struct {
 
 func generateApiVersions() []protocol.ApiVersion {
 	supported := []apiVersionSupport{
-		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 0},
+		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 3},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
 		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},
 		{key: protocol.APIKeyFindCoordinator, minVersion: 3, maxVersion: 3},
-		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 0},
+		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 4},
 		{key: protocol.APIKeyJoinGroup, minVersion: 4, maxVersion: 4},
 		{key: protocol.APIKeySyncGroup, minVersion: 4, maxVersion: 4},
 		{key: protocol.APIKeyHeartbeat, minVersion: 4, maxVersion: 4},
@@ -1625,8 +1737,8 @@ func generateApiVersions() []protocol.ApiVersion {
 		{key: protocol.APIKeyDescribeConfigs, minVersion: 4, maxVersion: 4},
 		{key: protocol.APIKeyAlterConfigs, minVersion: 1, maxVersion: 1},
 		{key: protocol.APIKeyCreatePartitions, minVersion: 0, maxVersion: 3},
-		{key: protocol.APIKeyCreateTopics, minVersion: 0, maxVersion: 0},
-		{key: protocol.APIKeyDeleteTopics, minVersion: 0, maxVersion: 0},
+		{key: protocol.APIKeyCreateTopics, minVersion: 0, maxVersion: 2},
+		{key: protocol.APIKeyDeleteTopics, minVersion: 0, maxVersion: 2},
 		{key: protocol.APIKeyDeleteGroups, minVersion: 0, maxVersion: 2},
 	}
 	unsupported := []int16{

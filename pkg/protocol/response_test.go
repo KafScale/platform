@@ -27,14 +27,14 @@ func strPtr(s string) *string {
 	return &s
 }
 
-func TestEncodeApiVersionsResponse(t *testing.T) {
+func TestEncodeApiVersionsResponseV0(t *testing.T) {
 	payload, err := EncodeApiVersionsResponse(&ApiVersionsResponse{
 		CorrelationID: 99,
 		ErrorCode:     0,
 		Versions: []ApiVersion{
 			{APIKey: APIKeyMetadata, MinVersion: 0, MaxVersion: 1},
 		},
-	})
+	}, 0)
 	if err != nil {
 		t.Fatalf("EncodeApiVersionsResponse: %v", err)
 	}
@@ -42,6 +42,34 @@ func TestEncodeApiVersionsResponse(t *testing.T) {
 	corr, _ := reader.Int32()
 	if corr != 99 {
 		t.Fatalf("unexpected correlation id %d", corr)
+	}
+}
+
+func TestEncodeApiVersionsResponseV3(t *testing.T) {
+	resp := &ApiVersionsResponse{
+		CorrelationID: 101,
+		ErrorCode:     0,
+		Versions: []ApiVersion{
+			{APIKey: APIKeyMetadata, MinVersion: 0, MaxVersion: 12},
+		},
+	}
+	payload, err := EncodeApiVersionsResponse(resp, 3)
+	if err != nil {
+		t.Fatalf("EncodeApiVersionsResponse: %v", err)
+	}
+	reader := newByteReader(payload)
+	corr, _ := reader.Int32()
+	if corr != 101 {
+		t.Fatalf("unexpected correlation id %d", corr)
+	}
+	body := payload[4:]
+	kmsgResp := kmsg.NewPtrApiVersionsResponse()
+	kmsgResp.Version = 3
+	if err := kmsgResp.ReadFrom(body); err != nil {
+		t.Fatalf("decode api versions response: %v", err)
+	}
+	if len(kmsgResp.ApiKeys) != 1 || kmsgResp.ApiKeys[0].ApiKey != APIKeyMetadata {
+		t.Fatalf("unexpected api versions response: %#v", kmsgResp.ApiKeys)
 	}
 }
 
@@ -78,6 +106,52 @@ func TestEncodeMetadataResponse(t *testing.T) {
 	corr, _ := reader.Int32()
 	if corr != 5 {
 		t.Fatalf("unexpected correlation id %d", corr)
+	}
+}
+
+func TestEncodeCreateTopicsResponseV2(t *testing.T) {
+	resp := &CreateTopicsResponse{
+		CorrelationID: 31,
+		ThrottleMs:    0,
+		Topics: []CreateTopicResult{
+			{Name: "orders", ErrorCode: NONE},
+		},
+	}
+	payload, err := EncodeCreateTopicsResponse(resp, 2)
+	if err != nil {
+		t.Fatalf("EncodeCreateTopicsResponse: %v", err)
+	}
+	body := payload[4:]
+	kmsgResp := kmsg.NewPtrCreateTopicsResponse()
+	kmsgResp.Version = 2
+	if err := kmsgResp.ReadFrom(body); err != nil {
+		t.Fatalf("decode create topics response: %v", err)
+	}
+	if len(kmsgResp.Topics) != 1 || kmsgResp.Topics[0].Topic != "orders" {
+		t.Fatalf("unexpected create topics response: %#v", kmsgResp.Topics)
+	}
+}
+
+func TestEncodeDeleteTopicsResponseV1(t *testing.T) {
+	resp := &DeleteTopicsResponse{
+		CorrelationID: 41,
+		ThrottleMs:    0,
+		Topics: []DeleteTopicResult{
+			{Name: "orders", ErrorCode: NONE},
+		},
+	}
+	payload, err := EncodeDeleteTopicsResponse(resp, 1)
+	if err != nil {
+		t.Fatalf("EncodeDeleteTopicsResponse: %v", err)
+	}
+	body := payload[4:]
+	kmsgResp := kmsg.NewPtrDeleteTopicsResponse()
+	kmsgResp.Version = 1
+	if err := kmsgResp.ReadFrom(body); err != nil {
+		t.Fatalf("decode delete topics response: %v", err)
+	}
+	if len(kmsgResp.Topics) != 1 || kmsgResp.Topics[0].Topic == nil || *kmsgResp.Topics[0].Topic != "orders" {
+		t.Fatalf("unexpected delete topics response: %#v", kmsgResp.Topics)
 	}
 }
 

@@ -148,7 +148,6 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		{Name: "KAFSCALE_ETCD_ENDPOINTS", Value: strings.Join(endpoints, ",")},
 		{Name: "KAFSCALE_BROKER_HOST", Value: brokerHost},
 		{Name: "KAFSCALE_BROKER_PORT", Value: fmt.Sprintf("%d", brokerPort)},
-		{Name: "KAFSCALE_BROKER_ADDR", Value: ":9092"},
 		{Name: "KAFSCALE_METRICS_ADDR", Value: ":9093"},
 	}
 	if strings.TrimSpace(cluster.Spec.S3.Endpoint) != "" {

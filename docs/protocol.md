@@ -25,7 +25,7 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 |---------|------|---------|-------|
 | 0 | Produce | 0-9 | Core produce path |
 | 1 | Fetch | 11-13 | Core consume path |
-| 2 | ListOffsets | 0 | Required for consumers (v0 only) |
+| 2 | ListOffsets | 0-4 | Required for consumers |
 | 3 | Metadata | 0-12 | Topic/broker discovery |
 | 8 | OffsetCommit | 3 | Consumer group tracking (v3 only) |
 | 9 | OffsetFetch | 5 | Consumer group tracking (v5 only) |
@@ -37,9 +37,9 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | 15 | DescribeGroups | 5 | Ops visibility |
 | 16 | ListGroups | 5 | Ops visibility |
 | 23 | OffsetForLeaderEpoch | 3 | Safe consumer recovery |
-| 18 | ApiVersions | 0 | Client capability negotiation (v0 only) |
-| 19 | CreateTopics | 0 | Topic management (v0 only) |
-| 20 | DeleteTopics | 0 | Topic management (v0 only) |
+| 18 | ApiVersions | 0-3 | Client capability negotiation |
+| 19 | CreateTopics | 0-2 | Topic management |
+| 20 | DeleteTopics | 0-2 | Topic management |
 | 32 | DescribeConfigs | 4 | Read topic/broker config |
 | 33 | AlterConfigs | 1 | Runtime config changes (whitelist) |
 | 37 | CreatePartitions | 0-3 | Scale partitions |
