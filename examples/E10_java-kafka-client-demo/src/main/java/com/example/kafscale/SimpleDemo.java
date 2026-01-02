@@ -43,7 +43,7 @@ import java.util.concurrent.TimeoutException;
 public class SimpleDemo {
     private static final Logger logger = LoggerFactory.getLogger(SimpleDemo.class);
     private static final String TOPIC_NAME = "demo-topic-1";
-    private static final String BOOTSTRAP_SERVERS = "127.0.0.1:39092";
+    private static final String BOOTSTRAP_SERVERS = "127.0.0.1:9092";
 
     public static void main(String[] args) {
 

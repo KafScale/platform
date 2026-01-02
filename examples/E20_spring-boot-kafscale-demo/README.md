@@ -14,17 +14,17 @@ This is a complete Spring Boot application demonstrating how to use KafScale as 
 
 - Java 17+
 - Maven 3.6+
-- KafScale running locally (see [Quick Start Guide](../../02-quick-start.md))
+- KafScale running locally (see [Quick Start Guide](../../examples/101_kafscale-dev-guide/02-quick-start.md))
 
 ## Running the Application
 
 ### 1. Ensure KafScale is Running
 
-Make sure you have KafScale running with Docker Compose:
+Make sure you have KafScale running with the Makefile demo:
 
 ```bash
-cd ../
-docker-compose up -d
+cd ../..
+make demo-guide-pf
 ```
 
 ### 2. Build the Application
@@ -39,13 +39,18 @@ You can run the application with different profiles depending on your environmen
 
 #### Local Development (Default)
 
-Connects to `localhost:39092` (Port-forwarded broker).
+Profile for local app development with a local broker. Choose one of these two options:
+
+- **Pure local (no containers)**: run a local broker + storage without containers, then use `localhost:39092`.
+- **Local demo (MinIO helper container)**: run `make demo` and use `localhost:39092`.
 
 ```bash
 mvn spring-boot:run
 ```
 
 #### Kubernetes Cluster
+
+Profile for in-cluster deployments where the app and KafScale live in the same Kubernetes namespace. Uses the internal service name.
 
 Connects to `kafscale-broker:9092` (Internal service). Use this when deploying the app as a Pod.
 
@@ -54,6 +59,8 @@ mvn spring-boot:run -Dspring-boot.run.profiles=cluster
 ```
 
 #### Local Load Balancer
+
+Profile for running the app locally while connecting to a remote KafScale cluster via a single exposed listener (for example, a port-forwarded LB or gateway).
 
 Connects to `localhost:59092` (Nginx LB).
 
@@ -107,9 +114,11 @@ The application uses Spring Profiles to switch between environments. See `src/ma
 
 | Profile | Description | Bootstrap Servers |
 |---------|-------------|-------------------|
-| `default` | Local development with port-forwarding | `localhost:39092` |
-| `cluster` | Running inside Kubernetes | `kafscale-broker:9092` |
-| `local-lb`| Local development via LoadBalancer | `localhost:59092` |
+| `default` | Local app + local broker (loopback) | `localhost:39092` |
+| `cluster` | App and KafScale in the same cluster | `kafscale-broker:9092` |
+| `local-lb`| Local app + remote cluster via single exposed listener | `localhost:59092` |
+
+**Listener note:** The demo currently exposes a single listener. That means you pick one network context at a time: in-cluster DNS (`cluster`) or external access (`default`/`local-lb`).
 
 ### Key Settings
 - **Topic**: `orders-springboot`

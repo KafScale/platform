@@ -5,9 +5,10 @@
 ## Getting Started
 
 * [What is KafScale?](01-introduction.md)
-* [Quick Start with Docker](02-quick-start.md)
+* [Quick Start: Local Demo + E10](02-quick-start.md)
 * [Spring Boot Configuration](03-spring-boot-configuration.md)
 * [Running Your Application](04-running-your-app.md)
+* [Flink Word Count Demo](07-flink-wordcount-demo.md)
 
 ## Reference
 

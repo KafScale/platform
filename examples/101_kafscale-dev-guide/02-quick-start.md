@@ -1,14 +1,15 @@
-# Quick Start with Docker
+# Quick Start: Local Demo + E10
 
-This section will guide you through setting up the KafScale infrastructure locally using Docker Compose. This covers the **Operations (OPS)** aspect of getting the cluster running.
+This section guides you through the local demo using `make demo`. It runs the broker and console as local Go processes and uses a small MinIO helper container for S3-compatible storage. No Docker Compose is used.
 
 ## Overview
 
-We'll set up a complete KafScale stack:
+We'll run a complete KafScale demo stack:
 
-- **etcd**: Metadata storage
-- **MinIO**: S3-compatible object storage
-- **KafScale Broker**: The stateless broker
+- **Embedded etcd**: Metadata storage (started by the demo)
+- **MinIO**: S3-compatible object storage (helper container)
+- **KafScale Broker**: Stateless broker (local process)
+- **KafScale Console**: UI for inspecting the cluster
 
 ## Step 1: Clone the Repository
 
@@ -17,51 +18,70 @@ git clone https://github.com/novatechflow/kafscale.git
 cd kafscale
 ```
 
-## Step 2: Build and Run (The Easy Way)
+## Step 2: Build and Run the Local Demo
 
 We provide a `Makefile` to automate building docker images and starting the cluster.
 
-### Option A: Complete Demo (Build + Run)
-
-This command builds the local developer images and starts the cluster:
+This command starts the local demo:
 
 ```bash
 make demo
 ```
 
-> **Note:** The first build may take a few minutes as it compiles Go code and builds Docker images.
+> **Note:** The demo starts local Go processes and a MinIO helper container. The first run may take a few minutes.
 
 ### System Check
 
-Once running, you should see logs streaming. You can verify the components in a separate terminal:
+Once running, you should see logs streaming. You can verify the MinIO helper container in a separate terminal:
 
 ```bash
 docker ps
 ```
 
 You should see:
-- `kafscale-broker` (Port 9092, 9093)
-- `kafscale-etcd` (Port 2379)
 - `kafscale-minio` (Port 9000, 9001)
 
-## Step 3: Managing the Cluster
+## Step 3: Run the E10 Java Client Demo
 
-### Stopping the Cluster
-Press `Ctrl+C` in the terminal running `make demo` to stop and clean up environment.
+In another terminal:
+
+```bash
+cd examples/E10_java-kafka-client-demo
+mvn clean package exec:java
+```
+
+What it does:
+- Connects to `localhost:39092`
+- Creates a topic `demo-topic-1`
+- Produces 25 messages
+- Consumes 5 messages
+- Prints cluster metadata
+
+## Step 4: Managing the Demo
+
+### Stopping the Demo Cleanly
+Press `Ctrl+C` in the terminal running `make demo` to stop the local broker and console. Wait for the test process to exit before starting another demo.
+
+If you see ports still in use (39092/39093/39094), run:
+```bash
+make stop-containers
+```
+This stops the MinIO helper and frees broker ports.
 
 ### Accessing Interfaces
 
+- **KafScale Console**: [http://localhost:48080/ui](http://localhost:48080/ui)
 - **MinIO Console**: [http://localhost:9001](http://localhost:9001) (User/Pass: `minioadmin`)
-- **Prometheus Metrics**: [http://localhost:9093/metrics](http://localhost:9093/metrics)
+- **Prometheus Metrics**: [http://localhost:39093/metrics](http://localhost:39093/metrics)
 
 ## Troubleshooting
 
 If `make demo` fails, check:
-1.  **Ports**: Ensure ports `9092`, `8080`, `2379`, `9000` are free.
-2.  **Docker Resource**: Ensure Docker Desktop has enough memory (recommended: 4GB+).
+1.  **Ports**: Ensure ports `39092`, `39093`, `39094`, `48080`, `9000` are free.
+2.  **Docker Resource**: Ensure Docker has enough memory for the MinIO helper (recommended: 2GB+).
 
 ## Next Steps
 
-Now that the **Infrastructure** is ready, let's run a **Developer** application to interact with it.
+Next, we'll run the platform demo on kind and use the Spring Boot demo app (E20).
 
 **Next**: [Running Your Application](04-running-your-app.md) →

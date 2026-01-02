@@ -4,7 +4,7 @@ Congratulations! 🎉 You've successfully set up KafScale locally and connected 
 
 ## Moving to Production
 
-The Docker Compose setup is great for development and testing, but for production deployments, you'll want to use Kubernetes.
+The local and kind demos are great for development and testing, but for production deployments, you'll want to use Kubernetes.
 
 ### Kubernetes Deployment
 
@@ -55,7 +55,7 @@ See [Operations Guide](../operations.md) for detailed production setup.
 
 ### Metrics
 
-KafScale exposes Prometheus metrics on port 9093:
+KafScale exposes Prometheus metrics on port 9093 (platform demo) or 39093 (local demo):
 
 ```bash
 curl http://localhost:9093/metrics

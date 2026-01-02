@@ -1,0 +1,101 @@
+# Flink Word Count Demo (E30)
+
+This section adds a Flink-based word count job that consumes from KafScale and keeps separate counts for headers, keys, and values. It also tracks `no-key`, `no-header`, and `no-value` stats.
+
+## Step 1: Run locally (make demo)
+
+Start the local demo:
+
+```bash
+make demo
+```
+
+Run the Flink job (builds the jar with Java 11 and submits via Docker Flink):
+
+```bash
+cd examples/E30_flink-kafscale-demo
+make up
+make status
+make submit
+```
+
+If your KafScale broker is local (from `make demo`), submit with:
+
+```bash
+make submit-local
+```
+
+### One-command local flow
+
+```bash
+./scripts/run-docker-local.sh
+```
+
+Set `KEEP_DEMO=1` to keep the local demo running.
+Set `FLINK_JOB_ONLY=1` to skip `make demo` and only submit to Flink.
+Set `BUILD_JAR=1` to rebuild the jar layer when needed.
+
+By default it listens on `demo-topic-1` via `localhost:39092`.
+
+## Step 2: Run inside the kind cluster
+
+Build and load the container:
+
+```bash
+cd examples/E30_flink-kafscale-demo
+docker build -t ghcr.io/novatechflow/kafscale-flink-demo:dev .
+kind load docker-image ghcr.io/novatechflow/kafscale-flink-demo:dev --name kafscale-demo
+```
+
+Deploy into the cluster:
+
+```bash
+kubectl apply -f deploy/demo/flink-wordcount-app.yaml
+```
+
+Follow logs:
+
+```bash
+kubectl -n kafscale-demo logs deployment/flink-wordcount-app -f
+```
+
+Clean up:
+
+```bash
+kubectl -n kafscale-demo delete deployment flink-wordcount-app
+```
+
+### One-command k8s flow
+
+```bash
+./scripts/run-k8s-stack.sh
+```
+
+Skip the image build and reuse an existing image:
+
+```bash
+SKIP_BUILD=1 ./scripts/run-k8s-stack.sh
+```
+
+## Profiles and listener note
+
+The Flink job uses the same three profiles as the Spring Boot app:
+
+- `default`: local broker on `localhost:39092`
+- `cluster`: in-cluster broker at `kafscale-broker:9092`
+- `local-lb`: local app + remote broker via `localhost:59092`
+
+Set the profile with `KAFSCALE_PROFILE` or `--profile=...`.
+
+> **Note:** The demo exposes only a single listener, so pick one network context at a time.
+
+## Output format
+
+You will see running counts like:
+
+```
+header | authorization => 5
+key | order => 12
+value | widget => 9
+stats | no-key => 3
+```

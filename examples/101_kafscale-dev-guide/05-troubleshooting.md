@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This section covers common issues you might encounter when using KafScale.
+This section covers common issues you might encounter when using the local demo or the platform demo.
 
 ## Connection Issues
 
@@ -13,24 +13,22 @@ org.apache.kafka.common.errors.TimeoutException: Failed to update metadata after
 
 **Possible Causes**:
 1. KafScale broker is not running.
-2. Wrong bootstrap server address (should be `localhost:39092` for local clients).
+2. Wrong bootstrap server address (should be `localhost:39092` for local and platform demos).
 3. Port 39092 is not accessible.
 
 **Solutions**:
 
-1. **Check if broker is running**:
-```bash
-docker ps | grep kafscale-broker
-```
-
-2. **Check broker logs**:
-```bash
-docker logs kafscale-broker
-```
-
-3. **Verify port is listening**:
+1. **Verify port is listening**:
 ```bash
 lsof -i :39092
+```
+
+2. **Local demo logs**: Check the terminal running `make demo`.
+
+3. **Platform demo logs**:
+```bash
+kubectl -n kafscale-demo get pods
+kubectl -n kafscale-demo logs deployment/kafscale-broker
 ```
 
 4. **Test connection**:
@@ -40,18 +38,12 @@ telnet localhost 39092
 
 ### Problem: Broker starts but immediately crashes
 
-**Check Dependencies**:
+**Local demo**: Check the terminal output from `make demo`.
 
-1. **Verify etcd is healthy**:
+**Platform demo**:
 ```bash
-docker logs kafscale-etcd
-curl http://localhost:2379/health
-```
-
-2. **Verify MinIO is healthy**:
-```bash
-docker logs kafscale-minio
-curl http://localhost:9000/minio/health/live
+kubectl -n kafscale-demo logs deployment/kafscale-broker
+kubectl -n kafscale-demo logs deployment/kafscale-operator
 ```
 
 ## Topic Issues
@@ -155,12 +147,6 @@ kafka-consumer-groups --bootstrap-server localhost:39092 --list
 ```properties
 logging.level.org.springframework.kafka=DEBUG
 logging.level.org.apache.kafka=DEBUG
-```
-
-### Check etcd Data
-
-```bash
-docker exec kafscale-etcd etcdctl get "" --prefix --keys-only
 ```
 
 ### Inspect MinIO Bucket

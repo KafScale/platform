@@ -386,6 +386,24 @@ demo: release-broker-ports ensure-minio ## Launch the broker + console demo stac
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
 	go test -count=1 -tags=e2e ./test/e2e -run TestDemoStack -v
 
+demo-bridge: release-broker-ports ensure-minio ## Launch the broker + console demo stack and open the UI (Ctrl-C to stop) + expose host for docker.
+	KAFSCALE_E2E=1 \
+	KAFSCALE_E2E_DEMO=1 \
+	KAFSCALE_E2E_OPEN_UI=1 \
+	KAFSCALE_UI_USERNAME=kafscaleadmin \
+	KAFSCALE_UI_PASSWORD=kafscale \
+	KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics \
+	KAFSCALE_S3_BUCKET=$(MINIO_BUCKET) \
+	KAFSCALE_S3_REGION=$(MINIO_REGION) \
+	KAFSCALE_S3_NAMESPACE=default \
+	KAFSCALE_S3_ENDPOINT=http://127.0.0.1:$(MINIO_PORT) \
+	KAFSCALE_S3_PATH_STYLE=true \
+	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
+	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
+	KAFSCALE_BROKERS_ADVERTISED_HOST=host.docker.internal \
+	KAFSCALE_BROKERS_ADVERTISED_PORT=39092 \
+	go test -count=1 -tags=e2e ./test/e2e -run TestDemoStack -v
+
 demo-guide-pf: docker-build ## Launch a full platform demo on kind.
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
@@ -453,6 +471,7 @@ demo-guide-pf: docker-build ## Launch a full platform demo on kind.
 		echo "Exposing Console at http://localhost:8080/ui"; \
 		nohup kubectl -n kafscale-demo port-forward svc/$$console_svc 8080:80 >/tmp/kafscale-demo-console.log 2>&1 & \
 		kubectl apply -f deploy/demo/spring-boot-app.yaml; \
+		kubectl apply -f deploy/demo/flink-wordcount-app.yaml; \
 		kubectl -n kafscale-demo wait --for=condition=available deployment/spring-demo-app --timeout=120s; \
 		nohup kubectl -n kafscale-demo port-forward svc/spring-demo-app 8083:8083 >/tmp/kafscale-demo-spring.log 2>&1 & \
 		nohup kubectl -n kafscale-demo port-forward svc/kafscale-broker 9093:9093 >/tmp/kafscale-demo-metrics.log 2>&1 & \

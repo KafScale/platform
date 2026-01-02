@@ -17,7 +17,7 @@ The good news: **KafScale is Kafka-compatible**, so your existing Spring Boot + 
 
 ### What Changes
 
-- 🔄 **Bootstrap servers**: Point to KafScale instead of Kafka (`localhost:9092` for Docker setup)
+- 🔄 **Bootstrap servers**: Point to KafScale instead of Kafka (`localhost:39092` for local demos)
 - 🔄 **Topic creation**: May need to create topics manually (or enable auto-creation)
 
 That's it! Everything else works as-is.
@@ -30,7 +30,7 @@ Here's a complete example for `application.properties`:
 
 ```properties
 # Kafka Bootstrap Servers - Point to KafScale
-spring.kafka.bootstrap-servers=localhost:9092
+spring.kafka.bootstrap-servers=localhost:39092
 
 # Producer Configuration
 spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer
@@ -54,7 +54,7 @@ spring.kafka.listener.ack-mode=batch
 spring.kafka.listener.concurrency=3
 
 # Admin Configuration (for topic creation)
-spring.kafka.admin.properties.bootstrap.servers=localhost:9092
+spring.kafka.admin.properties.bootstrap.servers=localhost:39092
 ```
 
 > **Tip:** The complete configuration file is available in [`examples/application.properties`](examples/application.properties).
@@ -66,7 +66,7 @@ If you prefer YAML configuration:
 ```yaml
 spring:
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: localhost:39092
     
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -93,7 +93,7 @@ spring:
     
     admin:
       properties:
-        bootstrap.servers: localhost:9092
+        bootstrap.servers: localhost:39092
 ```
 
 > **Tip:** The complete YAML configuration is available in [`examples/application.yml`](examples/application.yml).
@@ -112,7 +112,7 @@ spring.kafka.bootstrap-servers=kafka-broker-1:9092,kafka-broker-2:9092,kafka-bro
 ### After (KafScale)
 
 ```properties
-spring.kafka.bootstrap-servers=localhost:9092
+spring.kafka.bootstrap-servers=localhost:39092
 # ... rest of your configuration (unchanged!)
 ```
 
