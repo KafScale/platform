@@ -336,6 +336,7 @@ When `etcd.endpoints` is empty in the CRD, the operator deploys a managed etcd c
 | `KAFSCALE_OPERATOR_ETCD_IMAGE` | `kubesphere/etcd:3.6.4-0` | Managed etcd image |
 | `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` | `10Gi` | PVC size for managed etcd |
 | `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` | | StorageClass for managed etcd PVCs |
+| `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY` | `0` | Use in-memory `emptyDir` for etcd data (test/dev only). |
 
 ### etcd Snapshot Settings
 
