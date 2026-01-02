@@ -33,6 +33,10 @@ operator:
     repository: ghcr.io/novatechflow/kafscale-broker
     tag: ""
     useLatest: false
+  etcdSnapshotEtcdctlImage:
+    repository: ghcr.io/novatechflow/kafscale-etcd-tools
+    tag: ""
+    useLatest: false
   etcdEndpoints:
     - "http://etcd:2379"
   leaderKey: "kafscale-operator"

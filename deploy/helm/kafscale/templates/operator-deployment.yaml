@@ -61,6 +61,8 @@ spec:
               value: "{{ .Values.operator.brokerImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.brokerImage.tag) .Values.operator.brokerImage.useLatest }}"
             - name: BROKER_IMAGE_PULL_POLICY
               value: "{{ ternary "Always" "IfNotPresent" .Values.operator.brokerImage.useLatest }}"
+            - name: KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE
+              value: "{{ .Values.operator.etcdSnapshotEtcdctlImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.etcdSnapshotEtcdctlImage.tag) .Values.operator.etcdSnapshotEtcdctlImage.useLatest }}"
             - name: KAFSCALE_OPERATOR_ETCD_ENDPOINTS
               value: "{{ join "," .Values.operator.etcdEndpoints }}"
             - name: KAFSCALE_OPERATOR_LEADER_KEY
