@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-wordcount-app
+  namespace: kafscale-demo
+  labels:
+    app: flink-wordcount-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-wordcount-app
+  template:
+    metadata:
+      labels:
+        app: flink-wordcount-app
+    spec:
+      containers:
+        - name: flink-wordcount-app
+          image: ghcr.io/novatechflow/kafscale-flink-demo:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFSCALE_PROFILE
+              value: cluster
+            - name: KAFSCALE_TOPIC
+              value: demo-topic-1
