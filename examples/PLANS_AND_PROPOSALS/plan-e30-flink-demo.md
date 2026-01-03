@@ -10,7 +10,8 @@
 1) Build Maven project for Flink job with profile-based config.
 2) Implement Kafka source + word count + missing-key/header/value stats.
 3) Add Dockerfile and Kubernetes manifest for cluster run.
-4) Update dev guide + SUMMARY with new section and run instructions.
+4) Add durable storage: state backend + checkpointing + example sink beyond stdout.
+5) Update dev guide + SUMMARY with new section and run instructions.
 
 ## Status
 - [x] Inspected existing demos and deploy patterns.
@@ -19,3 +20,4 @@
 - [x] Updated dev guide with new section.
 - [x] Added helper scripts for standalone Flink + local demo + K8S stack.
 - [x] Updated E30 README and dev guide with scripts + verification steps.
+- [x] Add durable storage configuration and sample sink.

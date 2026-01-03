@@ -316,7 +316,7 @@ does not support `INIT_PRODUCER_ID`, so the producer fails.
 
 **Check**:
 1. **Bootstrap Servers**: Ensure `application.properties` uses `localhost:39092`.
-2. **Port Conflicts**: The app runs on `8083`. Ensure it's free.
+2. **Port Conflicts**: The app runs on `8093`. Ensure it's free.
 
 5. **Bootstrap Servers**: Ensure `application.properties` uses `localhost:39092`.
 6. **Port Conflicts**: The app runs on `8093`. Ensure it's free.
