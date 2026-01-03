@@ -37,17 +37,17 @@ const (
 )
 
 // SnapshotPublisher translates KafscaleCluster/KafscaleTopic resources into
-// the metadata snapshot consumed by brokers.
+// the metadata snapshot read by brokers.
 type SnapshotPublisher struct {
 	Client client.Client
 }
 
-// NewSnapshotPublisher builds a publisher backed by the provided controller-runtime client.
+// NewSnapshotPublisher creates a publisher backed by the provided controller-runtime client.
 func NewSnapshotPublisher(c client.Client) *SnapshotPublisher {
 	return &SnapshotPublisher{Client: c}
 }
 
-// Publish renders the current metadata for the supplied cluster and puts it into etcd.
+// Publish renders the current metadata for the cluster and puts it into etcd.
 func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
 	var topicList kafscalev1alpha1.KafscaleTopicList
 	if err := p.Client.List(ctx, &topicList, client.InNamespace(cluster.Namespace)); err != nil {

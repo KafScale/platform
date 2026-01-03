@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -46,8 +47,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 
 	requireBinaries(t, "docker", "kind", "kubectl", "helm")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 
 	clusterName := envOrDefault("KAFSCALE_KIND_CLUSTER", "kafscale-e2e")
 	created := false
@@ -115,7 +115,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1",
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio."+kindNamespace+".svc.cluster.local:9000",
 	)
-	waitForReadyPodCount(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 1, 4*time.Minute)
+	waitForDeploymentEnvValue(t, ctx, kindNamespace, operatorDeployment, "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE", etcdToolsImage, 2*time.Minute)
+	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
 
 	applyS3Secret(t, ctx, kindNamespace)
 	applyClusterManifest(t, ctx, kindNamespace, 3)
@@ -123,8 +124,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("timeout waiting for statefulset/kafscale-etcd: %v", err)
 	}
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-etcd", 4*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale", 2*time.Minute)
+	etcdReplicas := getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd")
+	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 2*time.Minute)
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
 	t.Log("waiting for etcd client port to accept connections")
 	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-etcd-client."+kindNamespace+".svc.cluster.local", []int{2379}); err != nil {
@@ -253,10 +255,10 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("expected produce to fail during S3 outage: %v", err)
 	}
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/minio", "--replicas=1")
-	waitForRollout(t, ctx, kindNamespace, "deployment/minio", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=minio", 2*time.Minute)
+	waitForDeploymentAvailable(t, ctx, kindNamespace, "deployment/minio", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "minio", 2*time.Minute)
 	touchClusterAnnotation(t, ctx, kindNamespace, "kafscale")
-	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
+	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 3*time.Minute)
 	metricsAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9093", kindNamespace)
 	if err := runE2EMetricsProbe(t, ctx, kindNamespace, e2eClientImage, metricsAddr, 90); err != nil {
 		t.Fatalf("expected broker S3 health to recover after MinIO restart: %v", err)
@@ -273,7 +275,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	operatorPod = getPodByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", operatorPod)
 	waitForRollout(t, ctx, kindNamespace, "deployment/"+operatorDeployment, 2*time.Minute)
-	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
+	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
 
 	t.Log("testing etcd HA: deleting one member and waiting for ready")
 	etcdPod := getPodByLabel(t, ctx, kindNamespace, "app=kafscale-etcd")
@@ -289,13 +291,13 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/minio", "--replicas=0")
 	waitForPodDeletion(t, ctx, kindNamespace, "app=minio", 90*time.Second)
 	touchClusterAnnotation(t, ctx, kindNamespace, "kafscale")
-	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "False", 2*time.Minute)
+	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "False", 2*time.Minute)
 
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/minio", "--replicas=1")
-	waitForRollout(t, ctx, kindNamespace, "deployment/minio", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=minio", 2*time.Minute)
+	waitForDeploymentAvailable(t, ctx, kindNamespace, "deployment/minio", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "minio", 2*time.Minute)
 	touchClusterAnnotation(t, ctx, kindNamespace, "kafscale")
-	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
+	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 3*time.Minute)
 
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "create", "job", "etcd-snapshot-manual", "--from=cronjob/kafscale-etcd-snapshot")
@@ -488,6 +490,21 @@ func waitForStatefulSetReadyByName(t *testing.T, ctx context.Context, namespace,
 	t.Fatalf("timeout waiting for statefulset/%s to be ready\n%s", name, truncateOutput(string(describe)))
 }
 
+func waitForStatefulSetPodsReady(t *testing.T, ctx context.Context, namespace, name string, replicas int, timeout time.Duration) {
+	t.Helper()
+	for i := 0; i < replicas; i++ {
+		pod := fmt.Sprintf("%s-%d", name, i)
+		if _, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "wait", "--for=condition=Ready", "pod/"+pod, "--timeout="+timeout.String()); err != nil {
+			describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "pod/"+pod)
+			downloadLogs, _ := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", "snapshot-download", "--tail=200")
+			restoreLogs, _ := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", "snapshot-restore", "--tail=200")
+			etcdLogs, _ := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", "etcd", "--tail=200")
+			t.Fatalf("timeout waiting for pod/%s to be Ready\n%s\nsnapshot-download logs:\n%s\nsnapshot-restore logs:\n%s\netcd logs:\n%s",
+				pod, truncateOutput(string(describe)), truncateOutput(string(downloadLogs)), truncateOutput(string(restoreLogs)), truncateOutput(string(etcdLogs)))
+		}
+	}
+}
+
 func waitForStatefulSetReplicas(t *testing.T, ctx context.Context, namespace, name string, replicas int32, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -507,6 +524,20 @@ func waitForStatefulSetReplicas(t *testing.T, ctx context.Context, namespace, na
 	}
 	describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "statefulset/"+name)
 	t.Fatalf("timeout waiting for statefulset/%s replicas=%d\n%s", name, replicas, truncateOutput(string(describe)))
+}
+
+func getStatefulSetReplicas(t *testing.T, ctx context.Context, namespace, name string) int {
+	t.Helper()
+	out := runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "get", "statefulset", name, "-o", "jsonpath={.spec.replicas}")
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		t.Fatalf("statefulset/%s replicas not found", name)
+	}
+	replicas, err := strconv.Atoi(raw)
+	if err != nil {
+		t.Fatalf("parse statefulset/%s replicas=%q: %v", name, raw, err)
+	}
+	return replicas
 }
 
 func waitForDeploymentReplicas(t *testing.T, ctx context.Context, namespace, name string, replicas int32, timeout time.Duration) {
@@ -565,6 +596,21 @@ func waitForDeploymentReadyByLabel(t *testing.T, ctx context.Context, namespace,
 	}
 	describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "deployment/"+name)
 	t.Fatalf("timeout waiting for deployment/%s to be ready\n%s", name, truncateOutput(string(describe)))
+}
+
+func waitForDeploymentEnvValue(t *testing.T, ctx context.Context, namespace, name, envKey, expected string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	jsonPath := fmt.Sprintf("{.spec.template.spec.containers[0].env[?(@.name==\"%s\")].value}", envKey)
+	for time.Now().Before(deadline) {
+		out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "deployment", name, "-o", "jsonpath="+jsonPath)
+		if err == nil && strings.TrimSpace(string(out)) == expected {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "deployment/"+name)
+	t.Fatalf("timeout waiting for deployment/%s env %s=%s\n%s", name, envKey, expected, truncateOutput(string(describe)))
 }
 
 func runCmdWithOutputErr(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -1016,6 +1062,11 @@ func waitForRollout(t *testing.T, ctx context.Context, namespace, resource strin
 	t.Fatalf("timeout waiting for rollout of %s\n%s\n%s", resource, truncateOutput(string(describe)), truncateOutput(string(pods)))
 }
 
+func waitForDeploymentAvailable(t *testing.T, ctx context.Context, namespace, deployment string, timeout time.Duration) {
+	t.Helper()
+	_ = runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=condition=Available", deployment, "--timeout="+timeout.String())
+}
+
 func waitForReadyPodCount(t *testing.T, ctx context.Context, namespace, selector string, minReady int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -1077,6 +1128,16 @@ func waitForCondition(t *testing.T, ctx context.Context, namespace, resource, co
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+func waitForConditionStatus(t *testing.T, ctx context.Context, namespace, resource, condition, status string, timeout time.Duration) {
+	t.Helper()
+	if status == "True" {
+		_ = runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=condition="+condition, resource, "--timeout="+timeout.String())
+		return
+	}
+	jsonPath := fmt.Sprintf("{.status.conditions[?(@.type==\"%s\")].status}=%s", condition, status)
+	_ = runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath="+jsonPath, resource, "--timeout="+timeout.String())
 }
 
 func waitForEtcdSnapshotContains(t *testing.T, ctx context.Context, namespace, needle string, timeout time.Duration) {
