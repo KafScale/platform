@@ -1,7 +1,0 @@
-com/example/kafscale/flink/WordCountJob$CountEventDeserializationSchema$1.class
-com/example/kafscale/flink/WordCountJob$CountKeySelector.class
-com/example/kafscale/flink/WordCountJob$CountEventDeserializationSchema.class
-com/example/kafscale/flink/WordCountJob$Config.class
-com/example/kafscale/flink/WordCountJob$CountEventFormatter.class
-com/example/kafscale/flink/WordCountJob.class
-com/example/kafscale/flink/WordCountJob$CountEvent.class

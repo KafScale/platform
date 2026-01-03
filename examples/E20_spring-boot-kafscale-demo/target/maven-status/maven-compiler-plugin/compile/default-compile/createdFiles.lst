@@ -1,5 +1,0 @@
-com/example/kafscale/controller/OrderController.class
-com/example/kafscale/model/Order.class
-com/example/kafscale/service/OrderConsumerService.class
-com/example/kafscale/KafScaleDemoApplication.class
-com/example/kafscale/service/OrderProducerService.class
