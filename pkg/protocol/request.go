@@ -716,6 +716,12 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if err != nil {
 					return nil, nil, err
 				}
+				leaderEpoch := int32(-1)
+				if header.APIVersion >= 4 {
+					if leaderEpoch, err = reader.Int32(); err != nil {
+						return nil, nil, err
+					}
+				}
 				timestamp, err := reader.Int64()
 				if err != nil {
 					return nil, nil, err
@@ -724,12 +730,6 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if header.APIVersion == 0 {
 					maxOffsets, err = reader.Int32()
 					if err != nil {
-						return nil, nil, err
-					}
-				}
-				leaderEpoch := int32(-1)
-				if header.APIVersion >= 4 {
-					if leaderEpoch, err = reader.Int32(); err != nil {
 						return nil, nil, err
 					}
 				}

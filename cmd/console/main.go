@@ -41,7 +41,7 @@ func main() {
 		Logger: log.Default(),
 		Auth:   authConfigFromEnv(),
 	}
-	if metricsProvider := buildMetricsProvider(); metricsProvider != nil {
+	if metricsProvider := buildMetricsProvider(store); metricsProvider != nil {
 		opts.Metrics = metricsProvider
 	}
 	if err := consolepkg.StartServer(ctx, addr, opts); err != nil {
@@ -83,10 +83,13 @@ func buildMetadataStore(ctx context.Context) (metadata.Store, error) {
 	return store, nil
 }
 
-func buildMetricsProvider() consolepkg.MetricsProvider {
+func buildMetricsProvider(store metadata.Store) consolepkg.MetricsProvider {
 	metricsURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL"))
-	if metricsURL == "" {
+	if metricsURL == "" && store == nil {
 		return nil
+	}
+	if store != nil {
+		return consolepkg.NewAggregatedPromMetricsClient(store, metricsURL)
 	}
 	return consolepkg.NewPromMetricsClient(metricsURL)
 }

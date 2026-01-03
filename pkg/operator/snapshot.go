@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -225,8 +225,19 @@ func PublishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 			getCtx, cancelGet := context.WithTimeout(ctx, 5*time.Second)
 			resp, err := cli.Get(getCtx, snapshotKey)
 			cancelGet()
+			if err != nil {
+				lastErr = err
+				_ = cli.Close()
+				if !isRetryableEtcdError(lastErr) {
+					return lastErr
+				}
+				if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+					return lastErr
+				}
+				continue
+			}
 			existing := metadata.ClusterMetadata{}
-			if err == nil && len(resp.Kvs) > 0 {
+			if len(resp.Kvs) > 0 {
 				if err := json.Unmarshal(resp.Kvs[0].Value, &existing); err == nil {
 					snapshot = mergeSnapshots(snapshot, existing)
 				}

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform platform-demo help
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/novatechflow
 STAMP_DIR ?= .build
@@ -41,6 +41,8 @@ KAFSCALE_UI_USERNAME ?= kafscaleadmin
 KAFSCALE_UI_PASSWORD ?= kafscale
 KAFSCALE_DEMO_BROKER_REPLICAS ?= 2
 KAFSCALE_DEMO_PROXY ?= 1
+KAFSCALE_DEMO_ETCD_INMEM ?= 1
+KAFSCALE_DEMO_ETCD_REPLICAS ?= 3
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
 
@@ -60,62 +62,63 @@ docker-build: docker-build-broker docker-build-operator docker-build-console doc
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
-	if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then \
-		echo "docker buildx build --load"; \
-	elif command -v docker-buildx >/dev/null 2>&1 && docker-buildx version >/dev/null 2>&1; then \
+	if command -v docker-buildx >/dev/null 2>&1 && docker-buildx version >/dev/null 2>&1; then \
 		echo "docker-buildx build --load"; \
+	elif command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then \
+		echo "docker buildx build --load"; \
 	else \
 		echo "DOCKER_BUILDKIT=1 docker build"; \
 	fi)
+DOCKER_BUILD_ARGS ?=
 
 
 BROKER_SRCS := $(shell find cmd/broker pkg go.mod go.sum)
 docker-build-broker: $(STAMP_DIR)/broker.image ## Build broker container image
 $(STAMP_DIR)/broker.image: $(BROKER_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(BROKER_IMAGE) -f deploy/docker/broker.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(BROKER_IMAGE) -f deploy/docker/broker.Dockerfile .
 	@touch $(STAMP_DIR)/broker.image
 
 OPERATOR_SRCS := $(shell find cmd/operator pkg/operator api config go.mod go.sum)
 docker-build-operator: $(STAMP_DIR)/operator.image ## Build operator container image
 $(STAMP_DIR)/operator.image: $(OPERATOR_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(OPERATOR_IMAGE) -f deploy/docker/operator.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(OPERATOR_IMAGE) -f deploy/docker/operator.Dockerfile .
 	@touch $(STAMP_DIR)/operator.image
 
 CONSOLE_SRCS := $(shell find cmd/console internal/console ui go.mod go.sum)
 docker-build-console: $(STAMP_DIR)/console.image ## Build console container image
 $(STAMP_DIR)/console.image: $(CONSOLE_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(CONSOLE_IMAGE) -f deploy/docker/console.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(CONSOLE_IMAGE) -f deploy/docker/console.Dockerfile .
 	@touch $(STAMP_DIR)/console.image
 
 PROXY_SRCS := $(shell find cmd/proxy pkg go.mod go.sum)
 docker-build-proxy: $(STAMP_DIR)/proxy.image ## Build proxy container image
 $(STAMP_DIR)/proxy.image: $(PROXY_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(PROXY_IMAGE) -f deploy/docker/proxy.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(PROXY_IMAGE) -f deploy/docker/proxy.Dockerfile .
 	@touch $(STAMP_DIR)/proxy.image
 
 MCP_SRCS := $(shell find cmd/mcp internal/mcpserver go.mod go.sum)
 docker-build-mcp: $(STAMP_DIR)/mcp.image ## Build MCP container image
 $(STAMP_DIR)/mcp.image: $(MCP_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(MCP_IMAGE) -f deploy/docker/mcp.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(MCP_IMAGE) -f deploy/docker/mcp.Dockerfile .
 	@touch $(STAMP_DIR)/mcp.image
 
 E2E_CLIENT_SRCS := $(shell find cmd/e2e-client go.mod go.sum)
 docker-build-e2e-client: $(STAMP_DIR)/e2e-client.image ## Build e2e client container image
 $(STAMP_DIR)/e2e-client.image: $(E2E_CLIENT_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(E2E_CLIENT_IMAGE) -f deploy/docker/e2e-client.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(E2E_CLIENT_IMAGE) -f deploy/docker/e2e-client.Dockerfile .
 	@touch $(STAMP_DIR)/e2e-client.image
 
 ETCD_TOOLS_SRCS := deploy/docker/etcd-tools.Dockerfile
 docker-build-etcd-tools: $(STAMP_DIR)/etcd-tools.image ## Build etcd tools container image (etcdctl/etcdutl + shell)
 $(STAMP_DIR)/etcd-tools.image: $(ETCD_TOOLS_SRCS)
 	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(ETCD_TOOLS_IMAGE) -f deploy/docker/etcd-tools.Dockerfile .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(ETCD_TOOLS_IMAGE) -f deploy/docker/etcd-tools.Dockerfile .
 	@touch $(STAMP_DIR)/etcd-tools.image
 
 docker-clean: ## Remove local dev images and prune dangling Docker data
@@ -141,6 +144,15 @@ clean-kind-e2e: ## Delete kafscale-e2e* kind clusters without stopping MinIO.
 	if [ -n "$$clusters" ]; then \
 	  echo "$$clusters" | while read -r name; do kind delete cluster --name $$name; done; \
 	fi
+
+clean-kind-all: ## Delete all kind clusters and stop any remaining kind containers.
+	@clusters=$$(kind get clusters 2>/dev/null || true); \
+	if [ -n "$$clusters" ]; then \
+	  echo "$$clusters" | while read -r name; do kind delete cluster --name $$name; done; \
+	fi
+	-ids=$$(docker ps -q --filter "label=io.x-k8s.kind.cluster"); if [ -n "$$ids" ]; then docker stop $$ids >/dev/null; fi
+	-ids=$$(docker ps -aq --filter "label=io.x-k8s.kind.cluster"); if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi
+	-rm -f /tmp/kafscale-demo-*.log
 
 ensure-minio: ## Ensure the local MinIO helper container is running and reachable
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required for MinIO-backed e2e tests"; exit 1; }
@@ -264,12 +276,15 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
 	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
 	@command -v helm >/dev/null 2>&1 || { echo "helm is required"; exit 1; }
+	@$(MAKE) clean-kind-all
 	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
 	@if ! kind get clusters | grep -q '^$(KAFSCALE_KIND_CLUSTER)$$'; then kind create cluster --name $(KAFSCALE_KIND_CLUSTER); fi
 	@kind get kubeconfig --name $(KAFSCALE_KIND_CLUSTER) > $(KAFSCALE_KIND_KUBECONFIG)
+	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) scripts/demo-platform-apply.sh metallb; fi
 	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(ETCD_TOOLS_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | \
 	  KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl apply --validate=false -f -
@@ -307,12 +322,24 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	    PROXY_TAG=dev; \
 	  fi; \
 	fi; \
+	ETCD_TOOLS_REPO=$${ETCD_TOOLS_IMAGE%:*}; ETCD_TOOLS_TAG=$${ETCD_TOOLS_IMAGE##*:}; \
+	if [ -z "$$ETCD_TOOLS_REPO" ] || [ "$$ETCD_TOOLS_REPO" = "$$ETCD_TOOLS_TAG" ]; then \
+	  echo "ETCD_TOOLS_IMAGE missing repository, defaulting to $(REGISTRY)/kafscale-etcd-tools"; \
+	  ETCD_TOOLS_REPO=$(REGISTRY)/kafscale-etcd-tools; \
+	  if [ "$$ETCD_TOOLS_TAG" = "$$ETCD_TOOLS_IMAGE" ] || [ -z "$$ETCD_TOOLS_TAG" ]; then \
+	    ETCD_TOOLS_TAG=dev; \
+	  fi; \
+	fi; \
 	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) helm upgrade --install kafscale deploy/helm/kafscale \
 	  --namespace $(KAFSCALE_DEMO_NAMESPACE) \
 	  --create-namespace \
 	  --set operator.replicaCount=2 \
 	  --set operator.image.repository=$$OPERATOR_REPO \
 	  --set operator.image.tag=$$OPERATOR_TAG \
+	  --set operator.etcdSnapshotEtcdctlImage.repository=$$ETCD_TOOLS_REPO \
+	  --set operator.etcdSnapshotEtcdctlImage.tag=$$ETCD_TOOLS_TAG \
+	  --set operator.etcdReplicas=$(KAFSCALE_DEMO_ETCD_REPLICAS) \
+	  $$( [ "$(KAFSCALE_DEMO_ETCD_INMEM)" = "1" ] && echo "--set operator.etcdStorageMemory=true" ) \
 	  --set console.image.repository=$$CONSOLE_REPO \
 	  --set console.image.tag=$$CONSOLE_TAG \
 	  --set console.auth.username=$(KAFSCALE_UI_USERNAME) \
@@ -320,7 +347,7 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  --set console.etcdEndpoints[0]=http://kafscale-etcd-client.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:2379 \
 	  --set console.metrics.brokerMetricsURL=http://kafscale-broker.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9093/metrics \
 	  --set operator.etcdEndpoints[0]= \
-	  $$( [ "$(KAFSCALE_DEMO_PROXY)" = "1" ] && echo "--set proxy.enabled=true --set proxy.image.repository=$$PROXY_REPO --set proxy.image.tag=$$PROXY_TAG --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:2379 --set proxy.advertisedHost=127.0.0.1 --set proxy.advertisedPort=39092 --set proxy.service.type=ClusterIP --set proxy.service.port=9092" )
+	  $$( [ "$(KAFSCALE_DEMO_PROXY)" = "1" ] && echo "--set proxy.enabled=true --set proxy.image.repository=$$PROXY_REPO --set proxy.image.tag=$$PROXY_TAG --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:2379 --set proxy.advertisedHost=127.0.0.1 --set proxy.advertisedPort=39092 --set proxy.service.type=LoadBalancer --set proxy.service.port=9092" )
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) bash -c 'set -euo pipefail; \
 	  OPERATOR_DEPLOY=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployments -l app.kubernetes.io/component=operator -o jsonpath="{.items[0].metadata.name}"); \
 	  if [ -z "$$OPERATOR_DEPLOY" ]; then \
@@ -343,20 +370,65 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
 	  scripts/demo-platform-apply.sh wait
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) bash -c 'set -euo pipefail; \
+		start_pf() { \
+		  local name="$$1"; shift; \
+		  local log="$$1"; shift; \
+		  while true; do \
+		    kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward "$$@" >>"$$log" 2>&1 || true; \
+		    echo "$$name port-forward exited; restarting..." >>"$$log"; \
+		    sleep 1; \
+		  done \
+		}; \
 		console_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
-		kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/$$console_svc 8080:80 >/tmp/kafscale-demo-console.log 2>&1 & \
-		console_pid=$$!; \
+		start_pf console /tmp/kafscale-demo-console.log svc/$$console_svc 8080:80 & \
+		console_pf_pid=$$!; \
+		broker_addr="127.0.0.1:39092"; \
 		if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then \
 		  proxy_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=proxy -o jsonpath="{.items[0].metadata.name}"); \
-		  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/$$proxy_svc 39092:9092 >/tmp/kafscale-demo-proxy.log 2>&1 & \
+		  proxy_deploy=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployment -l app.kubernetes.io/component=proxy -o jsonpath="{.items[0].metadata.name}"); \
+		  proxy_lb_ip=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc $$proxy_svc -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>/dev/null || true); \
+		  proxy_lb_host=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc $$proxy_svc -o jsonpath="{.status.loadBalancer.ingress[0].hostname}" 2>/dev/null || true); \
+		  if [ -n "$$proxy_lb_ip" ] || [ -n "$$proxy_lb_host" ]; then \
+		    proxy_advertised_host="$${proxy_lb_ip:-$$proxy_lb_host}"; \
+		    proxy_advertised_port="9092"; \
+		    if command -v nc >/dev/null 2>&1; then \
+		      if ! nc -z -w 2 "$$proxy_advertised_host" "$$proxy_advertised_port" >/dev/null 2>&1; then \
+		        proxy_advertised_host=""; \
+		      fi; \
+		    else \
+		      proxy_advertised_host=""; \
+		    fi; \
+		    if [ -n "$$proxy_advertised_host" ]; then \
+		      kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/$$proxy_deploy \
+		        KAFSCALE_PROXY_ADVERTISED_HOST="$$proxy_advertised_host" \
+		        KAFSCALE_PROXY_ADVERTISED_PORT="$$proxy_advertised_port" >/dev/null; \
+		      kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$proxy_deploy --timeout=120s; \
+		      broker_addr="$$proxy_advertised_host:$$proxy_advertised_port"; \
+		    else \
+		      kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/$$proxy_deploy \
+		        KAFSCALE_PROXY_ADVERTISED_HOST="127.0.0.1" \
+		        KAFSCALE_PROXY_ADVERTISED_PORT="39092" >/dev/null; \
+		      kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$proxy_deploy --timeout=120s; \
+		      start_pf proxy /tmp/kafscale-demo-proxy.log svc/$$proxy_svc 39092:9092 & \
+		      broker_pf_pid=$$!; \
+		    fi; \
+		  else \
+		    kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/$$proxy_deploy \
+		      KAFSCALE_PROXY_ADVERTISED_HOST="127.0.0.1" \
+		      KAFSCALE_PROXY_ADVERTISED_PORT="39092" >/dev/null; \
+		    kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$proxy_deploy --timeout=120s; \
+		    start_pf proxy /tmp/kafscale-demo-proxy.log svc/$$proxy_svc 39092:9092 & \
+		    broker_pf_pid=$$!; \
+		  fi; \
 		else \
-		  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/kafscale-broker 39092:9092 >/tmp/kafscale-demo-broker.log 2>&1 & \
+		  start_pf broker /tmp/kafscale-demo-broker.log svc/kafscale-broker 39092:9092 & \
+		  broker_pf_pid=$$!; \
 		fi; \
-		broker_pid=$$!; \
-		trap "kill $$console_pid $$broker_pid" EXIT INT TERM; \
+		trap "kill $$console_pf_pid $${broker_pf_pid:-} 2>/dev/null || true" EXIT INT TERM; \
 		echo "Console available at http://127.0.0.1:8080/ui/ (logs: /tmp/kafscale-demo-console.log)"; \
+		echo "Broker endpoint: $$broker_addr"; \
 		echo "Streaming demo messages; press Ctrl+C to stop."; \
-		KAFSCALE_DEMO_BROKER_ADDR=127.0.0.1:39092 \
+		KAFSCALE_DEMO_BROKER_ADDR=$$broker_addr \
 		KAFSCALE_DEMO_TOPICS=demo-topic-1,demo-topic-2 \
 		go run ./cmd/demo-workload; \
 	'

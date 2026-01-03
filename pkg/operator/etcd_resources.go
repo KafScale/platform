@@ -39,6 +39,7 @@ import (
 const (
 	operatorEtcdEndpointsEnv             = "KAFSCALE_OPERATOR_ETCD_ENDPOINTS"
 	operatorEtcdImageEnv                 = "KAFSCALE_OPERATOR_ETCD_IMAGE"
+	operatorEtcdReplicasEnv              = "KAFSCALE_OPERATOR_ETCD_REPLICAS"
 	operatorEtcdStorageEnv               = "KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE"
 	operatorEtcdClassEnv                 = "KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS"
 	operatorEtcdSnapshotBucketEnv        = "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET"
@@ -50,10 +51,12 @@ const (
 	operatorEtcdSnapshotStaleAfterEnv    = "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC"
 	operatorEtcdSnapshotCreateBucketEnv  = "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET"
 	operatorEtcdSnapshotProtectBucketEnv = "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET"
+	operatorEtcdStorageMemoryEnv         = "KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY"
 
 	defaultEtcdImage                 = "kubesphere/etcd:3.6.4-0"
 	defaultEtcdctlImage              = "ghcr.io/novatechflow/kafscale-etcd-tools:dev"
 	defaultEtcdStorageSize           = "10Gi"
+	defaultEtcdReplicas              = 3
 	defaultSnapshotBucketPrefix      = "kafscale-etcd"
 	defaultSnapshotPrefix            = "etcd-snapshots"
 	defaultSnapshotSchedule          = "0 * * * *"
@@ -174,37 +177,53 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 	}}
 	_, err := controllerutil.CreateOrUpdate(ctx, c, sts, func() error {
 		labels := etcdLabels(cluster)
-		replicas := int32(3)
+		replicas := int32(etcdReplicas())
 		sts.Labels = labels
 		sts.Spec.ServiceName = fmt.Sprintf("%s-etcd", cluster.Name)
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Template.ObjectMeta.Labels = labels
 
-		storageSize := getEnv(operatorEtcdStorageEnv, defaultEtcdStorageSize)
-		storageClass := strings.TrimSpace(os.Getenv(operatorEtcdClassEnv))
-		sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{
-			{
-				ObjectMeta: metav1.ObjectMeta{Name: "data"},
-				Spec: corev1.PersistentVolumeClaimSpec{
-					AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-					Resources: corev1.VolumeResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceStorage: resource.MustParse(storageSize),
+		useMemory := parseBoolEnv(operatorEtcdStorageMemoryEnv)
+		if useMemory {
+			sts.Spec.VolumeClaimTemplates = nil
+		} else {
+			storageSize := getEnv(operatorEtcdStorageEnv, defaultEtcdStorageSize)
+			storageClass := strings.TrimSpace(os.Getenv(operatorEtcdClassEnv))
+			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "data"},
+					Spec: corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse(storageSize),
+							},
 						},
+						StorageClassName: stringPtrOrNil(storageClass),
 					},
-					StorageClassName: stringPtrOrNil(storageClass),
 				},
-			},
+			}
 		}
 
 		image := getEnv(operatorEtcdImageEnv, defaultEtcdImage)
-		sts.Spec.Template.Spec.Volumes = append([]corev1.Volume{}, corev1.Volume{
-			Name: "snapshots",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
+		volumes := []corev1.Volume{
+			{
+				Name: "snapshots",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{},
+				},
 			},
-		})
+		}
+		if useMemory {
+			volumes = append(volumes, corev1.Volume{
+				Name: "data",
+				VolumeSource: corev1.VolumeSource{
+					EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory},
+				},
+			})
+		}
+		sts.Spec.Template.Spec.Volumes = append([]corev1.Volume{}, volumes...)
 
 		bucket := snapshotBucket(cluster)
 		if bucket != "" {
@@ -262,6 +281,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				)
 			}
 			peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
+			initialCluster := buildEtcdInitialCluster(cluster, etcdReplicas())
 			restoreScript := "set -euo pipefail\n" +
 				"DATA_DIR=/var/lib/etcd\n" +
 				"if [ -d \"$DATA_DIR/member\" ] && [ \"$(ls -A \"$DATA_DIR\")\" ]; then\n" +
@@ -276,9 +296,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  echo \"etcdutl not found; snapshot restore requires etcdutl in the image\"\n" +
 				"  exit 1\n" +
 				"fi\n" +
-				"INITIAL_CLUSTER=\"" + cluster.Name + "-etcd-0=http://" + cluster.Name + "-etcd-0." + peerSvc + ".${POD_NAMESPACE}.svc.cluster.local:2380," +
-				cluster.Name + "-etcd-1=http://" + cluster.Name + "-etcd-1." + peerSvc + ".${POD_NAMESPACE}.svc.cluster.local:2380," +
-				cluster.Name + "-etcd-2=http://" + cluster.Name + "-etcd-2." + peerSvc + ".${POD_NAMESPACE}.svc.cluster.local:2380\"\n" +
+				"INITIAL_CLUSTER=\"" + initialCluster + "\"\n" +
 				"PEER_URL=\"http://${POD_NAME}." + peerSvc + ".${POD_NAMESPACE}.svc.cluster.local:2380\"\n" +
 				"etcdutl snapshot restore /snapshots/etcd-snapshot.db " +
 				"--data-dir \"$DATA_DIR\" " +
@@ -377,12 +395,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 
 func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
-	initialCluster := fmt.Sprintf(
-		"%s-etcd-0=http://%s-etcd-0.%s.$(POD_NAMESPACE).svc.cluster.local:2380,%s-etcd-1=http://%s-etcd-1.%s.$(POD_NAMESPACE).svc.cluster.local:2380,%s-etcd-2=http://%s-etcd-2.%s.$(POD_NAMESPACE).svc.cluster.local:2380",
-		cluster.Name, cluster.Name, peerSvc,
-		cluster.Name, cluster.Name, peerSvc,
-		cluster.Name, cluster.Name, peerSvc,
-	)
+	initialCluster := buildEtcdInitialCluster(cluster, etcdReplicas())
 	peerURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2380", peerSvc)
 	clientURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2379", peerSvc)
 	return []string{
@@ -396,6 +409,22 @@ func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 		"--initial-cluster-state=new",
 		"--initial-cluster-token=" + cluster.Name + "-etcd",
 	}
+}
+
+func buildEtcdInitialCluster(cluster *kafscalev1alpha1.KafscaleCluster, replicas int) string {
+	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
+	if replicas < 1 {
+		replicas = 1
+	}
+	members := make([]string, 0, replicas)
+	for i := 0; i < replicas; i++ {
+		member := fmt.Sprintf(
+			"%s-etcd-%d=http://%s-etcd-%d.%s.$(POD_NAMESPACE).svc.cluster.local:2380",
+			cluster.Name, i, cluster.Name, i, peerSvc,
+		)
+		members = append(members, member)
+	}
+	return strings.Join(members, ",")
 }
 
 func reconcileEtcdPDB(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
@@ -677,6 +706,18 @@ func boolToString(val bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+func etcdReplicas() int {
+	raw := strings.TrimSpace(os.Getenv(operatorEtcdReplicasEnv))
+	if raw == "" {
+		return defaultEtcdReplicas
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed < defaultEtcdReplicas {
+		return defaultEtcdReplicas
+	}
+	return parsed
 }
 
 func stringPtrOrNil(val string) *string {

@@ -190,8 +190,10 @@ Recommended operator alerting (when using Prometheus Operator):
 
 - `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` – Comma-separated etcd endpoints to use instead of managed etcd.
 - `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `kubesphere/etcd:3.6.4-0`).
+- `KAFSCALE_OPERATOR_ETCD_REPLICAS` – Managed etcd replica count (default `3`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` – PVC size for managed etcd (default `10Gi`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` – StorageClass for managed etcd PVCs.
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY` – Use in-memory `emptyDir` for etcd data (`1` to enable, test/dev only).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` – Snapshot prefix (default `etcd-snapshots`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` – Cron schedule for snapshots (default `0 * * * *`).

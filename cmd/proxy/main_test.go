@@ -16,6 +16,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/novatechflow/kafscale/pkg/metadata"
@@ -81,4 +83,245 @@ func TestBuildProxyMetadataResponsePreservesTopicErrors(t *testing.T) {
 	if resp.Topics[0].ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
 		t.Fatalf("expected error code %d, got %d", protocol.UNKNOWN_TOPIC_OR_PARTITION, resp.Topics[0].ErrorCode)
 	}
+}
+
+func TestBuildNotReadyResponseProduce(t *testing.T) {
+	payload := encodeProduceRequestV3("orders", 0)
+	header, _, err := protocol.ParseRequestHeader(payload)
+	if err != nil {
+		t.Fatalf("parse header: %v", err)
+	}
+	p := &proxy{}
+	respBytes, ok, err := p.buildNotReadyResponse(header, payload)
+	if err != nil {
+		t.Fatalf("build not-ready response: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected produce response, got ok=false")
+	}
+	errCode, err := decodeProduceResponseError(respBytes, header.APIVersion)
+	if err != nil {
+		t.Fatalf("decode produce response: %v", err)
+	}
+	if errCode != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expected error %d, got %d", protocol.REQUEST_TIMED_OUT, errCode)
+	}
+}
+
+func TestBuildNotReadyResponseFetch(t *testing.T) {
+	payload := encodeFetchRequestV7("orders", 0)
+	header, _, err := protocol.ParseRequestHeader(payload)
+	if err != nil {
+		t.Fatalf("parse header: %v", err)
+	}
+	p := &proxy{}
+	respBytes, ok, err := p.buildNotReadyResponse(header, payload)
+	if err != nil {
+		t.Fatalf("build not-ready response: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected fetch response, got ok=false")
+	}
+	topErr, partErr, err := decodeFetchResponseErrors(respBytes, header.APIVersion)
+	if err != nil {
+		t.Fatalf("decode fetch response: %v", err)
+	}
+	if topErr != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expected top-level error %d, got %d", protocol.REQUEST_TIMED_OUT, topErr)
+	}
+	if partErr != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expected partition error %d, got %d", protocol.REQUEST_TIMED_OUT, partErr)
+	}
+}
+
+type testWriter struct {
+	buf bytes.Buffer
+}
+
+func (w *testWriter) Int8(v int8) {
+	w.buf.WriteByte(byte(v))
+}
+
+func (w *testWriter) Int16(v int16) {
+	var tmp [2]byte
+	binary.BigEndian.PutUint16(tmp[:], uint16(v))
+	w.buf.Write(tmp[:])
+}
+
+func (w *testWriter) Int32(v int32) {
+	var tmp [4]byte
+	binary.BigEndian.PutUint32(tmp[:], uint32(v))
+	w.buf.Write(tmp[:])
+}
+
+func (w *testWriter) Int64(v int64) {
+	var tmp [8]byte
+	binary.BigEndian.PutUint64(tmp[:], uint64(v))
+	w.buf.Write(tmp[:])
+}
+
+func (w *testWriter) String(v string) {
+	if v == "" {
+		w.Int16(0)
+		return
+	}
+	w.Int16(int16(len(v)))
+	w.buf.WriteString(v)
+}
+
+func (w *testWriter) NullableString(v *string) {
+	if v == nil {
+		w.Int16(-1)
+		return
+	}
+	w.String(*v)
+}
+
+func (w *testWriter) Bytes(b []byte) {
+	w.Int32(int32(len(b)))
+	w.buf.Write(b)
+}
+
+func encodeProduceRequestV3(topic string, partition int32) []byte {
+	w := &testWriter{}
+	w.Int16(protocol.APIKeyProduce)
+	w.Int16(3)
+	w.Int32(42)
+	clientID := "proxy-test"
+	w.NullableString(&clientID)
+	w.NullableString(nil)
+	w.Int16(1)
+	w.Int32(1000)
+	w.Int32(1)
+	w.String(topic)
+	w.Int32(1)
+	w.Int32(partition)
+	w.Bytes(nil)
+	return w.buf.Bytes()
+}
+
+func encodeFetchRequestV7(topic string, partition int32) []byte {
+	w := &testWriter{}
+	w.Int16(protocol.APIKeyFetch)
+	w.Int16(7)
+	w.Int32(7)
+	clientID := "proxy-test"
+	w.NullableString(&clientID)
+	w.Int32(-1)
+	w.Int32(1000)
+	w.Int32(1)
+	w.Int32(1048576)
+	w.Int8(0)
+	w.Int32(0)
+	w.Int32(0)
+	w.Int32(1)
+	w.String(topic)
+	w.Int32(1)
+	w.Int32(partition)
+	w.Int64(0)
+	w.Int64(0)
+	w.Int32(1048576)
+	w.Int32(0)
+	return w.buf.Bytes()
+}
+
+func decodeProduceResponseError(payload []byte, version int16) (int16, error) {
+	r := bytes.NewReader(payload)
+	if _, err := readInt32(r); err != nil {
+		return 0, err
+	}
+	topicCount, err := readInt32(r)
+	if err != nil {
+		return 0, err
+	}
+	if topicCount < 1 {
+		return 0, nil
+	}
+	if _, err := readString(r); err != nil {
+		return 0, err
+	}
+	partCount, err := readInt32(r)
+	if err != nil {
+		return 0, err
+	}
+	if partCount < 1 {
+		return 0, nil
+	}
+	if _, err := readInt32(r); err != nil {
+		return 0, err
+	}
+	errCode, err := readInt16(r)
+	if err != nil {
+		return 0, err
+	}
+	return errCode, nil
+}
+
+func decodeFetchResponseErrors(payload []byte, version int16) (int16, int16, error) {
+	r := bytes.NewReader(payload)
+	if _, err := readInt32(r); err != nil {
+		return 0, 0, err
+	}
+	if _, err := readInt32(r); err != nil {
+		return 0, 0, err
+	}
+	errCode, err := readInt16(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := readInt32(r); err != nil {
+		return 0, 0, err
+	}
+	topicCount, err := readInt32(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	if topicCount < 1 {
+		return errCode, 0, nil
+	}
+	if _, err := readString(r); err != nil {
+		return 0, 0, err
+	}
+	partCount, err := readInt32(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	if partCount < 1 {
+		return errCode, 0, nil
+	}
+	if _, err := readInt32(r); err != nil {
+		return 0, 0, err
+	}
+	partErr, err := readInt16(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	return errCode, partErr, nil
+}
+
+func readInt16(r *bytes.Reader) (int16, error) {
+	var v int16
+	err := binary.Read(r, binary.BigEndian, &v)
+	return v, err
+}
+
+func readInt32(r *bytes.Reader) (int32, error) {
+	var v int32
+	err := binary.Read(r, binary.BigEndian, &v)
+	return v, err
+}
+
+func readString(r *bytes.Reader) (string, error) {
+	var size int16
+	if err := binary.Read(r, binary.BigEndian, &size); err != nil {
+		return "", err
+	}
+	if size < 0 {
+		return "", nil
+	}
+	buf := make([]byte, size)
+	if _, err := r.Read(buf); err != nil {
+		return "", err
+	}
+	return string(buf), nil
 }

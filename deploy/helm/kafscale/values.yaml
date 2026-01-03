@@ -1,4 +1,4 @@
-# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 # This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +37,10 @@ operator:
     repository: ghcr.io/novatechflow/kafscale-etcd-tools
     tag: ""
     useLatest: false
+  etcdReplicas: 3
+  etcdStorageSize: ""
+  etcdStorageClass: ""
+  etcdStorageMemory: false
   etcdEndpoints:
     - "http://etcd:2379"
   leaderKey: "kafscale-operator"
@@ -102,6 +106,10 @@ proxy:
     tag: ""
     useLatest: false
     pullPolicy: IfNotPresent
+  health:
+    enabled: true
+    port: 9094
+  backendCacheTTLSeconds: 60
   advertisedHost: ""
   advertisedPort: 9092
   etcdEndpoints: []

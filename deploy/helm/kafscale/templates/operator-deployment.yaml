@@ -63,6 +63,20 @@ spec:
               value: "{{ ternary "Always" "IfNotPresent" .Values.operator.brokerImage.useLatest }}"
             - name: KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE
               value: "{{ .Values.operator.etcdSnapshotEtcdctlImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.etcdSnapshotEtcdctlImage.tag) .Values.operator.etcdSnapshotEtcdctlImage.useLatest }}"
+            - name: KAFSCALE_OPERATOR_ETCD_REPLICAS
+              value: "{{ .Values.operator.etcdReplicas }}"
+{{- if .Values.operator.etcdStorageSize }}
+            - name: KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE
+              value: "{{ .Values.operator.etcdStorageSize }}"
+{{- end }}
+{{- if .Values.operator.etcdStorageClass }}
+            - name: KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS
+              value: "{{ .Values.operator.etcdStorageClass }}"
+{{- end }}
+{{- if .Values.operator.etcdStorageMemory }}
+            - name: KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY
+              value: "1"
+{{- end }}
             - name: KAFSCALE_OPERATOR_ETCD_ENDPOINTS
               value: "{{ join "," .Values.operator.etcdEndpoints }}"
             - name: KAFSCALE_OPERATOR_LEADER_KEY

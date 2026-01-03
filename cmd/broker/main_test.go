@@ -155,7 +155,7 @@ func TestHandlerApiVersionsUnsupported(t *testing.T) {
 
 	header := &protocol.RequestHeader{
 		APIKey:        protocol.APIKeyApiVersion,
-		APIVersion:    4,
+		APIVersion:    5,
 		CorrelationID: 42,
 	}
 	payload, err := handler.Handle(context.Background(), header, &protocol.ApiVersionsRequest{})

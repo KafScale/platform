@@ -73,6 +73,34 @@ func TestEncodeApiVersionsResponseV3(t *testing.T) {
 	}
 }
 
+func TestEncodeApiVersionsResponseV4(t *testing.T) {
+	resp := &ApiVersionsResponse{
+		CorrelationID: 102,
+		ErrorCode:     0,
+		Versions: []ApiVersion{
+			{APIKey: APIKeyMetadata, MinVersion: 0, MaxVersion: 12},
+		},
+	}
+	payload, err := EncodeApiVersionsResponse(resp, 4)
+	if err != nil {
+		t.Fatalf("EncodeApiVersionsResponse: %v", err)
+	}
+	reader := newByteReader(payload)
+	corr, _ := reader.Int32()
+	if corr != 102 {
+		t.Fatalf("unexpected correlation id %d", corr)
+	}
+	body := payload[4:]
+	kmsgResp := kmsg.NewPtrApiVersionsResponse()
+	kmsgResp.Version = 4
+	if err := kmsgResp.ReadFrom(body); err != nil {
+		t.Fatalf("decode api versions response: %v", err)
+	}
+	if len(kmsgResp.ApiKeys) != 1 || kmsgResp.ApiKeys[0].ApiKey != APIKeyMetadata {
+		t.Fatalf("unexpected api versions response: %#v", kmsgResp.ApiKeys)
+	}
+}
+
 func TestEncodeMetadataResponse(t *testing.T) {
 	clusterID := "cluster-1"
 	payload, err := EncodeMetadataResponse(&MetadataResponse{
@@ -683,6 +711,107 @@ func TestEncodeFetchResponseV13(t *testing.T) {
 	}
 	if string(recordSet) != "records" {
 		t.Fatalf("unexpected record set %q", recordSet)
+	}
+	if tags, _ := reader.UVarint(); tags != 0 {
+		t.Fatalf("expected zero partition tags got %d", tags)
+	}
+	if tags, _ := reader.UVarint(); tags != 0 {
+		t.Fatalf("expected zero topic tags got %d", tags)
+	}
+	if tags, _ := reader.UVarint(); tags != 0 {
+		t.Fatalf("expected zero response tags got %d", tags)
+	}
+	if reader.remaining() != 0 {
+		t.Fatalf("unexpected trailing bytes %d", reader.remaining())
+	}
+}
+
+func TestEncodeFetchResponseV13EmptyRecordSet(t *testing.T) {
+	var topicID [16]byte
+	for i := range topicID {
+		topicID[i] = byte(i + 1)
+	}
+	payload, err := EncodeFetchResponse(&FetchResponse{
+		CorrelationID: 12,
+		ThrottleMs:    0,
+		ErrorCode:     NONE,
+		SessionID:     0,
+		Topics: []FetchTopicResponse{
+			{
+				TopicID: topicID,
+				Partitions: []FetchPartitionResponse{
+					{
+						Partition:            0,
+						ErrorCode:            NONE,
+						HighWatermark:        5,
+						LastStableOffset:     5,
+						LogStartOffset:       0,
+						PreferredReadReplica: -1,
+						RecordSet:            nil,
+					},
+				},
+			},
+		},
+	}, 13)
+	if err != nil {
+		t.Fatalf("EncodeFetchResponse v13 empty: %v", err)
+	}
+	reader := newByteReader(payload)
+	if corr, _ := reader.Int32(); corr != 12 {
+		t.Fatalf("unexpected correlation id %d", corr)
+	}
+	if err := reader.SkipTaggedFields(); err != nil {
+		t.Fatalf("skip response header tags: %v", err)
+	}
+	if throttle, _ := reader.Int32(); throttle != 0 {
+		t.Fatalf("unexpected throttle %d", throttle)
+	}
+	if errCode, _ := reader.Int16(); errCode != 0 {
+		t.Fatalf("unexpected error code %d", errCode)
+	}
+	if session, _ := reader.Int32(); session != 0 {
+		t.Fatalf("unexpected session id %d", session)
+	}
+	if topicCount, _ := reader.CompactArrayLen(); topicCount != 1 {
+		t.Fatalf("unexpected topic count %d", topicCount)
+	}
+	gotID, err := reader.UUID()
+	if err != nil {
+		t.Fatalf("read topic id: %v", err)
+	}
+	if gotID != topicID {
+		t.Fatalf("unexpected topic id %v", gotID)
+	}
+	if partCount, _ := reader.CompactArrayLen(); partCount != 1 {
+		t.Fatalf("unexpected partition count %d", partCount)
+	}
+	if partition, _ := reader.Int32(); partition != 0 {
+		t.Fatalf("unexpected partition %d", partition)
+	}
+	if perr, _ := reader.Int16(); perr != 0 {
+		t.Fatalf("unexpected partition error %d", perr)
+	}
+	if hw, _ := reader.Int64(); hw != 5 {
+		t.Fatalf("unexpected high watermark %d", hw)
+	}
+	if lso, _ := reader.Int64(); lso != 5 {
+		t.Fatalf("unexpected lso %d", lso)
+	}
+	if lsoff, _ := reader.Int64(); lsoff != 0 {
+		t.Fatalf("unexpected log start offset %d", lsoff)
+	}
+	if abortedCount, _ := reader.CompactArrayLen(); abortedCount != 0 {
+		t.Fatalf("unexpected aborted txns %d", abortedCount)
+	}
+	if pref, _ := reader.Int32(); pref != -1 {
+		t.Fatalf("unexpected preferred replica %d", pref)
+	}
+	recordSet, err := reader.CompactBytes()
+	if err != nil {
+		t.Fatalf("read record set: %v", err)
+	}
+	if recordSet == nil || len(recordSet) != 0 {
+		t.Fatalf("expected empty record set, got %#v", recordSet)
 	}
 	if tags, _ := reader.UVarint(); tags != 0 {
 		t.Fatalf("expected zero partition tags got %d", tags)

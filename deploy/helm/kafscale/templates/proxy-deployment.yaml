@@ -1,4 +1,4 @@
-# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 # This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,6 +50,14 @@ spec:
               value: ":{{ .Values.proxy.service.port }}"
             - name: KAFSCALE_PROXY_ADVERTISED_PORT
               value: "{{ .Values.proxy.advertisedPort }}"
+{{- if .Values.proxy.health.enabled }}
+            - name: KAFSCALE_PROXY_HEALTH_ADDR
+              value: ":{{ .Values.proxy.health.port }}"
+{{- end }}
+{{- if .Values.proxy.backendCacheTTLSeconds }}
+            - name: KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC
+              value: "{{ .Values.proxy.backendCacheTTLSeconds }}"
+{{- end }}
 {{- if .Values.proxy.advertisedHost }}
             - name: KAFSCALE_PROXY_ADVERTISED_HOST
               value: "{{ .Values.proxy.advertisedHost }}"
@@ -74,6 +82,25 @@ spec:
             - name: kafka
               containerPort: {{ .Values.proxy.service.port }}
               protocol: TCP
+{{- if .Values.proxy.health.enabled }}
+            - name: health
+              containerPort: {{ .Values.proxy.health.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+{{- end }}
           resources:
 {{- if .Values.proxy.resources }}
 {{ toYaml .Values.proxy.resources | indent 12 }}

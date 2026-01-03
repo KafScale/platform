@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +46,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	brokerAddr, metricsAddr, controlAddr := brokerAddrs(t)
 
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -80,7 +81,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		t.Fatalf("start broker: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = brokerCmd.Process.Signal(os.Interrupt)
+		_ = signalProcessGroup(brokerCmd, os.Interrupt)
 		done := make(chan struct{})
 		go func() {
 			_ = brokerCmd.Wait()
@@ -89,7 +90,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			_ = brokerCmd.Process.Kill()
+			_ = signalProcessGroup(brokerCmd, os.Kill)
 		}
 	})
 
@@ -269,6 +270,23 @@ func waitForPort(t *testing.T, addr string) {
 		select {
 		case <-deadline:
 			t.Fatalf("broker did not start listening on %s: %v", addr, err)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func waitForPortClosed(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		select {
+		case <-deadline:
+			t.Fatalf("port %s did not close in time", addr)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

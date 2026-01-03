@@ -95,7 +95,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	case *protocol.ApiVersionsRequest:
 		errorCode := protocol.NONE
 		responseVersion := header.APIVersion
-		if responseVersion > 3 {
+		if responseVersion > 4 {
 			errorCode = protocol.UNSUPPORTED_VERSION
 			responseVersion = 0
 		}
@@ -1116,10 +1116,14 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 	if header.APIVersion < 0 || header.APIVersion > 4 {
 		return nil, fmt.Errorf("list offsets version %d not supported", header.APIVersion)
 	}
+	if h.traceKafka {
+		h.logger.Debug("list offsets request", "api_version", header.APIVersion, "topics", len(req.Topics))
+	}
 	topicResponses := make([]protocol.ListOffsetsTopicResponse, 0, len(req.Topics))
 	for _, topic := range req.Topics {
 		partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
+			h.logger.Warn("list offsets partition", "topic", topic.Name, "partition", part.Partition, "timestamp", part.Timestamp, "max_offsets", part.MaxNumOffsets, "leader_epoch", part.CurrentLeaderEpoch)
 			resp := protocol.ListOffsetsPartitionResponse{
 				Partition:   part.Partition,
 				LeaderEpoch: -1,
@@ -1927,7 +1931,7 @@ type apiVersionSupport struct {
 
 func generateApiVersions() []protocol.ApiVersion {
 	supported := []apiVersionSupport{
-		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 3},
+		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 4},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
 		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},
