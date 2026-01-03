@@ -13,6 +13,7 @@
     <spark.version>3.5.1</spark.version>
     <scala.binary.version>2.12</scala.binary.version>
     <kafka.clients.version>3.9.1</kafka.clients.version>
+    <delta.version>3.2.0</delta.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <main.class>com.example.kafscale.spark.WordCountSparkJob</main.class>
   </properties>
@@ -28,6 +29,11 @@
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-sql-kafka-0-10_${scala.binary.version}</artifactId>
       <version>${spark.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.delta</groupId>
+      <artifactId>delta-spark_${scala.binary.version}</artifactId>
+      <version>${delta.version}</version>
     </dependency>
     <dependency>
       <groupId>org.apache.kafka</groupId>

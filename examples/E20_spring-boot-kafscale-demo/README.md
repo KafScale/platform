@@ -18,13 +18,13 @@ This is a complete Spring Boot application demonstrating how to use KafScale as 
 
 ## Running the Application
 
-### 1. Ensure KafScale is Running
+### 1. Ensure KafScale is running (default local demo)
 
-Make sure you have KafScale running with the Makefile demo:
+Start the local demo:
 
 ```bash
 cd ../..
-make demo-guide-pf
+make demo
 ```
 
 ### 2. Build the Application
@@ -33,7 +33,7 @@ make demo-guide-pf
 mvn clean package
 ```
 
-### 3. Run the Application
+### 3. Run the Application (default profile)
 
 You can run the application with different profiles depending on your environment.
 
@@ -48,6 +48,8 @@ Profile for local app development with a local broker. Choose one of these two o
 mvn spring-boot:run
 ```
 
+The application will start on `http://localhost:8093`.
+
 #### Kubernetes Cluster
 
 Profile for in-cluster deployments where the app and KafScale live in the same Kubernetes namespace. Uses the internal service name.
@@ -55,6 +57,9 @@ Profile for in-cluster deployments where the app and KafScale live in the same K
 Connects to `kafscale-broker:9092` (Internal service). Use this when deploying the app as a Pod.
 
 ```bash
+cd ../..
+make demo-guide-pf
+cd examples/E20_spring-boot-kafscale-demo
 mvn spring-boot:run -Dspring-boot.run.profiles=cluster
 ```
 
@@ -68,14 +73,12 @@ Connects to `localhost:59092` (Nginx LB).
 mvn spring-boot:run -Dspring-boot.run.profiles=local-lb
 ```
 
-The application will start on `http://localhost:8083`.
-
 ## Testing the Application
 
 ### Create an Order via REST API
 
 ```bash
-curl -X POST http://localhost:8083/api/orders \
+curl -X POST http://localhost:8093/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "product": "Widget",
@@ -90,7 +93,7 @@ You should see:
 ### Check Application Health
 
 ```bash
-curl http://localhost:8083/api/orders/health
+curl http://localhost:8093/api/orders/health
 ```
 
 ## Project Structure
@@ -135,6 +138,16 @@ INFO  OrderConsumerService - Received order from KafScale: Order{orderId='...', 
 INFO  OrderConsumerService - Processing order: ... for product: Widget (quantity: 5)
 ```
 
+## OpenTelemetry
+
+Tracing is enabled via Spring Boot Actuator + OpenTelemetry. Set the OTLP endpoint with:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+```
+
+Metrics are exposed at `http://localhost:8093/actuator/prometheus`.
+
 ## Next Steps
 
 - Modify the `Order` model to include additional fields
@@ -142,4 +155,22 @@ INFO  OrderConsumerService - Processing order: ... for product: Widget (quantity
 - Implement error handling and retry logic
 - Add integration tests
 
-See the [Running Your Application](../../04-running-your-app.md) guide for more details.
+See the [Running Your Application](../../examples/101_kafscale-dev-guide/04-running-your-app.md) guide for more details.
+
+## Deep Dive: Advanced networking
+
+For host mapping, port-forwarding, and Docker networking options, see `CONFIGURATION.md`.
+
+## Limitations
+
+- Consumer state is kept in memory only (no persistence or replay UI).
+- `/config` and `/cluster-info` endpoints expose internal configuration details and should not be public.
+- No authentication/authorization or TLS examples are included.
+- No retry, DLQ, or backoff strategy for failed consumption/production.
+
+## Next Level Extensions
+
+- Add persistence (database) and pagination for orders.
+- Add a DLQ topic and retry/backoff policy for failures.
+- Add authn/authz (Spring Security) and TLS configuration samples.
+- Add metrics/tracing and structured logging.

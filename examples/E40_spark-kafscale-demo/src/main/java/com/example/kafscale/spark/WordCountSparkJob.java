@@ -43,13 +43,20 @@ public final class WordCountSparkJob {
         LOG.info("Spark UI port: {}", config.sparkUiPort);
         LOG.info("Checkpoint dir: {}", config.checkpointDir);
         LOG.info("Include Kafka headers: {}", config.includeHeaders);
+        LOG.info("Fail on data loss: {}", config.failOnDataLoss);
+        LOG.info("Delta enabled: {}", config.deltaEnabled);
+        LOG.info("Delta path: {}", config.deltaPath);
 
         preflightKafka(config);
 
-        SparkSession spark = SparkSession.builder()
+        SparkSession.Builder builder = SparkSession.builder()
                 .appName("KafScale Spark WordCount Demo")
-                .config("spark.ui.port", config.sparkUiPort)
-                .getOrCreate();
+                .config("spark.ui.port", config.sparkUiPort);
+        if (config.deltaEnabled) {
+            builder.config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+                    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog");
+        }
+        SparkSession spark = builder.getOrCreate();
 
         Dataset<Row> kafka = spark.readStream()
                 .format("kafka")
@@ -60,20 +67,30 @@ public final class WordCountSparkJob {
                 .option("kafka.api.version.request", config.kafkaApiVersionRequest)
                 .option("kafka.broker.version.fallback", config.kafkaBrokerFallback)
                 .option("includeHeaders", String.valueOf(config.includeHeaders))
+                .option("failOnDataLoss", String.valueOf(config.failOnDataLoss))
                 .load();
 
-        Dataset<Row> tokens = buildTokens(kafka);
+        Dataset<Row> tokens = buildTokens(kafka, config.includeHeaders);
 
         Dataset<Row> counts = tokens.groupBy(col("category"), col("token")).count();
 
         StreamingQuery query;
         try {
-            query = counts.writeStream()
-                    .outputMode("complete")
-                    .format("console")
-                    .option("truncate", "false")
-                    .option("checkpointLocation", config.checkpointDir)
-                    .start();
+            if (config.deltaEnabled) {
+                query = counts.writeStream()
+                        .outputMode("complete")
+                        .format("delta")
+                        .option("checkpointLocation", config.checkpointDir)
+                        .option("path", config.deltaPath)
+                        .start();
+            } else {
+                query = counts.writeStream()
+                        .outputMode("complete")
+                        .format("console")
+                        .option("truncate", "false")
+                        .option("checkpointLocation", config.checkpointDir)
+                        .start();
+            }
         } catch (TimeoutException e) {
             throw new IllegalStateException("Failed to start Spark query within timeout.", e);
         }
@@ -81,21 +98,24 @@ public final class WordCountSparkJob {
         query.awaitTermination();
     }
 
-    private static Dataset<Row> buildTokens(Dataset<Row> kafka) {
+    private static Dataset<Row> buildTokens(Dataset<Row> kafka, boolean includeHeaders) {
         Column keyCol = col("key").cast("string");
         Column valueCol = col("value").cast("string");
-        Column headersCol = col("headers");
+        Column headersCol = includeHeaders ? col("headers") : lit(null);
 
         Dataset<Row> keyWords = wordsFromText(kafka, "key", keyCol);
         Dataset<Row> valueWords = wordsFromText(kafka, "value", valueCol);
 
-        Dataset<Row> headerRows = kafka.where(headersCol.isNotNull().and(size(headersCol).gt(0)))
-                .select(explode(headersCol).alias("header"));
+        Dataset<Row> headerKeyWords = sparkSessionEmpty(kafka);
+        Dataset<Row> headerValueWords = sparkSessionEmpty(kafka);
+        if (includeHeaders) {
+            Dataset<Row> headerRows = kafka.where(headersCol.isNotNull().and(size(headersCol).gt(0)))
+                    .select(explode(headersCol).alias("header"));
+            headerKeyWords = wordsFromText(headerRows, "header", col("header.key"));
+            headerValueWords = wordsFromText(headerRows, "header", col("header.value").cast("string"));
+        }
 
-        Dataset<Row> headerKeyWords = wordsFromText(headerRows, "header", col("header.key"));
-        Dataset<Row> headerValueWords = wordsFromText(headerRows, "header", col("header.value").cast("string"));
-
-        Dataset<Row> stats = missingStats(kafka, keyCol, valueCol, headersCol);
+        Dataset<Row> stats = missingStats(kafka, keyCol, valueCol, headersCol, includeHeaders);
 
         return keyWords.union(valueWords).union(headerKeyWords).union(headerValueWords).union(stats)
                 .where(col("token").isNotNull().and(length(col("token")).gt(0)));
@@ -108,10 +128,13 @@ public final class WordCountSparkJob {
                 .select(lit(category).alias("category"), explode(tokens).alias("token"));
     }
 
-    private static Dataset<Row> missingStats(Dataset<Row> kafka, Column keyCol, Column valueCol, Column headersCol) {
+    private static Dataset<Row> missingStats(Dataset<Row> kafka, Column keyCol, Column valueCol, Column headersCol,
+            boolean includeHeaders) {
         Column noKey = when(keyCol.isNull().or(length(keyCol).equalTo(0)), lit("no-key"));
         Column noValue = when(valueCol.isNull().or(length(valueCol).equalTo(0)), lit("no-value"));
-        Column noHeader = when(headersCol.isNull().or(size(headersCol).equalTo(0)), lit("no-header"));
+        Column noHeader = includeHeaders
+                ? when(headersCol.isNull().or(size(headersCol).equalTo(0)), lit("no-header"))
+                : lit(null);
 
         Dataset<Row> base = kafka.select(noKey.alias("noKey"), noValue.alias("noValue"), noHeader.alias("noHeader"));
 
@@ -119,10 +142,18 @@ public final class WordCountSparkJob {
                 .select(lit("stats").alias("category"), col("noKey").alias("token"));
         Dataset<Row> noValueRows = base.where(col("noValue").isNotNull())
                 .select(lit("stats").alias("category"), col("noValue").alias("token"));
-        Dataset<Row> noHeaderRows = base.where(col("noHeader").isNotNull())
-                .select(lit("stats").alias("category"), col("noHeader").alias("token"));
+        Dataset<Row> noHeaderRows = includeHeaders
+                ? base.where(col("noHeader").isNotNull())
+                        .select(lit("stats").alias("category"), col("noHeader").alias("token"))
+                : sparkSessionEmpty(kafka);
 
         return noKeyRows.union(noValueRows).union(noHeaderRows);
+    }
+
+    private static Dataset<Row> sparkSessionEmpty(Dataset<Row> kafka) {
+        return kafka.sparkSession().emptyDataFrame()
+                .select(lit("").alias("category"), lit("").alias("token"))
+                .limit(0);
     }
 
     private static void logBanner() {
@@ -173,12 +204,15 @@ public final class WordCountSparkJob {
         final String kafkaApiVersionRequest;
         final String kafkaBrokerFallback;
         final boolean includeHeaders;
+        final boolean failOnDataLoss;
+        final boolean deltaEnabled;
+        final String deltaPath;
         final String sparkUiPort;
         final String checkpointDir;
 
         private Config(String bootstrapServers, String topic, String groupId, String startingOffsets,
-                String kafkaApiVersionRequest, String kafkaBrokerFallback, boolean includeHeaders,
-                String sparkUiPort, String checkpointDir) {
+                String kafkaApiVersionRequest, String kafkaBrokerFallback, boolean includeHeaders, boolean failOnDataLoss,
+                boolean deltaEnabled, String deltaPath, String sparkUiPort, String checkpointDir) {
             this.bootstrapServers = bootstrapServers;
             this.topic = topic;
             this.groupId = groupId;
@@ -186,6 +220,9 @@ public final class WordCountSparkJob {
             this.kafkaApiVersionRequest = kafkaApiVersionRequest;
             this.kafkaBrokerFallback = kafkaBrokerFallback;
             this.includeHeaders = includeHeaders;
+            this.failOnDataLoss = failOnDataLoss;
+            this.deltaEnabled = deltaEnabled;
+            this.deltaPath = deltaPath;
             this.sparkUiPort = sparkUiPort;
             this.checkpointDir = checkpointDir;
         }
@@ -210,13 +247,19 @@ public final class WordCountSparkJob {
                     props.getProperty("kafscale.kafka.broker.version.fallback", "0.9.0.0"));
             boolean includeHeaders = Boolean.parseBoolean(envOrDefault("KAFSCALE_INCLUDE_HEADERS",
                     props.getProperty("kafscale.include.headers", "true")));
+            boolean failOnDataLoss = Boolean.parseBoolean(envOrDefault("KAFSCALE_FAIL_ON_DATA_LOSS",
+                    props.getProperty("kafscale.fail.on.data.loss", "false")));
+            boolean deltaEnabled = Boolean.parseBoolean(envOrDefault("KAFSCALE_DELTA_ENABLED",
+                    props.getProperty("kafscale.delta.enabled", "false")));
+            String deltaPath = envOrDefault("KAFSCALE_DELTA_PATH",
+                    props.getProperty("kafscale.delta.path", "/tmp/kafscale-delta-wordcount"));
             String sparkUiPort = envOrDefault("KAFSCALE_SPARK_UI_PORT",
                     props.getProperty("kafscale.spark.ui.port", "4040"));
             String checkpointDir = envOrDefault("KAFSCALE_CHECKPOINT_DIR",
                     props.getProperty("kafscale.checkpoint.dir", "/tmp/kafscale-spark-checkpoints"));
 
             return new Config(bootstrapServers, topic, groupId, startingOffsets, apiVersionRequest, brokerFallback,
-                    includeHeaders, sparkUiPort, checkpointDir);
+                    includeHeaders, failOnDataLoss, deltaEnabled, deltaPath, sparkUiPort, checkpointDir);
         }
 
         private static String readProfile(String[] args) {

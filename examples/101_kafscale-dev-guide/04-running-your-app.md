@@ -12,7 +12,7 @@ make demo-guide-pf
 
 When it finishes, you should see messages about port-forwarding:
 - **KafScale Console**: [http://localhost:8080/ui](http://localhost:8080/ui)
-- **Spring Boot Demo (E20)**: [http://localhost:8083](http://localhost:8083)
+- **Spring Boot Demo (E20)**: [http://localhost:8093](http://localhost:8093)
 - **Broker**: `localhost:39092`
 
 Logs are written to `/tmp/kafscale-demo-*.log`.
@@ -23,14 +23,14 @@ Logs are written to `/tmp/kafscale-demo-*.log`.
 
 **Send an Order:**
 ```bash
-curl -X POST http://localhost:8083/api/orders \
+curl -X POST http://localhost:8093/api/orders \
   -H "Content-Type: application/json" \
   -d '{"product": "Widget", "quantity": 5}'
 ```
 
 **Check Health:**
 ```bash
-curl http://localhost:8083/api/orders/health
+curl http://localhost:8093/api/orders/health
 ```
 
 You should see "Sending order..." and "Received order..." in the Spring Boot logs at `/tmp/kafscale-demo-spring.log`.

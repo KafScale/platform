@@ -18,14 +18,23 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.typeinfo.TypeHint;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.RestOptions;
+import org.apache.flink.connector.base.DeliveryGuarantee;
 import org.apache.flink.connector.kafka.source.KafkaSource;
+import org.apache.flink.connector.kafka.source.KafkaSourceOptions;
 import org.apache.flink.connector.kafka.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.flink.connector.kafka.source.reader.deserializer.KafkaRecordDeserializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
+import org.apache.flink.connector.kafka.sink.KafkaSink;
+import org.apache.flink.contrib.streaming.state.EmbeddedRocksDBStateBackend;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.util.Collector;
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.DescribeClusterResult;
@@ -62,10 +71,17 @@ public final class WordCountJob {
         Configuration flinkConfig = new Configuration();
         flinkConfig.setInteger(RestOptions.PORT, config.flinkRestPort);
         StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironmentWithWebUI(flinkConfig);
+        configureRuntime(env, config);
+        env.setParallelism(1);
 
         Properties kafkaProps = new Properties();
         kafkaProps.put("api.version.request", config.kafkaApiVersionRequest);
         kafkaProps.put("broker.version.fallback", config.kafkaBrokerFallback);
+        kafkaProps.put(KafkaSourceOptions.COMMIT_OFFSETS_ON_CHECKPOINT.key(), String.valueOf(config.commitOnCheckpoint));
+        kafkaProps.put("max.poll.interval.ms", String.valueOf(config.maxPollIntervalMs));
+        kafkaProps.put("max.poll.records", String.valueOf(config.maxPollRecords));
+        kafkaProps.put("session.timeout.ms", String.valueOf(config.sessionTimeoutMs));
+        kafkaProps.put("heartbeat.interval.ms", String.valueOf(config.heartbeatIntervalMs));
 
         KafkaSource<CountEvent> source = KafkaSource
                 .<CountEvent>builder()
@@ -82,7 +98,24 @@ public final class WordCountJob {
                 .keyBy(new CountKeySelector())
                 .sum("count");
 
-        counts.map(new CountEventFormatter()).print();
+        DataStream<String> output = counts.map(new CountEventFormatter());
+        output.print();
+
+        if (config.sinkEnabled) {
+            Properties sinkProps = new Properties();
+            sinkProps.put("enable.idempotence", String.valueOf(config.sinkEnableIdempotence));
+            DeliveryGuarantee deliveryGuarantee = config.sinkDeliveryGuarantee;
+            KafkaSink<String> sink = KafkaSink.<String>builder()
+                    .setBootstrapServers(config.bootstrapServers)
+                    .setKafkaProducerConfig(sinkProps)
+                    .setRecordSerializer(KafkaRecordSerializationSchema.builder()
+                            .setTopic(config.sinkTopic)
+                            .setValueSerializationSchema(new SimpleStringSchema())
+                            .build())
+                    .setDeliveryGuarantee(deliveryGuarantee)
+                    .build();
+            output.sinkTo(sink).name("kafka-counts-sink");
+        }
 
         env.execute("KafScale Flink WordCount Demo");
     }
@@ -96,10 +129,30 @@ public final class WordCountJob {
         final String kafkaApiVersionRequest;
         final String kafkaBrokerFallback;
         final int flinkRestPort;
+        final boolean commitOnCheckpoint;
+        final int maxPollIntervalMs;
+        final int maxPollRecords;
+        final int sessionTimeoutMs;
+        final int heartbeatIntervalMs;
+        final long checkpointIntervalMs;
+        final long checkpointMinPauseMs;
+        final long checkpointTimeoutMs;
+        final String checkpointDir;
+        final String stateBackend;
+        final int restartAttempts;
+        final long restartDelayMs;
+        final boolean sinkEnabled;
+        final String sinkTopic;
+        final boolean sinkEnableIdempotence;
+        final DeliveryGuarantee sinkDeliveryGuarantee;
 
         private Config(String bootstrapServers, String topic, String groupId, OffsetsInitializer startingOffsets,
                 String startingOffsetsLabel, String kafkaApiVersionRequest, String kafkaBrokerFallback,
-                int flinkRestPort) {
+                int flinkRestPort, boolean commitOnCheckpoint, int maxPollIntervalMs, int maxPollRecords,
+                int sessionTimeoutMs, int heartbeatIntervalMs, long checkpointIntervalMs, long checkpointMinPauseMs,
+                long checkpointTimeoutMs, String checkpointDir, String stateBackend, int restartAttempts,
+                long restartDelayMs, boolean sinkEnabled, String sinkTopic, boolean sinkEnableIdempotence,
+                DeliveryGuarantee sinkDeliveryGuarantee) {
             this.bootstrapServers = bootstrapServers;
             this.topic = topic;
             this.groupId = groupId;
@@ -108,6 +161,22 @@ public final class WordCountJob {
             this.kafkaApiVersionRequest = kafkaApiVersionRequest;
             this.kafkaBrokerFallback = kafkaBrokerFallback;
             this.flinkRestPort = flinkRestPort;
+            this.commitOnCheckpoint = commitOnCheckpoint;
+            this.maxPollIntervalMs = maxPollIntervalMs;
+            this.maxPollRecords = maxPollRecords;
+            this.sessionTimeoutMs = sessionTimeoutMs;
+            this.heartbeatIntervalMs = heartbeatIntervalMs;
+            this.checkpointIntervalMs = checkpointIntervalMs;
+            this.checkpointMinPauseMs = checkpointMinPauseMs;
+            this.checkpointTimeoutMs = checkpointTimeoutMs;
+            this.checkpointDir = checkpointDir;
+            this.stateBackend = stateBackend;
+            this.restartAttempts = restartAttempts;
+            this.restartDelayMs = restartDelayMs;
+            this.sinkEnabled = sinkEnabled;
+            this.sinkTopic = sinkTopic;
+            this.sinkEnableIdempotence = sinkEnableIdempotence;
+            this.sinkDeliveryGuarantee = sinkDeliveryGuarantee;
         }
 
         static Config load(String[] args) {
@@ -130,12 +199,49 @@ public final class WordCountJob {
             String restPortValue = envOrDefault("KAFSCALE_FLINK_REST_PORT",
                     props.getProperty("kafscale.flink.rest.port", "8081"));
             int restPort = parseInt(restPortValue, 8081);
+            boolean commitOnCheckpoint = Boolean.parseBoolean(envOrDefault("KAFSCALE_COMMIT_ON_CHECKPOINT",
+                    props.getProperty("kafscale.commit.on.checkpoint", "false")));
+            int maxPollIntervalMs = parseInt(envOrDefault("KAFSCALE_CONSUMER_MAX_POLL_INTERVAL_MS",
+                    props.getProperty("kafscale.consumer.max.poll.interval.ms", "300000")), 300000);
+            int maxPollRecords = parseInt(envOrDefault("KAFSCALE_CONSUMER_MAX_POLL_RECORDS",
+                    props.getProperty("kafscale.consumer.max.poll.records", "500")), 500);
+            int sessionTimeoutMs = parseInt(envOrDefault("KAFSCALE_CONSUMER_SESSION_TIMEOUT_MS",
+                    props.getProperty("kafscale.consumer.session.timeout.ms", "30000")), 30000);
+            int heartbeatIntervalMs = parseInt(envOrDefault("KAFSCALE_CONSUMER_HEARTBEAT_INTERVAL_MS",
+                    props.getProperty("kafscale.consumer.heartbeat.interval.ms", "10000")), 10000);
+            long checkpointInterval = parseLong(envOrDefault("KAFSCALE_CHECKPOINT_INTERVAL_MS",
+                    props.getProperty("kafscale.checkpoint.interval.ms", "10000")), 10000L);
+            long checkpointMinPause = parseLong(envOrDefault("KAFSCALE_CHECKPOINT_MIN_PAUSE_MS",
+                    props.getProperty("kafscale.checkpoint.min.pause.ms", "3000")), 3000L);
+            long checkpointTimeout = parseLong(envOrDefault("KAFSCALE_CHECKPOINT_TIMEOUT_MS",
+                    props.getProperty("kafscale.checkpoint.timeout.ms", "60000")), 60000L);
+            String checkpointDir = envOrDefault("KAFSCALE_CHECKPOINT_DIR",
+                    props.getProperty("kafscale.checkpoint.dir", "file:///tmp/kafscale-flink-checkpoints"));
+            String stateBackend = envOrDefault("KAFSCALE_STATE_BACKEND",
+                    props.getProperty("kafscale.state.backend", "hashmap"));
+            int restartAttempts = parseInt(envOrDefault("KAFSCALE_RESTART_ATTEMPTS",
+                    props.getProperty("kafscale.restart.attempts", "3")), 3);
+            long restartDelayMs = parseLong(envOrDefault("KAFSCALE_RESTART_DELAY_MS",
+                    props.getProperty("kafscale.restart.delay.ms", "5000")), 5000L);
+            boolean sinkEnabled = Boolean.parseBoolean(envOrDefault("KAFSCALE_SINK_ENABLED",
+                    props.getProperty("kafscale.sink.enabled", "true")));
+            String sinkTopic = envOrDefault("KAFSCALE_SINK_TOPIC",
+                    props.getProperty("kafscale.sink.topic", "demo-topic-1-counts"));
+            boolean sinkEnableIdempotence = Boolean.parseBoolean(envOrDefault("KAFSCALE_SINK_ENABLE_IDEMPOTENCE",
+                    props.getProperty("kafscale.sink.enable.idempotence", "false")));
+            String sinkGuaranteeValue = envOrDefault("KAFSCALE_SINK_DELIVERY_GUARANTEE",
+                    props.getProperty("kafscale.sink.delivery.guarantee", "none"));
+            DeliveryGuarantee sinkGuarantee = parseDeliveryGuarantee(sinkGuaranteeValue, sinkEnableIdempotence);
 
             boolean earliest = "earliest".equalsIgnoreCase(offsets);
             OffsetsInitializer initializer = earliest ? OffsetsInitializer.earliest() : OffsetsInitializer.latest();
             String label = earliest ? "earliest" : "latest";
 
-            return new Config(bootstrapServers, topic, groupId, initializer, label, apiVersionRequest, brokerFallback, restPort);
+            return new Config(bootstrapServers, topic, groupId, initializer, label, apiVersionRequest, brokerFallback,
+                    restPort, commitOnCheckpoint, maxPollIntervalMs, maxPollRecords, sessionTimeoutMs,
+                    heartbeatIntervalMs, checkpointInterval, checkpointMinPause, checkpointTimeout, checkpointDir,
+                    stateBackend, restartAttempts, restartDelayMs, sinkEnabled, sinkTopic, sinkEnableIdempotence,
+                    sinkGuarantee);
         }
 
         String startingOffsetsKind() {
@@ -143,6 +249,10 @@ public final class WordCountJob {
         }
 
         private static String readProfile(String[] args) {
+            String setupProfile = System.getenv("KAFSCALE_SETUP_PROFILE");
+            if (setupProfile != null && !setupProfile.isBlank()) {
+                return setupProfile.trim();
+            }
             String envProfile = System.getenv("KAFSCALE_PROFILE");
             if (envProfile != null && !envProfile.isBlank()) {
                 return envProfile.trim();
@@ -166,6 +276,25 @@ public final class WordCountJob {
             } catch (NumberFormatException ex) {
                 return fallback;
             }
+        }
+
+        private static long parseLong(String value, long fallback) {
+            try {
+                return Long.parseLong(value);
+            } catch (NumberFormatException ex) {
+                return fallback;
+            }
+        }
+
+        private static DeliveryGuarantee parseDeliveryGuarantee(String value, boolean idempotenceEnabled) {
+            if (value == null) {
+                return DeliveryGuarantee.NONE;
+            }
+            String normalized = value.trim().toLowerCase(Locale.ROOT);
+            if ("at-least-once".equals(normalized) || "at_least_once".equals(normalized)) {
+                return idempotenceEnabled ? DeliveryGuarantee.AT_LEAST_ONCE : DeliveryGuarantee.NONE;
+            }
+            return DeliveryGuarantee.NONE;
         }
 
         private static boolean loadFromConfigDir(Properties props, String profile) {
@@ -214,6 +343,26 @@ public final class WordCountJob {
                     throw new IllegalStateException("Failed to load " + profileFile, e);
                 }
             }
+        }
+    }
+
+    private static void configureRuntime(StreamExecutionEnvironment env, Config config) {
+        if (config.checkpointIntervalMs > 0) {
+            env.enableCheckpointing(config.checkpointIntervalMs, CheckpointingMode.AT_LEAST_ONCE);
+            CheckpointConfig checkpointConfig = env.getCheckpointConfig();
+            checkpointConfig.setMinPauseBetweenCheckpoints(config.checkpointMinPauseMs);
+            checkpointConfig.setCheckpointTimeout(config.checkpointTimeoutMs);
+            if (config.checkpointDir != null && !config.checkpointDir.isBlank()) {
+                checkpointConfig.setCheckpointStorage(config.checkpointDir);
+            }
+        }
+        if ("rocksdb".equalsIgnoreCase(config.stateBackend)) {
+            env.setStateBackend(new EmbeddedRocksDBStateBackend());
+        }
+        if (config.restartAttempts > 0) {
+            env.setRestartStrategy(RestartStrategies.fixedDelayRestart(
+                    config.restartAttempts,
+                    org.apache.flink.api.common.time.Time.milliseconds(config.restartDelayMs)));
         }
     }
 

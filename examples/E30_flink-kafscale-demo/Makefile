@@ -21,8 +21,8 @@ KAFSCALE_SETUP_PROFILE ?= default
 
 help:
 	@echo "Targets:"
-	@echo "  build-jar  Build the Flink job jar (dependencies shaded)"
-	@echo "  build-jar-standalone  Build jar with standalone profile (resources on classpath)"
+	@echo "  build-jar  Build the Flink job jar (standalone profile, resources on classpath)"
+	@echo "  build-jar-standalone  Alias for build-jar"
 	@echo "  run-jar-standalone    Run jar locally (no Docker), using standalone profile"
 	@echo "  up         Start Flink standalone (JobManager + TaskManager) in Docker"
 	@echo "  down       Stop and remove Flink containers + network"
@@ -33,19 +33,17 @@ help:
 
 build-jar:
 	@if [[ "$(BUILD_JAR)" == "1" ]]; then \
-		$(MVN_CMD) -DskipTests package; \
+		$(MVN_CMD) -Pstandalone -DskipTests package; \
 	elif [[ -f $(JAR_PATH) ]]; then \
 		echo "Jar exists. Set BUILD_JAR=1 to rebuild."; \
 	else \
-		$(MVN_CMD) -DskipTests package; \
+		$(MVN_CMD) -Pstandalone -DskipTests package; \
 	fi
 
-build-jar-standalone:
-	$(MVN_CMD) -Pstandalone -DskipTests package
+build-jar-standalone: build-jar
 
-run-jar-standalone:
-	mvn -Pstandalone -DskipTests package \
-	  exec:exec -Dexec.executable=java -Dexec.args="-jar target/flink-kafscale-demo.jar"
+run-jar-standalone: build-jar-standalone
+	KAFSCALE_SINK_ENABLE_IDEMPOTENCE=false java -jar target/flink-kafscale-demo.jar
 
 # Create a dedicated network so the Flink containers can resolve each other
 

@@ -2,14 +2,23 @@
 
 This document describes how to configure the Spring Boot application to connect to the KafScale broker in different environments.
 
-## Common Requirement: DNS
+## Default Local Setup (simple)
 
-The broker is configured to advertise itself as **`kafscale-broker:39092`**.
-Therefore, in **ALL** environments, the client must be able to resolve `kafscale-broker` to an IP address that accepts traffic on port **39092**.
+If you run the local demo (`make demo`), the broker is reachable at:
+
+```
+localhost:39092
+```
+
+Use the default profile in `application.yml` (no host mapping required).
 
 ---
 
-## (a) Local Run (via `mvn`)
+## Deep Dive: Advanced networking
+
+Use these options when you are not using the default local demo or when you run inside containers.
+
+### (a) Local Run (via `mvn`) with port-forward
 
 **Use case**: Running `mvn spring-boot:run` or `mvn exec:java` directly on your machine.
 
@@ -34,7 +43,7 @@ Therefore, in **ALL** environments, the client must be able to resolve `kafscale
 
 ---
 
-## (b) Docker Container
+### (b) Docker Container
 
 **Use case**: Running the app as a Docker container on your local machine.
 
@@ -63,7 +72,7 @@ The container needs to reach the host machine where the port-forward is running.
 
 ---
 
-## (c) Kubernetes Pod
+### (c) Kubernetes Pod
 
 **Use case**: Running inside the Kubernetes cluster (e.g., `make demo-guide-pf`).
 

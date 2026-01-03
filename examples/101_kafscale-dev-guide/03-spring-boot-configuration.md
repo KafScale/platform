@@ -201,7 +201,7 @@ If your application relies on these features, you'll need to use traditional Kaf
 
 ## Example Application
 
-A complete Spring Boot example application is available in [`examples/spring-boot-kafscale-demo/`](examples/spring-boot-kafscale-demo/). This application demonstrates:
+A complete Spring Boot example application is available in [`examples/E20_spring-boot-kafscale-demo/`](../E20_spring-boot-kafscale-demo/README.md). This application demonstrates:
 
 - Producer and consumer configuration
 - Message production and consumption

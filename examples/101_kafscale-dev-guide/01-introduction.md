@@ -59,7 +59,7 @@ Here's how KafScale works at a high level:
      ▼           ▼
 ┌─────────┐  ┌─────────┐
 │  etcd   │  │   S3    │
-│(Metadata│  │ (Data)  │
+│ Metadata│  │  Data   │
 └─────────┘  └─────────┘
 ```
 

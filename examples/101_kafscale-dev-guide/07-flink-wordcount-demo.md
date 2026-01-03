@@ -10,7 +10,28 @@ Start the local demo:
 make demo
 ```
 
-Run the Flink job (builds the jar with Java 11 and submits via Docker Flink):
+## Step 2: Run the Flink job
+
+### Option A: Standalone (no Docker)
+
+Run the job directly from this repo:
+
+```bash
+cd examples/E30_flink-kafscale-demo
+make run-jar-standalone
+```
+
+Or use the helper script (starts `make demo`, seeds data, runs the job):
+
+```bash
+./scripts/run-standalone-local.sh
+```
+
+The local Web UI is available at `http://localhost:8091` by default.
+
+### Option B: Flink standalone in Docker
+
+Build the jar and submit via Docker Flink:
 
 ```bash
 cd examples/E30_flink-kafscale-demo
@@ -25,7 +46,7 @@ If your KafScale broker is local (from `make demo`), submit with:
 make submit-local
 ```
 
-### One-command local flow
+### One-command local flow (Docker)
 
 ```bash
 ./scripts/run-docker-local.sh
@@ -37,7 +58,7 @@ Set `BUILD_JAR=1` to rebuild the jar layer when needed.
 
 By default it listens on `demo-topic-1` via `localhost:39092`.
 
-## Step 2: Run inside the kind cluster
+## Step 3: Run inside the kind cluster
 
 Build and load the container:
 
@@ -85,7 +106,7 @@ The Flink job uses the same three profiles as the Spring Boot app:
 - `cluster`: in-cluster broker at `kafscale-broker:9092`
 - `local-lb`: local app + remote broker via `localhost:59092`
 
-Set the profile with `KAFSCALE_PROFILE` or `--profile=...`.
+Set the profile with `KAFSCALE_SETUP_PROFILE`, `KAFSCALE_PROFILE`, or `--profile=...`.
 
 > **Note:** The demo exposes only a single listener, so pick one network context at a time.
 

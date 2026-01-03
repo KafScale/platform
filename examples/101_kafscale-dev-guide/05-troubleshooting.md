@@ -117,11 +117,33 @@ docker stop <container-id>
 
 ## Application Issues
 
+### Problem: Flink Kafka sink fails with INIT_PRODUCER_ID / transactional errors
+
+**Symptoms**:
+```
+UnsupportedVersionException: The node does not support INIT_PRODUCER_ID ...
+```
+
+**Cause**:
+Flink Kafka sink uses idempotent/transactional producer features for stronger guarantees. The current KafScale broker
+does not support `INIT_PRODUCER_ID`, so the producer fails.
+
+**Solutions**:
+
+1. **Use delivery guarantee `none` and disable idempotence** (recommended for demos):
+   - Set `KAFSCALE_SINK_DELIVERY_GUARANTEE=none` and `KAFSCALE_SINK_ENABLE_IDEMPOTENCE=false`.
+
+2. **Disable the sink entirely**:
+   - Set `KAFSCALE_SINK_ENABLED=false` and rely on stdout output only.
+
+3. **Reduce delivery guarantees**:
+   - Keep `DeliveryGuarantee.AT_LEAST_ONCE` and avoid transactional settings.
+
 ### Problem: Spring Boot application won't start
 
 **Check**:
 1. **Bootstrap Servers**: Ensure `application.properties` uses `localhost:39092`.
-2. **Port Conflicts**: The app runs on `8083`. Ensure it's free.
+2. **Port Conflicts**: The app runs on `8093`. Ensure it's free.
 
 ### Problem: Messages sent but not consumed
 
@@ -138,6 +160,25 @@ app.kafka.topic=orders
 ```bash
 kafka-consumer-groups --bootstrap-server localhost:39092 --list
 ```
+
+### Problem: Flink offset commit fails with UNKNOWN_MEMBER_ID
+
+**Symptoms**:
+```
+The coordinator is not aware of this member
+CommitFailedException: group has already rebalanced
+```
+
+**Cause**:
+The consumer spent too long between polls or a rebalance occurred, so the coordinator rejected the offset commit.
+
+**Solutions**:
+1. **Use minimal delivery guarantees**:
+   - Set `KAFSCALE_COMMIT_ON_CHECKPOINT=false`.
+2. **Tune consumer settings**:
+   - Increase `KAFSCALE_CONSUMER_MAX_POLL_INTERVAL_MS`.
+   - Reduce `KAFSCALE_CONSUMER_MAX_POLL_RECORDS`.
+   - Adjust `KAFSCALE_CONSUMER_SESSION_TIMEOUT_MS` and `KAFSCALE_CONSUMER_HEARTBEAT_INTERVAL_MS`.
 
 ## Debugging Tips
 

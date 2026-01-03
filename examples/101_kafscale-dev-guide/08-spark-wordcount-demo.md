@@ -41,8 +41,45 @@ You can override defaults with environment variables:
 - `KAFSCALE_TOPIC`
 - `KAFSCALE_GROUP_ID`
 - `KAFSCALE_STARTING_OFFSETS` (`latest` or `earliest`)
+- `KAFSCALE_INCLUDE_HEADERS`
 - `KAFSCALE_SPARK_UI_PORT`
 - `KAFSCALE_CHECKPOINT_DIR`
+- `KAFSCALE_FAIL_ON_DATA_LOSS` (`true` or `false`)
+- `KAFSCALE_DELTA_ENABLED` (`true` or `false`)
+- `KAFSCALE_DELTA_PATH`
+
+## Durable storage (Delta Lake)
+
+By default, checkpoints are stored on the local filesystem. For longer runs or restarts, point the checkpoint
+directory to durable storage (e.g., NFS, S3 via a mounted path):
+
+```bash
+KAFSCALE_CHECKPOINT_DIR=/mnt/kafscale-spark-checkpoints make run-jar-standalone
+```
+
+To write results to Delta Lake, enable the Delta sink:
+
+```bash
+KAFSCALE_DELTA_ENABLED=true KAFSCALE_DELTA_PATH=/mnt/kafscale-delta-wordcount make run-jar-standalone
+```
+
+When Delta is enabled, console output is disabled and results are written to the Delta table.
+
+## Handling data loss (Spark offset reset)
+
+If the topic is recreated or offsets are trimmed, Spark can detect missing data and fail with:
+
+```
+Partition demo-topic-1-0's offset was changed from 78 to 0
+```
+
+You have two options:
+
+1) **Continue (default, demo-friendly)**  
+   Keep `kafscale.fail.on.data.loss=false` or set `KAFSCALE_FAIL_ON_DATA_LOSS=false` to allow Spark to continue from the earliest available offsets.
+
+2) **Fail fast (safety)**  
+   Set `kafscale.fail.on.data.loss=true` or `KAFSCALE_FAIL_ON_DATA_LOSS=true` to surface missing data.
 
 ## Verify the job
 

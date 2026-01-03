@@ -2,40 +2,54 @@
 
 This example demonstrates a basic Java application using the standard `kafka-clients` library to interact with a KafScale cluster.
 
-## Features
+## Overview
 
-The `SimpleDemo` application performs the following actions:
-1.  **Admin Operations**: Checks if a topic exists, creating it if necessary (`demo-topic-1`).
-2.  **Producer**: Sends 25 messages to the topic.
-3.  **Admin Operations**: Retrieves and displays cluster metadata (Cluster ID, Controller, Nodes).
-4.  **Consumer**: Subscribes to the topic and consumes messages (waits for up to 5 messages or timeout).
+The `SimpleDemo` application performs:
+1. **Admin**: checks if a topic exists and creates it if needed (`demo-topic-1`).
+2. **Producer**: sends messages to the topic.
+3. **Admin**: prints cluster metadata (cluster ID, controller, nodes).
+4. **Consumer**: consumes a bounded number of messages or times out.
 
 ## Prerequisites
 
 -   Java 17+
 -   Maven 3.6+
--   A running KafScale cluster (e.g., local Docker Compose setup)
+-   A running KafScale cluster (e.g., `make demo` from the repo root)
 
-## Configuration
+## Step 1: Start KafScale
 
-The connection details are currently hardcoded in `src/main/java/com/example/kafscale/SimpleDemo.java`:
+Make sure your KafScale cluster is running (e.g., via `make demo` in the repo root).
 
-```java
-private static final String BOOTSTRAP_SERVERS = "127.0.0.1:39092";
-```
+## Step 2: Configure (optional)
 
-This configuration assumes you are running the demo locally and connecting to the KafScale broker exposed on port `39092` (standard local setup).
+The demo supports env vars or CLI args (CLI takes precedence):
 
-## Running the Demo
+- `KAFSCALE_BOOTSTRAP_SERVERS` / `--bootstrap=...`
+- `KAFSCALE_TOPIC` / `--topic=...`
+- `KAFSCALE_PRODUCE_COUNT` / `--produce-count=...`
+- `KAFSCALE_CONSUME_COUNT` / `--consume-count=...`
+- `KAFSCALE_CONSUME_TIMEOUT_MS` / `--consume-timeout-ms=...`
+- `KAFSCALE_ACKS` / `--acks=...`
+- `KAFSCALE_ENABLE_IDEMPOTENCE` / `--idempotence=true|false`
+- `KAFSCALE_RETRIES` / `--retries=...`
+- `KAFSCALE_TIMEOUT_MS` / `--timeout-ms=...`
+- `KAFSCALE_GROUP_ID` / `--group-id=...`
 
-1.  Make sure your KafScale cluster is running (e.g., via `docker-compose up` in the root directory).
-2.  Run the application using Maven:
+## Step 3: Run the demo
+
+Run the application using Maven:
 
 ```bash
 mvn clean package exec:java
 ```
 
-## Expected Output
+Example with CLI overrides:
+
+```bash
+mvn clean package exec:java -Dexec.args="--bootstrap=127.0.0.1:39092 --topic=demo-topic-1 --produce-count=10 --consume-count=10 --acks=all --idempotence=true"
+```
+
+## Step 4: Verify output
 
 You should see logs indicating the progression of the demo:
 
@@ -51,3 +65,23 @@ You should see logs indicating the progression of the demo:
 ...
 [INFO] Successfully consumed 5 messages.
 ```
+
+## Info: Shutdown sequence
+
+When the demo finishes or hits the timeout, it closes the Kafka consumer. The client logs a normal shutdown sequence:
+partition revocation, LeaveGroup request, coordinator reset, and network disconnect. This is expected and indicates
+the consumer is shutting down cleanly, not failing.
+
+## Limitations
+
+- Producer defaults to `acks=0` and idempotence disabled, so delivery guarantees are minimal unless overridden.
+- Consumer uses a random group ID by default, so offsets are not persisted unless configured.
+- No security (TLS/SASL) or schema evolution is demonstrated.
+- This is a single-process demo; no resiliency or horizontal scaling is covered.
+
+## Next Level Extensions
+
+- Provide a config file and proper CLI parsing library.
+- Switch defaults to `acks=all` with idempotence enabled for production-style runs.
+- Add serializers (e.g., JSON/Avro/Protobuf) and a schema registry example.
+- Add consumer group management and committed offsets.
