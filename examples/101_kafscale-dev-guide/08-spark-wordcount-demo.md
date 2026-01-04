@@ -2,6 +2,16 @@
 
 This section adds a Spark Structured Streaming word count job that consumes from KafScale and keeps separate counts for headers, keys, and values. It also tracks `no-key`, `no-header`, and `no-value` stats.
 
+**What you'll learn**:
+- How Spark Structured Streaming consumes from KafScale
+- Micro-batch processing with stateful aggregations
+- Using Delta Lake for durable word count storage
+- Handling offset changes and data loss scenarios
+
+> **Prerequisites**:
+> - Java 11+, Apache Spark 3.5.0 installed (`SPARK_HOME` set or `spark-submit` on PATH)
+> - KafScale running via `make demo` (from [Chapter 2](02-quick-start.md) or restart now)
+
 ## Step 1: Run locally with the make demo setup
 
 Start the local demo:

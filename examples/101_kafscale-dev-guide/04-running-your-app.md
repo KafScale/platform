@@ -2,6 +2,8 @@
 
 Now that you have verified the local demo in [Chapter 2](02-quick-start.md), we will run the full platform demo on kind and use the Spring Boot demo app (E20).
 
+> **Note**: If you still have `make demo` running from [Chapter 2](02-quick-start.md), you can stop it now (`Ctrl+C`). The platform demo will create its own KafScale cluster in kind.
+
 ## Step 1: Launch the Platform Demo
 
 This command builds the local images, creates a kind cluster, installs the Helm chart, and deploys the Spring Boot demo app:
@@ -33,7 +35,16 @@ curl -X POST http://localhost:8093/api/orders \
 curl http://localhost:8093/api/orders/health
 ```
 
-You should see "Sending order..." and "Received order..." in the Spring Boot logs at `/tmp/kafscale-demo-spring.log`.
+**Expected response**:
+```json
+{"status":"healthy","broker":"localhost:39092"}
+```
+
+Check `/tmp/kafscale-demo-spring.log` for:
+```
+Sending order: Order{product='Widget', quantity=5}
+Received order: Order{product='Widget', quantity=5}
+```
 
 ![KafScale Demo App - Cluster Infos](images/image-03.png)
 

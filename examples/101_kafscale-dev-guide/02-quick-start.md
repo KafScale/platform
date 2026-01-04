@@ -57,6 +57,14 @@ What it does:
 - Consumes 5 messages
 - Prints cluster metadata
 
+**Verify success**:
+You should see:
+- ✅ "Sent message: key=key-0 value=message-0 partition=0 offset=0"
+- ✅ "Received message: key=key-0 value=message-0 partition=0 offset=0"
+- ✅ "Successfully consumed 5 messages."
+
+If you see connection errors, check [Troubleshooting](05-troubleshooting.md).
+
 ## Step 4: Managing the Demo
 
 ### Stopping the Demo Cleanly

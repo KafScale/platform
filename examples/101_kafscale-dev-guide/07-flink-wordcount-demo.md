@@ -2,6 +2,16 @@
 
 This section adds a Flink-based word count job that consumes from KafScale and keeps separate counts for headers, keys, and values. It also tracks `no-key`, `no-header`, and `no-value` stats.
 
+**What you'll learn**:
+- How Apache Flink consumes from KafScale using the Kafka connector
+- Stateful stream processing with keyed state for word counts
+- Deploying Flink jobs in standalone, Docker, and Kubernetes modes
+- Handling common Flink-Kafka integration issues (idempotence, offset commits)
+
+> **Prerequisites**:
+> - Java 11+ and Maven 3.6+
+> - KafScale running via `make demo` (from [Chapter 2](02-quick-start.md) or restart now)
+
 ## Step 1: Run locally (make demo)
 
 Start the local demo:

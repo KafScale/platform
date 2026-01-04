@@ -2,6 +2,17 @@
 
 This section covers common issues you might encounter when using the local demo or the platform demo.
 
+**Most common issues** (start here):
+1. [Connection refused](#problem-connection-refused-when-connecting-to-broker) - Broker not running or wrong port
+2. [Topic not found](#problem-topic-not-found) - Topic needs manual creation
+3. [Messages sent but not consumed](#problem-messages-sent-but-not-consumed) - Topic name mismatch
+
+**Advanced issues** (for stream processing demos):
+4. [Flink Kafka sink fails](#problem-flink-kafka-sink-fails-with-init_producer_id--transactional-errors)
+5. [Flink offset commit fails](#problem-flink-offset-commit-fails-with-unknown_member_id)
+
+---
+
 ## Connection Issues
 
 ### Problem: "Connection refused" when connecting to broker

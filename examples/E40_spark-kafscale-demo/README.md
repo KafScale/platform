@@ -1,121 +1,358 @@
 # Spark KafScale Word Count Demo (E40)
 
-This demo runs a Spark Structured Streaming word count over Kafka records, counting words separately for headers, keys, and values. It also tracks missing fields in stats (`no-key`, `no-header`, `no-value`).
+A streaming word count application using Apache Spark Structured Streaming to process Kafka messages from KafScale. Counts words from message headers, keys, and values separately, tracking statistics for missing fields.
 
-## Prerequisites
-
-- Java 11+
-- Apache Spark 3.5+ (set `SPARK_HOME` or have `spark-submit` on PATH)
-- KafScale local demo or platform demo
-
-## Profiles
-
-The demo uses lightweight profiles to select the broker address.
-
-- `default`: local broker on `127.0.0.1:39092`
-- `cluster`: in-cluster broker at `kafscale-broker:9092`
-- `local-lb`: local app + remote broker via LB/port-forward on `localhost:59092`
-
-Set the profile with `KAFSCALE_SETUP_PROFILE` or `--profile=...`.
-
-## Step 1: Start the local demo
-
-Start the local demo:
+## Quick Start
 
 ```bash
+# 1. Start KafScale from repo root
+cd ../..
 make demo
-```
 
-## Step 2: Run the Spark job
-
-In a new terminal, run:
-
-```bash
+# 2. Run Spark job
 cd examples/E40_spark-kafscale-demo
 make run-jar-standalone
 ```
 
-Override profile or Spark master:
+The job will:
+- Consume from `demo-topic-1`
+- Count words in headers, keys, and values
+- Print running counts to console
+- Expose Spark UI at [http://localhost:4040](http://localhost:4040)
+
+## What This Demo Does
+
+This example demonstrates:
+- **Spark Structured Streaming**: Processing unbounded Kafka streams with micro-batch execution
+- **Kafka source integration**: Reading from KafScale using Spark's Kafka connector
+- **Stateful aggregations**: Maintaining running word counts across batches
+- **Multi-field parsing**: Extracting words from headers, keys, and values
+- **Delta Lake sink** (optional): Writing results to Delta tables for analytics
+
+## Prerequisites
+
+- Java 11+
+- Apache Spark 3.5.0 (tested version - set `SPARK_HOME` or have `spark-submit` on PATH)
+- Maven 3.6+
+- KafScale running locally or in a cluster
+
+## Documentation References
+
+- [Spark Structured Streaming + Kafka Integration Guide](https://spark.apache.org/docs/3.5.0/structured-streaming-kafka-integration.html)
+- [Delta Lake Documentation](https://docs.delta.io/latest/index.html)
+- [Spark Structured Streaming Programming Guide](https://spark.apache.org/docs/3.5.0/structured-streaming-programming-guide.html)
+
+## Running the Job
+
+### Basic Execution
 
 ```bash
-KAFSCALE_SETUP_PROFILE=local-lb SPARK_MASTER=local[2] make run-jar-standalone
+# Run with defaults (connects to localhost:39092)
+make run-jar-standalone
 ```
 
-The job listens on `demo-topic-1` by default. Override with `KAFSCALE_TOPIC` if needed.
+### With Custom Profile
+
+```bash
+# Use cluster profile (for in-cluster Kafka)
+KAFSCALE_SETUP_PROFILE=cluster make run-jar-standalone
+
+# Use local-lb profile (for port-forwarded LB)
+KAFSCALE_SETUP_PROFILE=local-lb make run-jar-standalone
+```
+
+### With Custom Spark Configuration
+
+```bash
+# Override Spark master and profile
+KAFSCALE_SETUP_PROFILE=local-lb SPARK_MASTER=local[4] make run-jar-standalone
+```
 
 ## Configuration
 
-You can override defaults with environment variables:
+All settings can be overridden via environment variables:
 
-- `KAFSCALE_BOOTSTRAP_SERVERS`
-- `KAFSCALE_TOPIC`
-- `KAFSCALE_GROUP_ID`
-- `KAFSCALE_STARTING_OFFSETS` (`latest` or `earliest`)
-- `KAFSCALE_INCLUDE_HEADERS`
-- `KAFSCALE_SPARK_UI_PORT`
-- `KAFSCALE_CHECKPOINT_DIR`
-- `KAFSCALE_FAIL_ON_DATA_LOSS` (`true` or `false`)
-- `KAFSCALE_DELTA_ENABLED` (`true` or `false`)
-- `KAFSCALE_DELTA_PATH`
+### Connection & Topics
+- `KAFSCALE_BOOTSTRAP_SERVERS` - Kafka bootstrap servers (default: `127.0.0.1:39092`)
+- `KAFSCALE_TOPIC` - Input topic (default: `demo-topic-1`)
+- `KAFSCALE_GROUP_ID` - Consumer group ID (default: `spark-kafscale-wordcount-${random-uuid}`)
+- `KAFSCALE_STARTING_OFFSETS` - Offset reset: `latest` or `earliest` (default: `latest`)
 
-## Durable storage (Delta Lake)
+### Spark Settings
+- `KAFSCALE_INCLUDE_HEADERS` - Include Kafka headers in processing (default: `true`)
+- `KAFSCALE_SPARK_UI_PORT` - Spark Web UI port (default: `4040`)
+- `KAFSCALE_CHECKPOINT_DIR` - Checkpoint directory (default: `/tmp/kafscale-spark-checkpoints`)
+- `KAFSCALE_FAIL_ON_DATA_LOSS` - Fail on offset gaps (default: `false`)
 
-By default, checkpoints are stored on the local filesystem. For longer runs or restarts, point the checkpoint
-directory to durable storage (e.g., NFS, S3 via a mounted path):
+### Delta Lake Output
+- `KAFSCALE_DELTA_ENABLED` - Enable Delta sink (default: `false`)
+- `KAFSCALE_DELTA_PATH` - Delta table path (default: `/tmp/kafscale-delta-wordcount`)
+
+### Profile Selection
+- `KAFSCALE_SETUP_PROFILE` - Profile: `default`, `cluster`, or `local-lb`
+
+**Profiles:**
+- `default` - Local broker on `127.0.0.1:39092`
+- `cluster` - In-cluster broker at `kafscale-broker:9092`
+- `local-lb` - Remote broker via load balancer on `localhost:59092`
+
+## Delta Lake Integration
+
+### Durable Checkpoints
+
+By default, checkpoints are stored in `/tmp/kafscale-spark-checkpoints`. For production or long-running jobs, use durable storage:
 
 ```bash
-KAFSCALE_CHECKPOINT_DIR=/mnt/kafscale-spark-checkpoints make run-jar-standalone
+# NFS mount
+KAFSCALE_CHECKPOINT_DIR=/mnt/nfs/kafscale-spark-checkpoints make run-jar-standalone
+
+# S3 (with appropriate Spark S3 jars and credentials)
+KAFSCALE_CHECKPOINT_DIR=s3a://my-bucket/spark-checkpoints make run-jar-standalone
 ```
 
-To write results to Delta Lake, enable the Delta sink:
+**⚠️ Warning**: Using `/tmp` for checkpoints means:
+- Job restarts lose state and restart from configured starting offsets
+- Offset conflicts may occur if the topic has changed
+
+### Delta Lake Sink
+
+Enable Delta Lake to persist word counts for analytics:
 
 ```bash
-KAFSCALE_DELTA_ENABLED=true KAFSCALE_DELTA_PATH=/mnt/kafscale-delta-wordcount make run-jar-standalone
+KAFSCALE_DELTA_ENABLED=true \
+  KAFSCALE_DELTA_PATH=/mnt/nfs/kafscale-delta-wordcount \
+  make run-jar-standalone
 ```
 
-When Delta is enabled, the console output is disabled and results are written to the Delta table.
+**When Delta is enabled:**
+- Console output is disabled
+- Results are written to Delta table in append mode
+- Table schema: `field STRING, word STRING, count LONG`
 
-## Handling data loss (Spark offset reset)
+**Query Delta table:**
+```python
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.getOrCreate()
+df = spark.read.format("delta").load("/mnt/nfs/kafscale-delta-wordcount")
+df.show()
+```
 
-If the topic is recreated or offsets are trimmed, Spark can detect missing data and fail with:
+## Handling Offset Changes
+
+### The Problem
+
+Spark Structured Streaming tracks Kafka offsets in checkpoints. If the topic is recreated or offsets are trimmed, Spark detects the mismatch:
 
 ```
+org.apache.spark.sql.streaming.StreamingQueryException:
 Partition demo-topic-1-0's offset was changed from 78 to 0
 ```
 
-You have two options:
+This indicates **data loss** - messages between offset 0 and 78 are missing.
 
-1) **Continue (default, demo-friendly)**  
-   Keep `kafscale.fail.on.data.loss=false` or set `KAFSCALE_FAIL_ON_DATA_LOSS=false` to allow Spark to continue from the earliest available offsets.
+### Solutions
 
-2) **Fail fast (safety)**  
-   Set `kafscale.fail.on.data.loss=true` or `KAFSCALE_FAIL_ON_DATA_LOSS=true` to surface missing data.
+**Option 1: Continue (Default - Demo Mode)**
 
-## Output format
+Set `KAFSCALE_FAIL_ON_DATA_LOSS=false` (default) to allow Spark to continue from the earliest available offset:
 
-The job prints running counts:
-
-```
-header | authorization => 5
-key | order => 12
-value | widget => 9
-stats | no-key => 3
+```bash
+KAFSCALE_FAIL_ON_DATA_LOSS=false make run-jar-standalone
 ```
 
-## Step 3: Verify the job
+- **Use when**: Developing, testing, or when gaps are acceptable
+- **Impact**: Silently skips missing data, counts may be incomplete
 
-- Spark UI: `http://localhost:4040` (or `KAFSCALE_SPARK_UI_PORT`)
+**Option 2: Fail Fast (Production Mode)**
 
-## Limitations
+Set `KAFSCALE_FAIL_ON_DATA_LOSS=true` to surface missing data immediately:
 
-- Console sink by default; Delta Lake output is optional and requires a durable checkpoint path.
-- Checkpoints are local by default; restarting with the same checkpoint can trigger offset conflicts.
-- Setting `kafka.group.id` in Structured Streaming is discouraged for multi-query use.
-- Preflight AdminClient requires topic/cluster metadata access; restricted clusters may fail the job.
+```bash
+KAFSCALE_FAIL_ON_DATA_LOSS=true make run-jar-standalone
+```
+
+- **Use when**: Production jobs where data integrity is critical
+- **Impact**: Job fails, requires manual intervention (delete checkpoint or fix topic)
+
+**Option 3: Delete Checkpoint**
+
+If you need to restart from scratch:
+
+```bash
+rm -rf /tmp/kafscale-spark-checkpoints
+make run-jar-standalone
+```
+
+## Expected Output
+
+### Console Output
+
+The job prints running word counts grouped by field type:
+
+```
+-------------------------------------------
+Batch: 5
+-------------------------------------------
++------+--------------+-----+
+| field|          word|count|
++------+--------------+-----+
+|header|authorization|    5|
+|   key|         order|   12|
+| value|        widget|    9|
+| stats|        no-key|    3|
+| stats|     no-header|    7|
+| stats|      no-value|    2|
++------+--------------+-----+
+```
+
+**Field types:**
+- `header` - Words found in Kafka message headers
+- `key` - Words found in message keys
+- `value` - Words found in message values
+- `stats` - Counters for messages missing that field (no-key, no-header, no-value)
+
+## Monitoring & Verification
+
+### Spark Web UI
+
+Access at [http://localhost:4040](http://localhost:4040) (or configured `KAFSCALE_SPARK_UI_PORT`)
+
+**The UI provides:**
+- Streaming query status and progress
+- Batch processing times and rates
+- Input/output metrics (rows read, rows written)
+- SQL query plans and DAG visualization
+- Executor and storage information
+
+### Key Metrics to Watch
+
+- **Input Rate**: Messages/second consumed from Kafka
+- **Process Rate**: Messages/second processed
+- **Batch Duration**: Time to process each micro-batch
+- **Scheduling Delay**: Time waiting for executor availability
+
+### Check Streaming Status
+
+```bash
+# View Spark streaming metrics via REST
+curl http://localhost:4040/api/v1/applications
+```
+
+## Troubleshooting
+
+### Job Fails to Start
+
+**Symptom:** `Connection refused` or `Failed to construct kafka consumer`
+
+**Fix:**
+1. Verify KafScale is running: `docker ps | grep kafscale`
+2. Check bootstrap server matches profile (default: `127.0.0.1:39092`)
+3. Test connectivity: `nc -zv 127.0.0.1 39092`
+
+### No Output in Console
+
+**Symptom:** Job starts but no word counts appear
+
+**Possible causes:**
+- **Topic is empty**: Send test messages to `demo-topic-1`
+- **Starting offsets set to `latest`**: Change to `earliest` with `KAFSCALE_STARTING_OFFSETS=earliest`
+- **Job hasn't processed a batch yet**: Wait for trigger interval
+
+### Offset Conflict Error
+
+**Symptom:** `Partition X's offset was changed from Y to Z`
+
+**Fix:**
+- **Option 1**: Set `KAFSCALE_FAIL_ON_DATA_LOSS=false` to continue
+- **Option 2**: Delete checkpoint directory and restart
+- **Option 3**: Fix the underlying issue (recreated topic, trimmed offsets)
+
+### Slow Batch Processing
+
+**Symptom:** Batch duration > 10 seconds
+
+**Fix:**
+- Increase Spark master parallelism: `SPARK_MASTER=local[8]`
+- Reduce micro-batch size (configure trigger interval)
+- Check Spark UI for slow stages
+
+### Delta Lake Write Failures
+
+**Symptom:** `Failed to write to Delta table`
+
+**Fix:**
+- Verify path is writable: `ls -la /mnt/nfs/kafscale-delta-wordcount`
+- Check disk space
+- Ensure Delta Lake jars are on classpath
+
+## Limitations & Considerations
+
+### Production Readiness Gaps
+
+1. **No exactly-once semantics**: Spark Structured Streaming doesn't guarantee exactly-once end-to-end processing
+   - **Impact**: Potential duplicate word counts on job restarts
+   - **Fix**: Implement idempotent downstream processing or use Delta Lake merge operations
+   - **Reference**: [Spark Streaming Fault Tolerance](https://spark.apache.org/docs/3.5.0/streaming-programming-guide.html#fault-tolerance-semantics)
+
+2. **Local checkpoints by default**: Checkpoint directory defaults to `/tmp/kafscale-spark-checkpoints`
+   - **Impact**: Job restarts lose state, offsets reset to configured starting position
+   - **Fix**: Use durable storage (NFS, S3, HDFS) via `KAFSCALE_CHECKPOINT_DIR`
+
+3. **Console sink limitations**: Default output goes to stdout
+   - **Impact**: No persistence, no queryable history, difficult to monitor
+   - **Fix**: Enable Delta Lake sink with `KAFSCALE_DELTA_ENABLED=true`
+
+4. **Consumer group ID behavior**: Explicit `group.id` setting can interfere with Spark's internal offset management
+   - **Impact**: Offset tracking may be unreliable across multiple streaming queries
+   - **Note**: Spark manages offsets in checkpoints, not Kafka consumer groups ([SPARK-19552](https://issues.apache.org/jira/browse/SPARK-19552))
+   - **Fix**: Let Spark auto-generate group IDs or use unique IDs per query
+
+5. **Data loss handling**: Default `failOnDataLoss=false` silently skips missing offsets
+   - **Impact**: Gaps in data go undetected unless explicitly monitored
+   - **Fix**: Set `KAFSCALE_FAIL_ON_DATA_LOSS=true` for production to fail fast
+
+6. **Preflight AdminClient check**: Requires Kafka cluster metadata access (DescribeCluster, ListTopics permissions)
+   - **Impact**: Restrictive ACL configurations may prevent job startup
+   - **Fix**: Grant necessary Kafka permissions or make preflight check optional
+
+### Architectural Limitations
+
+- **Micro-batch processing**: Inherent latency from batch intervals (not true streaming)
+- **No windowing**: Counts are global, not time-windowed
+- **No watermarks**: No event-time processing or late data handling
+- **Simple aggregations**: Only count operations, no complex analytics
+- **In-memory state**: Word counts stored in Spark executors, limited by memory
+
+### Tested Configuration
+
+- **Spark version**: 3.5.0
+- **Kafka client**: 3.9.1 (via KafScale)
+- **Delta Lake**: 3.0.0 (when enabled)
+- **Java**: 11+
+- **Scala**: 2.12
 
 ## Next Level Extensions
 
-- Write output to Kafka, Delta, or Parquet with a durable checkpoint location.
-- Add watermarking and windowed aggregations for time-based metrics.
-- Add structured logging and metrics integration (Prometheus/Grafana).
-- Package as a Spark application for cluster deployment (K8s/YARN).
+### Reliability & Fault Tolerance
+- **Durable checkpoints**: Configure S3/HDFS checkpoint directory for production
+- **Exactly-once with Delta**: Use Delta Lake merge operations for idempotent writes
+- **Graceful shutdown**: Implement signal handlers for clean streaming query termination
+- **Monitoring alerts**: Set up Prometheus/Grafana alerts for batch delays and failures
+
+### Processing & Analytics
+- **Windowing**: Add tumbling/sliding windows for time-based aggregations ([Spark Windowing Guide](https://spark.apache.org/docs/3.5.0/structured-streaming-programming-guide.html#window-operations-on-event-time))
+- **Watermarks**: Implement watermark strategies for handling late-arriving data
+- **Complex aggregations**: Track percentiles, distinct counts, moving averages
+- **Stateful operations**: Add custom stateful processing with `mapGroupsWithState`
+
+### Deployment & Operations
+- **Cluster deployment**: Package for YARN or Kubernetes with proper resource allocation
+- **External sinks**: Write to Kafka, Cassandra, or Elasticsearch for real-time serving
+- **Schema evolution**: Handle evolving message schemas with Schema Registry integration
+- **Multi-query coordination**: Run multiple streaming queries with shared checkpoints
+
+### Scalability
+- **Increase parallelism**: Configure shuffle partitions and executor cores
+- **Optimize batch intervals**: Tune trigger intervals based on throughput requirements
+- **Partitioning strategy**: Partition Delta table by date for efficient queries
+- **Resource tuning**: Configure executor memory, cores, and dynamic allocation

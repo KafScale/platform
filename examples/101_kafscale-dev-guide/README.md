@@ -17,19 +17,25 @@ By the end of this guide, you will:
 
 ## Prerequisites
 
-Before you begin, make sure you have:
+Before you begin, ensure you have:
 
-- [ ] **Go** installed (for running the broker in the local demo)
-- [ ] **Docker** installed (used only for the MinIO helper container)
-- [ ] **kind**, **kubectl**, and **helm** installed (for the platform demo)
-- [ ] **Java 11+** and **Maven** or **Gradle**
-- [ ] An existing **Spring Boot application** that uses Kafka
-- [ ] Basic understanding of Kafka concepts (topics, producers, consumers)
-- [ ] **Git** (to clone the KafScale repository)
+- **Docker Desktop** (or Docker Engine) running
+- **Java 11+** (`java -version`)
+- **Maven 3.6+** (`mvn -version`)
+- **kubectl** (`kubectl version --client`) for Kubernetes demos
+- **kind** for local Kubernetes cluster
+- **helm** for installing KafScale charts
+- **make** command available
+- **curl** for API testing
+- **Git** (to clone the KafScale repository)
+- Basic understanding of Kafka concepts (topics, producers, consumers)
 
-## Estimated Time
+**Verify Docker is running**:
+```bash
+docker ps
+```
 
-⏱️ **30 minutes** to complete the entire guide
+**Time commitment**: 30 minutes
 
 ## Guide Structure
 

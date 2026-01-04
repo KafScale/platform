@@ -1,6 +1,20 @@
 # Next Steps
 
-Congratulations! 🎉 You've successfully set up KafScale locally and connected your Spring Boot application to it. Here's what to explore next.
+Congratulations! 🎉 You've successfully set up KafScale locally and connected your Spring Boot application to it.
+
+**Recommended next steps** (in order):
+
+1. **[Monitoring and Observability](#monitoring-and-observability)** - Understand metrics and logging before production
+2. **[Moving to Production](#moving-to-production)** - Deploy to Kubernetes with Helm
+3. **[Security Considerations](#security-considerations)** - Enable TLS/SASL authentication
+4. **[Backup and Recovery](#backup-and-recovery)** - Protect etcd and S3 data
+
+**Optional explorations**:
+- [Stream Processing](#advanced-topics) - Try Flink or Spark demos ([E30](07-flink-wordcount-demo.md), [E40](08-spark-wordcount-demo.md))
+- [Performance Tuning](#performance-tuning) - Optimize for your workload
+- [Multi-Region Deployment](#advanced-topics) - Global deployments
+
+---
 
 ## Moving to Production
 
