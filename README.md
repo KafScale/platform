@@ -117,6 +117,13 @@ For the technical specification and data formats, see `kafscale-spec.md`.
 A detailed architecture overview and design rationale are available here:
 https://www.novatechflow.com/p/kafscale.html
 
+## Examples
+
+- Quickstart guide: `examples/101_kafscale-dev-guide/README.md`
+- Spring Boot app demo (E20): `examples/E20_spring-boot-kafscale-demo/README.md`
+- Flink demo (E30): `examples/E30_flink-kafscale-demo/README.md`
+- Spark demo (E40): `examples/E40_spark-kafscale-demo/README.md`
+
 ## Community
 
 - License: Apache 2.0 (`LICENSE`)

@@ -31,6 +31,9 @@
 *.key
 coverage*.out
 .build/
+target/
+**/target/
+spark-warehouse/
 
 # Local Go cache (use GOCACHE=.gocache for hermetic builds/tests)
 .gocache/

@@ -21,6 +21,14 @@ BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
+SPRING_DEMO_IMAGE ?= $(REGISTRY)/kafscale-spring-demo:dev
+
+OPERATOR_REPO := $(shell echo $(OPERATOR_IMAGE) | sed 's/:[^:]*$$//')
+OPERATOR_TAG := $(shell echo $(OPERATOR_IMAGE) | sed 's/.*://')
+CONSOLE_REPO := $(shell echo $(CONSOLE_IMAGE) | sed 's/:[^:]*$$//')
+CONSOLE_TAG := $(shell echo $(CONSOLE_IMAGE) | sed 's/.*://')
+SPRING_DEMO_REPO := $(shell echo $(SPRING_DEMO_IMAGE) | sed 's/:[^:]*$$//')
+SPRING_DEMO_TAG := $(shell echo $(SPRING_DEMO_IMAGE) | sed 's/.*://')
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
@@ -49,7 +57,7 @@ test: ## Run unit tests + vet + race
 	go vet ./...
 	go test -race ./...
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-mcp docker-build-e2e-client ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-mcp docker-build-spring-demo docker-build-e2e-client ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -97,10 +105,17 @@ $(STAMP_DIR)/e2e-client.image: $(E2E_CLIENT_SRCS)
 	$(DOCKER_BUILD_CMD) -t $(E2E_CLIENT_IMAGE) -f deploy/docker/e2e-client.Dockerfile .
 	@touch $(STAMP_DIR)/e2e-client.image
 
+SPRING_DEMO_SRCS := $(shell find examples/E20_spring-boot-kafscale-demo -type f)
+docker-build-spring-demo: $(STAMP_DIR)/spring-demo.image ## Build Spring Boot demo container image
+$(STAMP_DIR)/spring-demo.image: $(SPRING_DEMO_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) -t $(SPRING_DEMO_IMAGE) examples/E20_spring-boot-kafscale-demo
+	@touch $(STAMP_DIR)/spring-demo.image
+
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
 	@printf "Type YES to continue: "; read ans; [ "$$ans" = "YES" ] || { echo "aborted"; exit 1; }
-	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE)
+	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(SPRING_DEMO_IMAGE)
 	-rm -rf $(STAMP_DIR)
 	docker system prune --force --volumes
 	docker buildx prune --force
@@ -238,7 +253,7 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
-	@cat <<-EOF | kubectl apply -f -
+	@cat <<EOF | kubectl apply -f -
 	apiVersion: apps/v1
 	kind: Deployment
 	metadata:
@@ -306,7 +321,7 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
 	  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9000
 	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s
-	@cat <<-EOF | kubectl apply -f -
+	@cat <<EOF | kubectl apply -f -
 	apiVersion: kafscale.io/v1alpha1
 	kind: KafscaleCluster
 	metadata:
@@ -325,7 +340,7 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  etcd:
 	    endpoints: []
 	EOF
-	@cat <<-EOF | kubectl apply -f -
+	@cat <<EOF | kubectl apply -f -
 	apiVersion: kafscale.io/v1alpha1
 	kind: KafscaleTopic
 	metadata:
@@ -374,6 +389,117 @@ demo: release-broker-ports ensure-minio ## Launch the broker + console demo stac
 	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
 	go test -count=1 -tags=e2e ./test/e2e -run TestDemoStack -v
+
+demo-bridge: release-broker-ports ensure-minio ## Launch the broker + console demo stack and open the UI (Ctrl-C to stop) + expose host for docker.
+	KAFSCALE_E2E=1 \
+	KAFSCALE_E2E_DEMO=1 \
+	KAFSCALE_E2E_OPEN_UI=1 \
+	KAFSCALE_UI_USERNAME=kafscaleadmin \
+	KAFSCALE_UI_PASSWORD=kafscale \
+	KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics \
+	KAFSCALE_S3_BUCKET=$(MINIO_BUCKET) \
+	KAFSCALE_S3_REGION=$(MINIO_REGION) \
+	KAFSCALE_S3_NAMESPACE=default \
+	KAFSCALE_S3_ENDPOINT=http://127.0.0.1:$(MINIO_PORT) \
+	KAFSCALE_S3_PATH_STYLE=true \
+	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
+	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
+	KAFSCALE_BROKERS_ADVERTISED_HOST=host.docker.internal \
+	KAFSCALE_BROKERS_ADVERTISED_PORT=39092 \
+	go test -count=1 -tags=e2e ./test/e2e -run TestDemoStack -v
+
+demo-guide-pf: docker-build ## Launch a full platform demo on kind.
+	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
+	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
+	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
+	@command -v helm >/dev/null 2>&1 || { echo "helm is required"; exit 1; }
+
+	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
+	@kind create cluster --name $(KAFSCALE_KIND_CLUSTER)
+
+	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(SPRING_DEMO_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+
+	kubectl apply -f deploy/demo/namespace.yaml
+	kubectl apply -f deploy/demo/minio.yaml
+
+	kubectl -n kafscale-demo rollout status deployment/minio --timeout=120s
+
+	kubectl apply -f deploy/demo/s3-secret.yaml
+
+	helm upgrade --install kafscale deploy/helm/kafscale \
+	  --namespace $(KAFSCALE_DEMO_NAMESPACE) \
+	  --create-namespace \
+	  --set operator.replicaCount=1 \
+	  --set operator.image.repository=$(OPERATOR_REPO) \
+	  --set operator.image.tag=$(OPERATOR_TAG) \
+	  --set operator.image.pullPolicy=IfNotPresent \
+	  --set console.image.repository=$(CONSOLE_REPO) \
+	  --set console.image.tag=$(CONSOLE_TAG) \
+	  --set console.auth.username=admin \
+	  --set console.auth.password=admin \
+	  --set operator.etcdEndpoints[0]= 
+	  
+	@echo "[CONSOLE_TAG]     CONSOLE_TAG    = $(CONSOLE_TAG)"  
+	@echo "[CONSOLE_REPO ]   CONSOLE_REPO   = $(CONSOLE_REPO)"
+	@echo "[OPERATOR_REPO]   OPERATOR_REPO  = $(OPERATOR_REPO)"
+	@echo "[SPRING_DEMO_REPO] SPRING_DEMO_REPO = $(SPRING_DEMO_REPO)"
+
+	@echo "[IMAGENAME]       BROKER_IMAGE.  = $(BROKER_IMAGE)"
+	@echo "[IMAGENAME]       OPERATOR_IMAGE = $(OPERATOR_IMAGE)"
+	@echo "[IMAGENAME]       CONSOLE_IMAGE  = $(CONSOLE_IMAGE)"
+	@echo "[IMAGENAME]       SPRING_DEMO_IMAGE = $(SPRING_DEMO_IMAGE)"
+
+	@bash -c 'set -e; \
+		OPERATOR_DEPLOY=$$(kubectl -n kafscale-demo get deployments \
+		  -l app.kubernetes.io/component=operator \
+		  -o jsonpath="{.items[0].metadata.name}"); \
+		echo "Using operator deployment: $$OPERATOR_DEPLOY"; \
+		kubectl -n kafscale-demo set env deployment/$$OPERATOR_DEPLOY \
+		  BROKER_IMAGE=$(BROKER_IMAGE) \
+		  KAFSCALE_OPERATOR_ETCD_ENDPOINTS= \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET=kafscale-snapshots \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1 \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
+		  KAFSCALE_OPERATOR_LEADER_KEY=kafscale-operator-leader \
+		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.kafscale-demo.svc.cluster.local:9000; \
+		kubectl -n kafscale-demo rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s; \
+		kubectl apply -f deploy/demo/kafscale-cluster.yaml; \
+		kubectl apply -f deploy/demo/kafscale-topics.yaml; \
+		echo "Waiting for broker deployment to be created ..."; \
+		while ! kubectl -n kafscale-demo get deployment kafscale-broker >/dev/null 2>&1; do sleep 1; done; \
+		kubectl -n kafscale-demo wait --for=condition=available deployment/kafscale-broker --timeout=180s; \
+		console_svc=$$(kubectl -n kafscale-demo get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
+		echo "Exposing Console at http://localhost:8080/ui"; \
+		nohup kubectl -n kafscale-demo port-forward svc/$$console_svc 8080:80 >/tmp/kafscale-demo-console.log 2>&1 & \
+		kubectl apply -f deploy/demo/spring-boot-app.yaml; \
+		kubectl apply -f deploy/demo/flink-wordcount-app.yaml; \
+		kubectl -n kafscale-demo wait --for=condition=available deployment/spring-demo-app --timeout=120s; \
+		nohup kubectl -n kafscale-demo port-forward svc/spring-demo-app 8083:8083 >/tmp/kafscale-demo-spring.log 2>&1 & \
+		nohup kubectl -n kafscale-demo port-forward svc/kafscale-broker 9093:9093 >/tmp/kafscale-demo-metrics.log 2>&1 & \
+		nohup kubectl -n kafscale-demo port-forward svc/kafscale-broker 39092:9092 >/tmp/kafscale-demo-broker.log 2>&1 & \
+		echo "Exposing SpringBootApp at http://localhost:8083"; \
+		echo "Exposing Metrics at localhost:9093"; \
+		echo "Services exposed in background. Logs at /tmp/kafscale-demo-*.log"'
+
+demo-guide-pf-app: docker-build
+	kubectl apply -f deploy/demo/spring-boot-app.yaml;
+	kubectl -n kafscale-demo wait --for=condition=available deployment/spring-demo-app --timeout=120s;
+	# Start Nginx Load Balancer
+	kubectl apply -f deploy/demo/nginx-lb.yaml;
+	kubectl -n kafscale-demo wait --for=condition=available deployment/nginx-lb --timeout=120s;
+	echo "Exposing SpringBootApp at http://localhost:8083";
+	nohup kubectl -n kafscale-demo port-forward svc/spring-demo-app 8083:8083 >/tmp/kafscale-demo-spring.log 2>&1 &
+	echo "Exposing Kafka via Nginx LB at localhost:59092";
+	nohup kubectl -n kafscale-demo port-forward svc/nginx-lb 59092:59092 >/tmp/kafscale-demo-nginx.log 2>&1 &
+
+demo-guide-pf-clean: ## Clean up the platform demo environment
+	@echo "Cleaning up demo-platform2..."
+	@pkill -f 'kubectl -n kafscale-demo port-forward' || true
+	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
+	@echo "Cleanup complete. \nKIND CLUSTER: [$(KAFSCALE_KIND_CLUSTER)] removed."
 
 tidy:
 	go mod tidy

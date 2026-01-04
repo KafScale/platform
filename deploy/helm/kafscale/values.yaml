@@ -23,7 +23,7 @@ rbac:
   create: true
 
 operator:
-  replicaCount: 2
+  replicaCount: 1
   image:
     repository: ghcr.io/novatechflow/kafscale-operator
     tag: ""
@@ -125,3 +125,4 @@ mcp:
           - path: /
             pathType: Prefix
     tls: []
+    
