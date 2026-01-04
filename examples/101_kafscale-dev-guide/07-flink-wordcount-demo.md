@@ -12,6 +12,8 @@ This section adds a Flink-based word count job that consumes from KafScale and k
 > - Java 11+ and Maven 3.6+
 > - KafScale running via `make demo` (from [Chapter 2](02-quick-start.md) or restart now)
 
+**Estimated time**: 20-30 minutes (includes building Flink job and verifying output)
+
 ## Step 1: Run locally (make demo)
 
 Start the local demo:

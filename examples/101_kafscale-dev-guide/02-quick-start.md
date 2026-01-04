@@ -43,6 +43,8 @@ You should see:
 
 ## Step 3: Run the E10 Java Client Demo
 
+**Estimated time**: 5-10 minutes (first-time build may take longer)
+
 In another terminal:
 
 ```bash
@@ -78,9 +80,11 @@ This stops the MinIO helper and frees broker ports.
 
 ### Accessing Interfaces
 
-- **KafScale Console**: [http://localhost:48080/ui](http://localhost:48080/ui)
+- **KafScale Console**: [http://localhost:48080/ui](http://localhost:48080/ui) (local demo uses port 48080)
 - **MinIO Console**: [http://localhost:9001](http://localhost:9001) (User/Pass: `minioadmin`)
 - **Prometheus Metrics**: [http://localhost:39093/metrics](http://localhost:39093/metrics)
+
+> **Note**: The platform demo (Chapter 4) uses port 8080 for the console instead of 48080 to avoid conflicts with common development ports.
 
 ## Troubleshooting
 

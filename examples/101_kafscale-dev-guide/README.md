@@ -35,7 +35,10 @@ Before you begin, ensure you have:
 docker ps
 ```
 
-**Time commitment**: 30 minutes
+**Time commitment**:
+- **Core tutorial** (Chapters 1-4 with E10 + E20): 45-60 minutes
+- **With stream processing** (add E30 or E40): +20-30 minutes each
+- **Minimal path** (Chapters 1-2 with E10 only): 25-30 minutes
 
 ## Glossary
 
@@ -59,14 +62,17 @@ docker ps
 
 ## Guide Structure
 
+**Core Tutorial** (Required):
 1. [**Introduction**](01-introduction.md) - What is KafScale and why use it?
 2. [**Quick Start**](02-quick-start.md) - Run the local demo with `make demo` + E10
 3. [**Spring Boot Configuration**](03-spring-boot-configuration.md) - Configure your application
 4. [**Running Your Application**](04-running-your-app.md) - Platform demo with E20
-5. [**Flink Word Count Demo**](07-flink-wordcount-demo.md) - Stream processing with E30
-6. [**Spark Word Count Demo**](08-spark-wordcount-demo.md) - Stream processing with E40
-7. [**Troubleshooting**](05-troubleshooting.md) - Common issues and solutions
-8. [**Next Steps**](06-next-steps.md) - Production deployment and advanced topics
+5. [**Troubleshooting**](05-troubleshooting.md) - Common issues and solutions
+6. [**Next Steps**](06-next-steps.md) - Production deployment and advanced topics
+
+**Optional Stream Processing Demos**:
+- [**Flink Word Count Demo (E30)**](07-flink-wordcount-demo.md) - Stateful stream processing with Apache Flink
+- [**Spark Word Count Demo (E40)**](08-spark-wordcount-demo.md) - Micro-batch processing with Apache Spark
 
 ## Picking a Deployment Mode
 

@@ -2,6 +2,12 @@
 
 KafScale is a **Kafka-protocol compatible streaming platform** that separates compute from storage. Unlike traditional Kafka, KafScale uses **stateless brokers** and stores all data in **S3-compatible object storage**, making it simpler to operate and more cost-effective for many use cases.
 
+KafScale is Kafka protocol compatible for producers and consumers  
+(see claim: **KS-COMP-001**).
+
+Note: Kafka transactions are not supported  
+(see claim: **KS-LIMIT-001**).
+
 ## Key Characteristics
 
 - **Kafka-Compatible**: Uses the standard Kafka wire protocol, so your existing Kafka clients work without modification
@@ -35,7 +41,7 @@ KafScale is a **Kafka-protocol compatible streaming platform** that separates co
 
 - **Transactional Workloads**: KafScale does not support exactly-once semantics or transactions
 - **Log Compaction**: Compacted topics are not supported
-- **Ultra-Low Latency**: S3 storage adds latency compared to local disks (typically 10-50ms additional)
+- **Ultra-Low Latency**: S3 storage adds latency compared to local disks (estimated 10-50ms additional overhead based on network and S3 response times)
 - **High-Throughput Single Partition**: Traditional Kafka may be faster for very high throughput on a single partition
 
 ## Architecture Overview
@@ -108,10 +114,10 @@ KafScale is compatible with standard Kafka clients, but stricter schema validati
 **Not supported** (by design):
 - ❌ Transactions and exactly-once semantics
 - ❌ Log compaction
-- ❌ Kafka Streams embedded processing
+- ❌ Kafka Streams applications that rely on transactions or exactly-once semantics (stateless Streams processing without these features may work)
 - ❌ Flexible versions in some RPCs (may cause `recordErrors` serialization issues in newer clients)
 
-For stream processing, use external engines like [Apache Flink](https://flink.apache.org) or [Apache Wayang](https://wayang.apache.org).
+For stream processing, use external engines like [Apache Flink](https://flink.apache.org), [Apache Spark Streaming](https://spark.apache.org/streaming/), or [Apache Wayang](https://wayang.apache.org).
 
 ## Ready to Get Started?
 

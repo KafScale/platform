@@ -12,6 +12,8 @@ This section adds a Spark Structured Streaming word count job that consumes from
 > - Java 11+, Apache Spark 3.5.0 installed (`SPARK_HOME` set or `spark-submit` on PATH)
 > - KafScale running via `make demo` (from [Chapter 2](02-quick-start.md) or restart now)
 
+**Estimated time**: 20-30 minutes (includes building Spark job and verifying output, +10 min if Spark installation needed)
+
 ## Step 1: Run locally with the make demo setup
 
 Start the local demo:

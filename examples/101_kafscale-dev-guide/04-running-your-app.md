@@ -6,6 +6,8 @@ Now that you have verified the local demo in [Chapter 2](02-quick-start.md), we 
 
 ## Step 1: Launch the Platform Demo
 
+**Estimated time**: 15-20 minutes (includes building images, creating cluster, and deploying)
+
 This command builds the local images, creates a kind cluster, installs the Helm chart, and deploys the Spring Boot demo app:
 
 ```bash
