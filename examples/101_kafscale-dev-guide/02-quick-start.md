@@ -92,8 +92,20 @@ If `make demo` fails, check:
 1.  **Ports**: Ensure ports `39092`, `39093`, `39094`, `48080`, `9000` are free.
 2.  **Docker Resource**: Ensure Docker has enough memory for the MinIO helper (recommended: 2GB+).
 
+## What You Should Know Now
+
+Before moving to the next chapter, verify you can:
+
+- [ ] Start the local demo with `make demo`
+- [ ] Run the E10 Java client demo successfully
+- [ ] Verify messages were produced and consumed
+- [ ] Access the KafScale Console UI
+- [ ] Stop the demo cleanly with Ctrl+C and `make stop-containers`
+
+**Checkpoint**: If E10 produced and consumed messages successfully, you're ready to proceed!
+
 ## Next Steps
 
-Next, we'll run the platform demo on kind and use the Spring Boot demo app (E20).
+Next, we'll configure a Spring Boot application and run the platform demo on kind (E20).
 
-**Next**: [Running Your Application](04-running-your-app.md) →
+**Next**: [Spring Boot Configuration](03-spring-boot-configuration.md) →

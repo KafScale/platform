@@ -210,6 +210,18 @@ A complete Spring Boot example application is available in [`examples/E20_spring
 
 See the [Running Your Application](04-running-your-app.md) section for details on how to run the example.
 
+## What You Should Know Now
+
+Before moving to the next chapter, ensure you understand:
+
+- [ ] How to set the KafScale bootstrap server in Spring Boot configuration
+- [ ] Why `enable.idempotence=false` is required for producers
+- [ ] How to configure JSON serialization/deserialization
+- [ ] What features are NOT supported (transactions, exactly-once, compaction)
+- [ ] The difference between migrating from Kafka (minimal) vs configuring from scratch
+
+**Checkpoint**: Review the complete example configuration in [`examples/E20_spring-boot-kafscale-demo/`](../E20_spring-boot-kafscale-demo/README.md) to see all pieces together.
+
 ## Next Steps
 
 Now that you've configured your Spring Boot application, let's run it and verify it works with KafScale!

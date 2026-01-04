@@ -84,4 +84,16 @@ Use these questions to decide which Spring Boot profile (or deployment path) fit
 4. Are you limited to a single exposed listener and must pick one access path?
 5. Do you need in-cluster DNS names like `kafscale-broker:9092`, or external access via port-forward/LB?
 
+## What You Should Know Now
+
+Before moving to the next chapter, verify you can:
+
+- [ ] Run the platform demo with `make demo-guide-pf`
+- [ ] Access the E20 Spring Boot app via `curl http://localhost:30080/api/health`
+- [ ] Understand which profile to use (default, cluster, or local-lb)
+- [ ] Read logs to verify messages are being produced and consumed
+- [ ] Choose the right deployment mode for your use case
+
+**Checkpoint**: If you successfully saw "Received order:" in the logs, your Spring Boot app is working with KafScale!
+
 **Next**: [Troubleshooting](05-troubleshooting.md) →

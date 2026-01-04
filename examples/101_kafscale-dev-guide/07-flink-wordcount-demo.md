@@ -8,6 +8,13 @@ This section adds a Flink-based word count job that consumes from KafScale and k
 - Deploying Flink jobs in standalone, Docker, and Kubernetes modes
 - Handling common Flink-Kafka integration issues (idempotence, offset commits)
 
+**After this exercise, you'll be able to**:
+- Build and deploy a Flink streaming job that reads from KafScale
+- Configure Flink's Kafka connector with proper KafScale settings (`enable.idempotence=false`)
+- Manage stateful computations (word counts) using Flink's keyed state
+- Troubleshoot transaction-related errors when integrating Flink with KafScale
+- Choose between standalone, Docker, and Kubernetes deployment modes for Flink jobs
+
 > **Prerequisites**:
 > - Java 11+ and Maven 3.6+
 > - KafScale running via `make demo` (from [Chapter 2](02-quick-start.md) or restart now)
@@ -132,3 +139,18 @@ key | order => 12
 value | widget => 9
 stats | no-key => 3
 ```
+
+## What You Should Know Now
+
+After completing the Flink word count demo, verify you can:
+
+- [ ] Build the Flink job with Maven
+- [ ] Run the job in standalone mode (local Flink)
+- [ ] Understand why `enable.idempotence=false` is required in Flink's Kafka connector
+- [ ] Troubleshoot transaction-related errors (see [Troubleshooting](05-troubleshooting.md))
+- [ ] Interpret word count output from headers, keys, values, and stats
+- [ ] Deploy the job in different modes (standalone, Docker, Kubernetes)
+
+**Checkpoint**: If you see running word counts in the console, your Flink job is successfully processing KafScale data!
+
+**Next**: Try the [Spark Word Count Demo (E40)](08-spark-wordcount-demo.md) for micro-batch processing, or return to [Next Steps](06-next-steps.md).

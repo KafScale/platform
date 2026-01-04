@@ -19,12 +19,12 @@ By the end of this guide, you will:
 
 Before you begin, ensure you have:
 
-- **Docker Desktop** (or Docker Engine) running
+- **Docker Desktop** (or Docker Engine) v20.10+ running
 - **Java 11+** (`java -version`)
 - **Maven 3.6+** (`mvn -version`)
-- **kubectl** (`kubectl version --client`) for Kubernetes demos
-- **kind** for local Kubernetes cluster
-- **helm** for installing KafScale charts
+- **kubectl** v1.28+ (`kubectl version --client`) for Kubernetes demos
+- **kind** v0.20+ for local Kubernetes cluster
+- **helm** v3.12+ for installing KafScale charts
 - **make** command available
 - **curl** for API testing
 - **Git** (to clone the KafScale repository)
@@ -44,13 +44,18 @@ docker ps
 
 **Core Concepts:**
 - **[Stateless Broker](https://kafscale.io/architecture/)**: Broker pod that doesn't retain data persistently, enabling horizontal scaling from 0→N instances instantly
-- **[S3 (Object Storage)](https://kafscale.io/architecture/)**: Amazon S3 or compatible storage (MinIO) serving as the source of truth for immutable segment files with 11 nines durability
+- **[S3 (Object Storage)](https://kafscale.io/architecture/)**: Amazon S3 or compatible storage (MinIO) serving as the source of truth for immutable segment files with 11 nines durability (99.999999999% for S3 Standard, single region)
 - **[etcd](https://kafscale.io/architecture/)**: Distributed key-value store for cluster metadata including topic configuration, consumer offsets, and group assignments
-- **[Segment](https://kafscale.io/storage-format/)**: Immutable log file (~4MB) containing batched records with headers, data, and checksums, stored as `segment-{offset}.kfs` in S3
+- **[Segment](https://kafscale.io/storage-format/)**: Immutable log file (~4MB default, configurable via `KAFSCALE_SEGMENT_BYTES`) containing batched records with headers, data, and checksums, stored as `segment-{offset}.kfs` in S3
 - **[Wire Protocol](https://kafscale.io/protocol/)**: Kafka-compatible client-server communication protocol enabling existing Kafka clients to connect without modification
 
 **Configuration & Deployment:**
-- **Profile**: Configuration preset for different network scenarios (default = local `localhost:39092`, cluster = in-cluster `kafscale-broker:9092`, local-lb = remote via `localhost:59092`)
+- **Profile**: Configuration preset that determines how clients connect to KafScale brokers across different deployment scenarios:
+  - `default` (localhost:39092) - Local app connects to local demo broker; use for development with `make demo`
+  - `cluster` (kafscale-broker:9092) - In-cluster app connects to broker via service DNS; use for apps deployed inside the same Kubernetes cluster
+  - `local-lb` (localhost:59092) - Local app connects to remote broker via port-forward; use for development against a remote kind cluster
+
+  Choose based on: Where is your app running? Where is the broker running? See [Running Your Application](04-running-your-app.md) for the decision checklist.
 - **Bootstrap Server**: Initial broker address used by Kafka clients to discover the cluster (e.g., `localhost:39092`)
 - **[MinIO](https://kafscale.io/configuration/)**: S3-compatible object storage server used for local development instead of AWS S3
 
@@ -59,6 +64,8 @@ docker ps
 - **[No Compaction](https://kafscale.io/protocol/)**: Log compaction is not available; S3 lifecycle policies handle retention instead
 
 **Learn More**: See the [KafScale Documentation](https://kafscale.io/docs/) for comprehensive guides on [Architecture](https://kafscale.io/architecture/), [Configuration](https://kafscale.io/configuration/), [Protocol](https://kafscale.io/protocol/), and [Operations](https://kafscale.io/operations/).
+
+**Claims Registry**: Technical claims throughout this tutorial reference verified statements in [examples/claims/](../claims/README.md). This ensures accuracy and traceability of all architectural and compatibility statements.
 
 ## Guide Structure
 

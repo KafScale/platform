@@ -310,6 +310,20 @@ The example demos are designed to be minimal and production-aware. Here are plan
 
 **Contribute**: Interested in helping implement these improvements? See [CONTRIBUTING.md](../../CONTRIBUTING.md) or discuss in [GitHub Discussions](https://github.com/novatechflow/kafscale/discussions).
 
+## What You Should Know Now
+
+Congratulations! After completing this tutorial, you should be able to:
+
+- [ ] Explain what KafScale is and when to use it
+- [ ] Run the local demo (`make demo`) and platform demo (`make demo-guide-pf`)
+- [ ] Configure Spring Boot applications with proper KafScale settings
+- [ ] Choose the right deployment profile (default, cluster, local-lb)
+- [ ] Debug common issues using the troubleshooting guide
+- [ ] Understand KafScale limitations (no transactions, no compaction)
+- [ ] Access production deployment resources and next learning paths
+
+**Final Checkpoint**: Can you configure a new Spring Boot app from scratch to use KafScale? If yes, you're ready for production evaluation!
+
 ## Summary
 
 You've completed the KafScale Quickstart Guide! You should now be able to:
