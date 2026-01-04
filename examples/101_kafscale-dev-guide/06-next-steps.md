@@ -276,7 +276,39 @@ Both use S3-backed storage, but:
 
 ## Roadmap
 
-See [ROADMAP.md](../roadmap.md) for planned features and improvements.
+See [ROADMAP.md](../../docs/roadmap.md) for planned features and improvements.
+
+## Demo Enhancements Roadmap
+
+The example demos are designed to be minimal and production-aware. Here are planned improvements:
+
+### E10 (Java Client Demo)
+**Focus**: Production-ready client patterns
+
+- [ ] Delivery guarantees configuration (acks, idempotence, retries toggle)
+- [ ] Enhanced error handling and graceful shutdown
+- [ ] Connection pooling and resource management examples
+- [ ] Observability integration (metrics, tracing)
+
+### E20 (Spring Boot Demo)
+**Focus**: Enterprise application patterns
+
+- [ ] Full OpenTelemetry observability stack integration
+- [ ] Persistent order storage (database backing)
+- [ ] Retry mechanisms and Dead Letter Queue (DLQ) patterns
+- [ ] Security hardening (endpoint protection, profile-based auth)
+- [ ] Health checks and readiness probes
+
+### E30/E40 (Stream Processing Demos)
+**Focus**: Production streaming patterns
+
+- [ ] Exactly-once processing examples (when KafScale supports transactions)
+- [ ] State management best practices (RocksDB, savepoints)
+- [ ] Advanced windowing and watermark strategies
+- [ ] Multi-sink patterns (Kafka + Database + Data Lake)
+- [ ] Monitoring dashboards for Flink/Spark metrics
+
+**Contribute**: Interested in helping implement these improvements? See [CONTRIBUTING.md](../../CONTRIBUTING.md) or discuss in [GitHub Discussions](https://github.com/novatechflow/kafscale/discussions).
 
 ## Summary
 
