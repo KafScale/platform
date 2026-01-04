@@ -43,6 +43,8 @@ You should see:
 
 ## Step 3: Run the E10 Java Client Demo
 
+**Estimated time**: 5-10 minutes (first-time build may take longer)
+
 In another terminal:
 
 ```bash
@@ -57,6 +59,14 @@ What it does:
 - Consumes 5 messages
 - Prints cluster metadata
 
+**Verify success**:
+You should see:
+- ✅ "Sent message: key=key-0 value=message-0 partition=0 offset=0"
+- ✅ "Received message: key=key-0 value=message-0 partition=0 offset=0"
+- ✅ "Successfully consumed 5 messages."
+
+If you see connection errors, check [Troubleshooting](05-troubleshooting.md).
+
 ## Step 4: Managing the Demo
 
 ### Stopping the Demo Cleanly
@@ -70,9 +80,11 @@ This stops the MinIO helper and frees broker ports.
 
 ### Accessing Interfaces
 
-- **KafScale Console**: [http://localhost:48080/ui](http://localhost:48080/ui)
+- **KafScale Console**: [http://localhost:48080/ui](http://localhost:48080/ui) (local demo uses port 48080)
 - **MinIO Console**: [http://localhost:9001](http://localhost:9001) (User/Pass: `minioadmin`)
 - **Prometheus Metrics**: [http://localhost:39093/metrics](http://localhost:39093/metrics)
+
+> **Note**: The platform demo (Chapter 4) uses port 8080 for the console instead of 48080 to avoid conflicts with common development ports.
 
 ## Troubleshooting
 
@@ -80,8 +92,20 @@ If `make demo` fails, check:
 1.  **Ports**: Ensure ports `39092`, `39093`, `39094`, `48080`, `9000` are free.
 2.  **Docker Resource**: Ensure Docker has enough memory for the MinIO helper (recommended: 2GB+).
 
+## What You Should Know Now
+
+Before moving to the next chapter, verify you can:
+
+- [ ] Start the local demo with `make demo`
+- [ ] Run the E10 Java client demo successfully
+- [ ] Verify messages were produced and consumed
+- [ ] Access the KafScale Console UI
+- [ ] Stop the demo cleanly with Ctrl+C and `make stop-containers`
+
+**Checkpoint**: If E10 produced and consumed messages successfully, you're ready to proceed!
+
 ## Next Steps
 
-Next, we'll run the platform demo on kind and use the Spring Boot demo app (E20).
+Next, we'll configure a Spring Boot application and run the platform demo on kind (E20).
 
-**Next**: [Running Your Application](04-running-your-app.md) →
+**Next**: [Spring Boot Configuration](03-spring-boot-configuration.md) →

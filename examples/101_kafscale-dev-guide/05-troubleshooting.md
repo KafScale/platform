@@ -2,6 +2,17 @@
 
 This section covers common issues you might encounter when using the local demo or the platform demo.
 
+**Most common issues** (start here):
+1. [Connection refused](#problem-connection-refused-when-connecting-to-broker) - Broker not running or wrong port
+2. [Topic not found](#problem-topic-not-found) - Topic needs manual creation
+3. [Messages sent but not consumed](#problem-messages-sent-but-not-consumed) - Topic name mismatch
+
+**Advanced issues** (for stream processing demos):
+4. [Flink Kafka sink fails](#problem-flink-kafka-sink-fails-with-init_producer_id--transactional-errors)
+5. [Flink offset commit fails](#problem-flink-offset-commit-fails-with-unknown_member_id)
+
+---
+
 ## Connection Issues
 
 ### Problem: "Connection refused" when connecting to broker
@@ -196,6 +207,20 @@ logging.level.org.apache.kafka=DEBUG
 2. Login with `minioadmin` / `minioadmin`
 3. Browse `kafscale` bucket
 
+## What You Should Know Now
+
+After reviewing this troubleshooting guide, you should be able to:
+
+- [ ] Diagnose connection refused errors (broker not running, wrong port)
+- [ ] Create topics manually when auto-creation fails
+- [ ] Debug topic name mismatches between producer and consumer
+- [ ] Handle Flink-specific transaction and offset commit errors
+- [ ] Use MinIO console to inspect stored segments
+
+**Checkpoint**: Keep this page bookmarked for quick reference when issues arise!
+
 ## Getting Help
 
 If you're still stuck, please open an issue on [GitHub](https://github.com/novatechflow/kafscale/issues).
+
+**Next**: [Next Steps](06-next-steps.md) →

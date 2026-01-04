@@ -2,6 +2,25 @@
 
 This section adds a Spark Structured Streaming word count job that consumes from KafScale and keeps separate counts for headers, keys, and values. It also tracks `no-key`, `no-header`, and `no-value` stats.
 
+**What you'll learn**:
+- How Spark Structured Streaming consumes from KafScale
+- Micro-batch processing with stateful aggregations
+- Using Delta Lake for durable word count storage
+- Handling offset changes and data loss scenarios
+
+**After this exercise, you'll be able to**:
+- Build and run a Spark Structured Streaming job that reads from KafScale
+- Configure Spark's Kafka connector with KafScale bootstrap servers
+- Use Delta Lake for maintaining durable aggregations across restarts
+- Handle data loss scenarios with appropriate `fail.on.data.loss` settings
+- Monitor Spark jobs via the Spark UI and understand micro-batch processing patterns
+
+> **Prerequisites**:
+> - Java 11+, Apache Spark 3.5.0 installed (`SPARK_HOME` set or `spark-submit` on PATH)
+> - KafScale running via `make demo` (from [Chapter 2](02-quick-start.md) or restart now)
+
+**Estimated time**: 20-30 minutes (includes building Spark job and verifying output, +10 min if Spark installation needed)
+
 ## Step 1: Run locally with the make demo setup
 
 Start the local demo:
@@ -84,3 +103,18 @@ You have two options:
 ## Verify the job
 
 - Spark UI: `http://localhost:4040` (or `KAFSCALE_SPARK_UI_PORT`)
+
+## What You Should Know Now
+
+After completing the Spark word count demo, verify you can:
+
+- [ ] Build the Spark job with Maven
+- [ ] Run the job using `spark-submit` in standalone mode
+- [ ] Configure Spark's Kafka source to connect to KafScale
+- [ ] Understand how Delta Lake provides durable state for aggregations
+- [ ] Handle offset reset scenarios with `fail.on.data.loss` configuration
+- [ ] Monitor job progress via Spark UI
+
+**Checkpoint**: If you see word count batches processing in the Spark console and can query Delta Lake tables, your Spark job is working!
+
+**Next**: Return to [Next Steps](06-next-steps.md) to explore production deployment options.

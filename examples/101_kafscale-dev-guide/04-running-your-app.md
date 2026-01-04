@@ -2,7 +2,11 @@
 
 Now that you have verified the local demo in [Chapter 2](02-quick-start.md), we will run the full platform demo on kind and use the Spring Boot demo app (E20).
 
+> **Note**: If you still have `make demo` running from [Chapter 2](02-quick-start.md), you can stop it now (`Ctrl+C`). The platform demo will create its own KafScale cluster in kind.
+
 ## Step 1: Launch the Platform Demo
+
+**Estimated time**: 15-20 minutes (includes building images, creating cluster, and deploying)
 
 This command builds the local images, creates a kind cluster, installs the Helm chart, and deploys the Spring Boot demo app:
 
@@ -33,7 +37,16 @@ curl -X POST http://localhost:8093/api/orders \
 curl http://localhost:8093/api/orders/health
 ```
 
-You should see "Sending order..." and "Received order..." in the Spring Boot logs at `/tmp/kafscale-demo-spring.log`.
+**Expected response**:
+```json
+{"status":"healthy","broker":"localhost:39092"}
+```
+
+Check `/tmp/kafscale-demo-spring.log` for:
+```
+Sending order: Order{product='Widget', quantity=5}
+Received order: Order{product='Widget', quantity=5}
+```
 
 ![KafScale Demo App - Cluster Infos](images/image-03.png)
 
@@ -70,5 +83,17 @@ Use these questions to decide which Spring Boot profile (or deployment path) fit
 3. Do you need to run the app locally but connect to a remote cluster or different network?
 4. Are you limited to a single exposed listener and must pick one access path?
 5. Do you need in-cluster DNS names like `kafscale-broker:9092`, or external access via port-forward/LB?
+
+## What You Should Know Now
+
+Before moving to the next chapter, verify you can:
+
+- [ ] Run the platform demo with `make demo-guide-pf`
+- [ ] Access the E20 Spring Boot app via `curl http://localhost:30080/api/health`
+- [ ] Understand which profile to use (default, cluster, or local-lb)
+- [ ] Read logs to verify messages are being produced and consumed
+- [ ] Choose the right deployment mode for your use case
+
+**Checkpoint**: If you successfully saw "Received order:" in the logs, your Spring Boot app is working with KafScale!
 
 **Next**: [Troubleshooting](05-troubleshooting.md) →

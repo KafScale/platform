@@ -1,6 +1,20 @@
 # Next Steps
 
-Congratulations! 🎉 You've successfully set up KafScale locally and connected your Spring Boot application to it. Here's what to explore next.
+Congratulations! 🎉 You've successfully set up KafScale locally and connected your Spring Boot application to it.
+
+**Recommended next steps** (in order):
+
+1. **[Monitoring and Observability](#monitoring-and-observability)** - Understand metrics and logging before production
+2. **[Moving to Production](#moving-to-production)** - Deploy to Kubernetes with Helm
+3. **[Security Considerations](#security-considerations)** - Enable TLS/SASL authentication
+4. **[Backup and Recovery](#backup-and-recovery)** - Protect etcd and S3 data
+
+**Optional explorations**:
+- [Stream Processing](#advanced-topics) - Try Flink or Spark demos ([E30](07-flink-wordcount-demo.md), [E40](08-spark-wordcount-demo.md))
+- [Performance Tuning](#performance-tuning) - Optimize for your workload
+- [Multi-Region Deployment](#advanced-topics) - Global deployments
+
+---
 
 ## Moving to Production
 
@@ -262,7 +276,53 @@ Both use S3-backed storage, but:
 
 ## Roadmap
 
-See [ROADMAP.md](../roadmap.md) for planned features and improvements.
+See [ROADMAP.md](../../docs/roadmap.md) for planned features and improvements.
+
+## Demo Enhancements Roadmap
+
+The example demos are designed to be minimal and production-aware. Here are planned improvements:
+
+### E10 (Java Client Demo)
+**Focus**: Production-ready client patterns
+
+- [ ] Delivery guarantees configuration (acks, idempotence, retries toggle)
+- [ ] Enhanced error handling and graceful shutdown
+- [ ] Connection pooling and resource management examples
+- [ ] Observability integration (metrics, tracing)
+
+### E20 (Spring Boot Demo)
+**Focus**: Enterprise application patterns
+
+- [ ] Full OpenTelemetry observability stack integration
+- [ ] Persistent order storage (database backing)
+- [ ] Retry mechanisms and Dead Letter Queue (DLQ) patterns
+- [ ] Security hardening (endpoint protection, profile-based auth)
+- [ ] Health checks and readiness probes
+
+### E30/E40 (Stream Processing Demos)
+**Focus**: Production streaming patterns
+
+- [ ] Exactly-once processing examples (when KafScale supports transactions)
+- [ ] State management best practices (RocksDB, savepoints)
+- [ ] Advanced windowing and watermark strategies
+- [ ] Multi-sink patterns (Kafka + Database + Data Lake)
+- [ ] Monitoring dashboards for Flink/Spark metrics
+
+**Contribute**: Interested in helping implement these improvements? See [CONTRIBUTING.md](../../CONTRIBUTING.md) or discuss in [GitHub Discussions](https://github.com/novatechflow/kafscale/discussions).
+
+## What You Should Know Now
+
+Congratulations! After completing this tutorial, you should be able to:
+
+- [ ] Explain what KafScale is and when to use it
+- [ ] Run the local demo (`make demo`) and platform demo (`make demo-guide-pf`)
+- [ ] Configure Spring Boot applications with proper KafScale settings
+- [ ] Choose the right deployment profile (default, cluster, local-lb)
+- [ ] Debug common issues using the troubleshooting guide
+- [ ] Understand KafScale limitations (no transactions, no compaction)
+- [ ] Access production deployment resources and next learning paths
+
+**Final Checkpoint**: Can you configure a new Spring Boot app from scratch to use KafScale? If yes, you're ready for production evaluation!
 
 ## Summary
 
