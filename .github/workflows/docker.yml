@@ -44,6 +44,10 @@ jobs:
             image: kafscale-console
             context: .
             file: deploy/docker/console.Dockerfile
+          - name: etcd-tools
+            image: kafscale-etcd-tools
+            context: .
+            file: deploy/docker/etcd-tools.Dockerfile
           - name: iceberg-processor
             image: kafscale-iceberg-processor
             context: addons/processors/iceberg-processor

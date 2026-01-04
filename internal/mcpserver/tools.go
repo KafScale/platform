@@ -59,6 +59,7 @@ type TopicConfigInput struct {
 }
 
 type ClusterStatusOutput struct {
+	ClusterName  string         `json:"cluster_name,omitempty"`
 	ClusterID    string         `json:"cluster_id,omitempty"`
 	ControllerID int32          `json:"controller_id"`
 	Brokers      []BrokerOutput `json:"brokers"`
@@ -245,6 +246,9 @@ func clusterStatusHandler(opts Options) mcp.ToolHandlerFor[emptyInput, ClusterSt
 			ControllerID: meta.ControllerID,
 			Etcd:         ComponentState{State: "connected"},
 			ObservedAt:   time.Now().UTC().Format(time.RFC3339),
+		}
+		if meta.ClusterName != nil {
+			status.ClusterName = *meta.ClusterName
 		}
 		if meta.ClusterID != nil {
 			status.ClusterID = *meta.ClusterID

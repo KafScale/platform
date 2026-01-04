@@ -19,10 +19,15 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/novatechflow/kafscale/pkg/metadata"
 )
 
 type promMetricsClient struct {
@@ -40,11 +45,144 @@ func NewPromMetricsClient(url string) MetricsProvider {
 }
 
 func (c *promMetricsClient) Snapshot(ctx context.Context) (*MetricsSnapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
+	return fetchPromSnapshot(ctx, c.client, c.url)
+}
+
+type aggregatedPromMetricsClient struct {
+	store       metadata.Store
+	client      *http.Client
+	scheme      string
+	metricsPort string
+	metricsPath string
+	fallback    *promMetricsClient
+}
+
+func NewAggregatedPromMetricsClient(store metadata.Store, metricsURL string) MetricsProvider {
+	client := &http.Client{Timeout: 3 * time.Second}
+	scheme := "http"
+	metricsPort := "9093"
+	metricsPath := "/metrics"
+	if metricsURL != "" {
+		if parsed, err := url.Parse(metricsURL); err == nil {
+			if parsed.Scheme != "" {
+				scheme = parsed.Scheme
+			}
+			if parsed.Port() != "" {
+				metricsPort = parsed.Port()
+			}
+			if parsed.Path != "" && parsed.Path != "/" {
+				metricsPath = parsed.Path
+			}
+		}
+	}
+	var fallback *promMetricsClient
+	if metricsURL != "" {
+		fallback = &promMetricsClient{url: metricsURL, client: client}
+	}
+	return &aggregatedPromMetricsClient{
+		store:       store,
+		client:      client,
+		scheme:      scheme,
+		metricsPort: metricsPort,
+		metricsPath: metricsPath,
+		fallback:    fallback,
+	}
+}
+
+func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSnapshot, error) {
+	meta, err := c.store.Metadata(ctx, nil)
+	if err != nil || len(meta.Brokers) == 0 {
+		if c.fallback != nil {
+			return c.fallback.Snapshot(ctx)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("no brokers available for metrics")
+	}
+	var (
+		state                 string
+		latencySum            int
+		latencyCount          int
+		produceRPS            float64
+		fetchRPS              float64
+		adminReqTotal         float64
+		adminErrTotal         float64
+		adminLatencySum       float64
+		adminLatencySamples   int
+		healthyRank           = map[string]int{"healthy": 0, "degraded": 1, "unavailable": 2}
+		selectedStateRank     = -1
+		successfulBrokerCount int
+	)
+	for _, broker := range meta.Brokers {
+		host := broker.Host
+		if strings.Contains(host, ":") {
+			if splitHost, _, err := net.SplitHostPort(host); err == nil && splitHost != "" {
+				host = splitHost
+			} else if split := strings.SplitN(host, ":", 2); len(split) > 0 && split[0] != "" {
+				host = split[0]
+			}
+		}
+		metricsURL := url.URL{
+			Scheme: c.scheme,
+			Host:   fmt.Sprintf("%s:%s", host, c.metricsPort),
+			Path:   path.Clean(c.metricsPath),
+		}
+		snap, snapErr := fetchPromSnapshot(ctx, c.client, metricsURL.String())
+		if snapErr != nil || snap == nil {
+			continue
+		}
+		successfulBrokerCount++
+		if snap.S3LatencyMS > 0 {
+			latencySum += snap.S3LatencyMS
+			latencyCount++
+		}
+		if snap.S3State != "" {
+			if rank, ok := healthyRank[snap.S3State]; ok && rank > selectedStateRank {
+				selectedStateRank = rank
+				state = snap.S3State
+			}
+		}
+		produceRPS += snap.ProduceRPS
+		fetchRPS += snap.FetchRPS
+		adminReqTotal += snap.AdminRequestsTotal
+		adminErrTotal += snap.AdminRequestErrorsTotal
+		if snap.AdminRequestLatencyMS > 0 {
+			adminLatencySum += snap.AdminRequestLatencyMS
+			adminLatencySamples++
+		}
+	}
+	if successfulBrokerCount == 0 {
+		if c.fallback != nil {
+			return c.fallback.Snapshot(ctx)
+		}
+		return nil, fmt.Errorf("no broker metrics available")
+	}
+	latencyAvg := 0
+	if latencyCount > 0 {
+		latencyAvg = latencySum / latencyCount
+	}
+	adminLatencyAvg := 0.0
+	if adminLatencySamples > 0 {
+		adminLatencyAvg = adminLatencySum / float64(adminLatencySamples)
+	}
+	return &MetricsSnapshot{
+		S3State:                 state,
+		S3LatencyMS:             latencyAvg,
+		ProduceRPS:              produceRPS,
+		FetchRPS:                fetchRPS,
+		AdminRequestsTotal:      adminReqTotal,
+		AdminRequestErrorsTotal: adminErrTotal,
+		AdminRequestLatencyMS:   adminLatencyAvg,
+	}, nil
+}
+
+func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL string) (*MetricsSnapshot, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

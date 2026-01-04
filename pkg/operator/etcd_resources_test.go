@@ -93,6 +93,12 @@ func TestEnsureEtcdCreatesManagedCluster(t *testing.T) {
 	assertFound(t, c, &corev1.Service{}, cluster.Namespace, cluster.Name+"-etcd-client")
 	assertFound(t, c, &policyv1.PodDisruptionBudget{}, cluster.Namespace, cluster.Name+"-etcd")
 	assertFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-snapshot")
+
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	if len(sts.Spec.Template.Spec.InitContainers) == 0 {
+		t.Fatalf("expected snapshot restore init containers")
+	}
 }
 
 func TestEnsureEtcdEnvOverrides(t *testing.T) {
@@ -122,6 +128,15 @@ func TestEnsureEtcdEnvOverrides(t *testing.T) {
 	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
 	if len(sts.Spec.Template.Spec.Containers) == 0 || sts.Spec.Template.Spec.Containers[0].Image != "etcd:test" {
 		t.Fatalf("expected etcd image override, got %+v", sts.Spec.Template.Spec.Containers)
+	}
+	if len(sts.Spec.Template.Spec.InitContainers) < 2 {
+		t.Fatalf("expected snapshot restore init containers, got %+v", sts.Spec.Template.Spec.InitContainers)
+	}
+	if sts.Spec.Template.Spec.InitContainers[0].Image != "awscli:test" {
+		t.Fatalf("expected restore download image override, got %+v", sts.Spec.Template.Spec.InitContainers)
+	}
+	if sts.Spec.Template.Spec.InitContainers[1].Image != "etcdctl:test" {
+		t.Fatalf("expected restore etcdctl image override, got %+v", sts.Spec.Template.Spec.InitContainers)
 	}
 	if len(sts.Spec.VolumeClaimTemplates) == 0 {
 		t.Fatalf("expected pvc template")

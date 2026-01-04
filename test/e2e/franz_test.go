@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -46,6 +46,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	brokerAddr, metricsAddr, controlAddr := brokerAddrs(t)
 
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -80,7 +81,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		t.Fatalf("start broker: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = brokerCmd.Process.Signal(os.Interrupt)
+		_ = signalProcessGroup(brokerCmd, os.Interrupt)
 		done := make(chan struct{})
 		go func() {
 			_ = brokerCmd.Wait()
@@ -89,7 +90,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			_ = brokerCmd.Process.Kill()
+			_ = signalProcessGroup(brokerCmd, os.Kill)
 		}
 	})
 
@@ -274,6 +275,23 @@ func waitForPort(t *testing.T, addr string) {
 	}
 }
 
+func waitForPortClosed(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		select {
+		case <-deadline:
+			t.Fatalf("port %s did not close in time", addr)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 func waitForBroker(t *testing.T, logs *bytes.Buffer, addr string) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
@@ -294,13 +312,45 @@ func waitForBroker(t *testing.T, logs *bytes.Buffer, addr string) {
 func runCmdGetOutput(t *testing.T, ctx context.Context, name string, args ...string) []byte {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, name, args...)
+	applyKubeconfigEnv(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("command %s %s failed: %v\n%s", name, strings.Join(args, " "), err, buf.String())
+		t.Fatalf("command %s %s failed: %v\n%s", name, strings.Join(args, " "), err, truncateOutput(buf.String()))
 	}
 	return buf.Bytes()
+}
+
+func truncateOutput(out string) string {
+	const maxBytes = 8192
+	if len(out) <= maxBytes {
+		return out
+	}
+	return out[len(out)-maxBytes:]
+}
+
+func applyKubeconfigEnv(cmd *exec.Cmd) {
+	if os.Getenv("KAFSCALE_E2E_KUBECONFIG") == "" {
+		return
+	}
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	env = upsertEnv(env, "KUBECONFIG", os.Getenv("KAFSCALE_E2E_KUBECONFIG"))
+	cmd.Env = env
+}
+
+func upsertEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 func parseBoolEnv(name string) bool {

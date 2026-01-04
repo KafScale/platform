@@ -58,6 +58,10 @@ Some tools return wrapper objects (not raw arrays):
 - `list_groups` -> `{ "groups": [...] }`
 - `describe_configs` -> `{ "configs": [...] }`
 
+Field notes:
+
+- `cluster_status` includes `cluster_name` when available; clients can use it as the primary label and fall back to `cluster_id`.
+
 ## Deployment and Configuration
 
 ### Helm (recommended)

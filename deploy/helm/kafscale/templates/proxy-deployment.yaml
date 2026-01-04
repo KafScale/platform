@@ -1,0 +1,122 @@
+# Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.proxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kafscale.componentName" (dict "root" . "component" "proxy") }}
+  labels:
+{{ include "kafscale.labels" . | indent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: {{ .Values.proxy.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "proxy") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "proxy") | indent 8 }}
+{{- with .Values.proxy.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+{{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+{{- end }}
+{{- end }}
+      containers:
+        - name: proxy
+          image: "{{ .Values.proxy.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.proxy.image.tag) .Values.proxy.image.useLatest }}"
+          imagePullPolicy: {{ ternary "Always" .Values.proxy.image.pullPolicy .Values.proxy.image.useLatest }}
+          env:
+            - name: KAFSCALE_PROXY_ADDR
+              value: ":{{ .Values.proxy.service.port }}"
+            - name: KAFSCALE_PROXY_ADVERTISED_PORT
+              value: "{{ .Values.proxy.advertisedPort }}"
+{{- if .Values.proxy.health.enabled }}
+            - name: KAFSCALE_PROXY_HEALTH_ADDR
+              value: ":{{ .Values.proxy.health.port }}"
+{{- end }}
+{{- if .Values.proxy.backendCacheTTLSeconds }}
+            - name: KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC
+              value: "{{ .Values.proxy.backendCacheTTLSeconds }}"
+{{- end }}
+{{- if .Values.proxy.advertisedHost }}
+            - name: KAFSCALE_PROXY_ADVERTISED_HOST
+              value: "{{ .Values.proxy.advertisedHost }}"
+{{- end }}
+{{- if .Values.proxy.etcdEndpoints }}
+            - name: KAFSCALE_PROXY_ETCD_ENDPOINTS
+              value: "{{ join "," .Values.proxy.etcdEndpoints }}"
+{{- end }}
+{{- if .Values.proxy.etcd.username }}
+            - name: KAFSCALE_PROXY_ETCD_USERNAME
+              value: "{{ .Values.proxy.etcd.username }}"
+{{- end }}
+{{- if .Values.proxy.etcd.password }}
+            - name: KAFSCALE_PROXY_ETCD_PASSWORD
+              value: "{{ .Values.proxy.etcd.password }}"
+{{- end }}
+{{- if .Values.proxy.backends }}
+            - name: KAFSCALE_PROXY_BACKENDS
+              value: "{{ join "," .Values.proxy.backends }}"
+{{- end }}
+          ports:
+            - name: kafka
+              containerPort: {{ .Values.proxy.service.port }}
+              protocol: TCP
+{{- if .Values.proxy.health.enabled }}
+            - name: health
+              containerPort: {{ .Values.proxy.health.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+{{- end }}
+          resources:
+{{- if .Values.proxy.resources }}
+{{ toYaml .Values.proxy.resources | indent 12 }}
+{{- else }}
+            {}
+{{- end }}
+{{- with .Values.proxy.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.proxy.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.proxy.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- end }}

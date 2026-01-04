@@ -41,6 +41,7 @@ import (
 const (
 	defaultBrokerImage           = "ghcr.io/novatechflow/kafscale-broker:latest"
 	defaultBrokerImagePullPolicy = string(corev1.PullIfNotPresent)
+	publishRequeueDelay          = 5 * time.Second
 )
 
 var brokerImage = getEnv("BROKER_IMAGE", defaultBrokerImage)
@@ -77,7 +78,13 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
+	if err := r.deleteLegacyBrokerDeployment(ctx, &cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.reconcileBrokerDeployment(ctx, &cluster, etcdResolution.Endpoints); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileBrokerHeadlessService(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileBrokerService(ctx, &cluster); err != nil {
@@ -87,8 +94,25 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
-		return ctrl.Result{}, err
+		setClusterCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdAvailable",
+			Status:             metav1.ConditionFalse,
+			Reason:             "EtcdUnavailable",
+			Message:            err.Error(),
+			LastTransitionTime: metav1.NewTime(time.Now()),
+		})
+		if err := r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "EtcdUnavailable", "Etcd metadata publish failed"); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: publishRequeueDelay}, nil
 	}
+	setClusterCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               "EtcdAvailable",
+		Status:             metav1.ConditionTrue,
+		Reason:             "EtcdReady",
+		Message:            "Etcd metadata publish succeeded",
+		LastTransitionTime: metav1.NewTime(time.Now()),
+	})
 	if err := r.updateStatus(ctx, &cluster, metav1.ConditionTrue, "Ready", "Reconciled"); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -98,19 +122,19 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kafscalev1alpha1.KafscaleCluster{}).
-		Owns(&appsv1.Deployment{}).
+		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
 }
 
 func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
-	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-broker", cluster.Name),
 		Namespace: cluster.Namespace,
 	}}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		replicas := int32(3)
 		if cluster.Spec.Brokers.Replicas != nil {
 			replicas = *cluster.Spec.Brokers.Replicas
@@ -119,23 +143,41 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 			"app":     "kafscale-broker",
 			"cluster": cluster.Name,
 		}
-		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Template.ObjectMeta.Labels = labels
-		deploy.Spec.Template.Spec.Containers = []corev1.Container{
+		sts.Spec.ServiceName = brokerHeadlessServiceName(cluster)
+		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		sts.Spec.Replicas = &replicas
+		sts.Spec.Template.ObjectMeta.Labels = labels
+		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
 		}
-		return controllerutil.SetControllerReference(cluster, deploy, r.Scheme)
+		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
 	return err
+}
+
+func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-broker", cluster.Name),
+			Namespace: cluster.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, deploy); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
 	image := brokerImage
 	pullPolicy := parsePullPolicy(brokerImagePullPolicy)
-	brokerHost := fmt.Sprintf("%s-broker.%s.svc.cluster.local", cluster.Name, cluster.Namespace)
-	if strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost) != "" {
-		brokerHost = strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost)
+	replicas := int32(3)
+	if cluster.Spec.Brokers.Replicas != nil {
+		replicas = *cluster.Spec.Brokers.Replicas
+	}
+	brokerHost := strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost)
+	if replicas > 1 {
+		brokerHost = ""
 	}
 	brokerPort := int32(9092)
 	if cluster.Spec.Brokers.AdvertisedPort != nil && *cluster.Spec.Brokers.AdvertisedPort > 0 {
@@ -146,9 +188,15 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		{Name: "KAFSCALE_S3_REGION", Value: cluster.Spec.S3.Region},
 		{Name: "KAFSCALE_S3_NAMESPACE", Value: cluster.Namespace},
 		{Name: "KAFSCALE_ETCD_ENDPOINTS", Value: strings.Join(endpoints, ",")},
-		{Name: "KAFSCALE_BROKER_HOST", Value: brokerHost},
+		{Name: "KAFSCALE_BROKER_ADDR", Value: ":9092"},
+		{Name: "KAFSCALE_BROKER_SERVICE", Value: brokerHeadlessServiceName(cluster)},
+		{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+		{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
 		{Name: "KAFSCALE_BROKER_PORT", Value: fmt.Sprintf("%d", brokerPort)},
 		{Name: "KAFSCALE_METRICS_ADDR", Value: ":9093"},
+	}
+	if brokerHost != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_BROKER_HOST", Value: brokerHost})
 	}
 	if strings.TrimSpace(cluster.Spec.S3.Endpoint) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
@@ -256,6 +304,32 @@ func copyStringMap(source map[string]string) map[string]string {
 	return dest
 }
 
+func brokerHeadlessServiceName(cluster *kafscalev1alpha1.KafscaleCluster) string {
+	return fmt.Sprintf("%s-broker-headless", cluster.Name)
+}
+
+func (r *ClusterReconciler) reconcileBrokerHeadlessService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      brokerHeadlessServiceName(cluster),
+			Namespace: cluster.Namespace,
+		},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		svc.Spec.Selector = map[string]string{
+			"app":     "kafscale-broker",
+			"cluster": cluster.Name,
+		}
+		svc.Spec.Ports = []corev1.ServicePort{
+			{Name: "kafka", Port: 9092, TargetPort: intstr.FromString("kafka")},
+			{Name: "metrics", Port: 9093, TargetPort: intstr.FromString("metrics")},
+		}
+		svc.Spec.ClusterIP = corev1.ClusterIPNone
+		return controllerutil.SetControllerReference(cluster, svc, r.Scheme)
+	})
+	return err
+}
+
 func (r *ClusterReconciler) reconcileBrokerService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -316,7 +390,7 @@ func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kaf
 		hpa.Spec.MinReplicas = &min
 		hpa.Spec.MaxReplicas = max
 		hpa.Spec.ScaleTargetRef = autoscalingv2.CrossVersionObjectReference{
-			Kind:       "Deployment",
+			Kind:       "StatefulSet",
 			Name:       fmt.Sprintf("%s-broker", cluster.Name),
 			APIVersion: "apps/v1",
 		}

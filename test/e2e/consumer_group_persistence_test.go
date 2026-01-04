@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -176,6 +176,7 @@ func TestConsumerGroupMetadataPersistsInEtcd(t *testing.T) {
 func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string) (*exec.Cmd, *bytes.Buffer) {
 	t.Helper()
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -200,7 +201,7 @@ func stopBroker(t *testing.T, cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = cmd.Process.Signal(os.Interrupt)
+	_ = signalProcessGroup(cmd, os.Interrupt)
 	done := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
@@ -209,7 +210,7 @@ func stopBroker(t *testing.T, cmd *exec.Cmd) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		_ = cmd.Process.Kill()
+		_ = signalProcessGroup(cmd, os.Kill)
 	}
 }
 

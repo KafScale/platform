@@ -51,12 +51,12 @@ func TestBuildMetadataStoreUsesEtcdEnv(t *testing.T) {
 
 func TestBuildMetricsProvider(t *testing.T) {
 	t.Setenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL", "")
-	if got := buildMetricsProvider(); got != nil {
+	if got := buildMetricsProvider(nil); got != nil {
 		t.Fatalf("expected nil metrics provider when env unset")
 	}
 
 	t.Setenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL", "http://127.0.0.1:9093/metrics")
-	if got := buildMetricsProvider(); got == nil {
+	if got := buildMetricsProvider(nil); got == nil {
 		t.Fatalf("expected metrics provider when env set")
 	}
 }

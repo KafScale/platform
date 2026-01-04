@@ -51,3 +51,30 @@ func TestProbeAddrs(t *testing.T) {
 		t.Fatalf("expected retries, got %d", calls["bad:1"])
 	}
 }
+
+func TestParseEnvInts(t *testing.T) {
+	t.Setenv("E2E_INT", "12")
+	t.Setenv("E2E_INT32", "34")
+	t.Setenv("E2E_INT64", "56")
+	if got := parseEnvInt("E2E_INT", 1); got != 12 {
+		t.Fatalf("expected 12 got %d", got)
+	}
+	if got := parseEnvInt32("E2E_INT32", -1); got != 34 {
+		t.Fatalf("expected 34 got %d", got)
+	}
+	if got := parseEnvInt64("E2E_INT64", -1); got != 56 {
+		t.Fatalf("expected 56 got %d", got)
+	}
+	t.Setenv("E2E_INT", "bad")
+	t.Setenv("E2E_INT32", "bad")
+	t.Setenv("E2E_INT64", "bad")
+	if got := parseEnvInt("E2E_INT", 7); got != 7 {
+		t.Fatalf("expected fallback got %d", got)
+	}
+	if got := parseEnvInt32("E2E_INT32", 9); got != 9 {
+		t.Fatalf("expected fallback got %d", got)
+	}
+	if got := parseEnvInt64("E2E_INT64", 11); got != 11 {
+		t.Fatalf("expected fallback got %d", got)
+	}
+}

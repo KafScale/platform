@@ -115,6 +115,7 @@ type consoleHandlers struct {
 
 type statusResponse struct {
 	Cluster string       `json:"cluster"`
+	ClusterID string     `json:"cluster_id,omitempty"`
 	Version string       `json:"version"`
 	Brokers brokerStatus `json:"brokers"`
 	S3      s3Status     `json:"s3"`
@@ -283,8 +284,13 @@ func statusFromMetadata(meta *metadata.ClusterMetadata, metrics *MetricsSnapshot
 			resp.S3.LatencyMS = metrics.S3LatencyMS
 		}
 	}
-	if meta.ClusterID != nil && *meta.ClusterID != "" {
+	if meta.ClusterName != nil && *meta.ClusterName != "" {
+		resp.Cluster = *meta.ClusterName
+	} else if meta.ClusterID != nil && *meta.ClusterID != "" {
 		resp.Cluster = *meta.ClusterID
+	}
+	if meta.ClusterID != nil && *meta.ClusterID != "" {
+		resp.ClusterID = *meta.ClusterID
 	}
 	for _, broker := range meta.Brokers {
 		resp.Brokers.Nodes = append(resp.Brokers.Nodes, brokerNode{
@@ -345,6 +351,7 @@ func mockClusterStatus() statusResponse {
 	}
 	return statusResponse{
 		Cluster: "kafscale-dev",
+		ClusterID: "cluster-dev-1",
 		Version: "0.2.0",
 		Brokers: brokerStatus{
 			Ready:   2 + rand.Intn(2),

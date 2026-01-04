@@ -81,6 +81,7 @@ type ClusterMetadata struct {
 	Brokers      []protocol.MetadataBroker
 	ControllerID int32
 	Topics       []protocol.MetadataTopic
+	ClusterName  *string
 	ClusterID    *string
 }
 
@@ -162,6 +163,7 @@ func cloneMetadata(src ClusterMetadata) ClusterMetadata {
 		Brokers:      cloneBrokers(src.Brokers),
 		ControllerID: src.ControllerID,
 		Topics:       cloneTopics(src.Topics),
+		ClusterName:  cloneStringPtr(src.ClusterName),
 		ClusterID:    cloneStringPtr(src.ClusterID),
 	}
 }

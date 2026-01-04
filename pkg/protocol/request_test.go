@@ -168,8 +168,8 @@ func TestParseListOffsetsRequestV4(t *testing.T) {
 	w.String("orders")
 	w.Int32(1)
 	w.Int32(0)
-	w.Int64(-1)
 	w.Int32(3)
+	w.Int64(-1)
 
 	_, req, err := ParseRequest(w.Bytes())
 	if err != nil {

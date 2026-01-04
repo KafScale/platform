@@ -168,9 +168,29 @@ func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) er
 	}
 	_, err := c.api.PutObject(ctx, input)
 	if err != nil {
+		if isBucketMissingErr(err) {
+			if ensureErr := c.EnsureBucket(ctx); ensureErr == nil {
+				if _, retryErr := c.api.PutObject(ctx, input); retryErr == nil {
+					return nil
+				} else {
+					err = retryErr
+				}
+			}
+		}
 		return fmt.Errorf("put object %s: %w", key, err)
 	}
 	return nil
+}
+
+func isBucketMissingErr(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NotFound", "NoSuchBucket":
+			return true
+		}
+	}
+	return false
 }
 
 func (c *awsS3Client) DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error) {
@@ -219,6 +239,11 @@ func (c *awsS3Client) ListSegments(ctx context.Context, prefix string) ([]S3Obje
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
+			if isBucketMissingErr(err) {
+				if ensureErr := c.EnsureBucket(ctx); ensureErr == nil {
+					return []S3Object{}, nil
+				}
+			}
 			return nil, fmt.Errorf("list objects %s: %w", prefix, err)
 		}
 		for _, obj := range page.Contents {

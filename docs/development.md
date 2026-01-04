@@ -66,6 +66,31 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 | `make lint` | Run golangci-lint (requires installation). |
 | `make help` | List all Makefile targets. |
 
+## Local Limits (kind + e2e)
+
+Kind clusters and the operator e2e suite need a higher file descriptor limit. If `ulimit -n` is below `4096`, the control-plane may crash or time out (leader election failures, API timeouts). Raise it before running kind-based targets:
+
+```bash
+ulimit -n 4096
+```
+
+## Demo Platform Overrides
+
+`make demo-platform` defaults to two brokers and enables the Kafka proxy so the demo behaves like production access. To change broker count, set:
+
+```bash
+KAFSCALE_DEMO_BROKER_REPLICAS=3 make demo-platform
+```
+
+Note: with multiple brokers, the broker list contains per-pod DNS names (from the headless service). Host-based clients cannot resolve those cluster-local names, so use the proxy or keep replicas at `1` when running the demo workload on your machine.
+
+To disable the Kafka proxy in the demo platform, set the flag to `0`. The demo
+will port-forward the broker service instead of the proxy:
+
+```bash
+KAFSCALE_DEMO_PROXY=0 make demo-platform
+```
+
 ## Generating Protobuf Code
 
 We use `buf` to manage protobuf builds. All metadata schemas and control-plane RPCs live under `proto/`.

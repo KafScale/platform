@@ -111,6 +111,7 @@ Kafscale depends on etcd for metadata + offsets. Treat etcd as a production data
 - Deploy an odd number of members (3 for most clusters, 5 for higher fault tolerance).
 - Spread members across zones/racks to survive single-AZ failures.
 - Enable compaction/defragmentation and monitor fsync/proposal latency.
+- HA requires a stable client access layer: use a Kafka-aware proxy or per-broker endpoints so bootstrap addresses and leader routing survive broker churn.
 
 ### Operator-managed etcd (default path)
 
@@ -134,12 +135,16 @@ The operator resolves etcd endpoints in this order:
 
 Kafscale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
 
+### Etcd Availability Signals (clients)
+
+When etcd is unavailable, the broker rejects producer/admin/consumer-group operations with `REQUEST_TIMED_OUT`. Producers see per-partition errors in the Produce response; admin and group APIs return the same code in their response payloads.
+
 Snapshot job defaults and operator env overrides:
 
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: cluster S3 bucket)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: `kafscale-etcd-<namespace>-<cluster>`, separate from broker segment storage)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` (default: `etcd-snapshots`)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` (default: `0 * * * *`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `quay.io/coreos/etcd:v3.5.12`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `kubesphere/etcd:3.6.4-0`)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` (default: `amazon/aws-cli:2.15.0`)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (optional, for MinIO or custom S3)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` (default: 7200)
@@ -149,8 +154,27 @@ Snapshot job defaults and operator env overrides:
 
 The operator performs an S3 write preflight before enabling snapshots. If the check fails, the `EtcdSnapshotAccess` condition is set to `False` and reconciliation returns an error until access is restored. Snapshots are uploaded as timestamped files plus a `.sha256` checksum for recovery validation.
 
+### Snapshot Restore (KafScale managed etcd)
+
+Snapshot restore refers to **etcd operational data** (cluster metadata/offsets). It is not the broker topic snapshot flow.
+
+When the KafScale operator manages etcd, each cluster pod runs ```restore init containers``` before etcd starts:
+
+- The snapshot download container pulls the latest `.db` snapshot from the configured bucket/prefix.
+- The restore container runs `etcdctl snapshot restore` if the data directory is empty and a snapshot file is present.
+- If no snapshot is available, etcd starts with a clean data directory.
+
+The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
+
+### Consumer Offsets After Restore
+
+Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:
+
+- Ensure consumers commit offsets (default for most Kafka clients).
+- Set `auto.offset.reset=earliest` as a safety net for new or uncommitted consumers.
+
 Minimal env + spec checklist for a smooth run:
-- Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET`, `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
+- Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (optional override), `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
 - Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS). Optional read replica: `spec.s3.readBucket`, `spec.s3.readRegion`, `spec.s3.readEndpoint`.
 - Secret keys: `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`.
 - Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
@@ -165,10 +189,12 @@ Recommended operator alerting (when using Prometheus Operator):
 ### Operator
 
 - `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` – Comma-separated etcd endpoints to use instead of managed etcd.
-- `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `quay.io/coreos/etcd:v3.5.12`).
+- `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `kubesphere/etcd:3.6.4-0`).
+- `KAFSCALE_OPERATOR_ETCD_REPLICAS` – Managed etcd replica count (default `3`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` – PVC size for managed etcd (default `10Gi`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` – StorageClass for managed etcd PVCs.
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (defaults to cluster S3 bucket).
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY` – Use in-memory `emptyDir` for etcd data (`1` to enable, test/dev only).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` – Snapshot prefix (default `etcd-snapshots`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` – Cron schedule for snapshots (default `0 * * * *`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` – Etcdctl image for snapshots.
@@ -216,6 +242,7 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
 - `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
 - `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
+- `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
 - `KAFSCALE_LOG_LEVEL` – Log level (`debug`, `info`, `warn`, `error`).
 - `KAFSCALE_TRACE_KAFKA` – Enable protocol tracing (`true/false`).
 - `KAFSCALE_THROUGHPUT_WINDOW_SEC` – Throughput window size seconds.
@@ -223,6 +250,32 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_S3_LATENCY_WARN_MS`, `KAFSCALE_S3_LATENCY_CRIT_MS` – Latency thresholds.
 - `KAFSCALE_S3_ERROR_RATE_WARN`, `KAFSCALE_S3_ERROR_RATE_CRIT` – Error-rate thresholds.
 - `KAFSCALE_STARTUP_TIMEOUT_SEC` – Broker startup timeout.
+
+### Produce Flush Policy (cost vs durability)
+
+By default, the broker flushes to S3 for every Produce request with `acks != 0`
+to minimize the loss window after a broker crash. You can relax this for lower
+S3 write costs by disabling sync flush and relying on the background flush
+interval/segment size.
+
+Durability-optimized (default):
+- `KAFSCALE_PRODUCE_SYNC_FLUSH=true`
+- `KAFSCALE_FLUSH_INTERVAL_MS=500`
+- `KAFSCALE_SEGMENT_BYTES=4194304`
+
+Cost-optimized (accepts a larger loss window after crash):
+- `KAFSCALE_PRODUCE_SYNC_FLUSH=false`
+- `KAFSCALE_FLUSH_INTERVAL_MS=2000` (or higher)
+- `KAFSCALE_SEGMENT_BYTES=33554432` (or higher)
+
+### Proxy
+
+- `KAFSCALE_PROXY_ADDR` – Proxy listen address (host:port).
+- `KAFSCALE_PROXY_ADVERTISED_HOST` – Address Kafka clients should connect to.
+- `KAFSCALE_PROXY_ADVERTISED_PORT` – Advertised port (default `9092`).
+- `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
+- `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
+- `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
 
 ### Console
 
@@ -246,6 +299,43 @@ Broker exposure settings (KafscaleCluster `spec.brokers`):
 - `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
 - `service.externalTrafficPolicy` – `Cluster` or `Local`.
 - `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
+
+### Kafka Proxy (external scaling)
+
+For external clients plus broker churn, deploy the Kafka-aware proxy. It answers
+Metadata/FindCoordinator requests with a single stable endpoint (the proxy
+service), then forwards all other Kafka requests to the brokers. This keeps
+clients connected even as broker pods scale or rotate. The proxy is the
+recommended external access layer and enables automated horizontal scaling
+without exposing individual broker pods.
+
+Use the broker Service settings above when you intentionally expose dedicated
+brokers (for example, isolating traffic or pinning producers to specific nodes).
+That path is more controllable but requires explicit endpoint management.
+
+Recommended settings:
+- Run 2+ proxy replicas behind a LoadBalancer service.
+- Point the proxy at etcd via `KAFSCALE_PROXY_ETCD_ENDPOINTS` so it can read the cluster snapshot.
+- Set `KAFSCALE_PROXY_ADVERTISED_HOST`/`KAFSCALE_PROXY_ADVERTISED_PORT` to the public DNS + port clients should use.
+
+Helm values to enable:
+- `proxy.enabled=true`
+- `proxy.etcdEndpoints[0]=http://kafscale-etcd-client.<namespace>.svc.cluster.local:2379`
+- `proxy.advertisedHost=<public DNS>`
+
+Example (HA proxy + external access):
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set proxy.enabled=true \
+  --set proxy.replicaCount=2 \
+  --set proxy.service.type=LoadBalancer \
+  --set proxy.service.port=9092 \
+  --set proxy.advertisedHost=kafka.example.com \
+  --set proxy.advertisedPort=9092 \
+  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+```
 
 Helm chart docs: `deploy/helm/README.md`.
 

@@ -55,6 +55,22 @@ spec:
             - name: KAFSCALE_UI_PASSWORD
               value: "{{ .Values.console.auth.password }}"
 {{- end }}
+{{- if .Values.console.etcdEndpoints }}
+            - name: KAFSCALE_CONSOLE_ETCD_ENDPOINTS
+              value: "{{ join "," .Values.console.etcdEndpoints }}"
+{{- end }}
+{{- if .Values.console.etcd.username }}
+            - name: KAFSCALE_CONSOLE_ETCD_USERNAME
+              value: "{{ .Values.console.etcd.username }}"
+{{- end }}
+{{- if .Values.console.etcd.password }}
+            - name: KAFSCALE_CONSOLE_ETCD_PASSWORD
+              value: "{{ .Values.console.etcd.password }}"
+{{- end }}
+{{- if .Values.console.metrics.brokerMetricsURL }}
+            - name: KAFSCALE_CONSOLE_BROKER_METRICS_URL
+              value: "{{ .Values.console.metrics.brokerMetricsURL }}"
+{{- end }}
           ports:
             - name: http
               containerPort: 8080

@@ -85,6 +85,7 @@ func TestDemoStack(t *testing.T) {
 	}
 
 	brokerCmd := exec.CommandContext(demoCtx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -100,7 +101,7 @@ func TestDemoStack(t *testing.T) {
 		t.Fatalf("start broker: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = brokerCmd.Process.Signal(os.Interrupt)
+		_ = signalProcessGroup(brokerCmd, os.Interrupt)
 		_ = brokerCmd.Wait()
 	})
 	t.Log("waiting for broker readiness")

@@ -29,12 +29,14 @@ import (
 
 func TestBrokerContainerAdvertisedEndpoint(t *testing.T) {
 	port := int32(19092)
+	replicas := int32(1)
 	cluster := &kafscalev1alpha1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 		Spec: kafscalev1alpha1.KafscaleClusterSpec{
 			Brokers: kafscalev1alpha1.BrokerSpec{
 				AdvertisedHost: "kafka.example.com",
 				AdvertisedPort: &port,
+				Replicas:       &replicas,
 			},
 			S3: kafscalev1alpha1.S3Spec{
 				Bucket:               "bucket",
@@ -50,6 +52,33 @@ func TestBrokerContainerAdvertisedEndpoint(t *testing.T) {
 	}
 	if got := envValue(container.Env, "KAFSCALE_BROKER_PORT"); got != fmt.Sprintf("%d", port) {
 		t.Fatalf("expected advertised port, got %q", got)
+	}
+}
+
+func TestReconcileBrokerHeadlessService(t *testing.T) {
+	cluster := &kafscalev1alpha1.KafscaleCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+		Spec: kafscalev1alpha1.KafscaleClusterSpec{
+			Brokers: kafscalev1alpha1.BrokerSpec{},
+			S3: kafscalev1alpha1.S3Spec{
+				Bucket:               "bucket",
+				Region:               "us-east-1",
+				CredentialsSecretRef: "creds",
+			},
+		},
+	}
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme}
+
+	if err := r.reconcileBrokerHeadlessService(context.Background(), cluster); err != nil {
+		t.Fatalf("reconcile broker headless service: %v", err)
+	}
+
+	svc := &corev1.Service{}
+	assertFound(t, c, svc, cluster.Namespace, brokerHeadlessServiceName(cluster))
+	if svc.Spec.ClusterIP != corev1.ClusterIPNone {
+		t.Fatalf("expected headless service, got ClusterIP %q", svc.Spec.ClusterIP)
 	}
 }
 

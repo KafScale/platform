@@ -55,6 +55,23 @@ func (r *TopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
+		setTopicCondition(&topic.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "EtcdUnavailable",
+			Message: "Topic metadata publish failed",
+		})
+		topic.Status.Phase = "EtcdUnavailable"
+		if err := r.Status().Update(ctx, &topic); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: publishRequeueDelay}, nil
+	}
 	setTopicCondition(&topic.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
 		Status:  metav1.ConditionTrue,
@@ -63,13 +80,6 @@ func (r *TopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	})
 	topic.Status.Phase = "Ready"
 	if err := r.Status().Update(ctx, &topic); err != nil && !apierrors.IsNotFound(err) {
-		return ctrl.Result{}, err
-	}
-	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil

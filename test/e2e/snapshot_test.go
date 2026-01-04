@@ -21,7 +21,10 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -101,8 +104,15 @@ func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
 	cfg := embed.NewConfig()
 	cfg.Dir = t.TempDir()
 	cfg.Logger = "zap"
-	cfg.LogLevel = "error"
-	cfg.LogOutputs = []string{os.DevNull}
+	cfg.LogLevel = "info"
+	cfg.LogOutputs = []string{etcdLogPath(t)}
+	clientPort := freeLocalPort(t)
+	peerPort := freeLocalPort(t)
+	cfg.ListenClientUrls = []url.URL{mustURL(t, fmt.Sprintf("http://127.0.0.1:%d", clientPort))}
+	cfg.AdvertiseClientUrls = cfg.ListenClientUrls
+	cfg.ListenPeerUrls = []url.URL{mustURL(t, fmt.Sprintf("http://127.0.0.1:%d", peerPort))}
+	cfg.AdvertisePeerUrls = cfg.ListenPeerUrls
+	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
 
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
@@ -117,4 +127,32 @@ func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
 
 	clientURL := e.Clients[0].Addr().String()
 	return e, []string{fmt.Sprintf("http://%s", clientURL)}
+}
+
+func freeLocalPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func mustURL(t *testing.T, raw string) url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse url %s: %v", raw, err)
+	}
+	return *parsed
+}
+
+func etcdLogPath(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), "test", "e2e", "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create log dir: %v", err)
+	}
+	return filepath.Join(dir, fmt.Sprintf("embedded-etcd-%d.log", time.Now().UnixNano()))
 }

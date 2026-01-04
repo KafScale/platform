@@ -16,7 +16,10 @@
 package operator
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -63,6 +66,9 @@ func TestBuildClusterMetadata(t *testing.T) {
 	if meta.ClusterID == nil || *meta.ClusterID != "cluster-uid" {
 		t.Fatalf("unexpected cluster id: %v", meta.ClusterID)
 	}
+	if meta.ClusterName == nil || *meta.ClusterName != "prod" {
+		t.Fatalf("unexpected cluster name: %v", meta.ClusterName)
+	}
 	if len(meta.Topics) != 1 || meta.Topics[0].Name != "orders" {
 		t.Fatalf("expected orders topic, got %+v", meta.Topics)
 	}
@@ -76,5 +82,35 @@ func TestBuildClusterMetadata(t *testing.T) {
 		if len(part.ISRNodes) != len(part.ReplicaNodes) {
 			t.Fatalf("partition %+v ISR mismatch", part)
 		}
+	}
+}
+
+func TestIsRetryableEtcdError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "connection refused", err: fmt.Errorf("dial tcp 10.0.0.1:2379: connect: connection refused"), want: true},
+		{name: "deadline exceeded", err: fmt.Errorf("context deadline exceeded"), want: true},
+		{name: "transport dialing", err: fmt.Errorf("transport: Error while dialing: dial tcp 10.0.0.1:2379: connect: connection refused"), want: true},
+		{name: "no such host", err: fmt.Errorf("no such host"), want: true},
+		{name: "other", err: fmt.Errorf("permission denied"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetryableEtcdError(tc.err); got != tc.want {
+				t.Fatalf("isRetryableEtcdError=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSleepWithContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := sleepWithContext(ctx, 10*time.Millisecond); err == nil {
+		t.Fatalf("expected error on canceled context")
 	}
 }

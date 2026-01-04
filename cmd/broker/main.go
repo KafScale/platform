@@ -79,7 +79,12 @@ type handler struct {
 	readAhead            int
 	segmentBytes         int
 	flushInterval        time.Duration
+	flushOnAck           bool
 	adminMetrics         *adminMetrics
+}
+
+type etcdAvailability interface {
+	Available() bool
 }
 
 func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
@@ -90,7 +95,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	case *protocol.ApiVersionsRequest:
 		errorCode := protocol.NONE
 		responseVersion := header.APIVersion
-		if responseVersion > 3 {
+		if responseVersion > 4 {
 			errorCode = protocol.UNSUPPORTED_VERSION
 			responseVersion = 0
 		}
@@ -190,12 +195,26 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp := h.coordinator.FindCoordinatorResponse(header.CorrelationID, protocol.NONE)
 		return protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion)
 	case *protocol.JoinGroupRequest:
+		if !h.etcdAvailable() {
+			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.REQUEST_TIMED_OUT,
+			}, header.APIVersion)
+		}
 		resp, err := h.coordinator.JoinGroup(ctx, req.(*protocol.JoinGroupRequest), header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
 		return protocol.EncodeJoinGroupResponse(resp, header.APIVersion)
 	case *protocol.SyncGroupRequest:
+		if !h.etcdAvailable() {
+			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.REQUEST_TIMED_OUT,
+			}, header.APIVersion)
+		}
 		resp, err := h.coordinator.SyncGroup(ctx, req.(*protocol.SyncGroupRequest), header.CorrelationID)
 		if err != nil {
 			return nil, err
@@ -203,6 +222,21 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return protocol.EncodeSyncGroupResponse(resp, header.APIVersion)
 	case *protocol.DescribeGroupsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
+			if !h.etcdAvailable() {
+				req := req.(*protocol.DescribeGroupsRequest)
+				results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
+				for _, groupID := range req.Groups {
+					results = append(results, protocol.DescribeGroupsResponseGroup{
+						ErrorCode: protocol.REQUEST_TIMED_OUT,
+						GroupID:   groupID,
+					})
+				}
+				return protocol.EncodeDescribeGroupsResponse(&protocol.DescribeGroupsResponse{
+					CorrelationID: header.CorrelationID,
+					ThrottleMs:    0,
+					Groups:        results,
+				}, header.APIVersion)
+			}
 			resp, err := h.coordinator.DescribeGroups(ctx, req.(*protocol.DescribeGroupsRequest), header.CorrelationID)
 			if err != nil {
 				return nil, err
@@ -211,6 +245,14 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *protocol.ListGroupsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
+			if !h.etcdAvailable() {
+				return protocol.EncodeListGroupsResponse(&protocol.ListGroupsResponse{
+					CorrelationID: header.CorrelationID,
+					ThrottleMs:    0,
+					ErrorCode:     protocol.REQUEST_TIMED_OUT,
+					Groups:        nil,
+				}, header.APIVersion)
+			}
 			resp, err := h.coordinator.ListGroups(ctx, req.(*protocol.ListGroupsRequest), header.CorrelationID)
 			if err != nil {
 				return nil, err
@@ -218,18 +260,78 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeListGroupsResponse(resp, header.APIVersion)
 		})
 	case *protocol.HeartbeatRequest:
+		if !h.etcdAvailable() {
+			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.REQUEST_TIMED_OUT,
+			}, header.APIVersion)
+		}
 		resp := h.coordinator.Heartbeat(ctx, req.(*protocol.HeartbeatRequest), header.CorrelationID)
 		return protocol.EncodeHeartbeatResponse(resp, header.APIVersion)
 	case *protocol.LeaveGroupRequest:
+		if !h.etcdAvailable() {
+			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     protocol.REQUEST_TIMED_OUT,
+			})
+		}
 		resp := h.coordinator.LeaveGroup(ctx, req.(*protocol.LeaveGroupRequest), header.CorrelationID)
 		return protocol.EncodeLeaveGroupResponse(resp)
 	case *protocol.OffsetCommitRequest:
+		if !h.etcdAvailable() {
+			req := req.(*protocol.OffsetCommitRequest)
+			topics := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetCommitPartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: protocol.REQUEST_TIMED_OUT,
+					})
+				}
+				topics = append(topics, protocol.OffsetCommitTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetCommitResponse(&protocol.OffsetCommitResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				Topics:        topics,
+			})
+		}
 		resp, err := h.coordinator.OffsetCommit(ctx, req.(*protocol.OffsetCommitRequest), header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
 		return protocol.EncodeOffsetCommitResponse(resp)
 	case *protocol.OffsetFetchRequest:
+		if !h.etcdAvailable() {
+			req := req.(*protocol.OffsetFetchRequest)
+			topics := make([]protocol.OffsetFetchTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
+						Partition:   part.Partition,
+						Offset:      -1,
+						LeaderEpoch: -1,
+						ErrorCode:   protocol.REQUEST_TIMED_OUT,
+					})
+				}
+				topics = append(topics, protocol.OffsetFetchTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetFetchResponse(&protocol.OffsetFetchResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				Topics:        topics,
+				ErrorCode:     protocol.REQUEST_TIMED_OUT,
+			}, header.APIVersion)
+		}
 		resp, err := h.coordinator.OffsetFetch(ctx, req.(*protocol.OffsetFetchRequest), header.CorrelationID)
 		if err != nil {
 			return nil, err
@@ -253,6 +355,21 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *protocol.DeleteGroupsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
+			if !h.etcdAvailable() {
+				req := req.(*protocol.DeleteGroupsRequest)
+				results := make([]protocol.DeleteGroupsResponseGroup, 0, len(req.Groups))
+				for _, groupID := range req.Groups {
+					results = append(results, protocol.DeleteGroupsResponseGroup{
+						Group:     groupID,
+						ErrorCode: protocol.REQUEST_TIMED_OUT,
+					})
+				}
+				return protocol.EncodeDeleteGroupsResponse(&protocol.DeleteGroupsResponse{
+					CorrelationID: header.CorrelationID,
+					ThrottleMs:    0,
+					Groups:        results,
+				}, header.APIVersion)
+			}
 			resp, err := h.coordinator.DeleteGroups(ctx, req.(*protocol.DeleteGroupsRequest), header.CorrelationID)
 			if err != nil {
 				return nil, err
@@ -340,6 +457,16 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 		}
 		partitionResponses := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
+			if !h.etcdAvailable() {
+				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: protocol.REQUEST_TIMED_OUT,
+				})
+				if h.traceKafka {
+					h.logger.Debug("produce rejected due to etcd availability", "topic", topic.Name, "partition", part.Partition)
+				}
+				continue
+			}
 			if h.s3Health.State() != broker.S3StateHealthy {
 				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
 					Partition: part.Partition,
@@ -381,7 +508,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				}
 				continue
 			}
-			if req.Acks != 0 {
+			if req.Acks != 0 && h.flushOnAck {
 				if err := plog.Flush(ctx); err != nil {
 					h.logger.Error("flush failed", "error", err, "topic", topic.Name, "partition", part.Partition)
 					partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
@@ -435,6 +562,20 @@ func (h *handler) handleCreateTopics(ctx context.Context, header *protocol.Reque
 				Name:         topic.Name,
 				ErrorCode:    protocol.TOPIC_AUTHORIZATION_FAILED,
 				ErrorMessage: "admin APIs disabled",
+			})
+		}
+		return protocol.EncodeCreateTopicsResponse(&protocol.CreateTopicsResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			Topics:        results,
+		}, header.APIVersion)
+	}
+	if !h.etcdAvailable() {
+		for _, topic := range req.Topics {
+			results = append(results, protocol.CreateTopicResult{
+				Name:         topic.Name,
+				ErrorCode:    protocol.REQUEST_TIMED_OUT,
+				ErrorMessage: "etcd unavailable",
 			})
 		}
 		return protocol.EncodeCreateTopicsResponse(&protocol.CreateTopicsResponse{
@@ -506,6 +647,20 @@ func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.Reque
 			Topics:        results,
 		}, header.APIVersion)
 	}
+	if !h.etcdAvailable() {
+		for _, name := range req.TopicNames {
+			results = append(results, protocol.DeleteTopicResult{
+				Name:         name,
+				ErrorCode:    protocol.REQUEST_TIMED_OUT,
+				ErrorMessage: "etcd unavailable",
+			})
+		}
+		return protocol.EncodeDeleteTopicsResponse(&protocol.DeleteTopicsResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			Topics:        results,
+		}, header.APIVersion)
+	}
 	for _, name := range req.TopicNames {
 		result := protocol.DeleteTopicResult{Name: name}
 		if err := h.store.DeleteTopic(ctx, name); err != nil {
@@ -547,6 +702,13 @@ func (h *handler) validateCreateTopic(ctx context.Context, topic protocol.Create
 		return metadata.ErrInvalidTopic
 	}
 	return nil
+}
+
+func (h *handler) etcdAvailable() bool {
+	if checker, ok := h.store.(etcdAvailability); ok {
+		return checker.Available()
+	}
+	return true
 }
 
 const (
@@ -682,6 +844,20 @@ func (h *handler) handleDescribeConfigs(ctx context.Context, header *protocol.Re
 
 func (h *handler) handleAlterConfigs(ctx context.Context, header *protocol.RequestHeader, req *protocol.AlterConfigsRequest) ([]byte, error) {
 	resources := make([]protocol.AlterConfigsResponseResource, 0, len(req.Resources))
+	if !h.etcdAvailable() {
+		for _, resource := range req.Resources {
+			resources = append(resources, protocol.AlterConfigsResponseResource{
+				ErrorCode:    protocol.REQUEST_TIMED_OUT,
+				ResourceType: resource.ResourceType,
+				ResourceName: resource.ResourceName,
+			})
+		}
+		return protocol.EncodeAlterConfigsResponse(&protocol.AlterConfigsResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			Resources:     resources,
+		}, header.APIVersion)
+	}
 	for _, resource := range req.Resources {
 		if resource.ResourceType != protocol.ConfigResourceTopic || resource.ResourceName == "" {
 			resources = append(resources, protocol.AlterConfigsResponseResource{
@@ -760,6 +936,21 @@ func (h *handler) handleAlterConfigs(ctx context.Context, header *protocol.Reque
 func (h *handler) handleCreatePartitions(ctx context.Context, header *protocol.RequestHeader, req *protocol.CreatePartitionsRequest) ([]byte, error) {
 	results := make([]protocol.CreatePartitionsResponseTopic, 0, len(req.Topics))
 	seen := make(map[string]struct{}, len(req.Topics))
+	if !h.etcdAvailable() {
+		for _, topic := range req.Topics {
+			msg := "etcd unavailable"
+			results = append(results, protocol.CreatePartitionsResponseTopic{
+				Name:         topic.Name,
+				ErrorCode:    protocol.REQUEST_TIMED_OUT,
+				ErrorMessage: &msg,
+			})
+		}
+		return protocol.EncodeCreatePartitionsResponse(&protocol.CreatePartitionsResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			Topics:        results,
+		}, header.APIVersion)
+	}
 	for _, topic := range req.Topics {
 		result := protocol.CreatePartitionsResponseTopic{Name: topic.Name}
 		if strings.TrimSpace(topic.Name) == "" {
@@ -925,10 +1116,14 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 	if header.APIVersion < 0 || header.APIVersion > 4 {
 		return nil, fmt.Errorf("list offsets version %d not supported", header.APIVersion)
 	}
+	if h.traceKafka {
+		h.logger.Debug("list offsets request", "api_version", header.APIVersion, "topics", len(req.Topics))
+	}
 	topicResponses := make([]protocol.ListOffsetsTopicResponse, 0, len(req.Topics))
 	for _, topic := range req.Topics {
 		partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
+			h.logger.Warn("list offsets partition", "topic", topic.Name, "partition", part.Partition, "timestamp", part.Timestamp, "max_offsets", part.MaxNumOffsets, "leader_epoch", part.CurrentLeaderEpoch)
 			resp := protocol.ListOffsetsPartitionResponse{
 				Partition:   part.Partition,
 				LeaderEpoch: -1,
@@ -1033,22 +1228,36 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 			}
 			plog, err := h.getPartitionLog(ctx, topicName, part.Partition)
 			if err != nil {
+				h.logger.Error("fetch partition log failed", "topic", topicName, "partition", part.Partition, "error", err, "etcd_available", h.etcdAvailable(), "s3_state", h.s3Health.State())
+				errorCode := protocol.UNKNOWN_SERVER_ERROR
+				if !h.etcdAvailable() {
+					errorCode = protocol.REQUEST_TIMED_OUT
+				}
 				partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
 					Partition: part.Partition,
-					ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
+					ErrorCode: errorCode,
 				})
 				continue
 			}
 			nextOffset, offsetErr := h.waitForFetchData(ctx, topicName, part.Partition, part.FetchOffset, maxWait)
 			if offsetErr != nil {
-				if errors.Is(offsetErr, context.Canceled) || errors.Is(offsetErr, context.DeadlineExceeded) {
+				if errors.Is(offsetErr, metadata.ErrUnknownTopic) {
 					partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
 						Partition: part.Partition,
-						ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
+						ErrorCode: protocol.UNKNOWN_TOPIC_OR_PARTITION,
 					})
 					continue
 				}
-				nextOffset = 0
+				if errors.Is(offsetErr, context.Canceled) || errors.Is(offsetErr, context.DeadlineExceeded) {
+					// Treat request timeouts as empty fetches, not server errors.
+					offsetErr = nil
+				} else if !h.etcdAvailable() {
+					nextOffset = part.FetchOffset
+					offsetErr = nil
+				} else {
+					h.logger.Error("fetch wait failed", "topic", topicName, "partition", part.Partition, "error", offsetErr, "etcd_available", h.etcdAvailable())
+					nextOffset = 0
+				}
 			}
 			errorCode := int16(0)
 			var recordSet []byte
@@ -1197,6 +1406,7 @@ func (h *handler) getPartitionLog(ctx context.Context, topic string, partition i
 		}, h.recordS3Op)
 		lastOffset, err := plog.RestoreFromS3(ctx)
 		if err != nil {
+			h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
 			h.logMu.Unlock()
 			return nil, err
 		}
@@ -1228,6 +1438,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	s3Namespace := envOrDefault("KAFSCALE_S3_NAMESPACE", "default")
 	segmentBytes := parseEnvInt("KAFSCALE_SEGMENT_BYTES", 4<<20)
 	flushInterval := time.Duration(parseEnvInt("KAFSCALE_FLUSH_INTERVAL_MS", 500)) * time.Millisecond
+	flushOnAck := parseEnvBool("KAFSCALE_PRODUCE_SYNC_FLUSH", true)
 	if autoPartitions < 1 {
 		autoPartitions = 1
 	}
@@ -1264,6 +1475,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		readAhead:            readAhead,
 		segmentBytes:         segmentBytes,
 		flushInterval:        flushInterval,
+		flushOnAck:           flushOnAck,
 		adminMetrics:         newAdminMetrics(),
 	}
 }
@@ -1719,7 +1931,7 @@ type apiVersionSupport struct {
 
 func generateApiVersions() []protocol.ApiVersion {
 	supported := []apiVersionSupport{
-		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 3},
+		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 4},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
 		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},
@@ -1766,8 +1978,8 @@ func generateApiVersions() []protocol.ApiVersion {
 }
 
 func buildBrokerInfo() protocol.MetadataBroker {
-	id := parseEnvInt32("KAFSCALE_BROKER_ID", 1)
-	host := os.Getenv("KAFSCALE_BROKER_HOST")
+	id := resolveBrokerID()
+	host := strings.TrimSpace(os.Getenv("KAFSCALE_BROKER_HOST"))
 	port := parseEnvInt("KAFSCALE_BROKER_PORT", defaultKafkaPort)
 	if addr := strings.TrimSpace(os.Getenv("KAFSCALE_BROKER_ADDR")); addr != "" {
 		parsedHost, parsedPort := parseBrokerAddr(addr)
@@ -1777,6 +1989,11 @@ func buildBrokerInfo() protocol.MetadataBroker {
 		port = parsedPort
 	}
 	if host == "" {
+		if derived := deriveBrokerHost(); derived != "" {
+			host = derived
+		}
+	}
+	if host == "" {
 		host = "localhost"
 	}
 	return protocol.MetadataBroker{
@@ -1784,6 +2001,44 @@ func buildBrokerInfo() protocol.MetadataBroker {
 		Host:   host,
 		Port:   intToInt32(port, int32(defaultKafkaPort)),
 	}
+}
+
+func resolveBrokerID() int32 {
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_BROKER_ID")); val != "" {
+		if parsed, err := strconv.ParseInt(val, 10, 32); err == nil {
+			return int32(parsed)
+		}
+	}
+	if ordinal, ok := podOrdinal(os.Getenv("POD_NAME")); ok {
+		return ordinal
+	}
+	return 1
+}
+
+func deriveBrokerHost() string {
+	podName := strings.TrimSpace(os.Getenv("POD_NAME"))
+	namespace := strings.TrimSpace(os.Getenv("POD_NAMESPACE"))
+	service := strings.TrimSpace(os.Getenv("KAFSCALE_BROKER_SERVICE"))
+	if podName == "" || namespace == "" || service == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s.%s.%s.svc.cluster.local", podName, service, namespace)
+}
+
+func podOrdinal(name string) (int32, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return 0, false
+	}
+	idx := strings.LastIndex(name, "-")
+	if idx == -1 || idx == len(name)-1 {
+		return 0, false
+	}
+	ord, err := strconv.ParseInt(name[idx+1:], 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(ord), true
 }
 
 func parseBrokerAddr(addr string) (string, int) {

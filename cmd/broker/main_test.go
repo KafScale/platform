@@ -83,6 +83,43 @@ func TestHandleProduceAckAll(t *testing.T) {
 	}
 }
 
+func TestHandleProduceEtcdUnavailable(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(unavailableMetadataStore{Store: store})
+
+	req := &protocol.ProduceRequest{
+		Acks:      -1,
+		TimeoutMs: 1000,
+		Topics: []protocol.ProduceTopic{
+			{
+				Name: "orders",
+				Partitions: []protocol.ProducePartition{
+					{
+						Partition: 0,
+						Records:   testBatchBytes(0, 0, 1),
+					},
+				},
+			},
+		},
+	}
+
+	resp, err := handler.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 1}, req)
+	if err != nil {
+		t.Fatalf("handleProduce: %v", err)
+	}
+	if resp == nil {
+		t.Fatalf("expected response for acks=-1")
+	}
+
+	offset, err := store.NextOffset(context.Background(), "orders", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 0 {
+		t.Fatalf("expected offset unchanged got %d", offset)
+	}
+}
+
 func TestHandleProduceAckZero(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
@@ -118,7 +155,7 @@ func TestHandlerApiVersionsUnsupported(t *testing.T) {
 
 	header := &protocol.RequestHeader{
 		APIKey:        protocol.APIKeyApiVersion,
-		APIVersion:    4,
+		APIVersion:    5,
 		CorrelationID: 42,
 	}
 	payload, err := handler.Handle(context.Background(), header, &protocol.ApiVersionsRequest{})
@@ -318,6 +355,31 @@ func TestHandleCreateDeleteTopics(t *testing.T) {
 	}
 }
 
+func TestHandleCreateTopicsEtcdUnavailable(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(unavailableMetadataStore{Store: store})
+	createReq := &protocol.CreateTopicsRequest{
+		Topics: []protocol.CreateTopicConfig{
+			{Name: "payments", NumPartitions: 1, ReplicationFactor: 1},
+		},
+	}
+	respBytes, err := handler.handleCreateTopics(context.Background(), &protocol.RequestHeader{CorrelationID: 45}, createReq)
+	if err != nil {
+		t.Fatalf("handleCreateTopics: %v", err)
+	}
+	resp := decodeCreateTopicsResponse(t, respBytes, 0)
+	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expected etcd unavailable error, got %#v", resp)
+	}
+	meta, err := store.Metadata(context.Background(), []string{"payments"})
+	if err != nil {
+		t.Fatalf("metadata: %v", err)
+	}
+	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+		t.Fatalf("expected topic missing, got %+v", meta.Topics)
+	}
+}
+
 func TestHandleCreatePartitions(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
@@ -444,6 +506,69 @@ func TestHandleDeleteGroups(t *testing.T) {
 	}
 	if resp.Groups[2].ErrorCode != protocol.INVALID_REQUEST {
 		t.Fatalf("expected invalid request for empty group, got %d", resp.Groups[2].ErrorCode)
+	}
+}
+
+func TestHandleJoinGroupEtcdUnavailable(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(unavailableMetadataStore{Store: store})
+
+	req := &protocol.JoinGroupRequest{
+		GroupID:            "group-1",
+		MemberID:           "member-1",
+		ProtocolType:       "consumer",
+		SessionTimeoutMs:   1000,
+		RebalanceTimeoutMs: 1000,
+		Protocols: []protocol.JoinGroupProtocol{
+			{Name: "range", Metadata: []byte("meta")},
+		},
+	}
+	header := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyJoinGroup,
+		APIVersion:    4,
+		CorrelationID: 99,
+	}
+	payload, err := handler.Handle(context.Background(), header, req)
+	if err != nil {
+		t.Fatalf("Handle JoinGroup: %v", err)
+	}
+	resp := decodeJoinGroupResponse(t, payload, 4)
+	if resp.ErrorCode != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expected etcd unavailable error, got %d", resp.ErrorCode)
+	}
+}
+
+func TestHandleOffsetCommitEtcdUnavailable(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(unavailableMetadataStore{Store: store})
+
+	req := &protocol.OffsetCommitRequest{
+		GroupID:  "group-1",
+		MemberID: "member-1",
+		Topics: []protocol.OffsetCommitTopic{
+			{
+				Name: "orders",
+				Partitions: []protocol.OffsetCommitPartition{
+					{Partition: 0, Offset: 5},
+				},
+			},
+		},
+	}
+	header := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyOffsetCommit,
+		APIVersion:    3,
+		CorrelationID: 100,
+	}
+	payload, err := handler.Handle(context.Background(), header, req)
+	if err != nil {
+		t.Fatalf("Handle OffsetCommit: %v", err)
+	}
+	resp := decodeOffsetCommitResponse(t, payload, 3)
+	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected commit response entries, got %+v", resp.Topics)
+	}
+	if resp.Topics[0].Partitions[0].ErrorCode != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expected etcd unavailable error, got %d", resp.Topics[0].Partitions[0].ErrorCode)
 	}
 }
 
@@ -827,6 +952,14 @@ func (f failingMetadataStore) Metadata(ctx context.Context, topics []string) (*m
 	return nil, f.err
 }
 
+type unavailableMetadataStore struct {
+	metadata.Store
+}
+
+func (u unavailableMetadataStore) Available() bool {
+	return false
+}
+
 func TestFranzGoProduceConsumeLocal(t *testing.T) {
 	if os.Getenv("KAFSCALE_LOCAL_FRANZ") != "1" {
 		t.Skip("set KAFSCALE_LOCAL_FRANZ=1 to run the local franz-go test")
@@ -1097,6 +1230,44 @@ func decodeDeleteGroupsResponse(t *testing.T, payload []byte, version int16) *km
 	resp.Version = version
 	if err := resp.ReadFrom(body); err != nil {
 		t.Fatalf("decode delete groups response: %v", err)
+	}
+	return resp
+}
+
+func decodeJoinGroupResponse(t *testing.T, payload []byte, version int16) *kmsg.JoinGroupResponse {
+	t.Helper()
+	reader := bytes.NewReader(payload)
+	var corr int32
+	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
+		t.Fatalf("read correlation id: %v", err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	resp := kmsg.NewPtrJoinGroupResponse()
+	resp.Version = version
+	if err := resp.ReadFrom(body); err != nil {
+		t.Fatalf("decode join group response: %v", err)
+	}
+	return resp
+}
+
+func decodeOffsetCommitResponse(t *testing.T, payload []byte, version int16) *kmsg.OffsetCommitResponse {
+	t.Helper()
+	reader := bytes.NewReader(payload)
+	var corr int32
+	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
+		t.Fatalf("read correlation id: %v", err)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	resp := kmsg.NewPtrOffsetCommitResponse()
+	resp.Version = version
+	if err := resp.ReadFrom(body); err != nil {
+		t.Fatalf("decode offset commit response: %v", err)
 	}
 	return resp
 }
