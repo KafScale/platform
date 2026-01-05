@@ -17,6 +17,8 @@ SHELL := /bin/sh
 
 BINARY := skeleton-processor
 BUILD_DIR := bin
+IMAGE ?= $(BINARY):dev
+DOCKER_BUILD_ARGS ?=
 
 .PHONY: build test clean docker-build
 
@@ -31,4 +33,4 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 docker-build:
-	docker build -t $(BINARY):dev .
+	docker build $(DOCKER_BUILD_ARGS) -t $(IMAGE) .

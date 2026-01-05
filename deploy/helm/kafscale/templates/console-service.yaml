@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- if .Values.console.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -29,3 +30,4 @@ spec:
       protocol: TCP
   selector:
 {{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "console") | indent 4 }}
+{{- end }}

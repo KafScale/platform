@@ -29,7 +29,7 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 
 ## Local Demo
 
-For a kind-based demo environment run `make demo-platform`. The Makefile applies the demo resources via `scripts/demo-platform-apply.sh`; if your environment blocks inline heredocs, ensure the script is executable and run the target again.
+For a kind-based demo environment run `make demo-platform`. The Makefile applies the demo resources via `scripts/demo-platform.sh`; if your environment blocks inline heredocs, ensure the script is executable and run the target again.
 
 ## Client Examples
 

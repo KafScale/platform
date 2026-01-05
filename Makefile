@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform platform-demo help clean-kind-all
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform demo-platform-bootstrap iceberg-demo platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/novatechflow
 STAMP_DIR ?= .build
@@ -24,6 +24,21 @@ PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
+ICEBERG_PROCESSOR_IMAGE ?= iceberg-processor:dev
+ICEBERG_REST_IMAGE ?= tabulario/iceberg-rest:1.6.0
+ICEBERG_REST_PORT ?= 8181
+ICEBERG_WAREHOUSE_BUCKET ?= kafscale-snapshots
+ICEBERG_WAREHOUSE_PREFIX ?= iceberg
+ICEBERG_DEMO_TOPIC ?= demo-topic-1
+ICEBERG_DEMO_TABLE ?= demo.demo_topic_1
+ICEBERG_DEMO_TABLE_NAMESPACE ?= $(word 1,$(subst ., ,$(ICEBERG_DEMO_TABLE)))
+ICEBERG_DEMO_TABLE_NAME ?= $(word 2,$(subst ., ,$(ICEBERG_DEMO_TABLE)))
+ICEBERG_DEMO_RECORDS ?= 50
+ICEBERG_DEMO_TIMEOUT_SEC ?= 120
+ICEBERG_DEMO_NAMESPACE ?= $(KAFSCALE_DEMO_NAMESPACE)
+ICEBERG_PROCESSOR_RELEASE ?= iceberg-processor-dev
+ICEBERG_PROCESSOR_REST_DEBUG ?=
+ICEBERG_PROCESSOR_BUILD_FLAGS ?=
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
 MINIO_PORT ?= 9000
@@ -41,6 +56,9 @@ KAFSCALE_UI_USERNAME ?= kafscaleadmin
 KAFSCALE_UI_PASSWORD ?= kafscale
 KAFSCALE_DEMO_BROKER_REPLICAS ?= 2
 KAFSCALE_DEMO_PROXY ?= 1
+KAFSCALE_DEMO_CONSOLE ?= 1
+KAFSCALE_DEMO_ADVERTISED_HOST ?=
+KAFSCALE_DEMO_ADVERTISED_PORT ?=
 KAFSCALE_DEMO_ETCD_INMEM ?= 1
 KAFSCALE_DEMO_ETCD_REPLICAS ?= 3
 BROKER_PORT ?= 39092
@@ -69,7 +87,9 @@ DOCKER_BUILD_CMD := $(shell \
 	else \
 		echo "DOCKER_BUILDKIT=1 docker build"; \
 	fi)
-DOCKER_BUILD_ARGS ?=
+HOST_ARCH := $(shell uname -m)
+DOCKER_PLATFORM ?= $(if $(filter arm64 aarch64,$(HOST_ARCH)),linux/arm64,$(if $(filter x86_64 amd64,$(HOST_ARCH)),linux/amd64,))
+DOCKER_BUILD_ARGS ?= $(if $(findstring buildx,$(DOCKER_BUILD_CMD)),--platform=$(DOCKER_PLATFORM),)
 
 
 BROKER_SRCS := $(shell find cmd/broker pkg go.mod go.sum)
@@ -153,6 +173,7 @@ clean-kind-all: ## Delete all kind clusters and stop any remaining kind containe
 	-ids=$$(docker ps -q --filter "label=io.x-k8s.kind.cluster"); if [ -n "$$ids" ]; then docker stop $$ids >/dev/null; fi
 	-ids=$$(docker ps -aq --filter "label=io.x-k8s.kind.cluster"); if [ -n "$$ids" ]; then docker rm -f $$ids >/dev/null; fi
 	-rm -f /tmp/kafscale-demo-*.log
+	-@TMP_ROOT=$${TMPDIR:-/tmp}; rm -f "$$TMP_ROOT"/kafscale-kind-kubeconfig.* /tmp/kafscale-kind-kubeconfig.* 2>/dev/null || true
 
 ensure-minio: ## Ensure the local MinIO helper container is running and reachable
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required for MinIO-backed e2e tests"; exit 1; }
@@ -271,19 +292,20 @@ test-operator: docker-build ## Run operator envtest + kind snapshot e2e (require
 	KAFSCALE_KIND_RECREATE=1 \
 	go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v
 
-demo-platform: docker-build ## Launch a full platform demo on kind (operator HA + managed etcd + console).
+demo-platform-bootstrap: docker-build ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
 	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
 	@command -v helm >/dev/null 2>&1 || { echo "helm is required"; exit 1; }
+	@TMP_ROOT=$${TMPDIR:-/tmp}; rm -f "$$TMP_ROOT"/kafscale-kind-kubeconfig.* /tmp/kafscale-kind-kubeconfig.* 2>/dev/null || true
 	@$(MAKE) clean-kind-all
 	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
 	@if ! kind get clusters | grep -q '^$(KAFSCALE_KIND_CLUSTER)$$'; then kind create cluster --name $(KAFSCALE_KIND_CLUSTER); fi
 	@kind get kubeconfig --name $(KAFSCALE_KIND_CLUSTER) > $(KAFSCALE_KIND_KUBECONFIG)
-	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) scripts/demo-platform-apply.sh metallb; fi
+	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) scripts/demo-platform.sh metallb; fi
 	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@if [ "$(KAFSCALE_DEMO_CONSOLE)" = "1" ]; then kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@kind load docker-image $(ETCD_TOOLS_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | \
@@ -292,7 +314,7 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  MINIO_IMAGE=$(MINIO_IMAGE) \
 	  MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
 	  MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	  scripts/demo-platform-apply.sh minio
+	  scripts/demo-platform.sh minio
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/minio --timeout=120s
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl -n $(KAFSCALE_DEMO_NAMESPACE) create secret generic kafscale-s3-credentials \
 	  --from-literal=KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
@@ -340,6 +362,7 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	  --set operator.etcdSnapshotEtcdctlImage.tag=$$ETCD_TOOLS_TAG \
 	  --set operator.etcdReplicas=$(KAFSCALE_DEMO_ETCD_REPLICAS) \
 	  $$( [ "$(KAFSCALE_DEMO_ETCD_INMEM)" = "1" ] && echo "--set operator.etcdStorageMemory=true" ) \
+	  --set console.enabled=$(KAFSCALE_DEMO_CONSOLE) \
 	  --set console.image.repository=$$CONSOLE_REPO \
 	  --set console.image.tag=$$CONSOLE_TAG \
 	  --set console.auth.username=$(KAFSCALE_UI_USERNAME) \
@@ -365,10 +388,14 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
 	  KAFSCALE_DEMO_BROKER_REPLICAS=$(KAFSCALE_DEMO_BROKER_REPLICAS) \
 	  KAFSCALE_DEMO_PROXY=$(KAFSCALE_DEMO_PROXY) \
+	  KAFSCALE_DEMO_ADVERTISED_HOST=$(KAFSCALE_DEMO_ADVERTISED_HOST) \
+	  KAFSCALE_DEMO_ADVERTISED_PORT=$(KAFSCALE_DEMO_ADVERTISED_PORT) \
 	  MINIO_REGION=$(MINIO_REGION) \
-	  scripts/demo-platform-apply.sh cluster
+	  scripts/demo-platform.sh cluster
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
-	  scripts/demo-platform-apply.sh wait
+	  scripts/demo-platform.sh wait
+
+demo-platform: demo-platform-bootstrap ## Launch a full platform demo on kind (operator HA + managed etcd + console).
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) bash -c 'set -euo pipefail; \
 		start_pf() { \
 		  local name="$$1"; shift; \
@@ -379,9 +406,12 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 		    sleep 1; \
 		  done \
 		}; \
-		console_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
-		start_pf console /tmp/kafscale-demo-console.log svc/$$console_svc 8080:80 & \
-		console_pf_pid=$$!; \
+		console_pf_pid=""; \
+		if [ "$(KAFSCALE_DEMO_CONSOLE)" = "1" ]; then \
+		  console_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
+		  start_pf console /tmp/kafscale-demo-console.log svc/$$console_svc 8080:80 & \
+		  console_pf_pid=$$!; \
+		fi; \
 		broker_addr="127.0.0.1:39092"; \
 		if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then \
 		  proxy_svc=$$(kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc -l app.kubernetes.io/component=proxy -o jsonpath="{.items[0].metadata.name}"); \
@@ -424,14 +454,46 @@ demo-platform: docker-build ## Launch a full platform demo on kind (operator HA 
 		  start_pf broker /tmp/kafscale-demo-broker.log svc/kafscale-broker 39092:9092 & \
 		  broker_pf_pid=$$!; \
 		fi; \
-		trap "kill $$console_pf_pid $${broker_pf_pid:-} 2>/dev/null || true" EXIT INT TERM; \
-		echo "Console available at http://127.0.0.1:8080/ui/ (logs: /tmp/kafscale-demo-console.log)"; \
+		trap "kill $${console_pf_pid:-} $${broker_pf_pid:-} 2>/dev/null || true" EXIT INT TERM; \
+		if [ "$(KAFSCALE_DEMO_CONSOLE)" = "1" ]; then \
+		  echo "Console available at http://127.0.0.1:8080/ui/ (logs: /tmp/kafscale-demo-console.log)"; \
+		fi; \
 		echo "Broker endpoint: $$broker_addr"; \
 		echo "Streaming demo messages; press Ctrl+C to stop."; \
 		KAFSCALE_DEMO_BROKER_ADDR=$$broker_addr \
 		KAFSCALE_DEMO_TOPICS=demo-topic-1,demo-topic-2 \
 		go run ./cmd/demo-workload; \
 	'
+
+iceberg-demo: KAFSCALE_DEMO_PROXY=0
+iceberg-demo: KAFSCALE_DEMO_CONSOLE=0
+iceberg-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
+iceberg-demo: KAFSCALE_DEMO_ADVERTISED_HOST=kafscale-broker.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local
+iceberg-demo: KAFSCALE_DEMO_ADVERTISED_PORT=9092
+iceberg-demo: demo-platform-bootstrap ## Run the Iceberg processor demo on kind.
+	$(MAKE) -C addons/processors/iceberg-processor docker-build IMAGE=$(ICEBERG_PROCESSOR_IMAGE) DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg GO_BUILD_FLAGS='$(ICEBERG_PROCESSOR_BUILD_FLAGS)'"
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	ICEBERG_DEMO_NAMESPACE=$(ICEBERG_DEMO_NAMESPACE) \
+	ICEBERG_REST_IMAGE=$(ICEBERG_REST_IMAGE) \
+	ICEBERG_REST_PORT=$(ICEBERG_REST_PORT) \
+	ICEBERG_WAREHOUSE_BUCKET=$(ICEBERG_WAREHOUSE_BUCKET) \
+	ICEBERG_WAREHOUSE_PREFIX=$(ICEBERG_WAREHOUSE_PREFIX) \
+	MINIO_REGION=$(MINIO_REGION) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	ICEBERG_DEMO_TABLE_NAMESPACE=$(ICEBERG_DEMO_TABLE_NAMESPACE) \
+	ICEBERG_DEMO_TABLE_NAME=$(ICEBERG_DEMO_TABLE_NAME) \
+	ICEBERG_DEMO_TABLE=$(ICEBERG_DEMO_TABLE) \
+	ICEBERG_DEMO_TOPIC=$(ICEBERG_DEMO_TOPIC) \
+	ICEBERG_DEMO_RECORDS=$(ICEBERG_DEMO_RECORDS) \
+	ICEBERG_DEMO_TIMEOUT_SEC=$(ICEBERG_DEMO_TIMEOUT_SEC) \
+	ICEBERG_PROCESSOR_RELEASE=$(ICEBERG_PROCESSOR_RELEASE) \
+	ICEBERG_PROCESSOR_IMAGE=$(ICEBERG_PROCESSOR_IMAGE) \
+	ICEBERG_PROCESSOR_REST_DEBUG=$(ICEBERG_PROCESSOR_REST_DEBUG) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	bash scripts/iceberg-demo.sh
 
 platform-demo: demo-platform ## Alias for demo-platform.
 

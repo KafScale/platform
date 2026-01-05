@@ -64,6 +64,7 @@ operator:
       labels: {}
 
 console:
+  enabled: true
   replicaCount: 1
   image:
     repository: ghcr.io/novatechflow/kafscale-console

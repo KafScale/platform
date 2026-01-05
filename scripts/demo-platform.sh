@@ -56,7 +56,7 @@ wait_for_proxy_ready() {
 }
 
 wait_for_etcd_leader() {
-	local attempts="${KAFSCALE_DEMO_ETCD_WAIT_ATTEMPTS:-40}"
+	local attempts="${KAFSCALE_DEMO_ETCD_WAIT_ATTEMPTS:-80}"
 	local sleep_sec="${KAFSCALE_DEMO_ETCD_WAIT_SLEEP_SEC:-3}"
 	local replicas
 	replicas="$(kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" get statefulset kafscale-etcd -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)"
@@ -73,8 +73,14 @@ wait_for_etcd_leader() {
 	for i in $(seq 0 $((replicas - 1))); do
 		endpoints+=("http://kafscale-etcd-${i}.kafscale-etcd.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:2379")
 	done
+	local service_endpoint="http://kafscale-etcd-client.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:2379"
 
 	for i in $(seq 1 "${attempts}"); do
+		if kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" run "kafscale-etcd-health-$$" \
+			--restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
+			--command -- /bin/sh -c "out=\$(etcdctl --endpoints=${service_endpoint} endpoint status -w json 2>/dev/null || true); case \"\$out\" in *'\"Leader\":true'*|*'\"leader\":true'* ) exit 0 ;; *'\"leader\":0'*|*'\"Leader\":0'* ) exit 1 ;; *'\"leader\":'*|*'\"Leader\":'* ) exit 0 ;; * ) exit 1 ;; esac" >/dev/null 2>&1; then
+			return 0
+		fi
 		for endpoint in "${endpoints[@]}"; do
 			if kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" run "kafscale-etcd-health-$$" \
 				--restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
@@ -89,6 +95,27 @@ wait_for_etcd_leader() {
 		--restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
 		--command -- /bin/sh -c "etcdctl --endpoints=${endpoints[0]} endpoint status --cluster -w table || true" >&2 || true
 	return 1
+}
+
+wait_for_etcd_pods_ready() {
+	local sts_name="$1"
+	local selector="$2"
+	local timeout="${3:-180s}"
+	local pods
+	pods="$(kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" get pods -l "${selector}" \
+		-o go-template="{{range .items}}{{\$pod := .}}{{range .metadata.ownerReferences}}{{if and (eq .kind \"StatefulSet\") (eq .name \"${sts_name}\")}}{{\$pod.metadata.name}} {{end}}{{end}}{{end}}")"
+	if [[ -z "${pods}" ]]; then
+		echo "no etcd statefulset pods found for ${sts_name}" >&2
+		kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" get pods -l "${selector}" -o wide || true
+		return 1
+	fi
+	for p in ${pods}; do
+		if ! kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready "pod/${p}" --timeout="${timeout}"; then
+			echo "etcd pod not Ready: ${p}" >&2
+			kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" describe "pod/${p}" || true
+			return 1
+		fi
+	done
 }
 
 if [[ "$MODE" == "minio" ]]; then
@@ -135,9 +162,14 @@ spec:
 EOF
 
 elif [[ "$MODE" == "cluster" ]]; then
-	advertised_block=$'    advertisedHost: 127.0.0.1\n    advertisedPort: 39092'
-	if [[ "$KAFSCALE_DEMO_PROXY" == "1" ]]; then
+	advertised_block=""
+	if [[ -n "${KAFSCALE_DEMO_ADVERTISED_HOST:-}" ]]; then
+		advertised_port="${KAFSCALE_DEMO_ADVERTISED_PORT:-9092}"
+		advertised_block=$'    advertisedHost: '"${KAFSCALE_DEMO_ADVERTISED_HOST}"$'\n    advertisedPort: '"${advertised_port}"
+	elif [[ "$KAFSCALE_DEMO_PROXY" == "1" ]]; then
 		advertised_block=$'    advertisedPort: 9092'
+	else
+		advertised_block=$'    advertisedHost: 127.0.0.1\n    advertisedPort: 39092'
 	fi
 	cat <<EOF | kubectl apply --validate=false -f -
 apiVersion: kafscale.io/v1alpha1
@@ -179,7 +211,7 @@ spec:
 EOF
 elif [[ "$MODE" == "wait" ]]; then
 	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready kafscalecluster/kafscale --timeout=180s
-	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready pod -l app=kafscale-etcd,cluster=kafscale --timeout=180s
+	wait_for_etcd_pods_ready "kafscale-etcd" "app=kafscale-etcd,cluster=kafscale" "180s"
 	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" get svc kafscale-etcd-client >/dev/null
 	wait_for_dns "kafscale-etcd-client.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local"
 	wait_for_etcd_leader
