@@ -110,9 +110,4 @@ We prioritize features based on community demand and alignment with KafScale's c
 
 ## Release history
 
-| Version | Date | Highlights |
-|---------|------|------------|
-| v1.1.0 | 2025-12-21 | CodeQL fixes, dependency refresh, fuzzing and security docs |
-| v1.0.0 | 2025-12-20 | Initial stable release with core protocol, consumer groups, operator |
-
 See [GitHub Releases](https://github.com/novatechflow/kafscale/releases) for full changelogs.
