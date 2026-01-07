@@ -12,6 +12,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     <img alt="GitHub stars" src="https://img.shields.io/github/stars/novatechflow/kafscale?style=flat" />
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
     <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/novatechflow/kafscale" />
+    <img alt="Current release" src="https://img.shields.io/github/v/release/novatechflow/kafscale" />
   </div>
   <div class="hero-actions">
     <a class="button" href="/quickstart/">Get started</a>
