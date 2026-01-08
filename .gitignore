@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+Makefile-MK # Ignore build and IDE files
+
 # Binaries
 /bin/
 /dist/
