@@ -19,5 +19,5 @@ description: Helm chart for the Kafscale operator and console
 home: https://github.com/novatechflow/kafscale
 icon: https://raw.githubusercontent.com/novatechflow/kafscale/main/docs/assets/icon.png
 type: application
-version: 0.2.0
-appVersion: "v1.3.0"
+version: 0.3.0
+appVersion: "v1.4.0"

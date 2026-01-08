@@ -15,10 +15,15 @@
 
 FROM golang:1.22-alpine AS build
 WORKDIR /src
-COPY go.mod ./
-RUN go mod download
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
 COPY . ./
-RUN go build -o /out/skeleton-processor ./cmd/processor
+ARG GO_BUILD_FLAGS=
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build ${GO_BUILD_FLAGS} -o /out/skeleton-processor ./cmd/processor
 
 FROM alpine:3.19
 WORKDIR /app

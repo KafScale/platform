@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,7 +41,7 @@ func main() {
 		Logger: log.Default(),
 		Auth:   authConfigFromEnv(),
 	}
-	if metricsProvider := buildMetricsProvider(); metricsProvider != nil {
+	if metricsProvider := buildMetricsProvider(store); metricsProvider != nil {
 		opts.Metrics = metricsProvider
 	}
 	if err := consolepkg.StartServer(ctx, addr, opts); err != nil {
@@ -83,12 +83,22 @@ func buildMetadataStore(ctx context.Context) (metadata.Store, error) {
 	return store, nil
 }
 
-func buildMetricsProvider() consolepkg.MetricsProvider {
+func buildMetricsProvider(store metadata.Store) consolepkg.MetricsProvider {
 	metricsURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL"))
-	if metricsURL == "" {
+	operatorURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL"))
+	if metricsURL == "" && store == nil && operatorURL == "" {
 		return nil
 	}
-	return consolepkg.NewPromMetricsClient(metricsURL)
+	var brokerProvider consolepkg.MetricsProvider
+	if store != nil {
+		brokerProvider = consolepkg.NewAggregatedPromMetricsClient(store, metricsURL)
+	} else if metricsURL != "" {
+		brokerProvider = consolepkg.NewPromMetricsClient(metricsURL)
+	}
+	if operatorURL != "" {
+		return consolepkg.NewCompositeMetricsProvider(brokerProvider, operatorURL)
+	}
+	return brokerProvider
 }
 
 func authConfigFromEnv() consolepkg.AuthConfig {

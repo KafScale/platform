@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,8 @@ type Store interface {
 	CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error
 	// FetchConsumerOffset retrieves the committed offset for a consumer group partition.
 	FetchConsumerOffset(ctx context.Context, group, topic string, partition int32) (int64, string, error)
+	// ListConsumerOffsets returns all committed consumer offsets.
+	ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error)
 	// PutConsumerGroup persists consumer group metadata.
 	PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error
 	// FetchConsumerGroup retrieves consumer group metadata.
@@ -67,6 +70,14 @@ type TopicSpec struct {
 	ReplicationFactor int16
 }
 
+// ConsumerOffset captures a committed offset entry.
+type ConsumerOffset struct {
+	Group     string
+	Topic     string
+	Partition int32
+	Offset    int64
+}
+
 var (
 	// ErrTopicExists indicates the topic is already present.
 	ErrTopicExists = errors.New("topic already exists")
@@ -81,6 +92,7 @@ type ClusterMetadata struct {
 	Brokers      []protocol.MetadataBroker
 	ControllerID int32
 	Topics       []protocol.MetadataTopic
+	ClusterName  *string
 	ClusterID    *string
 }
 
@@ -162,6 +174,7 @@ func cloneMetadata(src ClusterMetadata) ClusterMetadata {
 		Brokers:      cloneBrokers(src.Brokers),
 		ControllerID: src.ControllerID,
 		Topics:       cloneTopics(src.Topics),
+		ClusterName:  cloneStringPtr(src.ClusterName),
 		ClusterID:    cloneStringPtr(src.ClusterID),
 	}
 }
@@ -483,6 +496,43 @@ func (s *InMemoryStore) FetchConsumerOffset(ctx context.Context, group, topic st
 	defer s.mu.RUnlock()
 	key := consumerKey(group, topic, partition)
 	return s.consumerOffsets[key], s.consumerMeta[key], nil
+}
+
+// ListConsumerOffsets implements Store.ListConsumerOffsets.
+func (s *InMemoryStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	offsets := make([]ConsumerOffset, 0, len(s.consumerOffsets))
+	for key, offset := range s.consumerOffsets {
+		group, topic, partition, ok := parseConsumerKey(key)
+		if !ok {
+			continue
+		}
+		offsets = append(offsets, ConsumerOffset{
+			Group:     group,
+			Topic:     topic,
+			Partition: partition,
+			Offset:    offset,
+		})
+	}
+	return offsets, nil
+}
+
+func parseConsumerKey(key string) (string, string, int32, bool) {
+	parts := strings.Split(key, ":")
+	if len(parts) != 3 {
+		return "", "", 0, false
+	}
+	partition, err := strconv.ParseInt(parts[2], 10, 32)
+	if err != nil {
+		return "", "", 0, false
+	}
+	return parts[0], parts[1], int32(partition), true
 }
 
 // PutConsumerGroup implements Store.PutConsumerGroup.

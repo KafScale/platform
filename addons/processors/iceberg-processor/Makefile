@@ -18,6 +18,7 @@ SHELL := /bin/sh
 BINARY := iceberg-processor
 BUILD_DIR := bin
 IMAGE ?= $(BINARY):dev
+DOCKER_BUILD_ARGS ?=
 
 DOCKER_BUILD_CMD := $(shell \
 	if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then \
@@ -45,4 +46,4 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 docker-build:
-	$(DOCKER_BUILD_CMD) -t $(IMAGE) .
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(IMAGE) .

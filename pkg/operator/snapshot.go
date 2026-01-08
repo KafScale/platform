@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -36,17 +37,17 @@ const (
 )
 
 // SnapshotPublisher translates KafscaleCluster/KafscaleTopic resources into
-// the metadata snapshot consumed by brokers.
+// the metadata snapshot read by brokers.
 type SnapshotPublisher struct {
 	Client client.Client
 }
 
-// NewSnapshotPublisher builds a publisher backed by the provided controller-runtime client.
+// NewSnapshotPublisher creates a publisher backed by the provided controller-runtime client.
 func NewSnapshotPublisher(c client.Client) *SnapshotPublisher {
 	return &SnapshotPublisher{Client: c}
 }
 
-// Publish renders the current metadata for the supplied cluster and puts it into etcd.
+// Publish renders the current metadata for the cluster and puts it into etcd.
 func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
 	var topicList kafscalev1alpha1.KafscaleTopicList
 	if err := p.Client.List(ctx, &topicList, client.InNamespace(cluster.Namespace)); err != nil {
@@ -68,6 +69,62 @@ func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alph
 	return nil
 }
 
+func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadata.ClusterMetadata) metadata.ClusterMetadata {
+	if len(endpoints) == 0 {
+		return next
+	}
+	existing, err := readSnapshotFromEtcd(ctx, endpoints)
+	if err != nil || len(existing.Topics) == 0 {
+		return next
+	}
+	seen := make(map[string]struct{}, len(next.Topics))
+	for _, topic := range next.Topics {
+		if topic.Name == "" {
+			continue
+		}
+		seen[topic.Name] = struct{}{}
+	}
+	for _, topic := range existing.Topics {
+		if topic.Name == "" || topic.ErrorCode != 0 {
+			continue
+		}
+		if _, ok := seen[topic.Name]; ok {
+			continue
+		}
+		next.Topics = append(next.Topics, topic)
+	}
+	return next
+}
+
+func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.ClusterMetadata, error) {
+	var snap metadata.ClusterMetadata
+	cfg := clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 5 * time.Second,
+	}
+	if parseBoolEnv(operatorEtcdSilenceLogsEnv) {
+		cfg.Logger = zap.NewNop()
+	}
+	cli, err := clientv3.New(cfg)
+	if err != nil {
+		return snap, err
+	}
+	defer cli.Close()
+	getCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := cli.Get(getCtx, "/kafscale/metadata/snapshot")
+	if err != nil {
+		return snap, err
+	}
+	if len(resp.Kvs) == 0 {
+		return snap, nil
+	}
+	if err := json.Unmarshal(resp.Kvs[0].Value, &snap); err != nil {
+		return snap, err
+	}
+	return snap, nil
+}
+
 // BuildClusterMetadata converts CRD state into the metadata snapshot consumed by brokers.
 func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic) metadata.ClusterMetadata {
 	replicas := int32(1)
@@ -75,18 +132,20 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 		replicas = *cluster.Spec.Brokers.Replicas
 	}
 	brokers := make([]protocol.MetadataBroker, replicas)
-	brokerHost := fmt.Sprintf("%s-broker.%s.svc.cluster.local", cluster.Name, cluster.Namespace)
-	if strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost) != "" {
-		brokerHost = strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost)
-	}
 	brokerPort := int32(9092)
 	if cluster.Spec.Brokers.AdvertisedPort != nil && *cluster.Spec.Brokers.AdvertisedPort > 0 {
 		brokerPort = *cluster.Spec.Brokers.AdvertisedPort
 	}
+	advertisedHost := strings.TrimSpace(cluster.Spec.Brokers.AdvertisedHost)
+	headlessSvc := fmt.Sprintf("%s-broker-headless", cluster.Name)
 	for i := int32(0); i < replicas; i++ {
+		host := advertisedHost
+		if replicas > 1 || host == "" {
+			host = fmt.Sprintf("%s-broker-%d.%s.%s.svc.cluster.local", cluster.Name, i, headlessSvc, cluster.Namespace)
+		}
 		brokers[i] = protocol.MetadataBroker{
 			NodeID: i,
-			Host:   brokerHost,
+			Host:   host,
 			Port:   brokerPort,
 		}
 	}
@@ -96,6 +155,11 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 	var clusterIDPtr *string
 	if clusterID != "" {
 		clusterIDPtr = &clusterID
+	}
+	clusterName := cluster.Name
+	var clusterNamePtr *string
+	if clusterName != "" {
+		clusterNamePtr = &clusterName
 	}
 	for _, topic := range topics {
 		partitions := make([]protocol.MetadataPartition, topic.Spec.Partitions)
@@ -122,6 +186,7 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 		Brokers:      brokers,
 		ControllerID: 0,
 		Topics:       metaTopics,
+		ClusterName:  clusterNamePtr,
 		ClusterID:    clusterIDPtr,
 	}
 }
@@ -149,17 +214,116 @@ func PublishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 	if parseBoolEnv(operatorEtcdSilenceLogsEnv) {
 		cfg.Logger = zap.NewNop()
 	}
-	cli, err := clientv3.New(cfg)
-	if err != nil {
-		return err
+	const snapshotKey = "/kafscale/metadata/snapshot"
+	conflictErr := errors.New("snapshot update conflict")
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		cli, err := clientv3.New(cfg)
+		if err != nil {
+			lastErr = err
+		} else {
+			getCtx, cancelGet := context.WithTimeout(ctx, 5*time.Second)
+			resp, err := cli.Get(getCtx, snapshotKey)
+			cancelGet()
+			if err != nil {
+				lastErr = err
+				_ = cli.Close()
+				if !isRetryableEtcdError(lastErr) {
+					return lastErr
+				}
+				if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+					return lastErr
+				}
+				continue
+			}
+			existing := metadata.ClusterMetadata{}
+			if len(resp.Kvs) > 0 {
+				if err := json.Unmarshal(resp.Kvs[0].Value, &existing); err == nil {
+					snapshot = mergeSnapshots(snapshot, existing)
+				}
+			}
+			payload, err := json.Marshal(snapshot)
+			if err != nil {
+				_ = cli.Close()
+				return err
+			}
+			putCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			txn := cli.Txn(putCtx)
+			if len(resp.Kvs) == 0 {
+				txn = txn.If(clientv3.Compare(clientv3.Version(snapshotKey), "=", 0))
+			} else {
+				txn = txn.If(clientv3.Compare(clientv3.ModRevision(snapshotKey), "=", resp.Kvs[0].ModRevision))
+			}
+			txn = txn.Then(clientv3.OpPut(snapshotKey, string(payload)))
+			txnResp, err := txn.Commit()
+			cancel()
+			_ = cli.Close()
+			if err == nil && txnResp.Succeeded {
+				return nil
+			}
+			if err == nil && !txnResp.Succeeded {
+				lastErr = conflictErr
+			} else {
+				lastErr = err
+			}
+		}
+		if errors.Is(lastErr, conflictErr) {
+			if err := sleepWithContext(ctx, 200*time.Millisecond); err != nil {
+				return lastErr
+			}
+			continue
+		}
+		if !isRetryableEtcdError(lastErr) {
+			return lastErr
+		}
+		if err := sleepWithContext(ctx, 2*time.Second); err != nil {
+			return lastErr
+		}
 	}
-	defer cli.Close()
-	payload, err := json.Marshal(snapshot)
-	if err != nil {
-		return err
+	return lastErr
+}
+
+func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMetadata {
+	if len(existing.Topics) == 0 {
+		return next
 	}
-	putCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err = cli.Put(putCtx, "/kafscale/metadata/snapshot", string(payload))
-	return err
+	seen := make(map[string]struct{}, len(next.Topics))
+	for _, topic := range next.Topics {
+		if topic.Name == "" {
+			continue
+		}
+		seen[topic.Name] = struct{}{}
+	}
+	for _, topic := range existing.Topics {
+		if topic.Name == "" || topic.ErrorCode != 0 {
+			continue
+		}
+		if _, ok := seen[topic.Name]; ok {
+			continue
+		}
+		next.Topics = append(next.Topics, topic)
+	}
+	return next
+}
+
+func isRetryableEtcdError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "transport: Error while dialing") ||
+		strings.Contains(msg, "no such host")
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

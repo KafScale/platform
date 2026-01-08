@@ -370,7 +370,7 @@ type DeleteGroupsResponse struct {
 
 // EncodeApiVersionsResponse renders bytes ready to send on the wire.
 func EncodeApiVersionsResponse(resp *ApiVersionsResponse, version int16) ([]byte, error) {
-	if version < 0 || version > 3 {
+	if version < 0 || version > 4 {
 		return nil, fmt.Errorf("api versions response version %d not supported", version)
 	}
 	w := newByteWriter(64)
@@ -657,7 +657,11 @@ func EncodeFetchResponse(resp *FetchResponse, version int16) ([]byte, error) {
 				w.Int32(part.PreferredReadReplica)
 			}
 			if flexible {
-				w.CompactBytes(part.RecordSet)
+				if part.RecordSet == nil {
+					w.CompactBytes([]byte{})
+				} else {
+					w.CompactBytes(part.RecordSet)
+				}
 				w.WriteTaggedFields(0)
 			} else {
 				if part.RecordSet == nil {

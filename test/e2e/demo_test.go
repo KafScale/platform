@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -85,6 +85,7 @@ func TestDemoStack(t *testing.T) {
 	}
 
 	brokerCmd := exec.CommandContext(demoCtx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -100,7 +101,7 @@ func TestDemoStack(t *testing.T) {
 		t.Fatalf("start broker: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = brokerCmd.Process.Signal(os.Interrupt)
+		_ = signalProcessGroup(brokerCmd, os.Interrupt)
 		_ = brokerCmd.Wait()
 	})
 	t.Log("waiting for broker readiness")
@@ -125,7 +126,14 @@ func TestDemoStack(t *testing.T) {
 			Password: consolePass,
 		},
 	}
-	consoleOpts.Metrics = consolepkg.NewPromMetricsClient(fmt.Sprintf("http://%s/metrics", metricsAddr))
+	brokerMetricsURL := fmt.Sprintf("http://%s/metrics", metricsAddr)
+	operatorMetricsURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL"))
+	brokerProvider := consolepkg.NewPromMetricsClient(brokerMetricsURL)
+	if operatorMetricsURL != "" {
+		consoleOpts.Metrics = consolepkg.NewCompositeMetricsProvider(brokerProvider, operatorMetricsURL)
+	} else {
+		consoleOpts.Metrics = brokerProvider
+	}
 	if err := consolepkg.StartServer(demoCtx, consoleAddr, consoleOpts); err != nil {
 		t.Fatalf("start console: %v", err)
 	}

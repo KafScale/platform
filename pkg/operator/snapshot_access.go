@@ -61,10 +61,7 @@ func (r *ClusterReconciler) verifySnapshotS3Access(ctx context.Context, cluster 
 		return nil
 	}
 
-	bucket := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotBucketEnv))
-	if bucket == "" {
-		bucket = strings.TrimSpace(cluster.Spec.S3.Bucket)
-	}
+	bucket := snapshotBucket(cluster)
 	if bucket == "" {
 		err := fmt.Errorf("snapshot bucket is not configured")
 		r.recordSnapshotAccessFailure(ctx, cluster, clusterKey, err)
@@ -100,7 +97,7 @@ func (r *ClusterReconciler) verifySnapshotS3Access(ctx context.Context, cluster 
 		}
 	}
 
-	prefix := getEnv(operatorEtcdSnapshotPrefixEnv, defaultSnapshotPrefix)
+	prefix := snapshotPrefix(cluster)
 	key := fmt.Sprintf("%s/health/%s-%d.txt", strings.Trim(prefix, "/"), cluster.Name, now.UnixNano())
 	if err := client.UploadSegment(checkCtx, key, []byte("ok")); err != nil {
 		r.recordSnapshotAccessFailure(ctx, cluster, clusterKey, err)

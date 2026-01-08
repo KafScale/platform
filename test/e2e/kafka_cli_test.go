@@ -64,6 +64,7 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 	advertisedHost := dockerAdvertisedHost(brokerAddr)
 
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -85,7 +86,7 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 		t.Fatalf("start broker: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = brokerCmd.Process.Signal(os.Interrupt)
+		_ = signalProcessGroup(brokerCmd, os.Interrupt)
 		done := make(chan struct{})
 		go func() {
 			_ = brokerCmd.Wait()
@@ -94,7 +95,7 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			_ = brokerCmd.Process.Kill()
+			_ = signalProcessGroup(brokerCmd, os.Kill)
 		}
 	})
 
@@ -246,6 +247,7 @@ func TestKafkaCliAdminTopics(t *testing.T) {
 	advertisedHost := dockerAdvertisedHost(brokerAddr)
 
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
+	configureProcessGroup(brokerCmd)
 	brokerCmd.Env = append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_TOPICS=false",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
@@ -268,7 +270,7 @@ func TestKafkaCliAdminTopics(t *testing.T) {
 		t.Fatalf("start broker: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = brokerCmd.Process.Signal(os.Interrupt)
+		_ = signalProcessGroup(brokerCmd, os.Interrupt)
 		done := make(chan struct{})
 		go func() {
 			_ = brokerCmd.Wait()
@@ -277,7 +279,7 @@ func TestKafkaCliAdminTopics(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			_ = brokerCmd.Process.Kill()
+			_ = signalProcessGroup(brokerCmd, os.Kill)
 		}
 	})
 

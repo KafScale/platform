@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -192,6 +192,24 @@ func TestInMemoryStoreConsumerGroups(t *testing.T) {
 	}
 	if loaded, err := store.FetchConsumerGroup(context.Background(), "group-1"); err != nil || loaded != nil {
 		t.Fatalf("expected group deletion, got %#v err=%v", loaded, err)
+	}
+}
+
+func TestInMemoryStoreConsumerOffsets(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx := context.Background()
+	if err := store.CommitConsumerOffset(ctx, "group-1", "orders", 0, 12, "meta"); err != nil {
+		t.Fatalf("CommitConsumerOffset: %v", err)
+	}
+	if err := store.CommitConsumerOffset(ctx, "group-1", "orders", 1, 42, ""); err != nil {
+		t.Fatalf("CommitConsumerOffset: %v", err)
+	}
+	offsets, err := store.ListConsumerOffsets(ctx)
+	if err != nil {
+		t.Fatalf("ListConsumerOffsets: %v", err)
+	}
+	if len(offsets) != 2 {
+		t.Fatalf("expected 2 offsets got %d", len(offsets))
 	}
 }
 

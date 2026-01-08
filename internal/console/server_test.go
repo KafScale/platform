@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +24,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/novatechflow/kafscale/pkg/metadata"
+	"github.com/novatechflow/kafscale/pkg/protocol"
 )
 
 func TestConsoleStatusEndpoint(t *testing.T) {
@@ -54,6 +57,35 @@ func TestConsoleStatusEndpoint(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "\"cluster\"") {
 		t.Fatalf("missing cluster field in response: %s", body)
+	}
+}
+
+func TestStatusFromMetadataInjectsBrokerRuntime(t *testing.T) {
+	meta := &metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-1"},
+		},
+		Topics: []protocol.MetadataTopic{
+			{Name: "orders"},
+		},
+	}
+	snap := &MetricsSnapshot{
+		BrokerRuntime: map[string]BrokerRuntime{
+			"broker-1": {
+				CPUPercent: 42.7,
+				MemBytes:   512 * 1024 * 1024,
+			},
+		},
+	}
+	resp := statusFromMetadata(meta, snap)
+	if len(resp.Brokers.Nodes) != 1 {
+		t.Fatalf("expected 1 broker got %d", len(resp.Brokers.Nodes))
+	}
+	if resp.Brokers.Nodes[0].CPU != 43 {
+		t.Fatalf("expected cpu 43 got %d", resp.Brokers.Nodes[0].CPU)
+	}
+	if resp.Brokers.Nodes[0].Memory != 512 {
+		t.Fatalf("expected mem 512 got %d", resp.Brokers.Nodes[0].Memory)
 	}
 }
 

@@ -111,6 +111,7 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 			Brokers: kafscalev1alpha1.BrokerSpec{
 				AdvertisedHost: "kafka.example.com",
 				AdvertisedPort: &advertisedPort,
+				Replicas:       ptr.To(int32(1)),
 				Service: kafscalev1alpha1.BrokerServiceSpec{
 					Type:                     string(corev1.ServiceTypeLoadBalancer),
 					Annotations:              map[string]string{"cloud.example.com/lb": "external"},
@@ -142,8 +143,8 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 		if !resourceExists(ctx, mgr.GetClient(), service, cluster.Namespace, cluster.Name+"-broker") {
 			return false, nil
 		}
-		deploy := &appsv1.Deployment{}
-		if !resourceExists(ctx, mgr.GetClient(), deploy, cluster.Namespace, cluster.Name+"-broker") {
+		sts := &appsv1.StatefulSet{}
+		if !resourceExists(ctx, mgr.GetClient(), sts, cluster.Namespace, cluster.Name+"-broker") {
 			return false, nil
 		}
 
@@ -165,17 +166,17 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 		if len(service.Spec.Ports) != 2 {
 			return false, nil
 		}
-		if service.Spec.Ports[0].NodePort != kafkaNodePort {
+		if portByName(service.Spec.Ports, "kafka").NodePort != kafkaNodePort {
 			return false, nil
 		}
-		if service.Spec.Ports[1].NodePort != metricsNodePort {
+		if portByName(service.Spec.Ports, "metrics").NodePort != metricsNodePort {
 			return false, nil
 		}
 
-		if len(deploy.Spec.Template.Spec.Containers) == 0 {
+		if len(sts.Spec.Template.Spec.Containers) == 0 {
 			return false, nil
 		}
-		env := deploy.Spec.Template.Spec.Containers[0].Env
+		env := sts.Spec.Template.Spec.Containers[0].Env
 		if envValue(env, "KAFSCALE_BROKER_HOST") != "kafka.example.com" {
 			return false, nil
 		}
@@ -195,4 +196,13 @@ func envValue(env []corev1.EnvVar, key string) string {
 		}
 	}
 	return ""
+}
+
+func portByName(ports []corev1.ServicePort, name string) corev1.ServicePort {
+	for _, port := range ports {
+		if port.Name == name {
+			return port
+		}
+	}
+	return corev1.ServicePort{}
 }

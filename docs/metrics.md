@@ -1,5 +1,5 @@
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,7 +26,8 @@ The console UI and Grafana dashboard templates are built on the same metrics.
 - **Operator metrics** – `http://<operator-host>:8080/metrics`
 
 In local development, the console can scrape broker metrics if you set
-`KAFSCALE_CONSOLE_BROKER_METRICS_URL`.
+`KAFSCALE_CONSOLE_BROKER_METRICS_URL`. Operator metrics can be wired into the
+console via `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`.
 
 ## ISR Terminology
 
@@ -51,6 +52,15 @@ Broker metrics are emitted directly by the broker process.
 | `kafscale_admin_requests_total` | Counter | `api` | Count of admin API requests by API name. |
 | `kafscale_admin_request_errors_total` | Counter | `api` | Count of admin API errors by API name. |
 | `kafscale_admin_request_latency_ms_avg` | Gauge | `api` | Average admin API latency (ms). |
+| `kafscale_produce_latency_ms` | Histogram | - | Produce request latency distribution (use p95 in PromQL). |
+| `kafscale_consumer_lag` | Histogram | - | Consumer lag distribution (use p95 in PromQL). |
+| `kafscale_consumer_lag_max` | Gauge | - | Maximum observed consumer lag. |
+| `kafscale_broker_uptime_seconds` | Gauge | - | Seconds since broker start. |
+| `kafscale_broker_cpu_percent` | Gauge | - | Process CPU usage percent between scrapes. |
+| `kafscale_broker_mem_alloc_bytes` | Gauge | - | Allocated heap bytes. |
+| `kafscale_broker_mem_sys_bytes` | Gauge | - | Memory obtained from the OS. |
+| `kafscale_broker_heap_inuse_bytes` | Gauge | - | Heap in-use bytes. |
+| `kafscale_broker_goroutines` | Gauge | - | Number of goroutines. |
 
 Admin API label values are human-readable for common ops APIs
 (`DescribeGroups`, `ListGroups`, `OffsetForLeaderEpoch`, `DescribeConfigs`,

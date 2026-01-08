@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,7 @@ package metadata
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"google.golang.org/protobuf/proto"
@@ -67,6 +68,28 @@ func ParseConsumerGroupID(key string) (string, bool) {
 // ConsumerOffsetKey returns the etcd key holding the committed offset for a partition.
 func ConsumerOffsetKey(groupID, topic string, partition int32) string {
 	return fmt.Sprintf("%s/%s/offsets/%s/%d", consumerGroupPrefix, groupID, topic, partition)
+}
+
+// ParseConsumerOffsetKey extracts group, topic, and partition from an offset key.
+func ParseConsumerOffsetKey(key string) (string, string, int32, bool) {
+	prefix := consumerGroupPrefix + "/"
+	if !strings.HasPrefix(key, prefix) {
+		return "", "", 0, false
+	}
+	trimmed := strings.TrimPrefix(key, prefix)
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 4 {
+		return "", "", 0, false
+	}
+	groupID := parts[0]
+	if parts[1] != "offsets" || groupID == "" || parts[2] == "" {
+		return "", "", 0, false
+	}
+	partition, err := strconv.ParseInt(parts[3], 10, 32)
+	if err != nil {
+		return "", "", 0, false
+	}
+	return groupID, parts[2], int32(partition), true
 }
 
 // BrokerRegistrationKey returns the etcd key for broker liveness data.

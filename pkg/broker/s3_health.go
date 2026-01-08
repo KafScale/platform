@@ -121,6 +121,9 @@ func (m *S3HealthMonitor) RecordOperation(op string, latency time.Duration, err 
 func (m *S3HealthMonitor) Snapshot() S3HealthSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now()
+	m.truncateLocked(now)
+	m.recomputeLocked(now)
 	return S3HealthSnapshot{
 		State:      m.state,
 		Since:      m.stateSince,
@@ -133,6 +136,9 @@ func (m *S3HealthMonitor) Snapshot() S3HealthSnapshot {
 func (m *S3HealthMonitor) State() S3HealthState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now()
+	m.truncateLocked(now)
+	m.recomputeLocked(now)
 	return m.state
 }
 

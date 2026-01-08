@@ -1,9 +1,11 @@
 const metricFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 let topicsCache = [];
+let brokersCache = [];
 let selectedTopicName = null;
 let consoleStarted = false;
 let metricsSource = null;
 let statusInterval = null;
+let brokersExpanded = false;
 
 const loginScreen = document.getElementById('login-screen');
 const appScreen = document.getElementById('app');
@@ -28,6 +30,7 @@ async function fetchStatus() {
     renderHealth(data);
 
     topicsCache = data.topics || [];
+    brokersCache = data.brokers?.nodes || [];
     renderTopics(topicsCache);
   } catch (err) {
     summary.textContent = `Failed to load status: ${err.message}`;
@@ -69,35 +72,139 @@ function renderHealth(data) {
   }
 }
 
-function renderBrokers(nodes) {
-  const grid = document.getElementById('broker-grid');
-  grid.innerHTML = '';
+function brokerStateRank(state) {
+  const normalized = normalizeBrokerState(state);
+  switch (normalized) {
+    case 'unavailable':
+      return 3;
+    case 'degraded':
+      return 2;
+    case 'healthy':
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function normalizeBrokerState(state) {
+  if (!state) return 'unknown';
+  const value = String(state).trim().toLowerCase();
+  if (value === 'ready' || value === 'up' || value === 'ok') return 'healthy';
+  return value;
+}
+
+function renderBrokerSummary(nodes) {
+  const summary = document.getElementById('broker-summary');
+  if (!summary) return;
   if (!nodes.length) {
-    grid.textContent = 'No broker data';
+    summary.textContent = 'No broker data';
+    const wrap = document.getElementById('broker-table-wrap');
+    if (wrap) {
+      wrap.style.display = 'none';
+    }
     return;
   }
+  let cpuMax = 0;
+  let memMax = 0;
+  let cpuSum = 0;
+  let memSum = 0;
+  let cpuCount = 0;
+  let memCount = 0;
+  let healthy = 0;
+  let degraded = 0;
+  let unavailable = 0;
   nodes.forEach(node => {
-    const card = document.createElement('div');
-    card.className = 'broker-card';
-    card.innerHTML = `
-      <div><span class="status-dot ${node.state}"></span><strong>${node.name}</strong></div>
-      <div>ID: ${node.id ?? 'unknown'}</div>
-      <div>State: ${node.state.toUpperCase()}</div>
-      <div>Partitions: ${node.partitions}</div>
-      <div>CPU: ${node.cpu}% · Mem: ${node.memory}%</div>
-      <div>Backpressure: ${node.backpressure.toUpperCase()}</div>
-    `;
-    grid.appendChild(card);
+    switch (normalizeBrokerState(node.state)) {
+      case 'healthy':
+        healthy++;
+        break;
+      case 'degraded':
+        degraded++;
+        break;
+      case 'unavailable':
+        unavailable++;
+        break;
+      default:
+        break;
+    }
+    if (typeof node.cpu === 'number' && node.cpu > 0) {
+      cpuSum += node.cpu;
+      cpuCount++;
+      if (node.cpu > cpuMax) cpuMax = node.cpu;
+    }
+    if (typeof node.memory === 'number' && node.memory > 0) {
+      memSum += node.memory;
+      memCount++;
+      if (node.memory > memMax) memMax = node.memory;
+    }
   });
+  const cpuAvg = cpuCount ? Math.round((cpuSum / cpuCount) * 10) / 10 : null;
+  const memAvg = memCount ? Math.round((memSum / memCount) * 10) / 10 : null;
+  const cpuSummary = cpuCount ? `${cpuAvg}% avg · ${cpuMax}% max` : 'n/a';
+  const memSummary = memCount ? `${memAvg} MB avg · ${memMax} MB max` : 'n/a';
+  summary.innerHTML = `
+    <div><span>State</span><strong>${healthy} healthy · ${degraded} degraded · ${unavailable} unavailable</strong></div>
+    <div><span>CPU</span><strong>${cpuSummary}</strong></div>
+    <div><span>Mem</span><strong>${memSummary}</strong></div>
+  `;
+}
+
+function renderBrokers(nodes) {
+  renderBrokerSummary(nodes);
+  const table = document.getElementById('broker-table');
+  const body = table ? table.querySelector('tbody') : null;
+  const wrap = document.getElementById('broker-table-wrap');
+  if (wrap) {
+    wrap.style.display = brokersExpanded ? 'block' : 'none';
+  }
+  if (!body) return;
+  body.innerHTML = '';
+  if (!nodes.length) {
+    body.innerHTML = '<tr><td colspan="5">No broker data</td></tr>';
+    return;
+  }
+  const sortSelect = document.getElementById('broker-sort');
+  const sortKey = sortSelect ? sortSelect.value : 'state';
+  const sorted = [...nodes].sort((a, b) => {
+    if (sortKey === 'cpu') return (b.cpu ?? 0) - (a.cpu ?? 0);
+    if (sortKey === 'mem') return (b.memory ?? 0) - (a.memory ?? 0);
+    if (sortKey === 'name') return String(a.name).localeCompare(String(b.name));
+    return brokerStateRank(b.state) - brokerStateRank(a.state);
+  });
+  sorted.forEach(node => {
+    const row = document.createElement('tr');
+    const cpu = typeof node.cpu === 'number' && node.cpu > 0 ? `${node.cpu}%` : 'n/a';
+    const mem = typeof node.memory === 'number' && node.memory > 0 ? `${node.memory} MB` : 'n/a';
+    const backpressure = node.backpressure ? node.backpressure.toUpperCase() : 'UNKNOWN';
+    const state = normalizeBrokerState(node.state);
+    row.innerHTML = `
+      <td><span class="status-dot ${state}"></span></td>
+      <td>${node.name}</td>
+      <td><span class="metric-pill">${cpu}</span></td>
+      <td><span class="metric-pill">${mem}</span></td>
+      <td>${backpressure}</td>
+    `;
+    body.appendChild(row);
+  });
+  const toggle = document.getElementById('broker-toggle');
+  if (toggle) {
+    toggle.textContent = brokersExpanded ? 'Hide brokers' : `Show brokers (${nodes.length})`;
+  }
 }
 
 function startMetricsStream() {
   const produceEl = document.getElementById('produce-rps');
   const fetchEl = document.getElementById('fetch-rps');
   const latencyEl = document.getElementById('live-s3-latency');
+  const errorRateEl = document.getElementById('s3-error-rate');
   const adminReqEl = document.getElementById('admin-requests');
   const adminErrEl = document.getElementById('admin-errors');
   const adminLatencyEl = document.getElementById('admin-latency');
+  const snapshotAgeEl = document.getElementById('etcd-snapshot-age');
+  const snapshotStaleEl = document.getElementById('etcd-snapshot-stale');
+  const snapshotAccessEl = document.getElementById('etcd-snapshot-access');
+  const snapshotLastSuccessEl = document.getElementById('etcd-snapshot-last-success');
+  const snapshotLastScheduleEl = document.getElementById('etcd-snapshot-last-schedule');
   const status = document.getElementById('metrics-status');
   if (metricsSource) {
     metricsSource.close();
@@ -110,9 +217,16 @@ function startMetricsStream() {
       setMetricValue(produceEl, metrics.produce_rps);
       setMetricValue(fetchEl, metrics.fetch_rps);
       setMetricValue(latencyEl, metrics.s3_latency_ms);
+      setMetricValue(errorRateEl, metrics.s3_error_rate);
       setMetricValue(adminReqEl, metrics.admin_requests_total);
       setMetricValue(adminErrEl, metrics.admin_errors_total);
       setMetricValue(adminLatencyEl, metrics.admin_latency_ms_avg);
+      setMetricValue(snapshotAgeEl, metrics.etcd_snapshot_age_s);
+      setMetricValue(snapshotStaleEl, metrics.etcd_snapshot_stale);
+      setMetricValue(snapshotAccessEl, metrics.etcd_snapshot_access_ok);
+      setMetricValue(snapshotLastSuccessEl, metrics.etcd_snapshot_last_success_ts, 'timestamp');
+      setMetricValue(snapshotLastScheduleEl, metrics.etcd_snapshot_last_schedule_ts, 'timestamp');
+      setEtcdFallbacks(metrics);
       if (payload.timestamp) {
         const ts = new Date(payload.timestamp);
         status.textContent = `Last update ${ts.toLocaleTimeString()}`;
@@ -129,9 +243,45 @@ function startMetricsStream() {
   };
 }
 
-function setMetricValue(el, value) {
+function setEtcdFallbacks(metrics) {
+  const ageEl = document.getElementById('etcd-snapshot-age');
+  const staleEl = document.getElementById('etcd-snapshot-stale');
+  const accessEl = document.getElementById('etcd-snapshot-access');
+  const lastSuccessEl = document.getElementById('etcd-snapshot-last-success');
+  const lastScheduleEl = document.getElementById('etcd-snapshot-last-schedule');
+  if (!ageEl || !staleEl || !accessEl || !lastSuccessEl || !lastScheduleEl) return;
+  if (typeof metrics.etcd_snapshot_age_s !== 'number') {
+    ageEl.textContent = 'n/a';
+    staleEl.textContent = 'n/a';
+    accessEl.textContent = 'n/a';
+    lastSuccessEl.textContent = 'n/a';
+    lastScheduleEl.textContent = 'n/a';
+  }
+}
+
+function setMetricValue(el, value, mode) {
   if (!el) return;
   if (typeof value === 'number' && !Number.isNaN(value)) {
+    if (el.id === 's3-error-rate') {
+      el.textContent = `${metricFormatter.format(value * 100)}%`;
+      return;
+    }
+    if (mode === 'timestamp') {
+      if (value <= 0) {
+        el.textContent = 'n/a';
+        return;
+      }
+      el.textContent = new Date(value * 1000).toLocaleString();
+      return;
+    }
+    if (el.id === 'etcd-snapshot-stale') {
+      el.textContent = value >= 1 ? 'YES' : 'NO';
+      return;
+    }
+    if (el.id === 'etcd-snapshot-access') {
+      el.textContent = value >= 1 ? 'OK' : 'FAIL';
+      return;
+    }
     el.textContent = metricFormatter.format(value);
   }
 }
@@ -301,6 +451,27 @@ async function initAuth() {
   showLogin();
 }
 
+const brokerSort = document.getElementById('broker-sort');
+if (brokerSort) {
+  brokerSort.addEventListener('change', () => {
+    if (brokersExpanded) {
+      renderBrokers(brokersCache);
+    }
+  });
+}
+
+const brokerToggle = document.getElementById('broker-toggle');
+if (brokerToggle) {
+  brokerToggle.addEventListener('click', () => {
+    if (!brokersExpanded) {
+      brokersExpanded = true;
+    } else {
+      brokersExpanded = false;
+    }
+    renderBrokers(brokersCache);
+  });
+}
+
 if (loginForm) {
   loginForm.addEventListener('submit', async event => {
     event.preventDefault();
@@ -352,3 +523,15 @@ if (logoutButton) {
 }
 
 initAuth();
+
+document.querySelectorAll('.tab-button').forEach(button => {
+  button.addEventListener('click', () => {
+    const target = button.getAttribute('data-tab');
+    document.querySelectorAll('.tab-button').forEach(btn => {
+      btn.classList.toggle('active', btn === button);
+    });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+      panel.classList.toggle('active', panel.id === `tab-${target}`);
+    });
+  });
+});

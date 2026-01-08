@@ -19,13 +19,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -52,7 +55,9 @@ func main() {
 			log.Fatalf("create producer client: %v", err)
 		}
 		defer client.Close()
-		if err := produceMessages(context.Background(), client, topic, count); err != nil {
+		produceCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := produceMessages(produceCtx, client, topic, count); err != nil {
 			log.Fatalf("produce: %v", err)
 		}
 		log.Printf("produced %d messages to %s", count, topic)
@@ -63,10 +68,27 @@ func main() {
 		if count <= 0 {
 			log.Fatalf("KAFSCALE_E2E_COUNT must be > 0")
 		}
+		partition := parseEnvInt32("KAFSCALE_E2E_PARTITION", -1)
+		offsetOverride := parseEnvInt64("KAFSCALE_E2E_OFFSET", -1)
+		var opts []kgo.Opt
+		opts = append(opts, kgo.SeedBrokers(brokerAddr))
+		if partition >= 0 {
+			offset := kgo.NewOffset().AtStart()
+			if offsetOverride >= 0 {
+				offset = kgo.NewOffset().At(offsetOverride)
+			}
+			partitions := map[string]map[int32]kgo.Offset{
+				topic: {partition: offset},
+			}
+			opts = append(opts, kgo.ConsumePartitions(partitions))
+		} else {
+			opts = append(opts,
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			)
+		}
 		client, err := kgo.NewClient(
-			kgo.SeedBrokers(brokerAddr),
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+			opts...,
 		)
 		if err != nil {
 			log.Fatalf("create consumer client: %v", err)
@@ -76,6 +98,16 @@ func main() {
 			log.Fatalf("consume: %v", err)
 		}
 		log.Printf("consumed %d messages from %s", count, topic)
+	case "metrics":
+		metricsAddr := strings.TrimSpace(os.Getenv("KAFSCALE_E2E_METRICS_ADDR"))
+		if metricsAddr == "" {
+			log.Fatalf("KAFSCALE_E2E_METRICS_ADDR is required")
+		}
+		waitTimeout := time.Duration(parseEnvInt("KAFSCALE_E2E_METRICS_TIMEOUT_SEC", 60)) * time.Second
+		if err := waitForS3Health(metricsAddr, waitTimeout); err != nil {
+			log.Fatalf("metrics: %v", err)
+		}
+		log.Printf("s3 health is healthy via %s", metricsAddr)
 	case "probe":
 		addrs := parseCSVAddrs(os.Getenv("KAFSCALE_E2E_ADDRS"))
 		if len(addrs) == 0 {
@@ -138,6 +170,9 @@ func allTransientFetchErrors(errs []kgo.FetchError) bool {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			continue
 		}
+		if kerr.IsRetriable(err) {
+			continue
+		}
 		return false
 	}
 	return true
@@ -172,6 +207,23 @@ func probeAddrs(addrs []string, timeout time.Duration, retries int, sleep time.D
 	return nil
 }
 
+func waitForS3Health(metricsAddr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	url := fmt.Sprintf("http://%s/metrics", metricsAddr)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(url)
+		if err == nil {
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr == nil && strings.Contains(string(body), `kafscale_s3_health_state{state="healthy"} 1`) {
+				return nil
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return fmt.Errorf("timed out waiting for s3 health metrics at %s", url)
+}
+
 func parseCSVAddrs(raw string) []string {
 	parts := strings.Split(raw, ",")
 	addrs := make([]string, 0, len(parts))
@@ -198,6 +250,30 @@ func parseEnvInt(name string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func parseEnvInt32(name string, fallback int32) int32 {
+	val := strings.TrimSpace(os.Getenv(name))
+	if val == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(val, 10, 32)
+	if err != nil {
+		return fallback
+	}
+	return int32(parsed)
+}
+
+func parseEnvInt64(name string, fallback int64) int64 {
+	val := strings.TrimSpace(os.Getenv(name))
+	if val == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
 		return fallback
 	}

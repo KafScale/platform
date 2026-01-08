@@ -1,3 +1,9 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root {
   font-family: "Space Grotesk", "Avenir Next", "Trebuchet MS", sans-serif;
   color: #f5f5f5;
@@ -15,6 +21,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
   background: radial-gradient(circle at 20% 10%, rgba(24, 198, 172, 0.18), transparent 50%),
     radial-gradient(circle at 80% 0%, rgba(244, 162, 97, 0.2), transparent 45%),
     linear-gradient(180deg, #0b0e0e, #050505 65%);
@@ -43,9 +50,86 @@ header, footer {
 main {
   flex: 1;
   padding: 2rem;
+  width: 100%;
+  margin: 0;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.tab-buttons {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.tab-button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 15, 15, 0.8);
+  color: #cbd5f5;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.tab-button.active {
+  background: rgba(37, 99, 235, 0.25);
+  border-color: rgba(59, 130, 246, 0.6);
+  color: #e2e8f0;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(180px, 0.45fr);
   gap: 2rem;
+}
+
+.tab-panel.active > section {
+  min-width: 0;
+}
+
+#tab-ops section:nth-child(2) {
+  grid-column: 2;
+}
+
+#tab-ops section:nth-child(3) {
+  grid-column: 3;
+}
+
+#tab-ops section.metrics-rail {
+  grid-column: 4;
+}
+
+.metrics-rail-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+.metrics-rail .metrics-rail-cards {
+  grid-template-columns: 1fr !important;
+}
+
+.metrics-rail .card.metric strong {
+  font-size: clamp(1.1rem, 1.4vw, 1.4rem);
+}
+
+.metrics-rail .card {
+  padding: 0.9rem 1rem;
+}
+
+#tab-advanced section {
+  grid-column: 1 / -1;
 }
 
 section {
@@ -72,6 +156,127 @@ section {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 0.75rem;
+}
+
+.broker-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.broker-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  padding: 0.6rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 8, 8, 0.75);
+}
+
+.broker-summary span {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+}
+
+.broker-summary strong {
+  font-size: 0.95rem;
+}
+
+.broker-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.broker-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #9ca3af;
+}
+
+.broker-controls select {
+  background: rgba(15, 15, 15, 0.9);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+}
+
+.broker-table-wrap {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.broker-table {
+  width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.broker-table th,
+.broker-table td {
+  padding: 0.65rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.broker-table th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+  background: rgba(10, 10, 10, 0.7);
+}
+
+.broker-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.broker-table td:nth-child(2) {
+  word-break: break-all;
+}
+
+@media (max-width: 1200px) {
+  .tab-panel.active {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #tab-ops section.metrics-rail {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 860px) {
+  .tab-panel.active {
+    grid-template-columns: 1fr;
+  }
+}
+
+.metric-pill {
+  display: inline-block;
+  min-width: 48px;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #bfdbfe;
+  font-variant-numeric: tabular-nums;
+}
+
+.broker-table td:first-child {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .broker-card {

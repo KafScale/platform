@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -40,9 +41,11 @@ type EtcdStoreConfig struct {
 
 // EtcdStore uses etcd for offset persistence while delegating metadata to an in-memory snapshot.
 type EtcdStore struct {
-	client   *clientv3.Client
-	metadata *InMemoryStore
-	cancel   context.CancelFunc
+	client    *clientv3.Client
+	metadata  *InMemoryStore
+	cancel    context.CancelFunc
+	available int32
+	lastError atomic.Value
 }
 
 type consumerOffsetRecord struct {
@@ -69,8 +72,9 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 		return nil, fmt.Errorf("connect etcd: %w", err)
 	}
 	store := &EtcdStore{
-		client:   cli,
-		metadata: NewInMemoryStore(snapshot),
+		client:    cli,
+		metadata:  NewInMemoryStore(snapshot),
+		available: 1,
 	}
 	if err := store.refreshSnapshot(ctx); err != nil {
 		// ignore if snapshot missing; operator will populate later
@@ -82,6 +86,20 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 // Metadata delegates to the snapshot captured at startup (operator keeps it fresh).
 func (s *EtcdStore) Metadata(ctx context.Context, topics []string) (*ClusterMetadata, error) {
 	return s.metadata.Metadata(ctx, topics)
+}
+
+// Available reports whether the most recent etcd operation succeeded.
+func (s *EtcdStore) Available() bool {
+	return atomic.LoadInt32(&s.available) == 1
+}
+
+func (s *EtcdStore) recordEtcdResult(err error) {
+	if err == nil {
+		atomic.StoreInt32(&s.available, 1)
+		return
+	}
+	atomic.StoreInt32(&s.available, 0)
+	s.lastError.Store(err)
 }
 
 // NextOffset reads the last committed offset from etcd and returns the next offset to assign.
@@ -98,8 +116,10 @@ func (s *EtcdStore) NextOffset(ctx context.Context, topic string, partition int3
 	key := offsetKey(topic, partition)
 	resp, err := s.client.Get(ctx, key)
 	if err != nil {
+		s.recordEtcdResult(err)
 		return 0, err
 	}
+	s.recordEtcdResult(nil)
 	if len(resp.Kvs) == 0 {
 		return 0, nil
 	}
@@ -120,6 +140,7 @@ func (s *EtcdStore) UpdateOffsets(ctx context.Context, topic string, partition i
 	defer cancel()
 	next := lastOffset + 1
 	_, err := s.client.Put(ctx, offsetKey(topic, partition), strconv.FormatInt(next, 10))
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -145,6 +166,7 @@ func (s *EtcdStore) CommitConsumerOffset(ctx context.Context, group, topic strin
 		return err
 	}
 	_, err = s.client.Put(ctx, consumerOffsetKey(group, topic, partition), string(bytes))
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -154,8 +176,10 @@ func (s *EtcdStore) FetchConsumerOffset(ctx context.Context, group, topic string
 	defer cancel()
 	resp, err := s.client.Get(ctx, consumerOffsetKey(group, topic, partition))
 	if err != nil {
+		s.recordEtcdResult(err)
 		return 0, "", err
 	}
+	s.recordEtcdResult(nil)
 	if len(resp.Kvs) == 0 {
 		return 0, "", nil
 	}
@@ -164,6 +188,36 @@ func (s *EtcdStore) FetchConsumerOffset(ctx context.Context, group, topic string
 		return 0, "", err
 	}
 	return rec.Offset, rec.Metadata, nil
+}
+
+// ListConsumerOffsets returns all committed offsets stored in etcd.
+func (s *EtcdStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := s.client.Get(ctx, ConsumerGroupPrefix(), clientv3.WithPrefix())
+	if err != nil {
+		s.recordEtcdResult(err)
+		return nil, err
+	}
+	s.recordEtcdResult(nil)
+	offsets := make([]ConsumerOffset, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		group, topic, partition, ok := ParseConsumerOffsetKey(string(kv.Key))
+		if !ok {
+			continue
+		}
+		var rec consumerOffsetRecord
+		if err := json.Unmarshal(kv.Value, &rec); err != nil {
+			return nil, err
+		}
+		offsets = append(offsets, ConsumerOffset{
+			Group:     group,
+			Topic:     topic,
+			Partition: partition,
+			Offset:    rec.Offset,
+		})
+	}
+	return offsets, nil
 }
 
 // PutConsumerGroup persists consumer group metadata in etcd.
@@ -178,6 +232,7 @@ func (s *EtcdStore) PutConsumerGroup(ctx context.Context, group *metadatapb.Cons
 		return err
 	}
 	_, err = s.client.Put(ctx, ConsumerGroupKey(group.GroupId), string(payload))
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -187,8 +242,10 @@ func (s *EtcdStore) FetchConsumerGroup(ctx context.Context, groupID string) (*me
 	defer cancel()
 	resp, err := s.client.Get(ctx, ConsumerGroupKey(groupID))
 	if err != nil {
+		s.recordEtcdResult(err)
 		return nil, err
 	}
+	s.recordEtcdResult(nil)
 	if len(resp.Kvs) == 0 {
 		return nil, nil
 	}
@@ -201,8 +258,10 @@ func (s *EtcdStore) ListConsumerGroups(ctx context.Context) ([]*metadatapb.Consu
 	defer cancel()
 	resp, err := s.client.Get(ctx, ConsumerGroupPrefix(), clientv3.WithPrefix())
 	if err != nil {
+		s.recordEtcdResult(err)
 		return nil, err
 	}
+	s.recordEtcdResult(nil)
 	groups := make([]*metadatapb.ConsumerGroup, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		if _, ok := ParseConsumerGroupID(string(kv.Key)); !ok {
@@ -222,6 +281,7 @@ func (s *EtcdStore) DeleteConsumerGroup(ctx context.Context, groupID string) err
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_, err := s.client.Delete(ctx, ConsumerGroupKey(groupID))
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -234,8 +294,10 @@ func (s *EtcdStore) FetchTopicConfig(ctx context.Context, topic string) (*metada
 	defer cancel()
 	resp, err := s.client.Get(ctx, TopicConfigKey(topic))
 	if err != nil {
+		s.recordEtcdResult(err)
 		return nil, err
 	}
+	s.recordEtcdResult(nil)
 	if len(resp.Kvs) > 0 {
 		return DecodeTopicConfig(resp.Kvs[0].Value)
 	}
@@ -274,6 +336,7 @@ func (s *EtcdStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.Topic
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	_, err = s.client.Put(ctx, TopicConfigKey(cfg.Name), string(payload))
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -323,8 +386,10 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 		_, err = s.client.Put(ctx, PartitionStateKey(topic, part.PartitionIndex), string(payload))
 		cancel()
 		if err != nil {
+			s.recordEtcdResult(err)
 			return err
 		}
+		s.recordEtcdResult(nil)
 	}
 	return nil
 }
@@ -419,8 +484,10 @@ func (s *EtcdStore) refreshSnapshot(ctx context.Context) error {
 	defer cancel()
 	resp, err := s.client.Get(ctx, snapshotKey())
 	if err != nil {
+		s.recordEtcdResult(err)
 		return err
 	}
+	s.recordEtcdResult(nil)
 	if len(resp.Kvs) == 0 {
 		return nil
 	}
@@ -448,6 +515,7 @@ func (s *EtcdStore) persistSnapshot(ctx context.Context) error {
 	putCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	_, err = s.client.Put(putCtx, snapshotKey(), string(payload))
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -456,6 +524,7 @@ func (s *EtcdStore) deleteTopicOffsets(ctx context.Context, topic string) error 
 	defer cancel()
 	prefix := fmt.Sprintf("/kafscale/topics/%s/", topic)
 	_, err := s.client.Delete(delCtx, prefix, clientv3.WithPrefix())
+	s.recordEtcdResult(err)
 	return err
 }
 
@@ -464,8 +533,10 @@ func (s *EtcdStore) deleteConsumerOffsets(ctx context.Context, topic string) err
 	defer cancel()
 	resp, err := s.client.Get(getCtx, "/kafscale/consumers/", clientv3.WithPrefix())
 	if err != nil {
+		s.recordEtcdResult(err)
 		return err
 	}
+	s.recordEtcdResult(nil)
 	for _, kv := range resp.Kvs {
 		key := string(kv.Key)
 		if strings.Contains(key, fmt.Sprintf("/offsets/%s/", topic)) {
@@ -473,8 +544,10 @@ func (s *EtcdStore) deleteConsumerOffsets(ctx context.Context, topic string) err
 			_, delErr := s.client.Delete(delCtx, key)
 			cancel()
 			if delErr != nil {
+				s.recordEtcdResult(delErr)
 				return delErr
 			}
+			s.recordEtcdResult(nil)
 		}
 	}
 	return nil

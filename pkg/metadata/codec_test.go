@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -138,5 +138,21 @@ func TestKeyBuilders(t *testing.T) {
 
 	if got := PartitionAssignmentKey("orders", 2); got != "/kafscale/assignments/orders/2" {
 		t.Fatalf("unexpected assignment key: %s", got)
+	}
+}
+
+func TestParseConsumerOffsetKey(t *testing.T) {
+	group, topic, partition, ok := ParseConsumerOffsetKey("/kafscale/consumers/group-1/offsets/orders/4")
+	if !ok {
+		t.Fatalf("expected key to parse")
+	}
+	if group != "group-1" || topic != "orders" || partition != 4 {
+		t.Fatalf("unexpected parsed key: %s %s %d", group, topic, partition)
+	}
+	if _, _, _, ok := ParseConsumerOffsetKey("/kafscale/consumers/group-1/metadata"); ok {
+		t.Fatalf("expected metadata key to be rejected")
+	}
+	if _, _, _, ok := ParseConsumerOffsetKey("/kafscale/consumers/group-1/offsets/orders/not-a-number"); ok {
+		t.Fatalf("expected invalid partition to be rejected")
 	}
 }

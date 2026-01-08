@@ -1,4 +1,4 @@
-// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 // This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -35,11 +35,22 @@ func init() {
 type MetricsSnapshot struct {
 	S3State                 string
 	S3LatencyMS             int
+	S3ErrorRate             float64
 	ProduceRPS              float64
 	FetchRPS                float64
 	AdminRequestsTotal      float64
 	AdminRequestErrorsTotal float64
 	AdminRequestLatencyMS   float64
+	BrokerCPUPercent        float64
+	BrokerMemBytes          int64
+	BrokerRuntime           map[string]BrokerRuntime
+	OperatorClusters                        float64
+	OperatorEtcdSnapshotAgeSeconds          float64
+	OperatorEtcdSnapshotLastSuccessTS       float64
+	OperatorEtcdSnapshotLastScheduleTS      float64
+	OperatorEtcdSnapshotStale               float64
+	OperatorEtcdSnapshotAccessOK            float64
+	OperatorMetricsAvailable                bool
 }
 
 type MetricsProvider interface {
@@ -115,6 +126,7 @@ type consoleHandlers struct {
 
 type statusResponse struct {
 	Cluster string       `json:"cluster"`
+	ClusterID string     `json:"cluster_id,omitempty"`
 	Version string       `json:"version"`
 	Brokers brokerStatus `json:"brokers"`
 	S3      s3Status     `json:"s3"`
@@ -143,6 +155,11 @@ type brokerNode struct {
 	CPU          int    `json:"cpu"`
 	Memory       int    `json:"memory"`
 	Backpressure string `json:"backpressure"`
+}
+
+type BrokerRuntime struct {
+	CPUPercent float64
+	MemBytes   int64
 }
 
 type component struct {
@@ -233,15 +250,25 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 			if h.metrics != nil {
 				if snap, err := h.metrics.Snapshot(ctx); err == nil && snap != nil {
 					metrics["s3_latency_ms"] = snap.S3LatencyMS
+					metrics["s3_error_rate"] = snap.S3ErrorRate
 					metrics["produce_rps"] = snap.ProduceRPS
 					metrics["fetch_rps"] = snap.FetchRPS
 					metrics["admin_requests_total"] = snap.AdminRequestsTotal
 					metrics["admin_errors_total"] = snap.AdminRequestErrorsTotal
 					metrics["admin_latency_ms_avg"] = snap.AdminRequestLatencyMS
+					if snap.OperatorMetricsAvailable {
+						metrics["etcd_snapshot_age_s"] = snap.OperatorEtcdSnapshotAgeSeconds
+						metrics["etcd_snapshot_last_success_ts"] = snap.OperatorEtcdSnapshotLastSuccessTS
+						metrics["etcd_snapshot_last_schedule_ts"] = snap.OperatorEtcdSnapshotLastScheduleTS
+						metrics["etcd_snapshot_stale"] = snap.OperatorEtcdSnapshotStale
+						metrics["etcd_snapshot_access_ok"] = snap.OperatorEtcdSnapshotAccessOK
+						metrics["operator_clusters"] = snap.OperatorClusters
+					}
 				}
 			}
 			if len(metrics) == 0 {
 				metrics["s3_latency_ms"] = 40 + rand.Intn(60)
+				metrics["s3_error_rate"] = 0.0
 				metrics["produce_rps"] = 2000 + rand.Intn(500)
 				metrics["fetch_rps"] = 1800 + rand.Intn(600)
 				metrics["admin_requests_total"] = 0
@@ -283,17 +310,43 @@ func statusFromMetadata(meta *metadata.ClusterMetadata, metrics *MetricsSnapshot
 			resp.S3.LatencyMS = metrics.S3LatencyMS
 		}
 	}
-	if meta.ClusterID != nil && *meta.ClusterID != "" {
+	if meta.ClusterName != nil && *meta.ClusterName != "" {
+		resp.Cluster = *meta.ClusterName
+	} else if meta.ClusterID != nil && *meta.ClusterID != "" {
 		resp.Cluster = *meta.ClusterID
 	}
+	if meta.ClusterID != nil && *meta.ClusterID != "" {
+		resp.ClusterID = *meta.ClusterID
+	}
 	for _, broker := range meta.Brokers {
+		var cpu int
+		var memMB int
+		if metrics != nil {
+			if metrics.BrokerRuntime != nil {
+				if runtime, ok := metrics.BrokerRuntime[broker.Host]; ok {
+					if runtime.CPUPercent > 0 {
+						cpu = int(runtime.CPUPercent + 0.5)
+					}
+					if runtime.MemBytes > 0 {
+						memMB = int(runtime.MemBytes / (1024 * 1024))
+					}
+				}
+			} else if len(meta.Brokers) == 1 {
+				if metrics.BrokerCPUPercent > 0 {
+					cpu = int(metrics.BrokerCPUPercent + 0.5)
+				}
+				if metrics.BrokerMemBytes > 0 {
+					memMB = int(metrics.BrokerMemBytes / (1024 * 1024))
+				}
+			}
+		}
 		resp.Brokers.Nodes = append(resp.Brokers.Nodes, brokerNode{
 			ID:           broker.NodeID,
 			Name:         broker.Host,
 			State:        "ready",
 			Partitions:   0,
-			CPU:          0,
-			Memory:       0,
+			CPU:          cpu,
+			Memory:       memMB,
 			Backpressure: "healthy",
 		})
 	}
@@ -345,6 +398,7 @@ func mockClusterStatus() statusResponse {
 	}
 	return statusResponse{
 		Cluster: "kafscale-dev",
+		ClusterID: "cluster-dev-1",
 		Version: "0.2.0",
 		Brokers: brokerStatus{
 			Ready:   2 + rand.Intn(2),
