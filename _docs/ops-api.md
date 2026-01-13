@@ -439,4 +439,4 @@ If you're stuck:
 1. Check broker logs: `kubectl logs -l app.kubernetes.io/component=broker`
 2. Check operator logs: `kubectl logs -l app.kubernetes.io/component=operator`
 3. Scrape metrics endpoint directly: `curl http://<broker>:9093/metrics`
-4. Open an issue: [github.com/novatechflow/kafscale/issues](https://github.com/novatechflow/kafscale/issues)
+4. Open an issue: [github.com/KafScale/platform/issues](https://github.com/KafScale/platform/issues)

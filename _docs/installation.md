@@ -49,7 +49,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 For local development without Kubernetes:
 
 ```bash
-git clone https://github.com/novatechflow/kafscale.git
+git clone https://github.com/KafScale/platform.git
 cd kafscale
 docker-compose up -d
 ```

@@ -126,8 +126,8 @@ spec:
 Import the pre-built dashboards from the repository:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/novatechflow/kafscale/main/docs/grafana/broker-dashboard.json
-kubectl apply -f https://raw.githubusercontent.com/novatechflow/kafscale/main/docs/grafana/operator-dashboard.json
+kubectl apply -f https://raw.githubusercontent.com/KafScale/platform/main/docs/grafana/broker-dashboard.json
+kubectl apply -f https://raw.githubusercontent.com/KafScale/platform/main/docs/grafana/operator-dashboard.json
 ```
 
 For the full metrics catalog, see [Metrics](/metrics/).
@@ -397,7 +397,7 @@ aws s3 ls s3://kafscale-prod-eu-west-1/crr-test/
 ### Helm upgrade
 
 ```bash
-helm upgrade kafscale novatechflow/kafscale \
+helm upgrade kafscale KafScale/platform \
   --namespace kafscale \
   --set broker.image.tag=v1.1.0 \
   --set operator.image.tag=v1.1.0
@@ -475,7 +475,7 @@ kubectl exec -it kafscale-broker-0 -- env | grep ETCD
 ### Debug mode
 
 ```bash
-helm upgrade kafscale novatechflow/kafscale \
+helm upgrade kafscale KafScale/platform \
   --set broker.env.KAFSCALE_LOG_LEVEL=debug \
   --set broker.env.KAFSCALE_TRACE_KAFKA=true
 ```

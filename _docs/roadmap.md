@@ -97,12 +97,12 @@ If your use case requires these features, KafScale may not be the right fit. See
 
 ## How to request features
 
-1. Check [GitHub Issues](https://github.com/novatechflow/kafscale/issues) for existing requests
+1. Check [GitHub Issues](https://github.com/KafScale/platform/issues) for existing requests
 2. Open a new issue with:
    - Your use case
    - Expected throughput and latency requirements
    - Operational constraints (cloud provider, compliance, etc.)
-3. Join the discussion in [GitHub Discussions](https://github.com/novatechflow/kafscale/discussions)
+3. Join the discussion in [GitHub Discussions](https://github.com/KafScale/platform/discussions)
 
 We prioritize features based on community demand and alignment with KafScale's core mission: simple, stateless, S3-native Kafka compatibility.
 
@@ -110,4 +110,4 @@ We prioritize features based on community demand and alignment with KafScale's c
 
 ## Release history
 
-See [GitHub Releases](https://github.com/novatechflow/kafscale/releases) for full changelogs.
+See [GitHub Releases](https://github.com/KafScale/platform/releases) for full changelogs.

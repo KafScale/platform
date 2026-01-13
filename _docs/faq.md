@@ -379,12 +379,12 @@ Increase `session.timeout.ms` on clients if pods are slow to respond to heartbea
 
 ### How can I contribute?
 
-See [CONTRIBUTING.md](https://github.com/novatechflow/kafscale/blob/main/CONTRIBUTING.md) in the repository. We welcome bug reports, feature requests, documentation improvements, and code contributions.
+See [CONTRIBUTING.md](https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md) in the repository. We welcome bug reports, feature requests, documentation improvements, and code contributions.
 
 ### Where do I report bugs?
 
-Open an issue on [GitHub](https://github.com/novatechflow/kafscale/issues). Include KafScale version, Kubernetes version, and relevant logs.
+Open an issue on [GitHub](https://github.com/KafScale/platform/issues). Include KafScale version, Kubernetes version, and relevant logs.
 
 ### Is there a community?
 
-Join the discussion on [GitHub Discussions](https://github.com/novatechflow/kafscale/discussions) or the `#kafscale` channel on the Kubernetes Slack.
+Join the discussion on [GitHub Discussions](https://github.com/KafScale/platform/discussions) or the `#kafscale` channel on the Kubernetes Slack.

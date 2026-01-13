@@ -354,6 +354,11 @@ a:visited {
   align-items: center;
 }
 
+.badge-row a {
+  display: inline-flex;
+  align-items: center;
+}
+
 .badge-row img {
   height: 24px;
 }

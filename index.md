@@ -10,14 +10,18 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   <p>Kafka-compatible streaming platform. <br>
   Scale streaming and analytics cloud-native on S3. Automated.</p>
   <div class="badge-row">
-    <img alt="GitHub stars" src="https://img.shields.io/github/stars/novatechflow/kafscale?style=flat" />
+    <a href="https://github.com/KafScale/platform/stargazers" target="_blank" rel="noreferrer">
+      <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=flat" />
+    </a>
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
-    <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/novatechflow/kafscale" />
-    <img alt="Current release" src="https://img.shields.io/github/v/release/novatechflow/kafscale" />
+    <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/KafScale/platform" />
+    <a href="https://github.com/KafScale/platform/releases/latest" target="_blank" rel="noreferrer">
+      <img alt="Current release" src="https://img.shields.io/github/v/release/KafScale/platform" />
+    </a>
   </div>
   <div class="hero-actions">
     <a class="button" href="/quickstart/">Get started</a>
-    <a class="button secondary" href="https://github.com/novatechflow/kafscale" target="_blank" rel="noreferrer">View on GitHub</a>
+    <a class="button secondary" href="https://github.com/KafScale/platform" target="_blank" rel="noreferrer">View on GitHub</a>
   </div>
 </section>
 
@@ -235,12 +239,12 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   </p>
   <div class="hero-actions">
     <a class="button" href="/quickstart/">Quickstart guide</a>
-    <a class="button secondary" href="https://github.com/novatechflow/kafscale" target="_blank" rel="noreferrer">View on GitHub</a>
+    <a class="button secondary" href="https://github.com/KafScale/platform" target="_blank" rel="noreferrer">View on GitHub</a>
   </div>
 </section>
 
 <section class="section backers">
   <h2>Backed by</h2>
   <p>KafScale is developed and maintained with support from <a href="https://scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a> and <a href="https://novatechflow.com" target="_blank" rel="noreferrer">NovaTechFlow</a>.</p>
-  <p>Apache 2.0 licensed. No CLA required. <a href="https://github.com/novatechflow/kafscale/blob/main/CONTRIBUTING.md">Contributions welcome</a>.</p>
+  <p>Apache 2.0 licensed. No CLA required. <a href="https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md">Contributions welcome</a>.</p>
 </section>

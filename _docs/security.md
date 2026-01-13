@@ -173,4 +173,4 @@ If you discover a security vulnerability, please report it responsibly:
 3. Include steps to reproduce if possible
 4. We will respond within 48 hours
 
-See [SECURITY.md](https://github.com/novatechflow/kafscale/blob/main/SECURITY.md) for full details.
+See [SECURITY.md](https://github.com/KafScale/platform/blob/main/SECURITY.md) for full details.
