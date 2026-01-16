@@ -27,8 +27,8 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 // EtcdStoreConfig defines how we connect to etcd for metadata/offsets.

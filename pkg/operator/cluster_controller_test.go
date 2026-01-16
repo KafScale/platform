@@ -24,7 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kafscalev1alpha1 "github.com/novatechflow/kafscale/api/v1alpha1"
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 )
 
 func TestBrokerContainerAdvertisedEndpoint(t *testing.T) {

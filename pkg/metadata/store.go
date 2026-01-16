@@ -24,8 +24,8 @@ import (
 	"sync"
 	"time"
 
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 // Store exposes read-only access to cluster metadata used by Kafka protocol handlers.

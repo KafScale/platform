@@ -22,13 +22,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/checkpoint"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/decoder"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/discovery"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/metrics"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/schema"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/sink"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/checkpoint"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/discovery"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/metrics"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/schema"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/sink"
 )
 
 var leaseRenewInterval = 10 * time.Second

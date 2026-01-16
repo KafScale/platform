@@ -18,7 +18,7 @@ package main
 import (
 	"context"
 
-	"github.com/novatechflow/kafscale/pkg/storage"
+	"github.com/KafScale/platform/pkg/storage"
 )
 
 type dualS3Client struct {

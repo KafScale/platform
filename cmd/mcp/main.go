@@ -27,9 +27,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	console "github.com/novatechflow/kafscale/internal/console"
-	"github.com/novatechflow/kafscale/internal/mcpserver"
-	"github.com/novatechflow/kafscale/pkg/metadata"
+	console "github.com/KafScale/platform/internal/console"
+	"github.com/KafScale/platform/internal/mcpserver"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 var version = "dev"

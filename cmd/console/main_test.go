@@ -29,7 +29,7 @@ import (
 
 	"go.etcd.io/etcd/server/v3/embed"
 
-	"github.com/novatechflow/kafscale/pkg/metadata"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 func TestBuildMetadataStoreUsesEtcdEnv(t *testing.T) {

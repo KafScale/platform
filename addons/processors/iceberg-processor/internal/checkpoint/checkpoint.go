@@ -18,7 +18,7 @@ package checkpoint
 import (
 	"context"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 )
 
 // Lease ties a worker to a partition with TTL-based ownership.

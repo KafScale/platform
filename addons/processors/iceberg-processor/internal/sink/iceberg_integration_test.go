@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 )
 
 func TestIcebergWriteSmoke(t *testing.T) {

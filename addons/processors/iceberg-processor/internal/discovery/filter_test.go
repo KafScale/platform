@@ -18,8 +18,8 @@ package discovery
 import (
 	"testing"
 
-	"github.com/novatechflow/kafscale/pkg/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func TestBuildTopicPartitionFilter(t *testing.T) {

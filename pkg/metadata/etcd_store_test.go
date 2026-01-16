@@ -31,8 +31,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
 
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func TestEtcdStoreCreateTopicPersistsSnapshot(t *testing.T) {

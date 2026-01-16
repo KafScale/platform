@@ -38,12 +38,12 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.etcd.io/etcd/server/v3/embed"
 
-	"github.com/novatechflow/kafscale/pkg/broker"
-	controlpb "github.com/novatechflow/kafscale/pkg/gen/control"
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
-	"github.com/novatechflow/kafscale/pkg/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
-	"github.com/novatechflow/kafscale/pkg/storage"
+	"github.com/KafScale/platform/pkg/broker"
+	controlpb "github.com/KafScale/platform/pkg/gen/control"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/pkg/storage"
 )
 
 func TestHandleProduceAckAll(t *testing.T) {

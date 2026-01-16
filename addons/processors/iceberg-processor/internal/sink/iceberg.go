@@ -39,8 +39,8 @@ import (
 	restcatalog "github.com/apache/iceberg-go/catalog/rest"
 	iceio "github.com/apache/iceberg-go/io"
 	"github.com/apache/iceberg-go/table"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
 )
 
 const defaultTableSchemaID = 1

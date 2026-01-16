@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/novatechflow/kafscale/pkg/cache"
+	"github.com/KafScale/platform/pkg/cache"
 )
 
 // PartitionLogConfig configures per-partition log behavior.

@@ -23,8 +23,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/config"
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/processor"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/config"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/processor"
 )
 
 func main() {

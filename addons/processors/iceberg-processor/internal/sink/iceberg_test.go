@@ -28,8 +28,8 @@ import (
 	"github.com/apache/iceberg-go/catalog"
 	"github.com/apache/iceberg-go/io"
 	"github.com/apache/iceberg-go/table"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
 )
 
 func TestRecordsToArrow(t *testing.T) {

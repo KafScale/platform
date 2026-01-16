@@ -1,4 +1,4 @@
-module github.com/novatechflow/kafscale/addons/processors/skeleton
+module github.com/KafScale/platform/addons/processors/skeleton
 
 go 1.22
 

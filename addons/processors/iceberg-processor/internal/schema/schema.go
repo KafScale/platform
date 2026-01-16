@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 

@@ -23,8 +23,8 @@ import (
 	"strings"
 	"syscall"
 
-	consolepkg "github.com/novatechflow/kafscale/internal/console"
-	"github.com/novatechflow/kafscale/pkg/metadata"
+	consolepkg "github.com/KafScale/platform/internal/console"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 func main() {

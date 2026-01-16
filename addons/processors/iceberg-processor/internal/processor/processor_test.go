@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/checkpoint"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/decoder"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/discovery"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/sink"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/checkpoint"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/discovery"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/sink"
 )
 
 func TestFilterRecords(t *testing.T) {

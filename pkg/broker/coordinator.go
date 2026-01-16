@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
-	"github.com/novatechflow/kafscale/pkg/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 const (

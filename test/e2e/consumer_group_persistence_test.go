@@ -32,7 +32,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/novatechflow/kafscale/pkg/metadata"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 func TestConsumerGroupMetadataPersistsInEtcd(t *testing.T) {

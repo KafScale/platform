@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/novatechflow/kafscale/pkg/metadata"
-	"github.com/novatechflow/kafscale/ui"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/ui"
 )
 
 func init() {

@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/novatechflow/kafscale/pkg/cache"
+	"github.com/KafScale/platform/pkg/cache"
 )
 
 func TestPartitionLogAppendFlush(t *testing.T) {

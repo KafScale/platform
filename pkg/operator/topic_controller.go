@@ -25,7 +25,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kafscalev1alpha1 "github.com/novatechflow/kafscale/api/v1alpha1"
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 )
 
 // TopicReconciler ensures topic metadata is reflected in the etcd snapshot.

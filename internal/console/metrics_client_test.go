@@ -22,8 +22,8 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/novatechflow/kafscale/pkg/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func TestFetchPromSnapshotParsesS3ErrorRate(t *testing.T) {

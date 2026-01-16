@@ -23,7 +23,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 // Handler processes parsed Kafka protocol requests and returns the response payload.

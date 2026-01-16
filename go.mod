@@ -1,4 +1,4 @@
-module github.com/novatechflow/kafscale
+module github.com/KafScale/platform
 
 go 1.25.2
 

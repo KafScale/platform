@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 )
 
 func TestLeaseExpirationRecoveryEtcd(t *testing.T) {

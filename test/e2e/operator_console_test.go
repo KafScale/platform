@@ -37,10 +37,10 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kafscalev1alpha1 "github.com/novatechflow/kafscale/api/v1alpha1"
-	consolepkg "github.com/novatechflow/kafscale/internal/console"
-	"github.com/novatechflow/kafscale/pkg/metadata"
-	"github.com/novatechflow/kafscale/pkg/operator"
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	consolepkg "github.com/KafScale/platform/internal/console"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/operator"
 )
 
 func TestOperatorConsoleEndToEnd(t *testing.T) {

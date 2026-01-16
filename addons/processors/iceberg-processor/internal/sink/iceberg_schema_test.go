@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	iceberg "github.com/apache/iceberg-go"
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 )
 
 func TestSchemaNeedsUpdateForNewColumn(t *testing.T) {

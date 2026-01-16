@@ -22,7 +22,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 )
 
 const (

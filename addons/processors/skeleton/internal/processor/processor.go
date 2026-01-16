@@ -20,11 +20,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/checkpoint"
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/config"
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/decoder"
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/discovery"
-	"github.com/novatechflow/kafscale/addons/processors/skeleton/internal/sink"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/checkpoint"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/config"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/decoder"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/discovery"
+	"github.com/KafScale/platform/addons/processors/skeleton/internal/sink"
 )
 
 // Processor wires discovery, decoding, checkpointing, and sink writing.

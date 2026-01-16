@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 type adminMetrics struct {

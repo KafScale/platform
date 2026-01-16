@@ -23,7 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1alpha1 "github.com/novatechflow/kafscale/api/v1alpha1"
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 )
 
 func TestBuildClusterMetadata(t *testing.T) {

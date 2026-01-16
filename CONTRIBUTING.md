@@ -30,9 +30,9 @@ Thanks for your interest in Kafscale! This project follows Apache 2.0 convention
 
 We track bugs and enhancements in GitHub Issues:
 
-- Report a bug: https://github.com/novatechflow/kafscale/issues/new?template=bug_report.md
-- Request an enhancement: https://github.com/novatechflow/kafscale/issues/new?template=feature_request.md
-- Browse the public archive: https://github.com/novatechflow/kafscale/issues
+- Report a bug: https://github.com/KafScale/platform/issues/new?template=bug_report.md
+- Request an enhancement: https://github.com/KafScale/platform/issues/new?template=feature_request.md
+- Browse the public archive: https://github.com/KafScale/platform/issues
 
 We aim to acknowledge new bug reports and enhancement requests within 7 days.
 

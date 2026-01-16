@@ -20,8 +20,8 @@ import (
 	"errors"
 	"testing"
 
-	metadatapb "github.com/novatechflow/kafscale/pkg/gen/metadata"
-	"github.com/novatechflow/kafscale/pkg/protocol"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func TestInMemoryStoreMetadata_AllTopics(t *testing.T) {

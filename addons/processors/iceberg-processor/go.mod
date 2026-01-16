@@ -1,4 +1,4 @@
-module github.com/novatechflow/kafscale/addons/processors/iceberg-processor
+module github.com/KafScale/platform/addons/processors/iceberg-processor
 
 go 1.25.2
 
@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.94.0
-	github.com/novatechflow/kafscale v1.3.0
+	github.com/KafScale/platform v1.4.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	go.etcd.io/etcd/api/v3 v3.6.7

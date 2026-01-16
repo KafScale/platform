@@ -18,7 +18,7 @@ package sink
 import (
 	"context"
 
-	"github.com/novatechflow/kafscale/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
 )
 
 // Record models a decoded record payload passed to the sink.

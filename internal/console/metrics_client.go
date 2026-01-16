@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/novatechflow/kafscale/pkg/metadata"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 type promMetricsClient struct {
