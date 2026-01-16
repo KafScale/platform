@@ -1742,6 +1742,43 @@ func TestHandlerEnvOverridesAll(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBrokerPrefersMetadata(t *testing.T) {
+	meta := metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "meta-0", Port: 9092},
+			{NodeID: 2, Host: "meta-2", Port: 9092},
+		},
+	}
+	brokerInfo := protocol.MetadataBroker{NodeID: 1, Host: "local", Port: 19092}
+	handler := newHandler(metadata.NewInMemoryStore(meta), storage.NewMemoryS3Client(), brokerInfo, testLogger())
+
+	got := handler.coordinatorBroker(context.Background())
+	if got.NodeID != 0 || got.Host != "meta-0" || got.Port != 9092 {
+		t.Fatalf("expected metadata broker 0, got %+v", got)
+	}
+
+	meta = metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "meta-1", Port: 19093},
+			{NodeID: 0, Host: "meta-0", Port: 9092},
+		},
+	}
+	handler = newHandler(metadata.NewInMemoryStore(meta), storage.NewMemoryS3Client(), brokerInfo, testLogger())
+	got = handler.coordinatorBroker(context.Background())
+	if got.NodeID != 1 || got.Host != "meta-1" || got.Port != 19093 {
+		t.Fatalf("expected matching metadata broker, got %+v", got)
+	}
+
+	handler = newHandler(failingMetadataStore{
+		Store: metadata.NewInMemoryStore(meta),
+		err:   errors.New("metadata down"),
+	}, storage.NewMemoryS3Client(), brokerInfo, testLogger())
+	got = handler.coordinatorBroker(context.Background())
+	if got != brokerInfo {
+		t.Fatalf("expected broker info fallback, got %+v", got)
+	}
+}
+
 func TestS3HealthConfigFromEnv(t *testing.T) {
 	t.Setenv("KAFSCALE_S3_HEALTH_WINDOW_SEC", "15")
 	t.Setenv("KAFSCALE_S3_LATENCY_WARN_MS", "25")

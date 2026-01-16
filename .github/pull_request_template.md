@@ -19,6 +19,20 @@ limitations under the License.
 
 - 
 
+## Improvement Note
+
+**Problem**
+- FindCoordinator could return a broker ID that was missing from Metadata, causing Kafka clients to retry because the coordinator identity could not be reconciled with broker metadata.
+
+**Solution**
+- Select the coordinator broker from the metadata snapshot first, falling back to local broker info only if metadata is unavailable, and default broker ID to 0 to align with operator snapshots.
+
+**How It Works**
+- On FindCoordinator, the handler loads metadata and returns a broker ID that exists in the advertised broker list; if the local ID is missing, it returns the first metadata broker, and if metadata fails, it uses local broker info.
+
+**Why Tests/Benchmarks Missed It**
+- E2E Franz runs use in-memory metadata seeded from the same broker info, operator e2e paths use broker IDs derived from pod ordinals that match snapshots, and benchmarks use kcat produce/consume without consumer groups (no FindCoordinator).
+
 ## Testing
 
 - [ ] `go test ./...`

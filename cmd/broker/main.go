@@ -196,7 +196,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	case *protocol.FetchRequest:
 		return h.handleFetch(ctx, header, req.(*protocol.FetchRequest))
 	case *protocol.FindCoordinatorRequest:
-		resp := h.coordinator.FindCoordinatorResponse(header.CorrelationID, protocol.NONE)
+		coord := h.coordinatorBroker(ctx)
+		resp := &protocol.FindCoordinatorResponse{
+			CorrelationID: header.CorrelationID,
+			ThrottleMs:    0,
+			ErrorCode:     protocol.NONE,
+			NodeID:        coord.NodeID,
+			Host:          coord.Host,
+			Port:          coord.Port,
+		}
 		return protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion)
 	case *protocol.JoinGroupRequest:
 		if !h.etcdAvailable() {
@@ -392,6 +400,28 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 }
 
 var ErrUnsupportedAPI = fmt.Errorf("unsupported api")
+
+func (h *handler) coordinatorBroker(ctx context.Context) protocol.MetadataBroker {
+	meta, err := h.store.Metadata(ctx, nil)
+	if err == nil {
+		if broker, ok := brokerByID(meta.Brokers, h.brokerInfo.NodeID); ok {
+			return broker
+		}
+		if len(meta.Brokers) > 0 {
+			return meta.Brokers[0]
+		}
+	}
+	return h.brokerInfo
+}
+
+func brokerByID(brokers []protocol.MetadataBroker, id int32) (protocol.MetadataBroker, bool) {
+	for _, broker := range brokers {
+		if broker.NodeID == id {
+			return broker, true
+		}
+	}
+	return protocol.MetadataBroker{}, false
+}
 
 func (h *handler) backpressureErrorCode() int16 {
 	switch h.s3Health.State() {
@@ -2041,7 +2071,7 @@ func resolveBrokerID() int32 {
 	if ordinal, ok := podOrdinal(os.Getenv("POD_NAME")); ok {
 		return ordinal
 	}
-	return 1
+	return 0
 }
 
 func deriveBrokerHost() string {
