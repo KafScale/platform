@@ -1,0 +1,83 @@
+# Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+s3:
+  bucket: kafscale-data
+  namespace: production
+  region: us-east-1
+  path_style: false
+
+metadata:
+  discovery: etcd
+  etcd:
+    endpoints:
+      - http://etcd.kafscale.svc.cluster.local:2379
+  snapshot:
+    key: /kafscale/metadata/snapshot
+    ttl_seconds: 60
+  topics: []
+
+discovery_cache:
+  ttl_seconds: 60
+  max_entries: 10000
+
+discovery_manifest:
+  enabled: false
+  key: manifest.json
+  ttl_seconds: 60
+  build_interval_seconds: 0
+  build_max_segments: 0
+  build_max_bytes: 0
+  build_lease_ttl_seconds: 120
+
+time_index:
+  enabled: false
+  key_suffix: .kfst
+  build_max_segments: 0
+  build_max_bytes: 0
+  build_lease_ttl_seconds: 120
+
+result_cache:
+  ttl_seconds: 30
+  max_entries: 100
+  max_rows: 10000
+
+server:
+  listen: ":5432"
+  max_connections: 100
+  metrics_listen: ":9090"
+
+proxy:
+  listen: ":5432"
+  upstreams:
+    - kafsql.kafka.svc.cluster.local:5432
+  max_connections: 200
+  cache_ttl_seconds: 10
+  cache_max_entries: 1000
+  acl:
+    allow: []
+    deny: []
+
+query:
+  default_limit: 1000
+  require_time_bound: true
+  max_unbounded_scan: 1000
+  max_scan_bytes: 10737418240
+  max_scan_segments: 10000
+  max_rows: 100000
+  timeout_seconds: 30
+  max_concurrent: 20
+  queue_size: 50
+  queue_timeout_seconds: 10

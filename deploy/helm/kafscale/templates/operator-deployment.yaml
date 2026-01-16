@@ -1,0 +1,101 @@
+# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kafscale.componentName" (dict "root" . "component" "operator") }}
+  labels:
+{{ include "kafscale.labels" . | indent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: {{ .Values.operator.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "operator") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "operator") | indent 8 }}
+{{- with .Values.operator.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+      serviceAccountName: {{ include "kafscale.operatorServiceAccountName" . }}
+{{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+{{- end }}
+{{- end }}
+      containers:
+        - name: operator
+          image: "{{ .Values.operator.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.image.tag) .Values.operator.image.useLatest }}"
+          imagePullPolicy: {{ ternary "Always" .Values.operator.image.pullPolicy .Values.operator.image.useLatest }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.operator.metrics.port }}
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: BROKER_IMAGE
+              value: "{{ .Values.operator.brokerImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.brokerImage.tag) .Values.operator.brokerImage.useLatest }}"
+            - name: BROKER_IMAGE_PULL_POLICY
+              value: "{{ ternary "Always" "IfNotPresent" .Values.operator.brokerImage.useLatest }}"
+            - name: KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE
+              value: "{{ .Values.operator.etcdSnapshotEtcdctlImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.etcdSnapshotEtcdctlImage.tag) .Values.operator.etcdSnapshotEtcdctlImage.useLatest }}"
+            - name: KAFSCALE_OPERATOR_ETCD_REPLICAS
+              value: "{{ .Values.operator.etcdReplicas }}"
+{{- if .Values.operator.etcdStorageSize }}
+            - name: KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE
+              value: "{{ .Values.operator.etcdStorageSize }}"
+{{- end }}
+{{- if .Values.operator.etcdStorageClass }}
+            - name: KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS
+              value: "{{ .Values.operator.etcdStorageClass }}"
+{{- end }}
+{{- if .Values.operator.etcdStorageMemory }}
+            - name: KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY
+              value: "1"
+{{- end }}
+            - name: KAFSCALE_OPERATOR_ETCD_ENDPOINTS
+              value: "{{ join "," .Values.operator.etcdEndpoints }}"
+            - name: KAFSCALE_OPERATOR_LEADER_KEY
+              value: "{{ .Values.operator.leaderKey }}"
+          resources:
+{{- if .Values.operator.resources }}
+{{ toYaml .Values.operator.resources | indent 12 }}
+{{- else }}
+            {}
+{{- end }}
+{{- with .Values.operator.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.operator.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.operator.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}

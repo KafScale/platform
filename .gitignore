@@ -1,33 +1,80 @@
-# Ignore everything by default for gh-pages
-*
+# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# Allow directories so HTML files can be included
-!*/
+# Binaries
+/bin/
+/dist/
+/out/
+/tmp/
+/.gopath/
 
-# Keep site sources and assets
-!*.html
-!*.md
-!*.yml
-!*.yaml
-!*.css
-!*.js
-!*.json
-!*.png
-!*.jpg
-!*.jpeg
-!*.svg
-!*.webp
-!*.ico
-!*.txt
-!CNAME
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.log
+*.crt
+*.key
+coverage*.out
+.build/
 
-# Keep this file
-!.gitignore
+# Local Go cache (use GOCACHE=.gocache for hermetic builds/tests)
+.gocache/
+.cache/
 
-# Ignore build/cache directories even if extensions match
-/.gocache/
-/.build/
-/_site/
-/.jekyll-cache/
+# Go modules/vendor
+/vendor/
+/third_party/**
+
+# e2e / smoke artifacts
+/test/pkg/
+/test/e2e/logs/
+
+# IDE/editor state
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Addon processor artifacts
+addons/processors/**/bin/
+addons/processors/**/dist/
+addons/processors/**/out/
+addons/processors/**/tmp/
+addons/processors/**/.cache/
+addons/processors/**/coverage*.out
+
+# Environment/config
+.env
+.env.*
 commercial-saas.md
-addons/*
+secrets/*.yaml
+secrets/*.json
+
+# Generated assets
+config/crd/bases/*.yaml
+deploy/helm/kafscale/charts/
+proto/**/*.pb.go
+proto/**/*.swagger.json
+
+# GitHub Pages (Jekyll) artifacts
+_site/
+.jekyll-cache/
+.sass-cache/
+Gemfile
+Gemfile.lock

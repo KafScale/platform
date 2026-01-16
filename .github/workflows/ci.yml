@@ -1,0 +1,89 @@
+# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  license-check:
+    name: License Header Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Validate Apache 2.0 headers
+        run: python3 hack/check_license_headers.py
+
+  go-test:
+    name: Go Test Suite
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Prepare Go build cache
+        run: mkdir -p "$GOCACHE"
+
+      - name: Run go vet ./...
+        run: go vet ./...
+
+      - name: Run go test -race ./...
+        run: go test -race ./...
+
+  go-coverage:
+    name: Go Coverage Gate
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Prepare Go build cache
+        run: mkdir -p "$GOCACHE"
+
+      - name: Enforce coverage floor
+        run: bash hack/check_coverage.sh 45
+
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
+      - name: Lint chart
+        run: helm lint deploy/helm/kafscale

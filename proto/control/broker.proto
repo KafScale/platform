@@ -1,0 +1,98 @@
+// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package kafscale.control;
+
+option go_package = "github.com/novatechflow/kafscale/pkg/gen/control;control";
+
+service BrokerControl {
+  rpc GetStatus(BrokerStatusRequest) returns (BrokerStatusResponse);
+  rpc DrainPartitions(DrainPartitionsRequest) returns (DrainPartitionsResponse);
+  rpc TriggerFlush(TriggerFlushRequest) returns (TriggerFlushResponse);
+  rpc StreamMetrics(stream MetricsSample) returns (Ack);
+}
+
+service AssignmentStream {
+  rpc WatchAssignments(AssignmentWatchRequest)
+      returns (stream PartitionAssignmentEvent);
+}
+
+message BrokerStatusRequest {}
+
+message BrokerStatusResponse {
+  string broker_id = 1;
+  string version = 2;
+  bool ready = 3;
+  repeated PartitionStatus partitions = 4;
+}
+
+message PartitionStatus {
+  string topic = 1;
+  int32 partition = 2;
+  bool leader = 3;
+  string state = 4;
+  int64 log_start_offset = 5;
+  int64 log_end_offset = 6;
+  int64 high_watermark = 7;
+}
+
+message DrainPartitionsRequest {
+  repeated PartitionRef partitions = 1;
+  string reason = 2;
+  int32 deadline_seconds = 3;
+}
+
+message DrainPartitionsResponse {
+  repeated PartitionRef drained = 1;
+  repeated PartitionRef pending = 2;
+}
+
+message TriggerFlushRequest {
+  repeated PartitionRef partitions = 1;
+  bool all_assigned = 2;
+}
+
+message TriggerFlushResponse {
+  repeated PartitionRef flushed = 1;
+}
+
+message MetricsSample {
+  string broker_id = 1;
+  int64 timestamp_ms = 2;
+  map<string, double> gauges = 3;
+  map<string, double> counters = 4;
+}
+
+message Ack {
+  string message = 1;
+}
+
+message AssignmentWatchRequest {
+  string broker_id = 1;
+}
+
+message PartitionAssignmentEvent {
+  PartitionRef partition = 1;
+  string broker_id = 2;
+  string status = 3;
+  int32 epoch = 4;
+}
+
+message PartitionRef {
+  string topic = 1;
+  int32 partition = 2;
+}

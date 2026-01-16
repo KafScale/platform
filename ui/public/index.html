@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kafscale Console</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="login-screen" class="screen screen-active">
+    <div class="login-shell">
+      <div class="login-hero">
+        <p class="eyebrow">Kafscale Console</p>
+        <h1>S3-backed Kafka operations, without the chaos.</h1>
+        <p class="subhead">Sign in to monitor cluster health, topics, and live throughput.</p>
+        <div class="hero-panel">
+          <div>
+            <span>Cluster</span>
+            <strong>kafscale</strong>
+          </div>
+          <div>
+            <span>Mode</span>
+            <strong>Ops Console</strong>
+          </div>
+          <div>
+            <span>Region</span>
+            <strong>Auto</strong>
+          </div>
+        </div>
+      </div>
+      <div class="login-card">
+        <h2>Sign in</h2>
+        <p class="muted">Use the credentials provided by your operator.</p>
+        <form id="login-form">
+          <label>
+            <span>Username</span>
+            <input type="text" id="login-username" autocomplete="username" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input type="password" id="login-password" autocomplete="current-password" required />
+          </label>
+          <button type="submit" id="login-submit">Enter Console</button>
+        </form>
+        <div id="login-message" class="login-message"></div>
+        <div id="login-error" class="login-error" role="alert"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" class="screen">
+    <header>
+      <div>
+        <h1>KafScale Operations Console</h1>
+        <p id="cluster-summary">Loading cluster status…</p>
+      </div>
+      <button id="logout-button" class="ghost-button" type="button">Sign out</button>
+    </header>
+    <main>
+      <div class="tab-bar">
+        <div class="tab-buttons">
+          <button class="tab-button active" data-tab="ops" type="button">Ops View</button>
+          <button class="tab-button" data-tab="advanced" type="button">Advanced</button>
+        </div>
+      </div>
+
+      <div id="tab-ops" class="tab-panel active">
+        <section>
+          <h2>Cluster Health</h2>
+          <div id="health-cards" class="cards"></div>
+          <div id="alerts"></div>
+          <div>
+            <h3>Broker Fleet</h3>
+            <div class="broker-toolbar">
+              <div id="broker-summary" class="broker-summary"></div>
+            <div class="broker-controls">
+              <label>
+                <span>Sort</span>
+                <select id="broker-sort">
+                  <option value="state">State</option>
+                  <option value="cpu">CPU</option>
+                  <option value="mem">Mem</option>
+                  <option value="name">Name</option>
+                </select>
+              </label>
+              <button id="broker-toggle" class="ghost-button" type="button">Show brokers</button>
+            </div>
+          </div>
+          <div id="broker-table-wrap" class="broker-table-wrap">
+            <table id="broker-table" class="broker-table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Name</th>
+                    <th>CPU</th>
+                    <th>Mem (MB)</th>
+                    <th>Backpressure</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+        <section>
+          <h2>Topics</h2>
+          <table id="topic-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Partitions</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section>
+          <h2>Topic Detail</h2>
+          <div id="topic-detail" class="detail-panel">
+            <p>Select a topic to inspect partition layout.</p>
+          </div>
+        </section>
+        <section class="metrics-rail">
+          <h2>Live Metrics</h2>
+          <div class="metrics-rail-cards">
+            <div class="card metric">
+              <h3>Produce (msg/s)</h3>
+              <strong id="produce-rps">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Fetch (msg/s)</h3>
+              <strong id="fetch-rps">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>S3 Latency (ms)</h3>
+              <strong id="live-s3-latency">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>S3 Error Rate</h3>
+              <strong id="s3-error-rate">0</strong>
+            </div>
+          </div>
+          <p id="metrics-status" class="muted">Waiting for samples…</p>
+        </section>
+      </div>
+
+      <div id="tab-advanced" class="tab-panel">
+        <section>
+          <h2>Admin &amp; Control Plane</h2>
+          <div class="cards metrics">
+            <div class="card metric">
+              <h3>Admin Requests</h3>
+              <strong id="admin-requests">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Admin Errors</h3>
+              <strong id="admin-errors">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Admin Latency (ms)</h3>
+              <strong id="admin-latency">0</strong>
+            </div>
+          </div>
+        </section>
+        <section>
+          <h2>ETCD Snapshots</h2>
+          <div class="cards metrics">
+            <div class="card metric">
+              <h3>Snapshot Age (s)</h3>
+              <strong id="etcd-snapshot-age">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Snapshot Stale</h3>
+              <strong id="etcd-snapshot-stale">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Snapshot Access</h3>
+              <strong id="etcd-snapshot-access">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Last Success</h3>
+              <strong id="etcd-snapshot-last-success">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Last Schedule</h3>
+              <strong id="etcd-snapshot-last-schedule">0</strong>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+    <footer>
+      <small>Data is real-time</small>
+    </footer>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

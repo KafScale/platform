@@ -1,0 +1,111 @@
+# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.mcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kafscale.componentName" (dict "root" . "component" "mcp") }}
+  namespace: {{ .Values.mcp.namespace.name }}
+  labels:
+{{ include "kafscale.labels" . | indent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: {{ .Values.mcp.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "mcp") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "mcp") | indent 8 }}
+{{- with .Values.mcp.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+{{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+{{- end }}
+{{- end }}
+      serviceAccountName: {{ include "kafscale.mcpServiceAccountName" . }}
+      containers:
+        - name: mcp
+          image: "{{ .Values.mcp.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.mcp.image.tag) .Values.mcp.image.useLatest }}"
+          imagePullPolicy: {{ ternary "Always" .Values.mcp.image.pullPolicy .Values.mcp.image.useLatest }}
+          env:
+            - name: KAFSCALE_MCP_HTTP_ADDR
+              value: ":8090"
+{{- if .Values.mcp.etcdEndpoints }}
+            - name: KAFSCALE_MCP_ETCD_ENDPOINTS
+              value: "{{ join "," .Values.mcp.etcdEndpoints }}"
+{{- end }}
+{{- if .Values.mcp.etcd.username }}
+            - name: KAFSCALE_MCP_ETCD_USERNAME
+              value: "{{ .Values.mcp.etcd.username }}"
+{{- end }}
+{{- if .Values.mcp.etcd.password }}
+            - name: KAFSCALE_MCP_ETCD_PASSWORD
+              value: "{{ .Values.mcp.etcd.password }}"
+{{- end }}
+{{- if .Values.mcp.metrics.brokerMetricsURL }}
+            - name: KAFSCALE_MCP_BROKER_METRICS_URL
+              value: "{{ .Values.mcp.metrics.brokerMetricsURL }}"
+{{- end }}
+{{- if .Values.mcp.sessionTimeout }}
+            - name: KAFSCALE_MCP_SESSION_TIMEOUT
+              value: "{{ .Values.mcp.sessionTimeout }}"
+{{- end }}
+{{- if .Values.mcp.auth.token }}
+            - name: KAFSCALE_MCP_AUTH_TOKEN
+              value: "{{ .Values.mcp.auth.token }}"
+{{- end }}
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+{{- if .Values.mcp.resources }}
+{{ toYaml .Values.mcp.resources | indent 12 }}
+{{- else }}
+            {}
+{{- end }}
+{{- with .Values.mcp.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.mcp.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.mcp.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- end }}

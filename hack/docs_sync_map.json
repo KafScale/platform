@@ -1,0 +1,18 @@
+{
+  "mappings": [
+    { "main": "docs/overview.md", "gh": "docs.md", "label": "overview" },
+    { "main": "docs/quickstart.md", "gh": "quickstart.md", "label": "quickstart" },
+    { "main": "docs/architecture.md", "gh": "architecture.md", "label": "architecture" },
+    { "main": "docs/protocol.md", "gh": "api.md", "label": "protocol" },
+    { "main": "docs/operations.md", "gh": "operations.md", "label": "operations" },
+    { "main": "docs/security.md", "gh": "security.md", "label": "security" },
+    { "main": "docs/storage.md", "gh": "storage-format.md", "label": "storage" },
+    { "main": "docs/roadmap.md", "gh": "roadmap.md", "label": "roadmap" },
+    { "main": "docs/development.md", "gh": null, "label": "development" },
+    { "main": "docs/mcp.md", "gh": null, "label": "mcp" },
+    { "main": "docs/metrics.md", "gh": null, "label": "metrics" },
+    { "main": "docs/ops-api.md", "gh": null, "label": "ops-api" },
+    { "main": "docs/ops-mcp.md", "gh": null, "label": "ops-mcp" },
+    { "main": "docs/user-guide.md", "gh": null, "label": "user-guide" }
+  ]
+}

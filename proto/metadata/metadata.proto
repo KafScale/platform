@@ -1,0 +1,97 @@
+// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package kafscale.metadata;
+
+option go_package = "github.com/novatechflow/kafscale/pkg/gen/metadata;metadata";
+
+message TopicConfig {
+  string name = 1;
+  int32 partitions = 2;
+  int32 replication_factor = 3;
+  int64 retention_ms = 4;
+  int64 retention_bytes = 5;
+  int64 segment_bytes = 6;
+  string created_at = 7;
+  map<string, string> config = 8;
+}
+
+message SegmentInfo {
+  int64 base_offset = 1;
+  int64 size_bytes = 2;
+  string created_at = 3;
+}
+
+message PartitionState {
+  string topic = 1;
+  int32 partition = 2;
+  string leader_broker = 3;
+  int32 leader_epoch = 4;
+  int64 log_start_offset = 5;
+  int64 log_end_offset = 6;
+  int64 high_watermark = 7;
+  string active_segment = 8;
+  repeated SegmentInfo segments = 9;
+}
+
+message Assignment {
+  string topic = 1;
+  repeated int32 partitions = 2;
+}
+
+message GroupMember {
+  string client_id = 1;
+  string client_host = 2;
+  string heartbeat_at = 3;
+  repeated Assignment assignments = 4;
+  repeated string subscriptions = 5;
+  int32 session_timeout_ms = 6;
+}
+
+message ConsumerGroup {
+  string group_id = 1;
+  string state = 2;
+  string protocol_type = 3;
+  string protocol = 4;
+  string leader = 5;
+  int32 generation_id = 6;
+  map<string, GroupMember> members = 7;
+  int32 rebalance_timeout_ms = 8;
+}
+
+message CommittedOffset {
+  int64 offset = 1;
+  string metadata = 2;
+  string committed_at = 3;
+  int32 leader_epoch = 4;
+}
+
+message BrokerRegistration {
+  string broker_id = 1;
+  string host = 2;
+  int32 port = 3;
+  string rack = 4;
+  string started_at = 5;
+  string last_heartbeat = 6;
+  string version = 7;
+}
+
+message PartitionAssignment {
+  string broker_id = 1;
+  int32 epoch = 2;
+  string assigned_at = 3;
+}

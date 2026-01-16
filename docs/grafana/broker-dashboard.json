@@ -1,0 +1,108 @@
+{
+  "title": "Kafscale Broker Overview",
+  "uid": "kafscale-broker",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "S3 Health",
+      "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "max(kafscale_s3_health_state{state=\"Healthy\"})",
+          "legendFormat": "Healthy"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "S3 Pressure",
+      "gridPos": {"x": 6, "y": 0, "w": 6, "h": 4},
+      "targets": [
+        {
+          "expr": "kafscale_s3_health_state{state=\"Degraded\"}",
+          "legendFormat": "Degraded"
+        }
+      ],
+      "options": {
+        "reduceOptions": {"calcs": ["lastNotNull"], "values": false},
+        "orientation": "horizontal",
+        "textMode": "value_and_name"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Produce Throughput",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 7},
+      "targets": [
+        {
+          "expr": "sum(rate(kafscale_produce_requests_total{status=\"success\"}[5m])) by (topic)",
+          "legendFormat": "{{topic}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "req/s"},
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "S3 Latency / Error",
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 11},
+      "targets": [
+        {
+          "expr": "kafscale_s3_latency_ms_avg",
+          "legendFormat": "Latency"
+        },
+        {
+          "expr": "kafscale_s3_error_rate",
+          "legendFormat": "Error rate"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "ms"},
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Admin API Requests",
+      "gridPos": {"x": 0, "y": 11, "w": 12, "h": 7},
+      "targets": [
+        {
+          "expr": "sum(rate(kafscale_admin_requests_total[5m])) by (api)",
+          "legendFormat": "{{api}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "req/s"},
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Admin API Errors",
+      "gridPos": {"x": 12, "y": 11, "w": 12, "h": 7},
+      "targets": [
+        {
+          "expr": "sum(rate(kafscale_admin_request_errors_total[5m])) by (api)",
+          "legendFormat": "{{api}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "req/s"},
+        "overrides": []
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  }
+}
