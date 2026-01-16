@@ -8,7 +8,7 @@ nav_order: 10
 ---
 
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");

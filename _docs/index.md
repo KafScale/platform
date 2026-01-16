@@ -41,6 +41,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 ## Processors
 
 - [Iceberg Processor](/processors/iceberg/)
+- [SQL Processor (KAFSQL)](/processors/sql/)
 
 ## Project
 

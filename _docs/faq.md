@@ -178,8 +178,7 @@ Processors are components that read directly from S3, bypassing brokers entirely
 Available processors:
 
 - **[Iceberg Processor](/processors/iceberg/)** — Continuous export to Apache Iceberg tables
-- **[Parquet Processor](/processors/parquet/)** — Direct Parquet file generation
-- **[S3 Sink Processor](/processors/s3-sink/)** — Raw segment archival
+- **[SQL Processor (KAFSQL)](/processors/sql/)** — Query KafScale segments with Postgres-compatible SQL
 
 ### Why bypass brokers for analytics?
 
@@ -193,7 +192,7 @@ This architecture is ideal for AI/ML pipelines where you need to replay large vo
 
 ### Can I build custom processors?
 
-Yes. The `.kfs` segment format is documented, and processors coordinate via etcd for offset tracking. See [Building Processors](/processors/building/) for the SDK and examples.
+Yes. The `.kfs` segment format is documented, and processors coordinate via etcd for offset tracking. See [Building Processors](https://github.com/KafScale/platform/tree/main/addons/processors/skeleton) for the SDK and examples.
 
 ---
 
