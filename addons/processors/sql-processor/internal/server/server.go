@@ -392,6 +392,12 @@ func (s *Server) describeFields(parsed kafsql.Query) ([]pgproto3.FieldDescriptio
 		return []pgproto3.FieldDescription{
 			{Name: []byte("QUERY PLAN"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
 		}, nil
+	case kafsql.QueryDescribe:
+		return []pgproto3.FieldDescription{
+			{Name: []byte("column"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+			{Name: []byte("type"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+			{Name: []byte("path"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+		}, nil
 	case kafsql.QuerySelect:
 		if parsed.JoinTopic != "" {
 			cols, err := s.resolveJoinColumns(parsed)
@@ -737,6 +743,9 @@ func (s *Server) executeQuery(ctx context.Context, backend *pgproto3.Backend, pa
 	case kafsql.QueryShowPartitions:
 		rows, err := s.handleShowPartitions(ctx, backend, parsed.Topic)
 		return queryResult{rows: rows}, err
+	case kafsql.QueryDescribe:
+		rows, err := s.handleDescribeTopic(ctx, backend, parsed.Topic)
+		return queryResult{rows: rows}, err
 	case kafsql.QuerySelect:
 		return s.handleSelect(ctx, backend, parsed, nil)
 	case kafsql.QueryExplain:
@@ -799,6 +808,56 @@ func (s *Server) handleShowPartitions(ctx context.Context, backend *pgproto3.Bac
 	}
 	_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(len(partitions))})
 	return len(partitions), nil
+}
+
+func (s *Server) handleDescribeTopic(ctx context.Context, backend *pgproto3.Backend, topic string) (int, error) {
+	_ = ctx
+	if topic == "" {
+		return 0, errors.New("describe requires a topic")
+	}
+
+	fields := []pgproto3.FieldDescription{
+		{Name: []byte("column"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+		{Name: []byte("type"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+		{Name: []byte("path"), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1, Format: 0},
+	}
+	if err := backend.Send(&pgproto3.RowDescription{Fields: fields}); err != nil {
+		return 0, err
+	}
+
+	rows := 0
+	implicit := []struct {
+		name string
+		typ  string
+	}{
+		{name: "_topic", typ: "text"},
+		{name: "_partition", typ: "integer"},
+		{name: "_offset", typ: "bigint"},
+		{name: "_ts", typ: "timestamp without time zone"},
+		{name: "_key", typ: "bytea"},
+		{name: "_value", typ: "bytea"},
+		{name: "_headers", typ: "jsonb"},
+		{name: "_segment", typ: "text"},
+	}
+	for _, col := range implicit {
+		if err := backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte(col.name), []byte(col.typ), nil}}); err != nil {
+			return rows, err
+		}
+		rows++
+	}
+
+	for _, col := range s.schemaColumnsForTopic(topic) {
+		name := strings.ToLower(col.Name)
+		typ := schemaTypeName(col.Type)
+		path := col.Path
+		if err := backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte(name), []byte(typ), []byte(path)}}); err != nil {
+			return rows, err
+		}
+		rows++
+	}
+
+	_ = backend.Send(&pgproto3.CommandComplete{CommandTag: commandTag(rows)})
+	return rows, nil
 }
 
 func (s *Server) handleExplain(ctx context.Context, backend *pgproto3.Backend, parsed kafsql.Query) (queryResult, error) {

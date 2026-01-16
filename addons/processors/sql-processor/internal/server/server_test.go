@@ -284,6 +284,47 @@ func TestHandleSelectTail(t *testing.T) {
 	}
 }
 
+func TestDescribeTopic(t *testing.T) {
+	cfg := config.Config{
+		Metadata: config.MetaConfig{
+			Topics: []config.TopicConfig{
+				{
+					Name: "orders",
+					Schema: config.SchemaConfig{
+						Columns: []config.SchemaColumn{
+							{Name: "amount", Type: "double", Path: "$.amount"},
+						},
+					},
+				},
+			},
+		},
+	}
+	srv := New(cfg, nil)
+
+	backend, frontend, cleanup := newPipeBackend(t)
+	defer cleanup()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.handleQuery(context.Background(), backend, "DESCRIBE orders;")
+	}()
+
+	rows := collectRows(t, frontend)
+	if err := <-errCh; err != nil {
+		t.Fatalf("handle query: %v", err)
+	}
+	if len(rows) != 9 {
+		t.Fatalf("expected 9 rows, got %d", len(rows))
+	}
+	last := rows[len(rows)-1]
+	if len(last) != 3 {
+		t.Fatalf("expected 3 columns, got %d", len(last))
+	}
+	if string(last[0]) != "amount" || string(last[1]) != "double precision" || string(last[2]) != "$.amount" {
+		t.Fatalf("unexpected schema row: %+v", last)
+	}
+}
+
 func TestResultCacheHit(t *testing.T) {
 	now := time.Now().UTC().Add(-time.Minute)
 	segments := []discovery.SegmentRef{
@@ -712,14 +753,21 @@ func TestHandleSetCommandReset(t *testing.T) {
 	}
 }
 
-func TestDescribeFieldsUnsupported(t *testing.T) {
+func TestDescribeFields(t *testing.T) {
 	srv := newTestServer(&mockLister{}, &mockDecoder{})
 	parsed, err := kafsql.Parse("DESCRIBE orders;")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if _, err := srv.describeFields(parsed); err == nil {
-		t.Fatalf("expected unsupported describe error")
+	fields, err := srv.describeFields(parsed)
+	if err != nil {
+		t.Fatalf("describe fields: %v", err)
+	}
+	if len(fields) != 3 {
+		t.Fatalf("expected 3 fields, got %d", len(fields))
+	}
+	if string(fields[0].Name) != "column" || string(fields[1].Name) != "type" || string(fields[2].Name) != "path" {
+		t.Fatalf("unexpected field names: %+v", fields)
 	}
 }
 

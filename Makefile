@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform demo-platform-bootstrap iceberg-demo platform-demo help clean-kind-all
+.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -40,6 +40,12 @@ ICEBERG_DEMO_NAMESPACE ?= $(KAFSCALE_DEMO_NAMESPACE)
 ICEBERG_PROCESSOR_RELEASE ?= iceberg-processor-dev
 ICEBERG_PROCESSOR_REST_DEBUG ?=
 ICEBERG_PROCESSOR_BUILD_FLAGS ?=
+KAFSQL_DEMO_NAMESPACE ?= kafsql-demo
+KAFSQL_DEMO_CLUSTER ?= kafsql
+KAFSQL_DEMO_TOPIC ?= kafsql-demo-topic
+KAFSQL_DEMO_RECORDS ?= 200
+KAFSQL_DEMO_TIMEOUT_SEC ?= 120
+KAFSQL_PROCESSOR_RELEASE ?= kafsql-processor-dev
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
 MINIO_PORT ?= 9000
@@ -504,6 +510,28 @@ iceberg-demo: demo-platform-bootstrap ## Run the Iceberg processor demo on kind.
 	ICEBERG_PROCESSOR_REST_DEBUG=$(ICEBERG_PROCESSOR_REST_DEBUG) \
 	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
 	bash scripts/iceberg-demo.sh
+
+kafsql-demo: KAFSCALE_DEMO_PROXY=0
+kafsql-demo: KAFSCALE_DEMO_CONSOLE=0
+kafsql-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
+kafsql-demo: KAFSCALE_DEMO_ADVERTISED_HOST=
+kafsql-demo: demo-platform-bootstrap ## Run the KAFSQL processor e2e demo on kind.
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	KAFSQL_DEMO_NAMESPACE=$(KAFSQL_DEMO_NAMESPACE) \
+	KAFSQL_DEMO_CLUSTER=$(KAFSQL_DEMO_CLUSTER) \
+	KAFSQL_DEMO_TOPIC=$(KAFSQL_DEMO_TOPIC) \
+	KAFSQL_DEMO_RECORDS=$(KAFSQL_DEMO_RECORDS) \
+	KAFSQL_DEMO_TIMEOUT_SEC=$(KAFSQL_DEMO_TIMEOUT_SEC) \
+	KAFSQL_PROCESSOR_RELEASE=$(KAFSQL_PROCESSOR_RELEASE) \
+	SQL_PROCESSOR_IMAGE=$(SQL_PROCESSOR_IMAGE) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_REGION=$(MINIO_REGION) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	bash scripts/kafsql-demo.sh
 
 platform-demo: demo-platform ## Alias for demo-platform.
 
