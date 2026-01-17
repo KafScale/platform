@@ -331,7 +331,7 @@ func parseSegmentKey(prefix, key string) (segmentKey, string, bool) {
 		return segmentKey{}, "", false
 	}
 	topic := parts[0]
-	partition, err := strconv.Atoi(parts[1])
+	partition, err := strconv.ParseInt(parts[1], 10, 32)
 	if err != nil {
 		return segmentKey{}, "", false
 	}
