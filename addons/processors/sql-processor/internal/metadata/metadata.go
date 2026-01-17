@@ -407,7 +407,7 @@ func (r *S3Resolver) Partitions(ctx context.Context, topic string) ([]int32, err
 		if raw == "" {
 			continue
 		}
-		value, err := strconv.Atoi(raw)
+		value, err := strconv.ParseInt(raw, 10, 32)
 		if err != nil {
 			continue
 		}
