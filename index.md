@@ -199,7 +199,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     <div class="card">
       <h3>Iceberg Processor</h3>
       <p>Reads .kfs segments from S3. Writes Parquet to Iceberg tables. Works with Unity Catalog, Polaris, AWS Glue. Zero broker load.</p>
-      <a class="button secondary" href="/processors/iceberg/">Deployment guide</a>
+      <a class="button secondary" href="/processors/iceberg/">Documentation</a>
     </div>
     <div class="card">
       <h3>SQL Processor (KAFSQL)</h3>
