@@ -26,8 +26,9 @@ and the boundaries of what is and is not supported in v1.
 - **Authentication**: none at the Kafka protocol layer. Brokers accept any
   client connection. The console UI supports basic auth via
   `KAFSCALE_UI_USERNAME` / `KAFSCALE_UI_PASSWORD`.
-- **Authorization**: none. All broker APIs are unauthenticated and authorized
-  implicitly. This includes admin APIs such as CreatePartitions and DeleteGroups.
+- **Authorization**: optional in v1.5. When ACLs are enabled, broker APIs are
+  authorized by the configured rules; when disabled, all broker APIs are
+  implicitly allowed (including admin APIs like CreatePartitions/DeleteGroups).
 - **Transport Security**: TLS termination is expected at the ingress or mesh
   layer in v1; brokers and the console speak plaintext by default.
 - **Secrets Handling**: S3 credentials are read from Kubernetes secrets and are
@@ -45,12 +46,71 @@ and the boundaries of what is and is not supported in v1.
 - Use least-privilege IAM roles for S3 access and restrict etcd endpoints.
 - Treat the console as privileged; do not expose it publicly without auth.
 
+## v1.5 Auth (Basic ACLs)
+
+Kafscale v1.5 introduces optional, basic ACL enforcement at the broker. TLS is
+still expected to terminate at your load balancer / ingress or service mesh.
+
+### What Is Supported
+
+- **ACL enforcement** for topic, group, and admin operations.
+- **Principal identity** derived from the Kafka `client.id` (ClientID) until
+  SASL auth is introduced.
+- **Allow/Deny rules** with wildcard topic/group names (prefix `*`).
+- **Proxy protocol identity** when deployed behind a trusted LB/sidecar.
+
+### Enabling ACLs
+
+Set the following environment variables on broker pods:
+
+```bash
+KAFSCALE_ACL_ENABLED=true
+KAFSCALE_ACL_JSON='{
+  "default_policy": "deny",
+  "principals": [
+    {
+      "name": "analytics-service",
+      "allow": [
+        {"action": "fetch", "resource": "topic", "name": "orders-*"},
+        {"action": "group_read", "resource": "group", "name": "analytics-*"}
+      ]
+    },
+    {
+      "name": "ops-admin",
+      "allow": [
+        {"action": "admin", "resource": "cluster", "name": "*"}
+      ]
+    }
+  ]
+}'
+```
+
+You can also supply `KAFSCALE_ACL_FILE=/path/to/acl.json` instead of inline JSON.
+Set `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic if the ACL config is missing
+or invalid. Default is fail-closed (deny).
+
+### Actions and Resources
+
+- **Actions**: `produce`, `fetch`, `group_read`, `group_write`, `group_admin`, `admin`
+- **Resources**: `topic`, `group`, `cluster`
+
+### Client Configuration
+
+Set `client.id` in your Kafka clients to the principal name used in ACLs.
+Until SASL is implemented, this is the default identity Kafscale uses for ACL
+checks. You can also derive principals from network identity when the proxy
+protocol is enabled (see Operations docs for `KAFSCALE_PRINCIPAL_SOURCE`). Only
+enable proxy-derived identity when brokers are reachable solely through a
+trusted proxy/LB.
+
 ## Known Gaps
 
 - No SASL or mTLS authentication for Kafka protocol clients.
-- No ACLs or RBAC at the broker layer.
+- ACLs are optional and rely on `client.id` or network-derived identity; no
+  strong client auth yet.
 - No multi-tenant isolation.
-- Admin APIs are writable without auth; UI is read-only by policy, not enforcement.
+- Admin APIs are writable without auth if ACLs are disabled; UI is read-only by
+  policy, not enforcement.
 
 ## Roadmap
 
