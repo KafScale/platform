@@ -11,7 +11,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   Scale streaming and analytics cloud-native on S3. Automated.</p>
   <div class="badge-row">
     <a href="https://github.com/KafScale/platform/stargazers" target="_blank" rel="noreferrer">
-      <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=flat" />
+      <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=social" />
     </a>
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
     <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/KafScale/platform" />
