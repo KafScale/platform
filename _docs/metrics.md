@@ -71,6 +71,7 @@ Broker metrics are emitted directly by the broker process.
 | `kafscale_admin_requests_total` | Counter | `api` | Count of admin API requests by API name. |
 | `kafscale_admin_request_errors_total` | Counter | `api` | Count of admin API errors by API name. |
 | `kafscale_admin_request_latency_ms_avg` | Gauge | `api` | Average admin API latency (ms). |
+| `kafscale_authz_denied_total` | Counter | `action`, `resource` | Count of authorization denials by action/resource. |
 
 Admin API label values are human-readable for common ops APIs
 (`DescribeGroups`, `ListGroups`, `OffsetForLeaderEpoch`, `DescribeConfigs`,

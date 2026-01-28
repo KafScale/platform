@@ -22,15 +22,91 @@ Before operating a production cluster:
 
 ## Security & Hardening
 
-- **RBAC**: The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
-- **S3 credentials**: Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
-- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. In Helm, set `console.auth.username` and `console.auth.password`.
-- **TLS**: Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
-- **Admin APIs**: Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
-- **Network policies**: Allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
-- **Health/metrics**: Prometheus can scrape `/metrics` on brokers and operator for early detection of S3 pressure or degraded nodes.
-- **Startup gating**: Broker pods exit if they cannot read metadata or write a probe object to S3, so Kubernetes restarts them instead of leaving a stuck listener in place.
-- **Leader IDs**: Each broker advertises a numeric NodeID in etcd. In a single-node demo you'll always see `Leader=0` in the Console's topic detail.
+### RBAC
+
+The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
+
+### S3 credentials
+
+Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
+
+### Console auth
+
+The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. In Helm, set `console.auth.username` and `console.auth.password`.
+
+### TLS
+
+Terminate TLS at your ingress, load balancer, or service mesh. Broker/console TLS env flags are not wired in v1.x. See [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer-recommended) for the recommended external TLS pattern.
+
+### Admin APIs
+
+Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
+
+### Network policies
+
+Allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
+
+### ACLs (v1.5+)
+
+Optional basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced.
+
+**Configuration variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `KAFSCALE_ACL_ENABLED` | Enable ACL enforcement (`true`/`false`) |
+| `KAFSCALE_ACL_JSON` | Inline JSON ACL configuration |
+| `KAFSCALE_ACL_FILE` | Path to ACL configuration file |
+| `KAFSCALE_ACL_FAIL_OPEN` | Allow traffic when ACL config is missing/invalid (default: `false`, fail-closed) |
+
+**Principal source:** Set `KAFSCALE_PRINCIPAL_SOURCE` to control how client identity is derived:
+
+| Value | Description |
+|-------|-------------|
+| `client_id` | Use Kafka `client.id` (default) |
+| `remote_addr` | Use client IP address |
+| `proxy_addr` | Use address from PROXY protocol header (requires `KAFSCALE_PROXY_PROTOCOL=true`) |
+
+**Example ACL configuration (Helm):**
+
+```yaml
+operator:
+  acl:
+    enabled: true
+    configJson: |
+      {"default_policy":"deny","principals":[
+        {"name":"analytics","allow":[{"action":"fetch","resource":"topic","name":"orders-*"}]}
+      ]}
+  auth:
+    principalSource: "proxy_addr"
+    proxyProtocol: true
+```
+
+**Auth denials:** Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
+
+### PROXY protocol (v1.5+)
+
+Use `KAFSCALE_PROXY_PROTOCOL=true` with `KAFSCALE_PRINCIPAL_SOURCE=proxy_addr` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
+
+**Trust boundary:** Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
+
+**Behavior:**
+
+- **Fail-closed:** When `KAFSCALE_PROXY_PROTOCOL=true`, brokers reject connections that do not include a valid PROXY header.
+- **Header limits:** PROXY v1 headers are capped at 256 bytes; oversized headers are rejected.
+- **Health checks:** PROXY v2 `LOCAL` connections are accepted (no identity); ensure LB health checks don't rely on ACL-protected operations.
+
+### Health/metrics
+
+Prometheus can scrape `/metrics` on brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
+
+### Startup gating
+
+Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
+
+### Leader IDs
+
+Each broker advertises a numeric `NodeID` in etcd. In a single-node demo you'll always see `Leader=0` in the Console's topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
 ## External Broker Access
 
@@ -91,11 +167,45 @@ spec:
     endpoints: []
 ```
 
-### TLS termination
+### Proxy TLS via LoadBalancer (recommended)
 
-Brokers speak plaintext today. Terminate TLS at your load balancer, ingress TCP proxy, or service mesh and advertise that endpoint in `advertisedHost`/`advertisedPort`.
+The proxy is the external Kafka entrypoint. For TLS in v1.5, terminate TLS at the cloud LoadBalancer by supplying Service annotations in the Helm values. This keeps broker traffic plaintext inside the cluster while enabling TLS for external clients.
 
-Example certificate (cert-manager):
+```yaml
+proxy:
+  enabled: true
+  service:
+    type: LoadBalancer
+    port: 9092
+    annotations:
+      # Add your cloud provider TLS annotations here (ACM / GCP / Azure, etc.)
+    loadBalancerSourceRanges:
+      - 203.0.113.0/24
+```
+
+If you need in-cluster ACME/Let's Encrypt support, use a TCP-capable gateway (Traefik, etc.) with cert-manager. Keep it off by default to avoid extra operational dependencies.
+
+#### AWS NLB TLS
+
+```yaml
+proxy:
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:REGION:ACCOUNT:certificate/ID"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "9092"
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+```
+
+#### GCP / Azure
+
+L4 LoadBalancers typically do TCP pass-through; TLS termination often requires a provider gateway/ingress (or a TCP-capable ingress controller). If you terminate TLS outside the Service, keep the proxy Service as plain TCP.
+
+**Note:** Annotation keys vary by provider and feature. Always validate against your cloud provider docs.
+
+### TLS termination (cert-manager)
+
+For custom certificate management without cloud provider TLS:
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -399,8 +509,8 @@ aws s3 ls s3://kafscale-prod-eu-west-1/crr-test/
 ```bash
 helm upgrade kafscale KafScale/platform \
   --namespace kafscale \
-  --set broker.image.tag=v1.1.0 \
-  --set operator.image.tag=v1.1.0
+  --set broker.image.tag=v1.5.0 \
+  --set operator.image.tag=v1.5.0
 
 kubectl rollout status deployment/kafscale-broker -n kafscale
 ```
@@ -471,6 +581,24 @@ Common causes:
 ETCDCTL_API=3 etcdctl endpoint health --endpoints=$ETCD_ENDPOINTS
 kubectl exec -it kafscale-broker-0 -- env | grep ETCD
 ```
+
+### ACL denials (v1.5+)
+
+If clients are unexpectedly rejected:
+
+1. Check broker logs for `authorization denied` entries
+2. Verify `KAFSCALE_PRINCIPAL_SOURCE` matches your identity strategy
+3. Confirm ACL config is valid JSON (invalid config = fail-closed by default)
+4. For debugging, temporarily set `KAFSCALE_ACL_FAIL_OPEN=true`
+
+### PROXY protocol issues (v1.5+)
+
+If connections fail with PROXY protocol enabled:
+
+1. Ensure load balancer is configured to inject PROXY headers
+2. Check that brokers are not directly exposed (trust boundary violation)
+3. Verify PROXY v1 headers don't exceed 256 bytes
+4. For health checks, use PROXY v2 `LOCAL` connections or exclude ACL-protected operations
 
 ### Debug mode
 

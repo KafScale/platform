@@ -127,7 +127,10 @@ KafScale implements a focused subset of the Kafka protocol. Versions below refle
 
 ## Unsupported APIs and error responses
 
-Until auth lands, KafScale responds to SASL handshake attempts with `UNSUPPORTED_SASL_MECHANISM` (error code 33).
+v1.5 focuses on basic broker ACLs with identity derived from `client.id`; terminate TLS at the proxy/LB.
+
+Until SASL lands, Kafscale rejects SASL handshake/auth requests as unsupported
+API keys and closes the connection (no SASL-specific error payload is returned).
 
 ## gRPC internal API
 

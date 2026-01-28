@@ -9,16 +9,16 @@ nav_order: 7
 
 # Security Overview
 
-KafScale is a Kubernetes-native platform focused on Kafka protocol parity and operational stability. This document summarizes the current security posture and the boundaries of what is and is not supported in v1.
+KafScale is a Kubernetes-native platform focused on Kafka protocol parity and operational stability. This document summarizes the current security posture and the boundaries of what is and is not supported.
 
 ---
 
-## Current security posture (v1)
+## Current security posture (v1.5)
 
 | Area | Status |
 |------|--------|
 | Authentication | None at Kafka protocol layer; console supports basic auth |
-| Authorization | None; admin APIs are unauthenticated |
+| Authorization | Optional ACLs (v1.5); disabled by default |
 | Transport | TLS termination expected at ingress/mesh; broker/console plaintext by default |
 | Secrets | S3 credentials via K8s secrets, not stored in etcd |
 | Data at rest | Depends on S3/etcd provider encryption |
@@ -26,15 +26,72 @@ KafScale is a Kubernetes-native platform focused on Kafka protocol parity and op
 
 ### Details
 
-- **Authentication**: Brokers accept any client connection. The console UI supports basic auth via `KAFSCALE_UI_USERNAME` / `KAFSCALE_UI_PASSWORD`.
+- **Authentication**: None at the Kafka protocol layer. Brokers accept any client connection. The console UI supports basic auth via `KAFSCALE_UI_USERNAME` / `KAFSCALE_UI_PASSWORD`.
 
-- **Authorization**: None. Admin APIs are unauthenticated. The console UI is read-only by policy, not enforcement.
+- **Authorization**: Optional in v1.5. When ACLs are enabled, broker APIs are authorized by the configured rules; when disabled, all broker APIs are implicitly allowed (including admin APIs like CreatePartitions/DeleteGroups).
 
-- **Transport security**: TLS termination is expected at the ingress or service mesh layer in v1; brokers and the console speak plaintext by default.
+- **Transport security**: TLS termination is expected at the ingress or service mesh layer; brokers and the console speak plaintext by default.
 
 - **Secrets handling**: S3 credentials are read from Kubernetes secrets and are never written to etcd or logged.
 
 - **Data at rest**: Stored in S3 and etcd. Encryption depends on your provider configuration (S3 SSE, etcd encryption at rest).
+
+---
+
+## v1.5 Auth (Basic ACLs)
+
+KafScale v1.5 introduces optional, basic ACL enforcement at the broker. TLS is still expected to terminate at your load balancer, ingress, or service mesh.
+
+### What is supported
+
+- **ACL enforcement** for topic, group, and admin operations.
+- **Principal identity** derived from the Kafka `client.id` until SASL auth is introduced.
+- **Allow/Deny rules** with wildcard topic/group names (prefix `*`).
+- **Proxy protocol identity** when deployed behind a trusted LB/sidecar.
+
+### Enabling ACLs
+
+Set the following environment variables on broker pods:
+
+```bash
+KAFSCALE_ACL_ENABLED=true
+KAFSCALE_ACL_JSON='{
+  "default_policy": "deny",
+  "principals": [
+    {
+      "name": "analytics-service",
+      "allow": [
+        {"action": "fetch", "resource": "topic", "name": "orders-*"},
+        {"action": "group_read", "resource": "group", "name": "analytics-*"}
+      ]
+    },
+    {
+      "name": "ops-admin",
+      "allow": [
+        {"action": "admin", "resource": "cluster", "name": "*"}
+      ]
+    }
+  ]
+}'
+```
+
+You can also supply `KAFSCALE_ACL_FILE=/path/to/acl.json` instead of inline JSON.
+
+Set `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic if the ACL config is missing or invalid. Default is fail-closed (deny).
+
+### Actions and resources
+
+| Actions | Resources |
+|---------|-----------|
+| `produce`, `fetch`, `group_read`, `group_write`, `group_admin`, `admin` | `topic`, `group`, `cluster` |
+
+### Client configuration
+
+Set `client.id` in your Kafka clients to the principal name used in ACLs. Until SASL is implemented, this is the default identity KafScale uses for ACL checks.
+
+You can also derive principals from network identity when the proxy protocol is enabled (see [Operations Guide](/operations/) for `KAFSCALE_PRINCIPAL_SOURCE`). Only enable proxy-derived identity when brokers are reachable solely through a trusted proxy/LB.
+
+PROXY v1 headers are capped at 256 bytes; oversized headers are rejected.
 
 ---
 
@@ -72,6 +129,8 @@ Terminate TLS at your ingress controller or service mesh, and restrict access to
 
 ### S3 IAM least privilege
 
+Use least-privilege IAM roles for S3 access:
+
 ```json
 {
   "Version": "2012-10-17",
@@ -101,7 +160,8 @@ Terminate TLS at your ingress controller or service mesh, and restrict access to
 
 ### Console protection
 
-- Do not expose the console publicly without authentication
+Treat the console as privileged; do not expose it publicly without auth:
+
 - Use ingress with authentication (OAuth proxy, basic auth)
 - Consider disabling the console in production if not needed
 
@@ -111,11 +171,11 @@ Terminate TLS at your ingress controller or service mesh, and restrict access to
 
 | Gap | Impact | Mitigation |
 |-----|--------|------------|
-| No SASL authentication | Any client can connect | Network isolation, VPN |
-| No mTLS for clients | Cannot verify client identity | Network policies |
-| No ACLs/RBAC | Cannot restrict topic access | Single-tenant deployments |
-| No multi-tenant isolation | All clients see all topics | Separate clusters per tenant |
-| Admin APIs unauthenticated | Anyone with network access can modify | Network isolation |
+| No SASL or mTLS authentication | Cannot cryptographically verify client identity | Network isolation, VPN |
+| ACLs rely on `client.id` or network identity | No strong client auth yet | Enable ACLs + network controls |
+| No multi-tenant isolation | All clients see all topics (unless ACLs configured) | Separate clusters per tenant, or ACLs |
+| Admin APIs writable without auth if ACLs disabled | Anyone with network access can modify | Enable ACLs or network isolation |
+| UI read-only by policy, not enforcement | Console could be modified to write | Network isolation, auth proxy |
 
 ---
 
@@ -125,7 +185,7 @@ Planned security milestones (order may change as requirements evolve):
 
 - TLS enabled by default in production templates.
 - SASL/PLAIN and SASL/SCRAM for Kafka client authentication.
-- Authorization / ACL layer for broker admin and data plane APIs.
+- Enhanced ACL layer with SASL-derived principals.
 - Optional mTLS for broker and console endpoints.
 - MCP services (if deployed) must be secured with strong auth, RBAC, and audit logging; see [MCP](/mcp/).
 

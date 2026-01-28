@@ -62,21 +62,6 @@ KafScale follows a milestone-based release process. This page summarizes what's 
 
 ---
 
-## Planned
-
-| Feature | Target | Description |
-|---------|--------|-------------|
-| TLS enabled by default | v1.5 | Production Helm templates with TLS out of the box |
-| SASL groundwork | v1.5 | Internal scaffolding for authentication |
-| SASL/PLAIN authentication | v2.0 | Username/password auth for clients |
-| SASL/SCRAM authentication | v2.0 | Secure credential storage |
-| Topic-level ACLs | v2.0 | Read/write permissions per topic |
-| Console improvements | v2.1 | Topic browser, consumer lag dashboard |
-| Multi-cluster federation | v2.2 | Cross-cluster topic mirroring |
-| Audit logging | v2.2 | Who did what, when |
-
----
-
 ## Explicitly not planned
 
 Some features are intentionally out of scope for KafScale. These are architectural decisions, not missing features.
