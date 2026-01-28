@@ -21,9 +21,9 @@ The short version: KafScale is the only S3-native, stateless Kafka-compatible pl
 
 KafScale trades latency for operational simplicity and storage-native processing. If your workload can tolerate hundreds of milliseconds of latency, KafScale eliminates stateful brokers, partition rebalancing, and disk capacity planning.
 
-**For AI agent infrastructure**: KafScale's architecture aligns with what agentic systems actually need. AI agents reasoning over business context require completeness and replay capability—not sub-millisecond latency. The immutable log in S3 becomes the system of record that agents query, replay, and reason over. Processors convert that log to tables without competing with streaming workloads for broker resources.
+**For AI agent infrastructure**: KafScale's architecture aligns with what agentic systems actually need. AI agents reasoning over business context require completeness and replay capability, not sub-millisecond latency. The immutable log in S3 becomes the system of record that agents query, replay, and reason over. Processors convert that log to tables without competing with streaming workloads for broker resources.
 
-Traditional stream processing optimizes for latency. Milliseconds matter for fraud detection or trading. But AI agents have different requirements: they need to understand what happened, in what order, and why the current state exists. Event sourcing research from the Apache Flink community (FLIP-531) and platforms like Akka confirms this pattern—agentic systems need reproducible state at any point in time.
+Traditional stream processing optimizes for latency. Milliseconds matter for fraud detection or trading. But AI agents have different requirements: they need to understand what happened, in what order, and why the current state exists. Event sourcing research from the Apache Flink community (FLIP-531) and platforms like Akka confirms this pattern: agentic systems need reproducible state at any point in time.
 
 <svg class="diagram" viewBox="0 0 700 220" role="img" aria-label="When to choose KafScale vs Kafka">
   <style>
@@ -66,7 +66,7 @@ Apache 2.0. You can use it commercially, modify it, distribute it, and offer it 
 
 ### Why does KafScale use native Kafka record format?
 
-KafScale stores data in `.kfs` segments containing native Kafka V2 record batches—the same binary format Kafka uses internally. This is a deliberate choice:
+KafScale stores data in `.kfs` segments containing native Kafka V2 record batches, the same binary format Kafka uses internally. This is a deliberate choice:
 
 **Format stability**: Kafka's on-disk format is one of the most stable interfaces in data infrastructure. In 15+ years, there have been exactly three message format versions:
 
@@ -76,7 +76,7 @@ KafScale stores data in `.kfs` segments containing native Kafka V2 record batche
 | V1 | Kafka 0.10.0 (2016) | Removed in Kafka 4.0 |
 | V2 | Kafka 0.11.0 (June 2017) | Current standard |
 
-V2 has been the only supported format for 8+ years. The entire Kafka ecosystem—Confluent, Redpanda, every client library, Flink, Spark, Debezium, MirrorMaker—depends on this stability. Changing it would break everything.
+V2 has been the only supported format for 8+ years. The entire Kafka ecosystem (Confluent, Redpanda, every client library, Flink, Spark, Debezium, MirrorMaker) depends on this stability. Changing it would break everything.
 
 **If Kafka ever changes**: KafScale is fully open source under Apache 2.0. Any format updates can be implemented immediately by the community. Contrast this with proprietary alternatives where you'd wait for a vendor to prioritize the update.
 
@@ -88,10 +88,10 @@ V2 has been the only supported format for 8+ years. The entire Kafka ecosystem�
 
 This is intentional coupling to a stable interface, not a liability:
 
-1. **The format won't change** — Kafka V2 record batches are a de facto standard
-2. **Read-replica brokers would have the same coupling** — they'd also need to parse segments and query etcd
-3. **The coupling is explicit and documented** — not hidden inside a proprietary broker
-4. **Open format means open tooling** — anyone can build processors, analyzers, or integrations
+1. **The format won't change**: Kafka V2 record batches are a de facto standard
+2. **Read-replica brokers would have the same coupling**: they'd also need to parse segments and query etcd
+3. **The coupling is explicit and documented**: not hidden inside a proprietary broker
+4. **Open format means open tooling**: anyone can build processors, analyzers, or integrations
 
 The tradeoff: if KafScale's internal segment layout evolves, processors need updates. In practice, we version the segment format and maintain backward compatibility.
 
@@ -135,6 +135,20 @@ Several factors affect latency:
 
 The fundamental tradeoff is S3 round-trip time. If you need sub-50ms latency, KafScale is not the right choice.
 
+### How large can messages be?
+
+There's no configured maximum in KafScale. The theoretical limit is the 32-bit Kafka frame length (~2 GB), but the practical limit is broker memory since messages are fully buffered in RAM before flushing to S3.
+
+**Rule of thumb**: max in-flight messages ≈ RAM / (2 × message size)
+
+| Broker RAM | 10 MB messages | 50 MB messages | 100 MB messages |
+|------------|----------------|----------------|-----------------|
+| 16 GB      | ~800 in-flight | ~160 in-flight | ~80 in-flight   |
+
+Large payloads (XML, JSON, binary blobs) work fine. They're stored as standard Kafka record batches inside `.kfs` segments. Multiple messages buffer until flush thresholds, then upload as a single segment object.
+
+**Scaling for large messages**: Since brokers are stateless, you can scale pods automatically based on memory pressure (e.g., HPA at 80% memory). One stable endpoint, automatic scaling behind the scenes.
+
 ### How does KafScale handle backpressure?
 
 When S3 latency exceeds thresholds, brokers enter `DEGRADED` state. If S3 becomes unavailable, brokers enter `UNAVAILABLE` state and reject produce requests while continuing to serve cached fetch requests. Clients should implement retry logic with exponential backoff.
@@ -177,8 +191,8 @@ Processors are components that read directly from S3, bypassing brokers entirely
 
 Available processors:
 
-- **[Iceberg Processor](/processors/iceberg/)** — Continuous export to Apache Iceberg tables
-- **[SQL Processor (KAFSQL)](/processors/sql/)** — Query KafScale segments with Postgres-compatible SQL
+- **[Iceberg Processor](/processors/iceberg/)**: Continuous export to Apache Iceberg tables
+- **[SQL Processor (KAFSQL)](/processors/sql/)**: Query KafScale segments with Postgres-compatible SQL
 
 ### Why bypass brokers for analytics?
 
