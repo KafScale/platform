@@ -81,6 +81,30 @@ spec:
               value: "{{ join "," .Values.operator.etcdEndpoints }}"
             - name: KAFSCALE_OPERATOR_LEADER_KEY
               value: "{{ .Values.operator.leaderKey }}"
+{{- if .Values.operator.acl.enabled }}
+            - name: KAFSCALE_ACL_ENABLED
+              value: "true"
+{{- end }}
+{{- if .Values.operator.acl.configJson }}
+            - name: KAFSCALE_ACL_JSON
+              value: "{{ .Values.operator.acl.configJson }}"
+{{- end }}
+{{- if .Values.operator.acl.configFile }}
+            - name: KAFSCALE_ACL_FILE
+              value: "{{ .Values.operator.acl.configFile }}"
+{{- end }}
+{{- if .Values.operator.acl.failOpen }}
+            - name: KAFSCALE_ACL_FAIL_OPEN
+              value: "true"
+{{- end }}
+{{- if .Values.operator.auth.principalSource }}
+            - name: KAFSCALE_PRINCIPAL_SOURCE
+              value: "{{ .Values.operator.auth.principalSource }}"
+{{- end }}
+{{- if .Values.operator.auth.proxyProtocol }}
+            - name: KAFSCALE_PROXY_PROTOCOL
+              value: "true"
+{{- end }}
           resources:
 {{- if .Values.operator.resources }}
 {{ toYaml .Values.operator.resources | indent 12 }}

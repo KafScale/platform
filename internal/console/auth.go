@@ -20,6 +20,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type authManager struct {
 	ttl      time.Duration
 	mu       sync.Mutex
 	sessions map[string]time.Time
+	limiter  *loginRateLimiter
 }
 
 type authConfigResponse struct {
@@ -70,6 +72,7 @@ func newAuthManager(cfg AuthConfig) *authManager {
 		password: cfg.Password,
 		ttl:      12 * time.Hour,
 		sessions: make(map[string]time.Time),
+		limiter:  newLoginRateLimiter(20, time.Minute),
 	}
 }
 
@@ -108,6 +111,13 @@ func (a *authManager) handleLogin(w http.ResponseWriter, r *http.Request) {
 			Message:       "UI access is disabled until credentials are configured.",
 		})
 		return
+	}
+	if a.limiter != nil {
+		ip := remoteIP(r)
+		if !a.limiter.Allow(ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 	}
 	var payload loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -218,4 +228,59 @@ func generateToken(size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+type loginRateLimiter struct {
+	limit  int
+	window time.Duration
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+}
+
+func newLoginRateLimiter(limit int, window time.Duration) *loginRateLimiter {
+	if limit <= 0 || window <= 0 {
+		return nil
+	}
+	return &loginRateLimiter{
+		limit:  limit,
+		window: window,
+		hits:   make(map[string][]time.Time),
+	}
+}
+
+func (l *loginRateLimiter) Allow(key string) bool {
+	if l == nil {
+		return true
+	}
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	hits := l.hits[key]
+	idx := 0
+	for _, ts := range hits {
+		if ts.After(cutoff) {
+			hits[idx] = ts
+			idx++
+		}
+	}
+	hits = hits[:idx]
+	if len(hits) >= l.limit {
+		l.hits[key] = hits
+		return false
+	}
+	hits = append(hits, now)
+	l.hits[key] = hits
+	return true
+}
+
+func remoteIP(r *http.Request) string {
+	if r == nil {
+		return "unknown"
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		return r.RemoteAddr
+	}
+	return host
 }

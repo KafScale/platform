@@ -72,9 +72,76 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
+- **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
+  - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
+  - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
+  - **Trust boundary** – Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
+  - **Fail-closed** – When `KAFSCALE_PROXY_PROTOCOL=true`, brokers reject connections that do not include a valid PROXY header.
+  - **Header limits** – PROXY v1 headers are capped at 256 bytes; oversized headers are rejected.
+  - **Health checks** – PROXY v2 `LOCAL` connections are accepted (no identity); ensure LB health checks don’t rely on ACL-protected operations.
+
+Example ACL values (Helm operator):
+```yaml
+operator:
+  acl:
+    enabled: true
+    configJson: |
+      {"default_policy":"deny","principals":[
+        {"name":"analytics","allow":[{"action":"fetch","resource":"topic","name":"orders-*"}]}
+      ]}
+  auth:
+    principalSource: "proxy_addr"
+    proxyProtocol: true
+```
 - **Health / metrics** – Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
 - **Startup gating** – Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
 - **Leader IDs** – Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
+
+### Proxy TLS via LoadBalancer (Recommended)
+
+The proxy is the external Kafka entrypoint. For TLS in v1.5, terminate TLS at
+the cloud LoadBalancer by supplying Service annotations in the Helm values.
+This keeps broker traffic plaintext inside the cluster while enabling HTTPS/TLS
+for clients.
+
+Example (provider-specific annotations omitted here):
+
+```yaml
+proxy:
+  enabled: true
+  service:
+    type: LoadBalancer
+    port: 9092
+    annotations:
+      # Add your cloud provider TLS annotations here (ACM / GCP / Azure, etc.)
+    loadBalancerSourceRanges:
+      - 203.0.113.0/24
+```
+
+If you need in-cluster ACME/Let’s Encrypt support, document it as an optional
+stack (Traefik or another TCP-capable gateway + cert-manager). Keep it off by
+default to avoid extra operational dependencies.
+
+#### Provider Examples (Verify with your cloud)
+
+These snippets show common patterns; annotation keys vary by provider and
+feature. Always validate against your cloud provider docs.
+
+AWS NLB TLS (example):
+```yaml
+proxy:
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:REGION:ACCOUNT:certificate/ID"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "9092"
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+```
+
+GCP / Azure:
+- L4 LoadBalancers typically do TCP pass-through; TLS termination often requires
+  a provider gateway/ingress (or a TCP-capable ingress controller).
+- If you terminate TLS outside the Service, keep the proxy Service as plain TCP.
 
 ## Ops API Examples
 

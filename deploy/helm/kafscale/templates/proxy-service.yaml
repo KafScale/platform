@@ -21,8 +21,16 @@ metadata:
   labels:
 {{ include "kafscale.labels" . | indent 4 }}
     app.kubernetes.io/component: proxy
+  {{- with .Values.proxy.service.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.proxy.service.type }}
+  {{- if .Values.proxy.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+{{ toYaml .Values.proxy.service.loadBalancerSourceRanges | indent 4 }}
+  {{- end }}
   selector:
 {{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "proxy") | indent 4 }}
   ports:
