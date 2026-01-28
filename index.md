@@ -202,6 +202,11 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
       <a class="button secondary" href="/processors/iceberg/">Deployment guide</a>
     </div>
     <div class="card">
+      <h3>SQL Processor (KAFSQL)</h3>
+      <p>Query KafScale segments with Postgres-compatible SQL. No Flink, no Spark, no complex pipelines. Just SQL against your Kafka data in S3.</p>
+      <a class="button secondary" href="/processors/sql/">Documentation</a>
+    </div>
+    <div class="card">
       <h3>Build your own</h3>
       <p>The .kfs segment format is documented. Build processors for your use case without waiting for vendors or negotiating enterprise contracts.</p>
       <a class="button secondary" href="/storage-format/">Storage format spec</a>
@@ -245,6 +250,6 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 
 <section class="section backers">
   <h2>Backed by</h2>
-  <p>KafScale is developed and maintained with support from <a href="https://scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a> and <a href="https://novatechflow.com" target="_blank" rel="noreferrer">NovaTechflow</a>.</p>
+  <p>KafScale is developed and maintained with support from <a href="https://www.scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a> and <a href="https://www.novatechflow.com" target="_blank" rel="noreferrer">NovaTechflow</a>.</p>
   <p>Apache 2.0 licensed. No CLA required. <a href="https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md">Contributions welcome</a>.</p>
 </section>
