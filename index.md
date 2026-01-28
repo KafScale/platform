@@ -229,7 +229,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     </div>
     <div class="card">
       <h3>Operations</h3>
-      <p>Scaling, backups, monitoring, and production hardening.</p>
+      <p>Deployment, scaling, backups, monitoring, and production hardening.</p>
       <a class="button secondary" href="/operations/">Operations guide</a>
     </div>
   </div>
