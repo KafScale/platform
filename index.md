@@ -11,7 +11,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   Scale streaming and analytics cloud-native on S3. Automated.</p>
   <div class="badge-row">
     <a href="https://github.com/KafScale/platform/stargazers" target="_blank" rel="noreferrer">
-      <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=flat" />
+      <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=flat-square" />
     </a>
     <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
     <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/KafScale/platform" />
@@ -199,7 +199,12 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     <div class="card">
       <h3>Iceberg Processor</h3>
       <p>Reads .kfs segments from S3. Writes Parquet to Iceberg tables. Works with Unity Catalog, Polaris, AWS Glue. Zero broker load.</p>
-      <a class="button secondary" href="/processors/iceberg/">Deployment guide</a>
+      <a class="button secondary" href="/processors/iceberg/">Documentation</a>
+    </div>
+    <div class="card">
+      <h3>SQL Processor (KAFSQL)</h3>
+      <p>Query KafScale segments with Postgres-compatible SQL. No Flink, no Spark, no complex pipelines. Just SQL against your Kafka data in S3.</p>
+      <a class="button secondary" href="/processors/sql/">Documentation</a>
     </div>
     <div class="card">
       <h3>Build your own</h3>
@@ -224,7 +229,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     </div>
     <div class="card">
       <h3>Operations</h3>
-      <p>Scaling, backups, monitoring, and production hardening.</p>
+      <p>Deployment, scaling, backups, monitoring, and production hardening.</p>
       <a class="button secondary" href="/operations/">Operations guide</a>
     </div>
   </div>
@@ -245,6 +250,6 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 
 <section class="section backers">
   <h2>Backed by</h2>
-  <p>KafScale is developed and maintained with support from <a href="https://scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a> and <a href="https://novatechflow.com" target="_blank" rel="noreferrer">NovaTechflow</a>.</p>
+  <p>KafScale is developed and maintained with support from <a href="https://www.scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a> and <a href="https://www.novatechflow.com" target="_blank" rel="noreferrer">NovaTechflow</a>.</p>
   <p>Apache 2.0 licensed. No CLA required. <a href="https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md">Contributions welcome</a>.</p>
 </section>
