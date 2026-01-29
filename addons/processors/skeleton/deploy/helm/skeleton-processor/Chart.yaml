@@ -17,5 +17,5 @@ apiVersion: v2
 name: skeleton-processor
 description: Storage-native processor skeleton for Kafscale segments
 type: application
-version: 0.1.2
-appVersion: "v1.4.2"
+version: 0.1.0
+appVersion: "v1.5.0"

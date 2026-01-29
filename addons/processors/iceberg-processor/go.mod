@@ -3,7 +3,7 @@ module github.com/KafScale/platform/addons/processors/iceberg-processor
 go 1.25.2
 
 require (
-	github.com/KafScale/platform v1.4.2
+	github.com/KafScale/platform v1.5.0
 	github.com/apache/arrow-go/v18 v18.4.1
 	github.com/apache/iceberg-go v0.4.0
 	github.com/aws/aws-sdk-go-v2 v1.41.1

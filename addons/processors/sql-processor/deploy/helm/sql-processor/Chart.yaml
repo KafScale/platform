@@ -17,5 +17,5 @@ apiVersion: v2
 name: sql-processor
 description: SQL processor for querying Kafscale segments in S3
 type: application
-version: 0.1.2
-appVersion: "v1.4.2"
+version: 0.1.0
+appVersion: "v1.5.0"
