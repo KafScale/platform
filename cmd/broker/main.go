@@ -259,41 +259,64 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return protocol.EncodeSyncGroupResponse(resp, header.APIVersion)
 	case *protocol.DescribeGroupsRequest:
 		req := req.(*protocol.DescribeGroupsRequest)
-		if !h.allowGroups(principal, req.Groups, acl.ActionGroupRead) {
-			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, strings.Join(req.Groups, ","))
+		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
+			allowed := make([]string, 0, len(req.Groups))
+			denied := make(map[string]struct{})
+			for _, groupID := range req.Groups {
+				if h.allowGroup(principal, groupID, acl.ActionGroupRead) {
+					allowed = append(allowed, groupID)
+				} else {
+					denied[groupID] = struct{}{}
+					h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, groupID)
+				}
+			}
+
+			responseByGroup := make(map[string]protocol.DescribeGroupsResponseGroup, len(req.Groups))
+			if len(allowed) > 0 {
+				if !h.etcdAvailable() {
+					for _, groupID := range allowed {
+						responseByGroup[groupID] = protocol.DescribeGroupsResponseGroup{
+							ErrorCode: protocol.REQUEST_TIMED_OUT,
+							GroupID:   groupID,
+						}
+					}
+				} else {
+					allowedReq := *req
+					allowedReq.Groups = allowed
+					resp, err := h.coordinator.DescribeGroups(ctx, &allowedReq, header.CorrelationID)
+					if err != nil {
+						return nil, err
+					}
+					for _, group := range resp.Groups {
+						responseByGroup[group.GroupID] = group
+					}
+				}
+			}
+
 			results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
 			for _, groupID := range req.Groups {
-				results = append(results, protocol.DescribeGroupsResponseGroup{
-					ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
-					GroupID:   groupID,
-				})
+				if _, denied := denied[groupID]; denied {
+					results = append(results, protocol.DescribeGroupsResponseGroup{
+						ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+						GroupID:   groupID,
+					})
+					continue
+				}
+				if group, ok := responseByGroup[groupID]; ok {
+					results = append(results, group)
+				} else {
+					results = append(results, protocol.DescribeGroupsResponseGroup{
+						ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
+						GroupID:   groupID,
+					})
+				}
 			}
+
 			return protocol.EncodeDescribeGroupsResponse(&protocol.DescribeGroupsResponse{
 				CorrelationID: header.CorrelationID,
 				ThrottleMs:    0,
 				Groups:        results,
 			}, header.APIVersion)
-		}
-		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			if !h.etcdAvailable() {
-				results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
-				for _, groupID := range req.Groups {
-					results = append(results, protocol.DescribeGroupsResponseGroup{
-						ErrorCode: protocol.REQUEST_TIMED_OUT,
-						GroupID:   groupID,
-					})
-				}
-				return protocol.EncodeDescribeGroupsResponse(&protocol.DescribeGroupsResponse{
-					CorrelationID: header.CorrelationID,
-					ThrottleMs:    0,
-					Groups:        results,
-				}, header.APIVersion)
-			}
-			resp, err := h.coordinator.DescribeGroups(ctx, req, header.CorrelationID)
-			if err != nil {
-				return nil, err
-			}
-			return protocol.EncodeDescribeGroupsResponse(resp, header.APIVersion)
 		})
 	case *protocol.ListGroupsRequest:
 		if !h.allowGroup(principal, "*", acl.ActionGroupRead) {
@@ -493,28 +516,63 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	case *protocol.DeleteGroupsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
 			deleteReq := req.(*protocol.DeleteGroupsRequest)
-			if !h.allowGroups(principal, deleteReq.Groups, acl.ActionGroupAdmin) {
-				return h.unauthorizedDeleteGroups(principal, header, deleteReq)
+			allowed := make([]string, 0, len(deleteReq.Groups))
+			denied := make(map[string]struct{})
+			for _, groupID := range deleteReq.Groups {
+				if h.allowGroup(principal, groupID, acl.ActionGroupAdmin) {
+					allowed = append(allowed, groupID)
+				} else {
+					denied[groupID] = struct{}{}
+					h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupAdmin, acl.ResourceGroup, groupID)
+				}
 			}
-			if !h.etcdAvailable() {
-				results := make([]protocol.DeleteGroupsResponseGroup, 0, len(deleteReq.Groups))
-				for _, groupID := range deleteReq.Groups {
+
+			responseByGroup := make(map[string]protocol.DeleteGroupsResponseGroup, len(deleteReq.Groups))
+			if len(allowed) > 0 {
+				if !h.etcdAvailable() {
+					for _, groupID := range allowed {
+						responseByGroup[groupID] = protocol.DeleteGroupsResponseGroup{
+							Group:     groupID,
+							ErrorCode: protocol.REQUEST_TIMED_OUT,
+						}
+					}
+				} else {
+					allowedReq := *deleteReq
+					allowedReq.Groups = allowed
+					resp, err := h.coordinator.DeleteGroups(ctx, &allowedReq, header.CorrelationID)
+					if err != nil {
+						return nil, err
+					}
+					for _, group := range resp.Groups {
+						responseByGroup[group.Group] = group
+					}
+				}
+			}
+
+			results := make([]protocol.DeleteGroupsResponseGroup, 0, len(deleteReq.Groups))
+			for _, groupID := range deleteReq.Groups {
+				if _, denied := denied[groupID]; denied {
 					results = append(results, protocol.DeleteGroupsResponseGroup{
 						Group:     groupID,
-						ErrorCode: protocol.REQUEST_TIMED_OUT,
+						ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+					})
+					continue
+				}
+				if group, ok := responseByGroup[groupID]; ok {
+					results = append(results, group)
+				} else {
+					results = append(results, protocol.DeleteGroupsResponseGroup{
+						Group:     groupID,
+						ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
 					})
 				}
-				return protocol.EncodeDeleteGroupsResponse(&protocol.DeleteGroupsResponse{
-					CorrelationID: header.CorrelationID,
-					ThrottleMs:    0,
-					Groups:        results,
-				}, header.APIVersion)
 			}
-			resp, err := h.coordinator.DeleteGroups(ctx, deleteReq, header.CorrelationID)
-			if err != nil {
-				return nil, err
-			}
-			return protocol.EncodeDeleteGroupsResponse(resp, header.APIVersion)
+
+			return protocol.EncodeDeleteGroupsResponse(&protocol.DeleteGroupsResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				Groups:        results,
+			}, header.APIVersion)
 		})
 	case *protocol.CreateTopicsRequest:
 		createReq := req.(*protocol.CreateTopicsRequest)

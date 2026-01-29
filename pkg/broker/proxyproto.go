@@ -74,6 +74,9 @@ func parseProxyV1(br *bufio.Reader) (*ProxyInfo, error) {
 		return nil, err
 	}
 	parts := bytes.Fields([]byte(line))
+	if len(parts) >= 2 && bytes.Equal(bytes.ToUpper(parts[1]), []byte("UNKNOWN")) {
+		return &ProxyInfo{Local: true}, nil
+	}
 	if len(parts) < 6 {
 		return nil, fmt.Errorf("proxy v1 header malformed")
 	}

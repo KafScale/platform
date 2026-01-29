@@ -20,8 +20,10 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"net"
 	"testing"
 
+	"github.com/KafScale/platform/pkg/broker"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -149,6 +151,108 @@ func TestACLOffsetFetchDenied(t *testing.T) {
 	}
 	if resp.ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatalf("expected top-level group auth failed, got %d", resp.ErrorCode)
+	}
+}
+
+func TestACLDescribeGroupsMixed(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
+	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"client-a","allow":[{"action":"group_read","resource":"group","name":"group-allowed"}]}]}`)
+
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+
+	clientID := "client-a"
+	req := &protocol.DescribeGroupsRequest{Groups: []string{"group-allowed", "group-denied"}}
+	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 20, APIVersion: 5, ClientID: &clientID}, req)
+	if err != nil {
+		t.Fatalf("Handle DescribeGroups: %v", err)
+	}
+	resp := decodeDescribeGroupsResponse(t, payload, 5)
+	if len(resp.Groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(resp.Groups))
+	}
+	if resp.Groups[0].Group != "group-allowed" || resp.Groups[1].Group != "group-denied" {
+		t.Fatalf("unexpected group order: %+v", resp.Groups)
+	}
+	if resp.Groups[0].ErrorCode == protocol.GROUP_AUTHORIZATION_FAILED {
+		t.Fatalf("expected allowed group not to be auth failed, got %d", resp.Groups[0].ErrorCode)
+	}
+	if resp.Groups[1].ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
+		t.Fatalf("expected denied group auth failed, got %d", resp.Groups[1].ErrorCode)
+	}
+}
+
+func TestACLDeleteGroupsMixed(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
+	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"client-a","allow":[{"action":"group_admin","resource":"group","name":"group-allowed"}]}]}`)
+
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+
+	clientID := "client-a"
+	req := &protocol.DeleteGroupsRequest{Groups: []string{"group-allowed", "group-denied"}}
+	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 21, APIVersion: 2, ClientID: &clientID}, req)
+	if err != nil {
+		t.Fatalf("Handle DeleteGroups: %v", err)
+	}
+	resp := decodeDeleteGroupsResponse(t, payload, 2)
+	if len(resp.Groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(resp.Groups))
+	}
+	if resp.Groups[0].Group != "group-allowed" || resp.Groups[1].Group != "group-denied" {
+		t.Fatalf("unexpected group order: %+v", resp.Groups)
+	}
+	if resp.Groups[0].ErrorCode == protocol.GROUP_AUTHORIZATION_FAILED {
+		t.Fatalf("expected allowed group not to be auth failed, got %d", resp.Groups[0].ErrorCode)
+	}
+	if resp.Groups[1].ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
+		t.Fatalf("expected denied group auth failed, got %d", resp.Groups[1].ErrorCode)
+	}
+}
+
+func TestACLProxyAddrProduceAllowed(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
+	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"10.0.0.1","allow":[{"action":"produce","resource":"topic","name":"orders"}]}]}`)
+	t.Setenv("KAFSCALE_PRINCIPAL_SOURCE", "proxy_addr")
+	t.Setenv("KAFSCALE_PROXY_PROTOCOL", "true")
+
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+
+	conn, peer := net.Pipe()
+	defer conn.Close()
+	defer peer.Close()
+	go func() {
+		_, _ = peer.Write([]byte("PROXY TCP4 10.0.0.1 10.0.0.2 12345 9092\r\n"))
+	}()
+
+	connCtx := buildConnContextFunc(testLogger())
+	_, info, err := connCtx(conn)
+	if err != nil {
+		t.Fatalf("proxy conn context: %v", err)
+	}
+	ctx := broker.ContextWithConnInfo(context.Background(), info)
+
+	clientID := "spoofed-client"
+	req := &protocol.ProduceRequest{
+		Acks:      -1,
+		TimeoutMs: 1000,
+		Topics: []protocol.ProduceTopic{
+			{
+				Name: "orders",
+				Partitions: []protocol.ProducePartition{
+					{Partition: 0, Records: testBatchBytes(0, 0, 1)},
+				},
+			},
+		},
+	}
+	payload, err := handler.handleProduce(ctx, &protocol.RequestHeader{CorrelationID: 22, APIVersion: 0, ClientID: &clientID}, req)
+	if err != nil {
+		t.Fatalf("handleProduce: %v", err)
+	}
+	resp := decodeProduceResponse(t, payload, 0)
+	if resp.Topics[0].Partitions[0].ErrorCode != protocol.NONE {
+		t.Fatalf("expected produce allowed, got %d", resp.Topics[0].Partitions[0].ErrorCode)
 	}
 }
 
@@ -397,6 +501,28 @@ func decodeOffsetFetchResponse(t *testing.T, payload []byte, version int16) *pro
 		if err := binary.Read(reader, binary.BigEndian, &resp.ErrorCode); err != nil {
 			t.Fatalf("read error code: %v", err)
 		}
+	}
+	return resp
+}
+
+func decodeDescribeGroupsResponse(t *testing.T, payload []byte, version int16) *kmsg.DescribeGroupsResponse {
+	t.Helper()
+	reader := bytes.NewReader(payload)
+	var corr int32
+	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
+		t.Fatalf("read correlation id: %v", err)
+	}
+	if version >= 5 {
+		skipTaggedFields(t, reader)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	resp := kmsg.NewPtrDescribeGroupsResponse()
+	resp.Version = version
+	if err := resp.ReadFrom(body); err != nil {
+		t.Fatalf("decode describe groups response: %v", err)
 	}
 	return resp
 }
