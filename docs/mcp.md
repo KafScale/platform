@@ -82,8 +82,8 @@ Mutation tools (future, gated by auth + RBAC):
 
 ## Security and Guardrails
 
-Kafscale v1.5 introduces basic broker ACLs, but MCP remains read-only for security reasons.
-For MCP, we ship secure-by-default to avoid "one prompt away from prod changes".
+Kafscale currently does not enforce auth on broker/admin APIs. For MCP, we
+must ship secure-by-default to avoid "one prompt away from prod changes".
 
 Requirements:
 

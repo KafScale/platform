@@ -33,15 +33,11 @@ type Handler interface {
 
 // Server implements minimal Kafka TCP handling for milestone 1.
 type Server struct {
-	Addr             string
-	Handler          Handler
-	ConnContextFunc  ConnContextFunc
-	listener         net.Listener
-	wg               sync.WaitGroup
+	Addr     string
+	Handler  Handler
+	listener net.Listener
+	wg       sync.WaitGroup
 }
-
-// ConnContextFunc can wrap a connection and attach connection-scoped context data.
-type ConnContextFunc func(conn net.Conn) (net.Conn, *ConnContext, error)
 
 // ListenAndServe starts accepting Kafka protocol connections.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -99,19 +95,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer conn.Close()
-	if s.ConnContextFunc != nil {
-		wrapped, info, err := s.ConnContextFunc(conn)
-		if err != nil {
-			log.Printf("connection context setup failed: %v", err)
-			return
-		}
-		if wrapped != nil {
-			conn = wrapped
-		}
-		if info != nil {
-			ctx = ContextWithConnInfo(ctx, info)
-		}
-	}
 	for {
 		frame, err := protocol.ReadFrame(conn)
 		if err != nil {

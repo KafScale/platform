@@ -229,24 +229,6 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 			Value: cluster.Spec.Config.CacheSize,
 		})
 	}
-	if val := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_ENABLED")); val != "" {
-		env = append(env, corev1.EnvVar{Name: "KAFSCALE_ACL_ENABLED", Value: val})
-	}
-	if val := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_JSON")); val != "" {
-		env = append(env, corev1.EnvVar{Name: "KAFSCALE_ACL_JSON", Value: val})
-	}
-	if val := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_FILE")); val != "" {
-		env = append(env, corev1.EnvVar{Name: "KAFSCALE_ACL_FILE", Value: val})
-	}
-	if val := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_FAIL_OPEN")); val != "" {
-		env = append(env, corev1.EnvVar{Name: "KAFSCALE_ACL_FAIL_OPEN", Value: val})
-	}
-	if val := strings.TrimSpace(os.Getenv("KAFSCALE_PRINCIPAL_SOURCE")); val != "" {
-		env = append(env, corev1.EnvVar{Name: "KAFSCALE_PRINCIPAL_SOURCE", Value: val})
-	}
-	if val := strings.TrimSpace(os.Getenv("KAFSCALE_PROXY_PROTOCOL")); val != "" {
-		env = append(env, corev1.EnvVar{Name: "KAFSCALE_PROXY_PROTOCOL", Value: val})
-	}
 	var envFrom []corev1.EnvFromSource
 	if cluster.Spec.S3.CredentialsSecretRef != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{

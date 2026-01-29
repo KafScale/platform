@@ -44,9 +44,6 @@ coverage*.out
 /test/pkg/
 /test/e2e/logs/
 
-# Local notes
-/notes/
-
 # IDE/editor state
 .idea/
 .vscode/

@@ -77,7 +77,4 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | v2.0 | mTLS | Certificate-based auth |
 | v2.0 | SASL/OAUTHBEARER | Enterprise SSO |
 
-v1.5 focuses on basic broker ACLs with identity derived from `client.id`; terminate TLS at the proxy/LB.
-
-Until SASL lands, Kafscale rejects SASL handshake/auth requests as unsupported
-API keys and closes the connection (no SASL-specific error payload is returned).
+Until auth lands, Kafscale responds to SASL handshake attempts with `UNSUPPORTED_SASL_MECHANISM` (error code 33).
