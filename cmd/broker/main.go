@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/KafScale/platform/pkg/acl"
 	"github.com/KafScale/platform/pkg/broker"
 	"github.com/KafScale/platform/pkg/cache"
 	controlpb "github.com/KafScale/platform/pkg/gen/control"
@@ -85,6 +87,10 @@ type handler struct {
 	flushInterval        time.Duration
 	flushOnAck           bool
 	adminMetrics         *adminMetrics
+	authorizer           *acl.Authorizer
+	authMetrics          *authMetrics
+	authLogMu            sync.Mutex
+	authLogLast          map[string]time.Time
 }
 
 type etcdAvailability interface {
@@ -95,6 +101,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	if h.traceKafka {
 		h.logger.Debug("received request", "api_key", header.APIKey, "api_version", header.APIVersion, "correlation", header.CorrelationID, "client_id", header.ClientID)
 	}
+	principal := principalFromContext(ctx, header)
 	switch req.(type) {
 	case *protocol.ApiVersionsRequest:
 		errorCode := protocol.NONE
@@ -207,6 +214,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion)
 	case *protocol.JoinGroupRequest:
+		req := req.(*protocol.JoinGroupRequest)
+		if !h.allowGroup(principal, req.GroupID, acl.ActionGroupWrite) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.GroupID)
+			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
 				CorrelationID: header.CorrelationID,
@@ -214,12 +230,21 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
-		resp, err := h.coordinator.JoinGroup(ctx, req.(*protocol.JoinGroupRequest), header.CorrelationID)
+		resp, err := h.coordinator.JoinGroup(ctx, req, header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
 		return protocol.EncodeJoinGroupResponse(resp, header.APIVersion)
 	case *protocol.SyncGroupRequest:
+		req := req.(*protocol.SyncGroupRequest)
+		if !h.allowGroup(principal, req.GroupID, acl.ActionGroupWrite) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.GroupID)
+			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
 				CorrelationID: header.CorrelationID,
@@ -227,15 +252,30 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
-		resp, err := h.coordinator.SyncGroup(ctx, req.(*protocol.SyncGroupRequest), header.CorrelationID)
+		resp, err := h.coordinator.SyncGroup(ctx, req, header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
 		return protocol.EncodeSyncGroupResponse(resp, header.APIVersion)
 	case *protocol.DescribeGroupsRequest:
+		req := req.(*protocol.DescribeGroupsRequest)
+		if !h.allowGroups(principal, req.Groups, acl.ActionGroupRead) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, strings.Join(req.Groups, ","))
+			results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
+			for _, groupID := range req.Groups {
+				results = append(results, protocol.DescribeGroupsResponseGroup{
+					ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+					GroupID:   groupID,
+				})
+			}
+			return protocol.EncodeDescribeGroupsResponse(&protocol.DescribeGroupsResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				Groups:        results,
+			}, header.APIVersion)
+		}
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
 			if !h.etcdAvailable() {
-				req := req.(*protocol.DescribeGroupsRequest)
 				results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
 				for _, groupID := range req.Groups {
 					results = append(results, protocol.DescribeGroupsResponseGroup{
@@ -249,13 +289,22 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 					Groups:        results,
 				}, header.APIVersion)
 			}
-			resp, err := h.coordinator.DescribeGroups(ctx, req.(*protocol.DescribeGroupsRequest), header.CorrelationID)
+			resp, err := h.coordinator.DescribeGroups(ctx, req, header.CorrelationID)
 			if err != nil {
 				return nil, err
 			}
 			return protocol.EncodeDescribeGroupsResponse(resp, header.APIVersion)
 		})
 	case *protocol.ListGroupsRequest:
+		if !h.allowGroup(principal, "*", acl.ActionGroupRead) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, "*")
+			return protocol.EncodeListGroupsResponse(&protocol.ListGroupsResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+				Groups:        nil,
+			}, header.APIVersion)
+		}
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
 			if !h.etcdAvailable() {
 				return protocol.EncodeListGroupsResponse(&protocol.ListGroupsResponse{
@@ -272,6 +321,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeListGroupsResponse(resp, header.APIVersion)
 		})
 	case *protocol.HeartbeatRequest:
+		req := req.(*protocol.HeartbeatRequest)
+		if !h.allowGroup(principal, req.GroupID, acl.ActionGroupWrite) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.GroupID)
+			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
 				CorrelationID: header.CorrelationID,
@@ -279,20 +337,50 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
-		resp := h.coordinator.Heartbeat(ctx, req.(*protocol.HeartbeatRequest), header.CorrelationID)
+		resp := h.coordinator.Heartbeat(ctx, req, header.CorrelationID)
 		return protocol.EncodeHeartbeatResponse(resp, header.APIVersion)
 	case *protocol.LeaveGroupRequest:
+		req := req.(*protocol.LeaveGroupRequest)
+		if !h.allowGroup(principal, req.GroupID, acl.ActionGroupWrite) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.GroupID)
+			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			})
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
 				CorrelationID: header.CorrelationID,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			})
 		}
-		resp := h.coordinator.LeaveGroup(ctx, req.(*protocol.LeaveGroupRequest), header.CorrelationID)
+		resp := h.coordinator.LeaveGroup(ctx, req, header.CorrelationID)
 		return protocol.EncodeLeaveGroupResponse(resp)
 	case *protocol.OffsetCommitRequest:
+		req := req.(*protocol.OffsetCommitRequest)
+		if !h.allowGroup(principal, req.GroupID, acl.ActionGroupWrite) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.GroupID)
+			topics := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetCommitPartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+					})
+				}
+				topics = append(topics, protocol.OffsetCommitTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetCommitResponse(&protocol.OffsetCommitResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				Topics:        topics,
+			})
+		}
 		if !h.etcdAvailable() {
-			req := req.(*protocol.OffsetCommitRequest)
 			topics := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
 			for _, topic := range req.Topics {
 				partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
@@ -313,14 +401,39 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				Topics:        topics,
 			})
 		}
-		resp, err := h.coordinator.OffsetCommit(ctx, req.(*protocol.OffsetCommitRequest), header.CorrelationID)
+		resp, err := h.coordinator.OffsetCommit(ctx, req, header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
 		return protocol.EncodeOffsetCommitResponse(resp)
 	case *protocol.OffsetFetchRequest:
+		req := req.(*protocol.OffsetFetchRequest)
+		if !h.allowGroup(principal, req.GroupID, acl.ActionGroupRead) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, req.GroupID)
+			topics := make([]protocol.OffsetFetchTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
+						Partition:   part.Partition,
+						Offset:      -1,
+						LeaderEpoch: -1,
+						ErrorCode:   protocol.GROUP_AUTHORIZATION_FAILED,
+					})
+				}
+				topics = append(topics, protocol.OffsetFetchTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetFetchResponse(&protocol.OffsetFetchResponse{
+				CorrelationID: header.CorrelationID,
+				ThrottleMs:    0,
+				Topics:        topics,
+				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
-			req := req.(*protocol.OffsetFetchRequest)
 			topics := make([]protocol.OffsetFetchTopicResponse, 0, len(req.Topics))
 			for _, topic := range req.Topics {
 				partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
@@ -344,14 +457,18 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
-		resp, err := h.coordinator.OffsetFetch(ctx, req.(*protocol.OffsetFetchRequest), header.CorrelationID)
+		resp, err := h.coordinator.OffsetFetch(ctx, req, header.CorrelationID)
 		if err != nil {
 			return nil, err
 		}
 		return protocol.EncodeOffsetFetchResponse(resp, header.APIVersion)
 	case *protocol.OffsetForLeaderEpochRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			return h.handleOffsetForLeaderEpoch(ctx, header, req.(*protocol.OffsetForLeaderEpochRequest))
+			offsetReq := req.(*protocol.OffsetForLeaderEpochRequest)
+			if !h.allowTopics(principal, topicsFromOffsetForLeaderEpoch(offsetReq), acl.ActionFetch) {
+				return h.unauthorizedOffsetForLeaderEpoch(principal, header, offsetReq)
+			}
+			return h.handleOffsetForLeaderEpoch(ctx, header, offsetReq)
 		})
 	case *protocol.DescribeConfigsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
@@ -359,18 +476,29 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *protocol.AlterConfigsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			return h.handleAlterConfigs(ctx, header, req.(*protocol.AlterConfigsRequest))
+			alterReq := req.(*protocol.AlterConfigsRequest)
+			if !h.allowAdmin(principal) {
+				return h.unauthorizedAlterConfigs(principal, header, alterReq)
+			}
+			return h.handleAlterConfigs(ctx, header, alterReq)
 		})
 	case *protocol.CreatePartitionsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			return h.handleCreatePartitions(ctx, header, req.(*protocol.CreatePartitionsRequest))
+			createReq := req.(*protocol.CreatePartitionsRequest)
+			if !h.allowAdmin(principal) {
+				return h.unauthorizedCreatePartitions(principal, header, createReq)
+			}
+			return h.handleCreatePartitions(ctx, header, createReq)
 		})
 	case *protocol.DeleteGroupsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
+			deleteReq := req.(*protocol.DeleteGroupsRequest)
+			if !h.allowGroups(principal, deleteReq.Groups, acl.ActionGroupAdmin) {
+				return h.unauthorizedDeleteGroups(principal, header, deleteReq)
+			}
 			if !h.etcdAvailable() {
-				req := req.(*protocol.DeleteGroupsRequest)
-				results := make([]protocol.DeleteGroupsResponseGroup, 0, len(req.Groups))
-				for _, groupID := range req.Groups {
+				results := make([]protocol.DeleteGroupsResponseGroup, 0, len(deleteReq.Groups))
+				for _, groupID := range deleteReq.Groups {
 					results = append(results, protocol.DeleteGroupsResponseGroup{
 						Group:     groupID,
 						ErrorCode: protocol.REQUEST_TIMED_OUT,
@@ -382,18 +510,30 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 					Groups:        results,
 				}, header.APIVersion)
 			}
-			resp, err := h.coordinator.DeleteGroups(ctx, req.(*protocol.DeleteGroupsRequest), header.CorrelationID)
+			resp, err := h.coordinator.DeleteGroups(ctx, deleteReq, header.CorrelationID)
 			if err != nil {
 				return nil, err
 			}
 			return protocol.EncodeDeleteGroupsResponse(resp, header.APIVersion)
 		})
 	case *protocol.CreateTopicsRequest:
-		return h.handleCreateTopics(ctx, header, req.(*protocol.CreateTopicsRequest))
+		createReq := req.(*protocol.CreateTopicsRequest)
+		if !h.allowAdmin(principal) {
+			return h.unauthorizedCreateTopics(principal, header, createReq)
+		}
+		return h.handleCreateTopics(ctx, header, createReq)
 	case *protocol.DeleteTopicsRequest:
-		return h.handleDeleteTopics(ctx, header, req.(*protocol.DeleteTopicsRequest))
+		deleteReq := req.(*protocol.DeleteTopicsRequest)
+		if !h.allowAdmin(principal) {
+			return h.unauthorizedDeleteTopics(principal, header, deleteReq)
+		}
+		return h.handleDeleteTopics(ctx, header, deleteReq)
 	case *protocol.ListOffsetsRequest:
-		return h.handleListOffsets(ctx, header, req.(*protocol.ListOffsetsRequest))
+		listReq := req.(*protocol.ListOffsetsRequest)
+		if !h.allowTopics(principal, topicsFromListOffsets(listReq), acl.ActionFetch) {
+			return h.unauthorizedListOffsets(principal, header, listReq)
+		}
+		return h.handleListOffsets(ctx, header, listReq)
 	default:
 		return nil, ErrUnsupportedAPI
 	}
@@ -471,6 +611,7 @@ func (h *handler) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	h.writeRuntimeMetrics(w)
 	h.adminMetrics.writePrometheus(w)
+	h.authMetrics.writePrometheus(w)
 }
 
 func (h *handler) recordS3Op(op string, latency time.Duration, err error) {
@@ -487,11 +628,268 @@ func (h *handler) recordProduceLatency(latency time.Duration) {
 	h.produceLatency.Observe(float64(latency.Milliseconds()))
 }
 
+func (h *handler) recordAuthzDenied(action acl.Action, resource acl.Resource) {
+	if h.authMetrics == nil {
+		return
+	}
+	h.authMetrics.RecordDenied(action, resource)
+}
+
+func (h *handler) recordAuthzDeniedWithPrincipal(principal string, action acl.Action, resource acl.Resource, name string) {
+	h.recordAuthzDenied(action, resource)
+	h.logAuthzDenied(principal, action, resource, name)
+}
+
+func (h *handler) logAuthzDenied(principal string, action acl.Action, resource acl.Resource, name string) {
+	if h == nil || h.logger == nil {
+		return
+	}
+	key := fmt.Sprintf("%s|%s|%s|%s", action, resource, principal, name)
+	now := time.Now()
+	h.authLogMu.Lock()
+	if len(h.authLogLast) > 10000 {
+		h.authLogLast = make(map[string]time.Time)
+	}
+	last := h.authLogLast[key]
+	if now.Sub(last) < time.Minute {
+		h.authLogMu.Unlock()
+		return
+	}
+	h.authLogLast[key] = now
+	h.authLogMu.Unlock()
+	h.logger.Warn("authorization denied", "principal", principal, "action", action, "resource", resource, "name", name)
+}
+
 func (h *handler) withAdminMetrics(apiKey int16, fn func() ([]byte, error)) ([]byte, error) {
 	start := time.Now()
 	payload, err := fn()
 	h.adminMetrics.Record(apiKey, time.Since(start), err)
 	return payload, err
+}
+
+func principalFromContext(ctx context.Context, header *protocol.RequestHeader) string {
+	if info := broker.ConnInfoFromContext(ctx); info != nil {
+		if strings.TrimSpace(info.Principal) != "" {
+			return strings.TrimSpace(info.Principal)
+		}
+	}
+	if header == nil || header.ClientID == nil {
+		return "anonymous"
+	}
+	if strings.TrimSpace(*header.ClientID) == "" {
+		return "anonymous"
+	}
+	return *header.ClientID
+}
+
+func (h *handler) allowTopic(principal string, topic string, action acl.Action) bool {
+	if h.authorizer == nil || !h.authorizer.Enabled() {
+		return true
+	}
+	return h.authorizer.Allows(principal, action, acl.ResourceTopic, topic)
+}
+
+func (h *handler) allowTopics(principal string, topics []string, action acl.Action) bool {
+	for _, topic := range topics {
+		if !h.allowTopic(principal, topic, action) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *handler) allowGroup(principal string, group string, action acl.Action) bool {
+	if h.authorizer == nil || !h.authorizer.Enabled() {
+		return true
+	}
+	return h.authorizer.Allows(principal, action, acl.ResourceGroup, group)
+}
+
+func (h *handler) allowGroups(principal string, groups []string, action acl.Action) bool {
+	for _, group := range groups {
+		if !h.allowGroup(principal, group, action) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *handler) allowCluster(principal string, action acl.Action) bool {
+	if h.authorizer == nil || !h.authorizer.Enabled() {
+		return true
+	}
+	return h.authorizer.Allows(principal, action, acl.ResourceCluster, "cluster")
+}
+
+func (h *handler) allowAdmin(principal string) bool {
+	return h.allowCluster(principal, acl.ActionAdmin)
+}
+
+func topicsFromListOffsets(req *protocol.ListOffsetsRequest) []string {
+	topics := make([]string, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		topics = append(topics, topic.Name)
+	}
+	return topics
+}
+
+func topicsFromOffsetForLeaderEpoch(req *protocol.OffsetForLeaderEpochRequest) []string {
+	topics := make([]string, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		topics = append(topics, topic.Name)
+	}
+	return topics
+}
+
+func topicsFromCreateTopics(req *protocol.CreateTopicsRequest) []string {
+	topics := make([]string, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		topics = append(topics, topic.Name)
+	}
+	return topics
+}
+
+func topicsFromCreatePartitions(req *protocol.CreatePartitionsRequest) []string {
+	topics := make([]string, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		topics = append(topics, topic.Name)
+	}
+	return topics
+}
+
+func (h *handler) unauthorizedOffsetForLeaderEpoch(principal string, header *protocol.RequestHeader, req *protocol.OffsetForLeaderEpochRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionFetch, acl.ResourceTopic, strings.Join(topicsFromOffsetForLeaderEpoch(req), ","))
+	respTopics := make([]protocol.OffsetForLeaderEpochTopicResponse, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		partitions := make([]protocol.OffsetForLeaderEpochPartitionResponse, 0, len(topic.Partitions))
+		for _, part := range topic.Partitions {
+			partitions = append(partitions, protocol.OffsetForLeaderEpochPartitionResponse{
+				Partition:   part.Partition,
+				ErrorCode:   protocol.TOPIC_AUTHORIZATION_FAILED,
+				LeaderEpoch: -1,
+				EndOffset:   -1,
+			})
+		}
+		respTopics = append(respTopics, protocol.OffsetForLeaderEpochTopicResponse{
+			Name:       topic.Name,
+			Partitions: partitions,
+		})
+	}
+	return protocol.EncodeOffsetForLeaderEpochResponse(&protocol.OffsetForLeaderEpochResponse{
+		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
+		Topics:        respTopics,
+	}, header.APIVersion)
+}
+
+func (h *handler) unauthorizedAlterConfigs(principal string, header *protocol.RequestHeader, req *protocol.AlterConfigsRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionAdmin, acl.ResourceCluster, "cluster")
+	resources := make([]protocol.AlterConfigsResponseResource, 0, len(req.Resources))
+	for _, resource := range req.Resources {
+		errorCode := protocol.CLUSTER_AUTHORIZATION_FAILED
+		if resource.ResourceType == protocol.ConfigResourceTopic {
+			errorCode = protocol.TOPIC_AUTHORIZATION_FAILED
+		}
+		resources = append(resources, protocol.AlterConfigsResponseResource{
+			ErrorCode:    errorCode,
+			ResourceType: resource.ResourceType,
+			ResourceName: resource.ResourceName,
+		})
+	}
+	return protocol.EncodeAlterConfigsResponse(&protocol.AlterConfigsResponse{
+		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
+		Resources:     resources,
+	}, header.APIVersion)
+}
+
+func (h *handler) unauthorizedCreatePartitions(principal string, header *protocol.RequestHeader, req *protocol.CreatePartitionsRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionAdmin, acl.ResourceTopic, strings.Join(topicsFromCreatePartitions(req), ","))
+	results := make([]protocol.CreatePartitionsResponseTopic, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		results = append(results, protocol.CreatePartitionsResponseTopic{
+			Name:      topic.Name,
+			ErrorCode: protocol.TOPIC_AUTHORIZATION_FAILED,
+		})
+	}
+	return protocol.EncodeCreatePartitionsResponse(&protocol.CreatePartitionsResponse{
+		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
+		Topics:        results,
+	}, header.APIVersion)
+}
+
+func (h *handler) unauthorizedDeleteGroups(principal string, header *protocol.RequestHeader, req *protocol.DeleteGroupsRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupAdmin, acl.ResourceGroup, strings.Join(req.Groups, ","))
+	results := make([]protocol.DeleteGroupsResponseGroup, 0, len(req.Groups))
+	for _, groupID := range req.Groups {
+		results = append(results, protocol.DeleteGroupsResponseGroup{
+			Group:     groupID,
+			ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+		})
+	}
+	return protocol.EncodeDeleteGroupsResponse(&protocol.DeleteGroupsResponse{
+		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
+		Groups:        results,
+	}, header.APIVersion)
+}
+
+func (h *handler) unauthorizedCreateTopics(principal string, header *protocol.RequestHeader, req *protocol.CreateTopicsRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionAdmin, acl.ResourceTopic, strings.Join(topicsFromCreateTopics(req), ","))
+	results := make([]protocol.CreateTopicResult, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		results = append(results, protocol.CreateTopicResult{
+			Name:         topic.Name,
+			ErrorCode:    protocol.TOPIC_AUTHORIZATION_FAILED,
+			ErrorMessage: "unauthorized",
+		})
+	}
+	return protocol.EncodeCreateTopicsResponse(&protocol.CreateTopicsResponse{
+		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
+		Topics:        results,
+	}, header.APIVersion)
+}
+
+func (h *handler) unauthorizedDeleteTopics(principal string, header *protocol.RequestHeader, req *protocol.DeleteTopicsRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionAdmin, acl.ResourceTopic, strings.Join(req.TopicNames, ","))
+	results := make([]protocol.DeleteTopicResult, 0, len(req.TopicNames))
+	for _, name := range req.TopicNames {
+		results = append(results, protocol.DeleteTopicResult{
+			Name:         name,
+			ErrorCode:    protocol.TOPIC_AUTHORIZATION_FAILED,
+			ErrorMessage: "unauthorized",
+		})
+	}
+	return protocol.EncodeDeleteTopicsResponse(&protocol.DeleteTopicsResponse{
+		CorrelationID: header.CorrelationID,
+		ThrottleMs:    0,
+		Topics:        results,
+	}, header.APIVersion)
+}
+
+func (h *handler) unauthorizedListOffsets(principal string, header *protocol.RequestHeader, req *protocol.ListOffsetsRequest) ([]byte, error) {
+	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionFetch, acl.ResourceTopic, strings.Join(topicsFromListOffsets(req), ","))
+	topicResponses := make([]protocol.ListOffsetsTopicResponse, 0, len(req.Topics))
+	for _, topic := range req.Topics {
+		partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
+		for _, part := range topic.Partitions {
+			partitions = append(partitions, protocol.ListOffsetsPartitionResponse{
+				Partition:   part.Partition,
+				ErrorCode:   protocol.TOPIC_AUTHORIZATION_FAILED,
+				LeaderEpoch: -1,
+			})
+		}
+		topicResponses = append(topicResponses, protocol.ListOffsetsTopicResponse{
+			Name:       topic.Name,
+			Partitions: partitions,
+		})
+	}
+	return protocol.EncodeListOffsetsResponse(header.APIVersion, &protocol.ListOffsetsResponse{
+		CorrelationID: header.CorrelationID,
+		Topics:        topicResponses,
+	})
 }
 
 func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHeader, req *protocol.ProduceRequest) ([]byte, error) {
@@ -502,12 +900,27 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	topicResponses := make([]protocol.ProduceTopicResponse, 0, len(req.Topics))
 	now := time.Now().UnixMilli()
 	var producedMessages int64
+	principal := principalFromContext(ctx, header)
 
 	for _, topic := range req.Topics {
 		if h.traceKafka {
 			h.logger.Debug("produce request received", "topic", topic.Name, "partitions", len(topic.Partitions), "acks", req.Acks, "timeout_ms", req.TimeoutMs)
 		}
 		partitionResponses := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
+		if !h.allowTopic(principal, topic.Name, acl.ActionProduce) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionProduce, acl.ResourceTopic, topic.Name)
+			for _, part := range topic.Partitions {
+				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: protocol.TOPIC_AUTHORIZATION_FAILED,
+				})
+			}
+			topicResponses = append(topicResponses, protocol.ProduceTopicResponse{
+				Name:       topic.Name,
+				Partitions: partitionResponses,
+			})
+			continue
+		}
 		for _, part := range topic.Partitions {
 			if !h.etcdAvailable() {
 				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
@@ -852,9 +1265,19 @@ func (h *handler) handleOffsetForLeaderEpoch(ctx context.Context, header *protoc
 
 func (h *handler) handleDescribeConfigs(ctx context.Context, header *protocol.RequestHeader, req *protocol.DescribeConfigsRequest) ([]byte, error) {
 	resources := make([]protocol.DescribeConfigsResponseResource, 0, len(req.Resources))
+	principal := principalFromContext(ctx, header)
 	for _, resource := range req.Resources {
 		switch resource.ResourceType {
 		case protocol.ConfigResourceTopic:
+			if !h.allowTopic(principal, resource.ResourceName, acl.ActionFetch) {
+				h.recordAuthzDeniedWithPrincipal(principal, acl.ActionFetch, acl.ResourceTopic, resource.ResourceName)
+				resources = append(resources, protocol.DescribeConfigsResponseResource{
+					ErrorCode:    protocol.TOPIC_AUTHORIZATION_FAILED,
+					ResourceType: resource.ResourceType,
+					ResourceName: resource.ResourceName,
+				})
+				continue
+			}
 			cfg, err := h.store.FetchTopicConfig(ctx, resource.ResourceName)
 			if err != nil {
 				resources = append(resources, protocol.DescribeConfigsResponseResource{
@@ -872,6 +1295,15 @@ func (h *handler) handleDescribeConfigs(ctx context.Context, header *protocol.Re
 				Configs:      configs,
 			})
 		case protocol.ConfigResourceBroker:
+			if !h.allowAdmin(principal) {
+				h.recordAuthzDeniedWithPrincipal(principal, acl.ActionAdmin, acl.ResourceCluster, "cluster")
+				resources = append(resources, protocol.DescribeConfigsResponseResource{
+					ErrorCode:    protocol.CLUSTER_AUTHORIZATION_FAILED,
+					ResourceType: resource.ResourceType,
+					ResourceName: resource.ResourceName,
+				})
+				continue
+			}
 			configs := h.brokerConfigEntries(resource.ConfigNames)
 			resources = append(resources, protocol.DescribeConfigsResponseResource{
 				ErrorCode:    protocol.NONE,
@@ -880,6 +1312,15 @@ func (h *handler) handleDescribeConfigs(ctx context.Context, header *protocol.Re
 				Configs:      configs,
 			})
 		default:
+			if !h.allowAdmin(principal) {
+				h.recordAuthzDeniedWithPrincipal(principal, acl.ActionAdmin, acl.ResourceCluster, "cluster")
+				resources = append(resources, protocol.DescribeConfigsResponseResource{
+					ErrorCode:    protocol.CLUSTER_AUTHORIZATION_FAILED,
+					ResourceType: resource.ResourceType,
+					ResourceName: resource.ResourceName,
+				})
+				continue
+			}
 			resources = append(resources, protocol.DescribeConfigsResponseResource{
 				ErrorCode:    protocol.INVALID_REQUEST,
 				ResourceType: resource.ResourceType,
@@ -1231,6 +1672,7 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 	var fetchedMessages int64
 	zeroID := [16]byte{}
 	idToName := map[[16]byte]string{}
+	principal := principalFromContext(ctx, header)
 	for _, topic := range req.Topics {
 		if topic.TopicID != zeroID {
 			meta, err := h.store.Metadata(ctx, nil)
@@ -1264,6 +1706,22 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 				})
 				continue
 			}
+		}
+		if !h.allowTopic(principal, topicName, acl.ActionFetch) {
+			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionFetch, acl.ResourceTopic, topicName)
+			partitionResponses := make([]protocol.FetchPartitionResponse, 0, len(topic.Partitions))
+			for _, part := range topic.Partitions {
+				partitionResponses = append(partitionResponses, protocol.FetchPartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: protocol.TOPIC_AUTHORIZATION_FAILED,
+				})
+			}
+			topicResponses = append(topicResponses, protocol.FetchTopicResponse{
+				Name:       topicName,
+				TopicID:    topic.TopicID,
+				Partitions: partitionResponses,
+			})
+			continue
 		}
 		partitionResponses := make([]protocol.FetchPartitionResponse, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
@@ -1497,6 +1955,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		autoPartitions = 1
 	}
 	health := broker.NewS3HealthMonitor(s3HealthConfigFromEnv())
+	authorizer := buildAuthorizerFromEnv(logger)
 	return &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
@@ -1535,6 +1994,9 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		flushInterval:        flushInterval,
 		flushOnAck:           flushOnAck,
 		adminMetrics:         newAdminMetrics(),
+		authorizer:           authorizer,
+		authMetrics:          newAuthMetrics(),
+		authLogLast:          make(map[string]time.Time),
 	}
 }
 
@@ -1602,8 +2064,9 @@ func main() {
 	startControlServer(ctx, controlAddr, handler, logger)
 	kafkaAddr := envOrDefault("KAFSCALE_BROKER_ADDR", defaultKafkaAddr)
 	srv := &broker.Server{
-		Addr:    kafkaAddr,
-		Handler: handler,
+		Addr:            kafkaAddr,
+		Handler:         handler,
+		ConnContextFunc: buildConnContextFunc(logger),
 	}
 	if err := srv.ListenAndServe(ctx); err != nil {
 		logger.Error("broker server error", "error", err)
@@ -1698,6 +2161,134 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 		KMSKeyARN:       kmsARN,
 	}
 	return writeCfg, readCfg, false, usingDefaultMinio, credsProvided, useReadReplica
+}
+
+func buildConnContextFunc(logger *slog.Logger) broker.ConnContextFunc {
+	source := strings.TrimSpace(os.Getenv("KAFSCALE_PRINCIPAL_SOURCE"))
+	if source == "" {
+		source = "client_id"
+	}
+	proxyProtocol := parseEnvBool("KAFSCALE_PROXY_PROTOCOL", false)
+	if strings.EqualFold(source, "proxy_addr") {
+		proxyProtocol = true
+	}
+	if strings.EqualFold(source, "client_id") && !proxyProtocol {
+		if parseEnvBool("KAFSCALE_ACL_ENABLED", false) {
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Warn("ACL enabled with client_id principal source; client.id is spoofable without trusted edge auth")
+		}
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if parseEnvBool("KAFSCALE_ACL_ENABLED", false) && strings.EqualFold(source, "client_id") {
+		logger.Warn("ACL enabled with client_id principal source; client.id is spoofable without trusted edge auth")
+	}
+	if proxyProtocol && strings.EqualFold(source, "client_id") {
+		logger.Warn("proxy protocol enabled but principal source remains client_id; proxy identity is unused")
+	}
+	return func(conn net.Conn) (net.Conn, *broker.ConnContext, error) {
+		info := &broker.ConnContext{}
+		var proxyInfo *broker.ProxyInfo
+		if proxyProtocol {
+			wrapped, parsed, err := broker.ReadProxyProtocol(conn)
+			if err != nil {
+				logger.Warn("proxy protocol parse failed", "error", err)
+				return conn, nil, err
+			}
+			if parsed == nil {
+				return conn, nil, fmt.Errorf("proxy protocol required but header missing")
+			}
+			if parsed.Local {
+				logger.Warn("proxy protocol local command received; using socket remote addr")
+			}
+			if wrapped != nil {
+				conn = wrapped
+			}
+			proxyInfo = parsed
+			if proxyInfo != nil {
+				if !proxyInfo.Local && proxyInfo.SourceAddr != "" {
+					info.ProxyAddr = proxyInfo.SourceAddr
+					info.RemoteAddr = proxyInfo.SourceAddr
+				}
+			}
+		}
+		if info.RemoteAddr == "" {
+			info.RemoteAddr = conn.RemoteAddr().String()
+		}
+		switch strings.ToLower(source) {
+		case "remote_addr":
+			info.Principal = hostFromAddr(info.RemoteAddr)
+		case "proxy_addr":
+			if proxyInfo != nil && proxyInfo.SourceAddr != "" {
+				info.Principal = hostFromAddr(proxyInfo.SourceAddr)
+			} else {
+				info.Principal = hostFromAddr(info.RemoteAddr)
+			}
+		case "client_id":
+			// Default; use client.id from the Kafka request header.
+		default:
+			logger.Warn("unknown principal source; defaulting to client_id", "source", source)
+		}
+		return conn, info, nil
+	}
+}
+
+func hostFromAddr(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
+func buildAuthorizerFromEnv(logger *slog.Logger) *acl.Authorizer {
+	if !parseEnvBool("KAFSCALE_ACL_ENABLED", false) {
+		return acl.NewAuthorizer(acl.Config{Enabled: false})
+	}
+	failOpen := parseEnvBool("KAFSCALE_ACL_FAIL_OPEN", false)
+	if logger == nil {
+		logger = slog.Default()
+	}
+	var raw []byte
+	if inline := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_JSON")); inline != "" {
+		raw = []byte(inline)
+	} else if path := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_FILE")); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if failOpen {
+				logger.Warn("failed to read ACL file; ACL disabled", "error", err)
+				return acl.NewAuthorizer(acl.Config{Enabled: false})
+			}
+			logger.Warn("failed to read ACL file; default deny enabled", "error", err)
+			return acl.NewAuthorizer(acl.Config{Enabled: true, DefaultPolicy: "deny"})
+		}
+		raw = data
+	} else {
+		if failOpen {
+			logger.Warn("ACL enabled but no config provided; ACL disabled")
+			return acl.NewAuthorizer(acl.Config{Enabled: false})
+		}
+		logger.Warn("ACL enabled but no config provided; default deny enabled")
+		return acl.NewAuthorizer(acl.Config{Enabled: true, DefaultPolicy: "deny"})
+	}
+	var cfg acl.Config
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		if failOpen {
+			logger.Warn("failed to parse ACL config; ACL disabled", "error", err)
+			return acl.NewAuthorizer(acl.Config{Enabled: false})
+		}
+		logger.Warn("failed to parse ACL config; default deny enabled", "error", err)
+		return acl.NewAuthorizer(acl.Config{Enabled: true, DefaultPolicy: "deny"})
+	}
+	cfg.Enabled = true
+	return acl.NewAuthorizer(cfg)
 }
 
 func s3HealthConfigFromEnv() broker.S3HealthConfig {

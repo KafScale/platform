@@ -44,6 +44,14 @@ operator:
   etcdEndpoints:
     - "http://etcd:2379"
   leaderKey: "kafscale-operator"
+  acl:
+    enabled: false
+    configJson: ""
+    configFile: ""
+    failOpen: false
+  auth:
+    principalSource: ""
+    proxyProtocol: false
   podAnnotations: {}
   resources: {}
   nodeSelector: {}
@@ -127,6 +135,8 @@ proxy:
   service:
     type: LoadBalancer
     port: 9092
+    annotations: {}
+    loadBalancerSourceRanges: []
 
 mcp:
   enabled: false
