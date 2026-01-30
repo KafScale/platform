@@ -19,5 +19,5 @@ description: Helm chart for the Kafscale operator and console
 home: https://github.com/KafScale/platform
 icon: https://raw.githubusercontent.com/KafScale/platform/main/docs/assets/icon.png
 type: application
-version: 0.3.2
-appVersion: "v1.4.2"
+version: 0.4.0
+appVersion: "v1.5.0"

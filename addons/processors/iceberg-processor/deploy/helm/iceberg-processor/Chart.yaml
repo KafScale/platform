@@ -17,5 +17,5 @@ apiVersion: v2
 name: iceberg-processor
 description: Storage-native Iceberg processor for Kafscale segments
 type: application
-version: 0.1.2
-appVersion: "v1.4.2"
+version: 0.1.0
+appVersion: "v1.5.0"
