@@ -84,3 +84,6 @@ proto/**/*.swagger.json
 _site/
 Gemfile
 Gemfile.lock
+
+# Ignore demo node_modules
+examples/E50_JS-kafscale-demo/node_modules/
