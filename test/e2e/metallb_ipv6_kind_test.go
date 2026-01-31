@@ -20,7 +20,6 @@ package e2e
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,8 +65,9 @@ func TestDemoPlatformMetallbIPv6(t *testing.T) {
 		t.Skipf("kind network is not IPv6 (subnet=%q)", subnet)
 	}
 
-	scriptPath := filepath.Join(repoRoot(t), "scripts", "demo-platform.sh")
-	if err := execCommand(ctx, "bash", scriptPath, "metallb"); err != nil {
+	repo := repoRoot(t)
+	cmd := "cd " + repo + " && scripts/demo-platform.sh metallb"
+	if err := execCommand(ctx, "bash", "-lc", cmd); err != nil {
 		t.Fatalf("apply metallb config: %v", err)
 	}
 
