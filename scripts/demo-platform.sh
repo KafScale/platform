@@ -238,11 +238,16 @@ elif [[ "$MODE" == "metallb" ]]; then
 		base="${subnet%%/*}"
 		mask="${subnet##*/}"
 		if [[ -n "$base" ]]; then
-			IFS='.' read -r o1 o2 o3 o4 <<<"$base"
-			if [[ "${mask:-24}" -le 16 ]]; then
-				KAFSCALE_METALLB_RANGE="${o1}.${o2}.255.200-${o1}.${o2}.255.250"
+			if [[ "$base" == *:* ]]; then
+				# IPv6 subnet: use the full CIDR to avoid invalid IPv4-style ranges.
+				KAFSCALE_METALLB_RANGE="${subnet}"
 			else
-				KAFSCALE_METALLB_RANGE="${o1}.${o2}.${o3}.200-${o1}.${o2}.${o3}.250"
+				IFS='.' read -r o1 o2 o3 o4 <<<"$base"
+				if [[ "${mask:-24}" -le 16 ]]; then
+					KAFSCALE_METALLB_RANGE="${o1}.${o2}.255.200-${o1}.${o2}.255.250"
+				else
+					KAFSCALE_METALLB_RANGE="${o1}.${o2}.${o3}.200-${o1}.${o2}.${o3}.250"
+				fi
 			fi
 		else
 			KAFSCALE_METALLB_RANGE="172.18.255.200-172.18.255.250"

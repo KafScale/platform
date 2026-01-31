@@ -555,6 +555,23 @@ demo: release-broker-ports ensure-minio ## Launch the broker + console demo stac
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
 	go test -count=1 -tags=e2e ./test/e2e -run TestDemoStack -v
 
+demo-long: release-broker-ports ensure-minio ## Launch the broker + console demo stack without test timeout (Ctrl-C to stop).
+	KAFSCALE_E2E=1 \
+	KAFSCALE_E2E_DEMO=1 \
+	KAFSCALE_E2E_OPEN_UI=1 \
+	KAFSCALE_UI_USERNAME=kafscaleadmin \
+	KAFSCALE_UI_PASSWORD=kafscale \
+	KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics \
+	KAFSCALE_CONSOLE_OPERATOR_METRICS_URL=http://127.0.0.1:8080/metrics \
+	KAFSCALE_S3_BUCKET=$(MINIO_BUCKET) \
+	KAFSCALE_S3_REGION=$(MINIO_REGION) \
+	KAFSCALE_S3_NAMESPACE=default \
+	KAFSCALE_S3_ENDPOINT=http://127.0.0.1:$(MINIO_PORT) \
+	KAFSCALE_S3_PATH_STYLE=true \
+	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
+	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
+	go test -count=1 -timeout 0 -tags=e2e ./test/e2e -run TestDemoStack -v
+
 tidy:
 	go mod tidy
 
