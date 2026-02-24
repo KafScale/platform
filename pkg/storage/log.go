@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/pkg/cache"
+	"golang.org/x/sync/errgroup"
 )
 
 // PartitionLogConfig configures per-partition log behavior.
@@ -242,21 +243,25 @@ func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error
 	segmentKey := l.segmentKey(artifact.BaseOffset)
 	indexKey := l.indexKey(artifact.BaseOffset)
 
-	start := time.Now()
-	uploadErr := l.s3.UploadSegment(ctx, segmentKey, artifact.SegmentBytes)
-	if l.onS3Op != nil {
-		l.onS3Op("upload_segment", time.Since(start), uploadErr)
-	}
-	if uploadErr != nil {
-		return nil, uploadErr
-	}
-	start = time.Now()
-	uploadErr = l.s3.UploadIndex(ctx, indexKey, artifact.IndexBytes)
-	if l.onS3Op != nil {
-		l.onS3Op("upload_index", time.Since(start), uploadErr)
-	}
-	if uploadErr != nil {
-		return nil, uploadErr
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		start := time.Now()
+		err := l.s3.UploadSegment(gctx, segmentKey, artifact.SegmentBytes)
+		if l.onS3Op != nil {
+			l.onS3Op("upload_segment", time.Since(start), err)
+		}
+		return err
+	})
+	g.Go(func() error {
+		start := time.Now()
+		err := l.s3.UploadIndex(gctx, indexKey, artifact.IndexBytes)
+		if l.onS3Op != nil {
+			l.onS3Op("upload_index", time.Since(start), err)
+		}
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	if l.cache != nil && l.cfg.CacheEnabled {
 		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
