@@ -55,7 +55,7 @@ type PartitionLog struct {
 	indexEntries map[int64][]*IndexEntry
 	prefetchMu   sync.Mutex
 	mu           sync.Mutex
-	flushCond    *sync.Cond // signalled when an in-flight flush completes
+	flushCond    *sync.Cond
 	s3sem        *semaphore.Weighted
 	flushing     bool
 }
@@ -70,9 +70,6 @@ type segmentRange struct {
 var ErrOffsetOutOfRange = errors.New("offset out of range")
 
 // NewPartitionLog constructs a log for a topic partition.
-// The sem parameter is an optional shared semaphore that limits concurrent S3
-// operations across all partitions on a broker. Pass nil to leave S3
-// concurrency unbounded (backwards-compatible).
 func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
 	if namespace == "" {
 		namespace = "default"
@@ -105,9 +102,6 @@ func (l *PartitionLog) acquireS3(ctx context.Context) error {
 	return l.s3sem.Acquire(ctx, 1)
 }
 
-// tryAcquireS3 attempts to acquire a semaphore token without blocking.
-// Returns true if acquired, false if the semaphore is full. Always returns
-// true when no semaphore is configured.
 func (l *PartitionLog) tryAcquireS3() bool {
 	if l.s3sem == nil {
 		return true
@@ -115,7 +109,6 @@ func (l *PartitionLog) tryAcquireS3() bool {
 	return l.s3sem.TryAcquire(1)
 }
 
-// releaseS3 releases a semaphore token. No-op when no semaphore is configured.
 func (l *PartitionLog) releaseS3() {
 	if l.s3sem != nil {
 		l.s3sem.Release(1)
@@ -266,9 +259,7 @@ func (l *PartitionLog) EarliestOffset() int64 {
 // it to complete and then flushes any data that accumulated in the meantime.
 func (l *PartitionLog) Flush(ctx context.Context) error {
 	l.mu.Lock()
-	// Wait for any in-flight flush to finish before draining.
 	for l.flushing {
-		// Check context so we don't wait forever.
 		if ctx.Err() != nil {
 			l.mu.Unlock()
 			return ctx.Err()
@@ -307,8 +298,6 @@ func (l *PartitionLog) Flush(ctx context.Context) error {
 // It sets l.flushing = true to prevent concurrent flushes on the same
 // partition. Returns (nil, nil) if the buffer is empty or a flush is already
 // in progress (the data stays in the buffer for the next flush).
-// The caller decides whether a flush is warranted (e.g. ShouldFlush check
-// in AppendBatch, unconditional in Flush).
 // Caller must hold l.mu.
 func (l *PartitionLog) prepareFlush() (*SegmentArtifact, error) {
 	if l.flushing {
