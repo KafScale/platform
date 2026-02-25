@@ -18,6 +18,7 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func TestPartitionLogReadUsesIndexRange(t *testing.T) {
 func TestPartitionLogReportsS3Uploads(t *testing.T) {
 	s3 := NewMemoryS3Client()
 	c := cache.NewSegmentCache(1024)
-	var uploads int
+	var uploads atomic.Int64
 	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
 		Buffer: WriteBufferConfig{
 			MaxBytes:      1,
@@ -153,7 +154,7 @@ func TestPartitionLogReportsS3Uploads(t *testing.T) {
 			IndexIntervalMessages: 1,
 		},
 	}, nil, func(op string, d time.Duration, err error) {
-		uploads++
+		uploads.Add(1)
 	})
 
 	batchData := make([]byte, 70)
@@ -165,8 +166,8 @@ func TestPartitionLogReportsS3Uploads(t *testing.T) {
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
-	if uploads < 2 {
-		t.Fatalf("expected upload callback for segment + index, got %d", uploads)
+	if uploads.Load() < 2 {
+		t.Fatalf("expected upload callback for segment + index, got %d", uploads.Load())
 	}
 }
 
