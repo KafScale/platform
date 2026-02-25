@@ -46,7 +46,7 @@ func NewWriteBuffer(cfg WriteBufferConfig) *WriteBuffer {
 	}
 }
 
-// Append adds a batch to the buffer.
+// Append adds a batch to the end of the buffer.
 func (b *WriteBuffer) Append(batch RecordBatch) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
