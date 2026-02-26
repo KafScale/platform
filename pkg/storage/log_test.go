@@ -58,8 +58,6 @@ func TestPartitionLogAppendFlush(t *testing.T) {
 	if res.BaseOffset != 0 {
 		t.Fatalf("expected base offset 0 got %d", res.BaseOffset)
 	}
-	// Force flush
-	time.Sleep(2 * time.Millisecond)
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -88,7 +86,7 @@ func TestPartitionLogRead(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -129,7 +127,7 @@ func TestPartitionLogReadUsesIndexRange(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), record2); err != nil {
 		t.Fatalf("AppendBatch batch2: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -166,7 +164,7 @@ func TestPartitionLogReportsS3Uploads(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -193,7 +191,7 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -247,7 +245,6 @@ func TestPartitionLogPrefetchSkippedWhenSemaphoreFull(t *testing.T) {
 		if _, err := writer.AppendBatch(context.Background(), batch); err != nil {
 			t.Fatalf("AppendBatch %d: %v", i, err)
 		}
-		time.Sleep(2 * time.Millisecond)
 		if err := writer.Flush(context.Background()); err != nil {
 			t.Fatalf("Flush %d: %v", i, err)
 		}
@@ -498,8 +495,9 @@ func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
 
 	transientS3 := &transientIndexErrorS3{MemoryS3Client: s3}
 
-	// startOffset=0 means the segment is uncommitted (baseOffset >= nextOffset).
-	// Despite being uncommitted, a transient error must not be silently skipped.
+	// The segment's baseOffset (0) >= nextOffset (0), so the offset condition
+	// for orphan-skip is satisfied. But the error is not ErrNotFound, so the
+	// skip must not trigger — we can't tell if .index is missing or S3 is down.
 	recovered := NewPartitionLog("default", "orders", 0, 0, transientS3, c, PartitionLogConfig{
 		Buffer: WriteBufferConfig{
 			MaxBytes:      1,
