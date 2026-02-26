@@ -135,12 +135,7 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 	if err != nil {
 		return -1, err
 	}
-	type entry struct {
-		base int64
-		last int64
-		size int64
-	}
-	entries := make([]entry, 0, len(objects))
+	found := make([]segmentRange, 0, len(objects))
 	for _, obj := range objects {
 		if !strings.HasSuffix(obj.Key, ".kfs") {
 			continue
@@ -170,18 +165,18 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 		if err != nil {
 			return -1, err
 		}
-		entries = append(entries, entry{base: base, last: lastOffset, size: obj.Size})
+		found = append(found, segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size})
 	}
-	if len(entries) == 0 {
+	if len(found) == 0 {
 		return -1, nil
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].base < entries[j].base
+	sort.Slice(found, func(i, j int) bool {
+		return found[i].baseOffset < found[j].baseOffset
 	})
-	segments := make([]segmentRange, 0, len(entries))
-	indexByBase := make(map[int64][]*IndexEntry, len(entries))
-	for _, entry := range entries {
-		indexKey := l.indexKey(entry.base)
+	segments := make([]segmentRange, 0, len(found))
+	indexByBase := make(map[int64][]*IndexEntry, len(found))
+	for _, seg := range found {
+		indexKey := l.indexKey(seg.baseOffset)
 		if err := l.acquireS3(ctx); err != nil {
 			return -1, err
 		}
@@ -192,20 +187,33 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 			l.onS3Op("download_index", time.Since(startTime), err)
 		}
 		if err != nil {
+			if errors.Is(err, ErrNotFound) && seg.baseOffset >= l.nextOffset {
+				l.logger().Warn("skipping orphaned segment: missing .index",
+					"topic", l.topic, "partition", l.partition,
+					"segment_base", seg.baseOffset, "next_offset", l.nextOffset,
+					"index_key", indexKey, "error", err)
+				continue
+			}
 			return -1, err
 		}
 		parsedEntries, err := ParseIndex(indexBytes)
 		if err != nil {
+			if seg.baseOffset >= l.nextOffset {
+				l.logger().Warn("skipping orphaned segment: corrupt .index",
+					"topic", l.topic, "partition", l.partition,
+					"segment_base", seg.baseOffset, "next_offset", l.nextOffset,
+					"index_key", indexKey, "error", err)
+				continue
+			}
 			return -1, fmt.Errorf("parse index %s: %w", indexKey, err)
 		}
-		segments = append(segments, segmentRange{
-			baseOffset: entry.base,
-			lastOffset: entry.last,
-			size:       entry.size,
-		})
-		indexByBase[entry.base] = parsedEntries
+		segments = append(segments, seg)
+		indexByBase[seg.baseOffset] = parsedEntries
 	}
-	last := entries[len(entries)-1].last
+	if len(segments) == 0 {
+		return -1, nil
+	}
+	last := segments[len(segments)-1].lastOffset
 
 	l.mu.Lock()
 	l.segments = segments
