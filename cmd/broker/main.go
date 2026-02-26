@@ -2039,6 +2039,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			},
 			ReadAheadSegments: readAhead,
 			CacheEnabled:      true,
+			Logger:            logger,
 		},
 		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
 		s3Health:             health,

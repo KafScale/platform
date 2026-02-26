@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"sort"
 	"strconv"
@@ -37,6 +38,7 @@ type PartitionLogConfig struct {
 	Segment           SegmentWriterConfig
 	ReadAheadSegments int
 	CacheEnabled      bool
+	Logger            *slog.Logger
 }
 
 // PartitionLog coordinates buffering, segment serialization, S3 uploads, and caching.
@@ -91,6 +93,13 @@ func NewPartitionLog(namespace string, topic string, partition int32, startOffse
 	}
 	pl.flushCond = sync.NewCond(&pl.mu)
 	return pl
+}
+
+func (l *PartitionLog) logger() *slog.Logger {
+	if l.cfg.Logger != nil {
+		return l.cfg.Logger
+	}
+	return slog.Default()
 }
 
 // acquireS3 blocks until a semaphore token is available or ctx is cancelled.
