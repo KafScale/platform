@@ -18,11 +18,14 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/KafScale/platform/pkg/cache"
+	"golang.org/x/sync/semaphore"
 )
 
 func TestPartitionLogAppendFlush(t *testing.T) {
@@ -39,7 +42,7 @@ func TestPartitionLogAppendFlush(t *testing.T) {
 		},
 	}, func(ctx context.Context, artifact *SegmentArtifact) {
 		flushCount++
-	}, nil)
+	}, nil, nil)
 
 	batchData := make([]byte, 70)
 	batch, err := NewRecordBatchFromBytes(batchData)
@@ -77,7 +80,7 @@ func TestPartitionLogRead(t *testing.T) {
 		},
 		ReadAheadSegments: 1,
 		CacheEnabled:      true,
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
 	batch, _ := NewRecordBatchFromBytes(batchData)
@@ -107,7 +110,7 @@ func TestPartitionLogReadUsesIndexRange(t *testing.T) {
 		Segment: SegmentWriterConfig{
 			IndexIntervalMessages: 1,
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	batch1 := makeBatchBytes(0, 0, 1, 0x11)
 	batch2 := makeBatchBytes(1, 0, 1, 0x22)
@@ -155,7 +158,7 @@ func TestPartitionLogReportsS3Uploads(t *testing.T) {
 		},
 	}, nil, func(op string, d time.Duration, err error) {
 		uploads.Add(1)
-	})
+	}, nil)
 
 	batchData := make([]byte, 70)
 	batch, _ := NewRecordBatchFromBytes(batchData)
@@ -182,7 +185,7 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 		Segment: SegmentWriterConfig{
 			IndexIntervalMessages: 1,
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
 	batch, _ := NewRecordBatchFromBytes(batchData)
@@ -202,7 +205,7 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 		Segment: SegmentWriterConfig{
 			IndexIntervalMessages: 1,
 		},
-	}, nil, nil)
+	}, nil, nil, nil)
 	lastOffset, err := recovered.RestoreFromS3(context.Background())
 	if err != nil {
 		t.Fatalf("RestoreFromS3: %v", err)
@@ -224,6 +227,186 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 	if res.BaseOffset != 1 {
 		t.Fatalf("expected base offset 1 after restore, got %d", res.BaseOffset)
 	}
+}
+
+func TestPartitionLogPrefetchSkippedWhenSemaphoreFull(t *testing.T) {
+	s3mem := NewMemoryS3Client()
+	// First, write two segments without semaphore constraint.
+	writer := NewPartitionLog("default", "orders", 0, 0, s3mem, nil, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+	for i := 0; i < 2; i++ {
+		batch, _ := NewRecordBatchFromBytes(makeBatchBytes(int64(i), 0, 1, byte(i+1)))
+		if _, err := writer.AppendBatch(context.Background(), batch); err != nil {
+			t.Fatalf("AppendBatch %d: %v", i, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+		if err := writer.Flush(context.Background()); err != nil {
+			t.Fatalf("Flush %d: %v", i, err)
+		}
+	}
+
+	// Now create a reader with a full semaphore and a fresh cache.
+	sem := semaphore.NewWeighted(1)
+	sem.Acquire(context.Background(), 1) // exhaust the semaphore
+	c := cache.NewSegmentCache(1 << 20)
+	reader := NewPartitionLog("default", "orders", 0, 0, s3mem, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+		ReadAheadSegments: 2,
+		CacheEnabled:      true,
+	}, nil, nil, sem)
+	// Restore segments so the reader knows about them.
+	sem.Release(1) // temporarily release for RestoreFromS3
+	if _, err := reader.RestoreFromS3(context.Background()); err != nil {
+		t.Fatalf("RestoreFromS3: %v", err)
+	}
+	sem.Acquire(context.Background(), 1) // re-exhaust
+
+	// Trigger prefetch — should be skipped because TryAcquire fails.
+	reader.startPrefetch(context.Background(), 0)
+	time.Sleep(5 * time.Millisecond)
+
+	if _, ok := c.GetSegment("default/orders", 0, 0); ok {
+		t.Fatalf("expected prefetch to be skipped when semaphore is full")
+	}
+	sem.Release(1)
+}
+
+func TestPartitionLogFlushWaitsForInflight(t *testing.T) {
+	// Verify that a concurrent Flush blocks until an in-flight flush completes
+	// and then flushes any data that accumulated in the meantime.
+	uploadStarted := make(chan struct{})
+	uploadRelease := make(chan struct{})
+	slowS3 := &slowUploadS3{
+		MemoryS3Client: NewMemoryS3Client(),
+		started:        uploadStarted,
+		release:        uploadRelease,
+	}
+	flushCh := make(chan int64, 4)
+	log := NewPartitionLog("default", "orders", 0, 0, slowS3, nil, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes: 1 << 20, // large — manual flush only
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, func(_ context.Context, a *SegmentArtifact) {
+		flushCh <- a.LastOffset
+	}, nil, nil)
+
+	// Append batch 0 and start a slow flush in the background.
+	batch0, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0x01))
+	if _, err := log.AppendBatch(context.Background(), batch0); err != nil {
+		t.Fatalf("AppendBatch 0: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- log.Flush(context.Background())
+	}()
+	<-uploadStarted // first flush is now blocked in UploadSegment
+
+	// Append batch 1 while the first flush is in progress.
+	batch1, _ := NewRecordBatchFromBytes(makeBatchBytes(1, 0, 1, 0x02))
+	if _, err := log.AppendBatch(context.Background(), batch1); err != nil {
+		t.Fatalf("AppendBatch 1: %v", err)
+	}
+
+	// Start second Flush — it must block until first completes.
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh2 <- log.Flush(context.Background())
+	}()
+	time.Sleep(5 * time.Millisecond) // give second Flush time to reach the wait
+
+	// Release the slow upload — both flushes should complete.
+	close(uploadRelease)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("first Flush: %v", err)
+	}
+	if err := <-errCh2; err != nil {
+		t.Fatalf("second Flush: %v", err)
+	}
+
+	// Both batches must have been flushed (two onFlush callbacks).
+	// Collect results from the channel now that both goroutines have returned.
+	close(flushCh)
+	var flushedOffsets []int64
+	for off := range flushCh {
+		flushedOffsets = append(flushedOffsets, off)
+	}
+	if len(flushedOffsets) < 2 {
+		t.Fatalf("expected 2 flush callbacks, got %d", len(flushedOffsets))
+	}
+}
+
+// slowUploadS3 blocks UploadSegment until release is closed.
+type slowUploadS3 struct {
+	*MemoryS3Client
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *slowUploadS3) UploadSegment(ctx context.Context, key string, body []byte) error {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	return s.MemoryS3Client.UploadSegment(ctx, key, body)
+}
+
+func TestPartitionLogFlushErrorClearsFlushing(t *testing.T) {
+	failingS3 := &failingUploadS3{MemoryS3Client: NewMemoryS3Client()}
+	log := NewPartitionLog("default", "orders", 0, 0, failingS3, nil, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes: 1 << 20, // large threshold so AppendBatch won't auto-flush
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+
+	batchData := make([]byte, 70)
+	batch, _ := NewRecordBatchFromBytes(batchData)
+	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	err := log.Flush(context.Background())
+	if err == nil {
+		t.Fatalf("expected flush to fail")
+	}
+
+	// flushing flag should be cleared so a subsequent flush can proceed.
+	log.mu.Lock()
+	if log.flushing {
+		t.Fatalf("expected flushing flag to be false after failed upload")
+	}
+	log.mu.Unlock()
+}
+
+// failingUploadS3 wraps MemoryS3Client but fails all uploads.
+type failingUploadS3 struct {
+	*MemoryS3Client
+}
+
+func (f *failingUploadS3) UploadSegment(ctx context.Context, key string, body []byte) error {
+	return fmt.Errorf("simulated S3 upload failure")
+}
+
+func (f *failingUploadS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	return fmt.Errorf("simulated S3 upload failure")
 }
 
 func makeBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32, marker byte) []byte {

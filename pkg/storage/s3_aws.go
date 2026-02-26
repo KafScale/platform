@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -81,6 +83,12 @@ func NewS3Client(ctx context.Context, cfg S3Config) (S3Client, error) {
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = cfg.ForcePathStyle
+		if cfg.MaxConnections > 0 {
+			o.HTTPClient = awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+				t.MaxIdleConnsPerHost = cfg.MaxConnections
+				t.MaxConnsPerHost = cfg.MaxConnections
+			})
+		}
 	})
 
 	return newAWSClientWithAPI(cfg.Bucket, cfg.Region, cfg.KMSKeyARN, client), nil
