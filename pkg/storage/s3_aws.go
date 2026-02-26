@@ -190,6 +190,21 @@ func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) er
 	return nil
 }
 
+func isNotFoundErr(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+			return true
+		}
+	}
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		return true
+	}
+	return false
+}
+
 func isBucketMissingErr(err error) bool {
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
@@ -228,6 +243,9 @@ func (c *awsS3Client) DownloadIndex(ctx context.Context, key string) ([]byte, er
 	}
 	resp, err := c.api.GetObject(ctx, input)
 	if err != nil {
+		if isNotFoundErr(err) {
+			return nil, fmt.Errorf("get object %s: %w", key, ErrNotFound)
+		}
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
 	defer resp.Body.Close()
