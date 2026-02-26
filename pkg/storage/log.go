@@ -432,6 +432,8 @@ type AppendResult struct {
 }
 
 // Read loads the segment containing the requested offset.
+// When the requested offset falls in a gap (e.g. after an orphaned segment was
+// skipped during restore), Read snaps forward to the next available segment.
 func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) ([]byte, error) {
 	l.mu.Lock()
 	var seg segmentRange
@@ -443,6 +445,15 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 			seg = s
 			found = true
 			segIdx = i
+			entries = l.indexEntries[s.baseOffset]
+			break
+		}
+		// Offset falls in a gap before this segment — snap forward.
+		if s.baseOffset > offset {
+			seg = s
+			found = true
+			segIdx = i
+			offset = s.baseOffset
 			entries = l.indexEntries[s.baseOffset]
 			break
 		}

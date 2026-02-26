@@ -518,6 +518,74 @@ func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestPartitionLogReadSkipsGap(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	c := cache.NewSegmentCache(1024)
+	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+
+	batch1, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0xAA))
+	if _, err := log.AppendBatch(context.Background(), batch1); err != nil {
+		t.Fatalf("AppendBatch 1: %v", err)
+	}
+
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush 1: %v", err)
+	}
+
+	batch2, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0xBB))
+	if _, err := log.AppendBatch(context.Background(), batch2); err != nil {
+		t.Fatalf("AppendBatch 2: %v", err)
+	}
+
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush 2: %v", err)
+	}
+
+	firstIndexKey := "default/orders/0/segment-00000000000000000000.index"
+	s3.mu.Lock()
+	delete(s3.index, firstIndexKey)
+	s3.mu.Unlock()
+
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+	lastOffset, err := recovered.RestoreFromS3(context.Background())
+	if err != nil {
+		t.Fatalf("RestoreFromS3: %v", err)
+	}
+	if len(recovered.segments) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(recovered.segments))
+	}
+	if recovered.segments[0].baseOffset != 1 {
+		t.Fatalf("expected surviving segment base offset 1, got %d", recovered.segments[0].baseOffset)
+	}
+	if lastOffset != 1 {
+		t.Fatalf("expected last offset 1, got %d", lastOffset)
+	}
+
+	data, err := recovered.Read(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("Read at gap offset 0 should snap forward, got error: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected non-empty data from snapped-forward read")
+	}
+}
+
 type transientIndexErrorS3 struct {
 	*MemoryS3Client
 }
