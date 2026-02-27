@@ -39,6 +39,7 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/KafScale/platform/pkg/storage"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -54,8 +55,9 @@ const (
 	defaultMinioRegion    = "us-east-1"
 	defaultMinioEndpoint  = "http://127.0.0.1:9000"
 	defaultMinioAccessKey = "minioadmin"
-	defaultMinioSecretKey = "minioadmin"
-	brokerVersion         = "dev"
+	defaultMinioSecretKey  = "minioadmin"
+	defaultS3Concurrency   = 64
+	brokerVersion          = "dev"
 )
 
 type handler struct {
@@ -91,6 +93,7 @@ type handler struct {
 	authMetrics          *authMetrics
 	authLogMu            sync.Mutex
 	authLogLast          map[string]time.Time
+	s3sem                *semaphore.Weighted
 }
 
 type etcdAvailability interface {
@@ -1971,7 +1974,7 @@ func (h *handler) getPartitionLog(ctx context.Context, topic string, partition i
 			if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
 				h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
 			}
-		}, h.recordS3Op)
+		}, h.recordS3Op, h.s3sem)
 		lastOffset, err := plog.RestoreFromS3(ctx)
 		if err != nil {
 			h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
@@ -2007,6 +2010,12 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	segmentBytes := parseEnvInt("KAFSCALE_SEGMENT_BYTES", 4<<20)
 	flushInterval := time.Duration(parseEnvInt("KAFSCALE_FLUSH_INTERVAL_MS", 500)) * time.Millisecond
 	flushOnAck := parseEnvBool("KAFSCALE_PRODUCE_SYNC_FLUSH", true)
+	// 0 or negative disables the S3 concurrency limit (no semaphore, default HTTP pool).
+	s3Concurrency := parseEnvInt("KAFSCALE_S3_CONCURRENCY", defaultS3Concurrency)
+	var s3sem *semaphore.Weighted
+	if s3Concurrency > 0 {
+		s3sem = semaphore.NewWeighted(int64(s3Concurrency))
+	}
 	produceLatencyBuckets := []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2000, 5000}
 	consumerLagBuckets := []float64{1, 10, 100, 1000, 5000, 10000, 50000, 100000, 500000, 1000000}
 	if autoPartitions < 1 {
@@ -2030,6 +2039,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			},
 			ReadAheadSegments: readAhead,
 			CacheEnabled:      true,
+			Logger:            logger,
 		},
 		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
 		s3Health:             health,
@@ -2055,6 +2065,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		authorizer:           authorizer,
 		authMetrics:          newAuthMetrics(),
 		authLogLast:          make(map[string]time.Time),
+		s3sem:                s3sem,
 	}
 }
 
@@ -2184,6 +2195,7 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 		secretKey = defaultMinioSecretKey
 	}
 	credsProvided := accessKey != "" && secretKey != ""
+	s3Concurrency := parseEnvInt("KAFSCALE_S3_CONCURRENCY", defaultS3Concurrency)
 	writeCfg := storage.S3Config{
 		Bucket:          writeBucket,
 		Region:          writeRegion,
@@ -2193,6 +2205,7 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 		SecretAccessKey: secretKey,
 		SessionToken:    sessionToken,
 		KMSKeyARN:       kmsARN,
+		MaxConnections:  s3Concurrency,
 	}
 
 	readBucket := os.Getenv("KAFSCALE_S3_READ_BUCKET")
@@ -2217,6 +2230,7 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 		SecretAccessKey: secretKey,
 		SessionToken:    sessionToken,
 		KMSKeyARN:       kmsARN,
+		MaxConnections:  s3Concurrency,
 	}
 	return writeCfg, readCfg, false, usingDefaultMinio, credsProvided, useReadReplica
 }

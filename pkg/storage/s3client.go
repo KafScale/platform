@@ -17,8 +17,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
+
+var ErrNotFound = errors.New("not found")
 
 // ByteRange represents an inclusive byte range for reads.
 type ByteRange struct {
@@ -60,4 +63,5 @@ type S3Config struct {
 	SecretAccessKey string
 	SessionToken    string
 	KMSKeyARN       string
+	MaxConnections int
 }

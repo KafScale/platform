@@ -295,6 +295,7 @@ Recommended operator alerting (when using Prometheus Operator):
 - `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
 - `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
 - `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
+- `KAFSCALE_S3_CONCURRENCY` – Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends.
 
 Read replica example (multi-region reads):
 

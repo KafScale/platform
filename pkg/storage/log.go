@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
 	"sort"
 	"strconv"
@@ -27,6 +28,8 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/pkg/cache"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // PartitionLogConfig configures per-partition log behavior.
@@ -35,6 +38,7 @@ type PartitionLogConfig struct {
 	Segment           SegmentWriterConfig
 	ReadAheadSegments int
 	CacheEnabled      bool
+	Logger            *slog.Logger
 }
 
 // PartitionLog coordinates buffering, segment serialization, S3 uploads, and caching.
@@ -53,6 +57,9 @@ type PartitionLog struct {
 	indexEntries map[int64][]*IndexEntry
 	prefetchMu   sync.Mutex
 	mu           sync.Mutex
+	flushCond    *sync.Cond
+	s3sem        *semaphore.Weighted
+	flushing     bool
 }
 
 type segmentRange struct {
@@ -65,11 +72,11 @@ type segmentRange struct {
 var ErrOffsetOutOfRange = errors.New("offset out of range")
 
 // NewPartitionLog constructs a log for a topic partition.
-func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error)) *PartitionLog {
+func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
 	if namespace == "" {
 		namespace = "default"
 	}
-	return &PartitionLog{
+	pl := &PartitionLog{
 		namespace:    namespace,
 		topic:        topic,
 		partition:    partition,
@@ -82,22 +89,53 @@ func NewPartitionLog(namespace string, topic string, partition int32, startOffse
 		onS3Op:       onS3Op,
 		segments:     make([]segmentRange, 0),
 		indexEntries: make(map[int64][]*IndexEntry),
+		s3sem:        sem,
+	}
+	pl.flushCond = sync.NewCond(&pl.mu)
+	return pl
+}
+
+func (l *PartitionLog) logger() *slog.Logger {
+	if l.cfg.Logger != nil {
+		return l.cfg.Logger
+	}
+	return slog.Default()
+}
+
+// acquireS3 blocks until a semaphore token is available or ctx is cancelled.
+// If no semaphore is configured, it returns immediately.
+func (l *PartitionLog) acquireS3(ctx context.Context) error {
+	if l.s3sem == nil {
+		return nil
+	}
+	return l.s3sem.Acquire(ctx, 1)
+}
+
+func (l *PartitionLog) tryAcquireS3() bool {
+	if l.s3sem == nil {
+		return true
+	}
+	return l.s3sem.TryAcquire(1)
+}
+
+func (l *PartitionLog) releaseS3() {
+	if l.s3sem != nil {
+		l.s3sem.Release(1)
 	}
 }
 
 // RestoreFromS3 rebuilds segment ranges from objects already stored in S3.
 func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 	prefix := l.segmentPrefix()
+	if err := l.acquireS3(ctx); err != nil {
+		return -1, err
+	}
 	objects, err := l.s3.ListSegments(ctx, prefix)
+	l.releaseS3()
 	if err != nil {
 		return -1, err
 	}
-	type entry struct {
-		base int64
-		last int64
-		size int64
-	}
-	entries := make([]entry, 0, len(objects))
+	found := make([]segmentRange, 0, len(objects))
 	for _, obj := range objects {
 		if !strings.HasSuffix(obj.Key, ".kfs") {
 			continue
@@ -111,8 +149,12 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 		}
 		start := obj.Size - segmentFooterLen
 		rng := &ByteRange{Start: start, End: obj.Size - 1}
+		if err := l.acquireS3(ctx); err != nil {
+			return -1, err
+		}
 		startTime := time.Now()
 		footerBytes, err := l.s3.DownloadSegment(ctx, obj.Key, rng)
+		l.releaseS3()
 		if l.onS3Op != nil {
 			l.onS3Op("download_segment_footer", time.Since(startTime), err)
 		}
@@ -123,38 +165,55 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 		if err != nil {
 			return -1, err
 		}
-		entries = append(entries, entry{base: base, last: lastOffset, size: obj.Size})
+		found = append(found, segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size})
 	}
-	if len(entries) == 0 {
+	if len(found) == 0 {
 		return -1, nil
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].base < entries[j].base
+	sort.Slice(found, func(i, j int) bool {
+		return found[i].baseOffset < found[j].baseOffset
 	})
-	segments := make([]segmentRange, 0, len(entries))
-	indexByBase := make(map[int64][]*IndexEntry, len(entries))
-	for _, entry := range entries {
-		indexKey := l.indexKey(entry.base)
+	segments := make([]segmentRange, 0, len(found))
+	indexByBase := make(map[int64][]*IndexEntry, len(found))
+	for _, seg := range found {
+		indexKey := l.indexKey(seg.baseOffset)
+		if err := l.acquireS3(ctx); err != nil {
+			return -1, err
+		}
 		startTime := time.Now()
 		indexBytes, err := l.s3.DownloadIndex(ctx, indexKey)
+		l.releaseS3()
 		if l.onS3Op != nil {
 			l.onS3Op("download_index", time.Since(startTime), err)
 		}
 		if err != nil {
+			if errors.Is(err, ErrNotFound) && seg.baseOffset >= l.nextOffset {
+				l.logger().Warn("skipping orphaned segment: missing .index",
+					"topic", l.topic, "partition", l.partition,
+					"segment_base", seg.baseOffset, "next_offset", l.nextOffset,
+					"index_key", indexKey, "error", err)
+				continue
+			}
 			return -1, err
 		}
 		parsedEntries, err := ParseIndex(indexBytes)
 		if err != nil {
+			if seg.baseOffset >= l.nextOffset {
+				l.logger().Warn("skipping orphaned segment: corrupt .index",
+					"topic", l.topic, "partition", l.partition,
+					"segment_base", seg.baseOffset, "next_offset", l.nextOffset,
+					"index_key", indexKey, "error", err)
+				continue
+			}
 			return -1, fmt.Errorf("parse index %s: %w", indexKey, err)
 		}
-		segments = append(segments, segmentRange{
-			baseOffset: entry.base,
-			lastOffset: entry.last,
-			size:       entry.size,
-		})
-		indexByBase[entry.base] = parsedEntries
+		segments = append(segments, seg)
+		indexByBase[seg.baseOffset] = parsedEntries
 	}
-	last := entries[len(entries)-1].last
+	if len(segments) == 0 {
+		return -1, nil
+	}
+	last := segments[len(segments)-1].lastOffset
 
 	l.mu.Lock()
 	l.segments = segments
@@ -169,8 +228,6 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
 
 // AppendBatch writes a record batch to the log, updating offsets and flushing as needed.
 func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*AppendResult, error) {
-	var flushed *SegmentArtifact
-
 	l.mu.Lock()
 	baseOffset := l.nextOffset
 	PatchRecordBatchBaseOffset(&batch, baseOffset)
@@ -181,9 +238,11 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 		BaseOffset: baseOffset,
 		LastOffset: l.nextOffset - 1,
 	}
+
+	var artifact *SegmentArtifact
 	if l.buffer.ShouldFlush(time.Now()) {
 		var err error
-		flushed, err = l.flushLocked(ctx)
+		artifact, err = l.prepareFlush()
 		if err != nil {
 			l.mu.Unlock()
 			return nil, err
@@ -191,8 +250,13 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 	}
 	l.mu.Unlock()
 
-	if flushed != nil && l.onFlush != nil {
-		l.onFlush(ctx, flushed)
+	if artifact != nil {
+		if err := l.uploadFlush(ctx, artifact); err != nil {
+			return nil, err
+		}
+		if l.onFlush != nil {
+			l.onFlush(ctx, artifact)
+		}
 	}
 	return result, nil
 }
@@ -208,17 +272,34 @@ func (l *PartitionLog) EarliestOffset() int64 {
 }
 
 // Flush forces buffered batches to be written to S3 immediately.
+// If another flush is already in progress on this partition, Flush waits for
+// it to complete and then flushes any data that accumulated in the meantime.
 func (l *PartitionLog) Flush(ctx context.Context) error {
 	l.mu.Lock()
-	artifact, err := l.flushLocked(ctx)
+	for l.flushing {
+		if ctx.Err() != nil {
+			l.mu.Unlock()
+			return ctx.Err()
+		}
+		l.flushCond.Wait()
+	}
+	artifact, err := l.prepareFlush()
 	l.mu.Unlock()
 	if err != nil {
 		return err
 	}
+
+	if artifact != nil {
+		if err := l.uploadFlush(ctx, artifact); err != nil {
+			return err
+		}
+	}
 	if l.onFlush != nil {
 		target := artifact
 		if target == nil {
+			l.mu.Lock()
 			current := l.nextOffset - 1
+			l.mu.Unlock()
 			if current >= 0 {
 				target = &SegmentArtifact{LastOffset: current}
 			}
@@ -230,7 +311,15 @@ func (l *PartitionLog) Flush(ctx context.Context) error {
 	return nil
 }
 
-func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error) {
+// prepareFlush drains the buffer and builds a segment artifact under l.mu.
+// It sets l.flushing = true to prevent concurrent flushes on the same
+// partition. Returns (nil, nil) if the buffer is empty or a flush is already
+// in progress (the data stays in the buffer for the next flush).
+// Caller must hold l.mu.
+func (l *PartitionLog) prepareFlush() (*SegmentArtifact, error) {
+	if l.flushing {
+		return nil, nil
+	}
 	batches := l.buffer.Drain()
 	if len(batches) == 0 {
 		return nil, nil
@@ -239,28 +328,54 @@ func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error
 	if err != nil {
 		return nil, fmt.Errorf("build segment: %w", err)
 	}
+	l.flushing = true
+	return artifact, nil
+}
+
+// uploadFlush uploads the segment and index to S3 (with semaphore gating),
+// then re-acquires l.mu to commit segment metadata. Called without l.mu held.
+func (l *PartitionLog) uploadFlush(ctx context.Context, artifact *SegmentArtifact) error {
 	segmentKey := l.segmentKey(artifact.BaseOffset)
 	indexKey := l.indexKey(artifact.BaseOffset)
 
-	start := time.Now()
-	uploadErr := l.s3.UploadSegment(ctx, segmentKey, artifact.SegmentBytes)
-	if l.onS3Op != nil {
-		l.onS3Op("upload_segment", time.Since(start), uploadErr)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		if err := l.acquireS3(gctx); err != nil {
+			return err
+		}
+		defer l.releaseS3()
+		start := time.Now()
+		err := l.s3.UploadSegment(gctx, segmentKey, artifact.SegmentBytes)
+		if l.onS3Op != nil {
+			l.onS3Op("upload_segment", time.Since(start), err)
+		}
+		return err
+	})
+	g.Go(func() error {
+		if err := l.acquireS3(gctx); err != nil {
+			return err
+		}
+		defer l.releaseS3()
+		start := time.Now()
+		err := l.s3.UploadIndex(gctx, indexKey, artifact.IndexBytes)
+		if l.onS3Op != nil {
+			l.onS3Op("upload_index", time.Since(start), err)
+		}
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		l.mu.Lock()
+		l.flushing = false
+		l.flushCond.Broadcast()
+		l.mu.Unlock()
+		return err
 	}
-	if uploadErr != nil {
-		return nil, uploadErr
-	}
-	start = time.Now()
-	uploadErr = l.s3.UploadIndex(ctx, indexKey, artifact.IndexBytes)
-	if l.onS3Op != nil {
-		l.onS3Op("upload_index", time.Since(start), uploadErr)
-	}
-	if uploadErr != nil {
-		return nil, uploadErr
-	}
+
 	if l.cache != nil && l.cfg.CacheEnabled {
 		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
 	}
+
+	l.mu.Lock()
 	l.segments = append(l.segments, segmentRange{
 		baseOffset: artifact.BaseOffset,
 		lastOffset: artifact.LastOffset,
@@ -269,8 +384,13 @@ func (l *PartitionLog) flushLocked(ctx context.Context) (*SegmentArtifact, error
 	if artifact.RelativeIndex != nil {
 		l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
 	}
-	l.startPrefetch(ctx, len(l.segments)-1)
-	return artifact, nil
+	l.flushing = false
+	l.flushCond.Broadcast()
+	lastSegIdx := len(l.segments) - 1
+	l.mu.Unlock()
+
+	l.startPrefetch(ctx, lastSegIdx)
+	return nil
 }
 
 func (l *PartitionLog) segmentKey(baseOffset int64) string {
@@ -312,15 +432,28 @@ type AppendResult struct {
 }
 
 // Read loads the segment containing the requested offset.
+// When the requested offset falls in a gap (e.g. after an orphaned segment was
+// skipped during restore), Read snaps forward to the next available segment.
 func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) ([]byte, error) {
 	l.mu.Lock()
 	var seg segmentRange
 	found := false
+	segIdx := -1
 	var entries []*IndexEntry
-	for _, s := range l.segments {
+	for i, s := range l.segments {
 		if offset >= s.baseOffset && offset <= s.lastOffset {
 			seg = s
 			found = true
+			segIdx = i
+			entries = l.indexEntries[s.baseOffset]
+			break
+		}
+		// Offset falls in a gap before this segment — snap forward.
+		if s.baseOffset > offset {
+			seg = s
+			found = true
+			segIdx = i
+			offset = s.baseOffset
 			entries = l.indexEntries[s.baseOffset]
 			break
 		}
@@ -338,9 +471,13 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 	}
 	rangeReadUsed := false
 	if !ok {
+		if err := l.acquireS3(ctx); err != nil {
+			return nil, err
+		}
 		if rangeRead, rng := l.segmentRangeForOffset(seg, entries, offset, maxBytes); rangeRead {
 			start := time.Now()
 			bytes, err := l.s3.DownloadSegment(ctx, l.segmentKey(seg.baseOffset), rng)
+			l.releaseS3()
 			if l.onS3Op != nil {
 				l.onS3Op("download_segment_range", time.Since(start), err)
 			}
@@ -352,6 +489,7 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 		} else {
 			start := time.Now()
 			bytes, err := l.s3.DownloadSegment(ctx, l.segmentKey(seg.baseOffset), nil)
+			l.releaseS3()
 			if l.onS3Op != nil {
 				l.onS3Op("download_segment", time.Since(start), err)
 			}
@@ -364,7 +502,7 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 			}
 		}
 	}
-	l.startPrefetch(ctx, l.segmentIndex(seg.baseOffset)+1)
+	l.startPrefetch(ctx, segIdx+1)
 
 	if ok {
 		body, err := l.sliceCachedSegment(seg, entries, offset, maxBytes, data)
@@ -383,31 +521,36 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 	return body, nil
 }
 
-func (l *PartitionLog) segmentIndex(baseOffset int64) int {
-	for i, seg := range l.segments {
-		if seg.baseOffset == baseOffset {
-			return i
-		}
-	}
-	return -1
-}
-
 func (l *PartitionLog) startPrefetch(ctx context.Context, nextIndex int) {
 	if l.cfg.ReadAheadSegments <= 0 || nextIndex < 0 || l.cache == nil || !l.cfg.CacheEnabled {
 		return
 	}
 	l.prefetchMu.Lock()
 	defer l.prefetchMu.Unlock()
+
+	l.mu.Lock()
+	segsLen := len(l.segments)
+	// Collect the segments we need to prefetch while holding the lock.
+	var toFetch []segmentRange
 	for i := 0; i < l.cfg.ReadAheadSegments; i++ {
 		idx := nextIndex + i
-		if idx >= len(l.segments) {
+		if idx >= segsLen {
 			break
 		}
 		seg := l.segments[idx]
 		if _, ok := l.cache.GetSegment(l.cacheTopicKey(), l.partition, seg.baseOffset); ok {
 			continue
 		}
+		toFetch = append(toFetch, seg)
+	}
+	l.mu.Unlock()
+
+	for _, seg := range toFetch {
 		go func(seg segmentRange) {
+			if !l.tryAcquireS3() {
+				return // semaphore full, skip prefetch
+			}
+			defer l.releaseS3()
 			data, err := l.s3.DownloadSegment(ctx, l.segmentKey(seg.baseOffset), nil)
 			if err != nil {
 				return

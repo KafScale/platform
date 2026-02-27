@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -81,6 +83,12 @@ func NewS3Client(ctx context.Context, cfg S3Config) (S3Client, error) {
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = cfg.ForcePathStyle
+		if cfg.MaxConnections > 0 {
+			o.HTTPClient = awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+				t.MaxIdleConnsPerHost = cfg.MaxConnections
+				t.MaxConnsPerHost = cfg.MaxConnections
+			})
+		}
 	})
 
 	return newAWSClientWithAPI(cfg.Bucket, cfg.Region, cfg.KMSKeyARN, client), nil
@@ -182,6 +190,21 @@ func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) er
 	return nil
 }
 
+func isNotFoundErr(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+			return true
+		}
+	}
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		return true
+	}
+	return false
+}
+
 func isBucketMissingErr(err error) bool {
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
@@ -220,6 +243,9 @@ func (c *awsS3Client) DownloadIndex(ctx context.Context, key string) ([]byte, er
 	}
 	resp, err := c.api.GetObject(ctx, input)
 	if err != nil {
+		if isNotFoundErr(err) {
+			return nil, fmt.Errorf("get object %s: %w", key, ErrNotFound)
+		}
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
 	defer resp.Body.Close()
