@@ -88,7 +88,7 @@ func (m *MemoryS3Client) DownloadIndex(ctx context.Context, key string) ([]byte,
 	if data, ok := m.index[key]; ok {
 		return append([]byte(nil), data...), nil
 	}
-	return nil, fmt.Errorf("index %s not found", key)
+	return nil, fmt.Errorf("index %s: %w", key, ErrNotFound)
 }
 
 func (m *MemoryS3Client) ListSegments(ctx context.Context, prefix string) ([]S3Object, error) {

@@ -17,8 +17,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
+
+var ErrNotFound = errors.New("not found")
 
 // ByteRange represents an inclusive byte range for reads.
 type ByteRange struct {

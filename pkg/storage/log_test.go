@@ -18,6 +18,7 @@ package storage
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -57,8 +58,6 @@ func TestPartitionLogAppendFlush(t *testing.T) {
 	if res.BaseOffset != 0 {
 		t.Fatalf("expected base offset 0 got %d", res.BaseOffset)
 	}
-	// Force flush
-	time.Sleep(2 * time.Millisecond)
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -87,7 +86,7 @@ func TestPartitionLogRead(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -128,7 +127,7 @@ func TestPartitionLogReadUsesIndexRange(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), record2); err != nil {
 		t.Fatalf("AppendBatch batch2: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -165,7 +164,7 @@ func TestPartitionLogReportsS3Uploads(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -192,7 +191,7 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
+
 	if err := log.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush: %v", err)
 	}
@@ -246,7 +245,6 @@ func TestPartitionLogPrefetchSkippedWhenSemaphoreFull(t *testing.T) {
 		if _, err := writer.AppendBatch(context.Background(), batch); err != nil {
 			t.Fatalf("AppendBatch %d: %v", i, err)
 		}
-		time.Sleep(2 * time.Millisecond)
 		if err := writer.Flush(context.Background()); err != nil {
 			t.Fatalf("Flush %d: %v", i, err)
 		}
@@ -407,6 +405,191 @@ func (f *failingUploadS3) UploadSegment(ctx context.Context, key string, body []
 
 func (f *failingUploadS3) UploadIndex(ctx context.Context, key string, body []byte) error {
 	return fmt.Errorf("simulated S3 upload failure")
+}
+
+func TestPartitionLogRestoreFromS3SkipsOrphanedSegment(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	c := cache.NewSegmentCache(1024)
+	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+
+	batchData := make([]byte, 70)
+	batch, _ := NewRecordBatchFromBytes(batchData)
+	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	s3.mu.Lock()
+	for key := range s3.index {
+		delete(s3.index, key)
+	}
+	s3.mu.Unlock()
+
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+	lastOffset, err := recovered.RestoreFromS3(context.Background())
+	if err != nil {
+		t.Fatalf("RestoreFromS3 should not fail for orphaned .kfs: %v", err)
+	}
+	if lastOffset != -1 {
+		t.Fatalf("expected last offset -1 (no valid segments), got %d", lastOffset)
+	}
+	if len(recovered.segments) != 0 {
+		t.Fatalf("expected no segments, got %d", len(recovered.segments))
+	}
+	// nextOffset is not advanced past the orphan because the metadata store
+	// controls the starting offset. New writes at offset 0 will overwrite
+	// the orphaned .kfs with a valid segment+index pair (self-healing).
+	res, err := recovered.AppendBatch(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("AppendBatch after restore: %v", err)
+	}
+	if res.BaseOffset != 0 {
+		t.Fatalf("expected base offset 0 (metadata store controls offset), got %d", res.BaseOffset)
+	}
+}
+
+func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
+	// A transient S3 error (not ErrNotFound) during DownloadIndex must
+	// propagate as a hard error even for uncommitted segments, because we
+	// cannot distinguish "orphaned .kfs" from "S3 is temporarily down."
+	s3 := NewMemoryS3Client()
+	c := cache.NewSegmentCache(1024)
+	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+
+	batchData := make([]byte, 70)
+	batch, _ := NewRecordBatchFromBytes(batchData)
+	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	transientS3 := &transientIndexErrorS3{MemoryS3Client: s3}
+
+	// The segment's baseOffset (0) >= nextOffset (0), so the offset condition
+	// for orphan-skip is satisfied. But the error is not ErrNotFound, so the
+	// skip must not trigger — we can't tell if .index is missing or S3 is down.
+	recovered := NewPartitionLog("default", "orders", 0, 0, transientS3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+	_, err := recovered.RestoreFromS3(context.Background())
+	if err == nil {
+		t.Fatalf("RestoreFromS3 should fail on transient DownloadIndex error")
+	}
+	if err.Error() == "" || errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected transient error, not ErrNotFound, got: %v", err)
+	}
+}
+
+func TestPartitionLogReadSkipsGap(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	c := cache.NewSegmentCache(1024)
+	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+
+	batch1, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0xAA))
+	if _, err := log.AppendBatch(context.Background(), batch1); err != nil {
+		t.Fatalf("AppendBatch 1: %v", err)
+	}
+
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush 1: %v", err)
+	}
+
+	batch2, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0xBB))
+	if _, err := log.AppendBatch(context.Background(), batch2); err != nil {
+		t.Fatalf("AppendBatch 2: %v", err)
+	}
+
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush 2: %v", err)
+	}
+
+	firstIndexKey := "default/orders/0/segment-00000000000000000000.index"
+	s3.mu.Lock()
+	delete(s3.index, firstIndexKey)
+	s3.mu.Unlock()
+
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+	}, nil, nil, nil)
+	lastOffset, err := recovered.RestoreFromS3(context.Background())
+	if err != nil {
+		t.Fatalf("RestoreFromS3: %v", err)
+	}
+	if len(recovered.segments) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(recovered.segments))
+	}
+	if recovered.segments[0].baseOffset != 1 {
+		t.Fatalf("expected surviving segment base offset 1, got %d", recovered.segments[0].baseOffset)
+	}
+	if lastOffset != 1 {
+		t.Fatalf("expected last offset 1, got %d", lastOffset)
+	}
+
+	data, err := recovered.Read(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("Read at gap offset 0 should snap forward, got error: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected non-empty data from snapped-forward read")
+	}
+}
+
+type transientIndexErrorS3 struct {
+	*MemoryS3Client
+}
+
+func (t *transientIndexErrorS3) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
+	return nil, fmt.Errorf("connection reset by peer")
 }
 
 func makeBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32, marker byte) []byte {
