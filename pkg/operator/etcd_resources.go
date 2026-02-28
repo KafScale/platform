@@ -242,9 +242,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				{Name: "SNAPSHOT_BUCKET", Value: bucket},
 				{Name: "SNAPSHOT_PREFIX", Value: prefix},
 			}
-			if endpoint != "" {
-				restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
-			}
+			restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
 			if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
 				secretRef := corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef}
 				restoreEnv = append(restoreEnv,
@@ -308,7 +306,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 			downloadScript := "set -euo pipefail\n" +
 				"DATA_DIR=/var/lib/etcd\n" +
 				"ENDPOINT_OPT=\"\"\n" +
-				"if [ -n \"$AWS_ENDPOINT_URL\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
+				"if [ -n \"${AWS_ENDPOINT_URL:-}\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
 				"if [ -d \"$DATA_DIR/member\" ] && [ \"$(ls -A \"$DATA_DIR\")\" ]; then\n" +
 				"  echo \"etcd data dir not empty; skipping snapshot download\"\n" +
 				"  exit 0\n" +
@@ -523,9 +521,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 			{Name: "CREATE_BUCKET", Value: boolToString(createBucket)},
 			{Name: "PROTECT_BUCKET", Value: boolToString(protectBucket)},
 		}
-		if endpoint != "" {
-			uploadEnv = append(uploadEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
-		}
+		uploadEnv = append(uploadEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
 		if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
 			secretRef := corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef}
 			uploadEnv = append(uploadEnv,
@@ -574,7 +570,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 						"SNAPSHOT=/snapshots/etcd-snapshot.db\n" +
 						"CHECKSUM=/snapshots/etcd-snapshot.db.sha256\n" +
 						"ENDPOINT_OPT=\"\"\n" +
-						"if [ -n \"$AWS_ENDPOINT_URL\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
+						"if [ -n \"${AWS_ENDPOINT_URL:-}\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
 						"if [ \"$CREATE_BUCKET\" = \"1\" ]; then\n" +
 						"  if ! aws $ENDPOINT_OPT s3api head-bucket --bucket \"$SNAPSHOT_BUCKET\" >/dev/null 2>&1; then\n" +
 						"    if [ \"$AWS_REGION\" = \"us-east-1\" ]; then\n" +
@@ -714,7 +710,7 @@ func etcdReplicas() int32 {
 		return int32(defaultEtcdReplicas)
 	}
 	parsed, err := strconv.ParseInt(raw, 10, 32)
-	if err != nil || parsed < int64(defaultEtcdReplicas) {
+	if err != nil || parsed < 1 {
 		return int32(defaultEtcdReplicas)
 	}
 	return int32(parsed)
