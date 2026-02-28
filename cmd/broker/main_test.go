@@ -1818,12 +1818,9 @@ func TestBuildS3ConfigsFromEnv(t *testing.T) {
 	t.Setenv("KAFSCALE_S3_READ_REGION", "us-east-2")
 	t.Setenv("KAFSCALE_S3_READ_ENDPOINT", "http://s3-read.local")
 
-	writeCfg, readCfg, useMemory, usingDefaultMinio, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
+	writeCfg, readCfg, useMemory, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
 	if useMemory {
 		t.Fatalf("expected useMemory false")
-	}
-	if usingDefaultMinio {
-		t.Fatalf("expected non-default minio")
 	}
 	if !credsProvided {
 		t.Fatalf("expected credsProvided true")
@@ -1862,35 +1859,45 @@ func TestBuildS3ConfigsFromEnvDefaults(t *testing.T) {
 	t.Setenv("KAFSCALE_S3_READ_REGION", "")
 	t.Setenv("KAFSCALE_S3_READ_ENDPOINT", "")
 
-	writeCfg, readCfg, useMemory, usingDefaultMinio, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
+	writeCfg, readCfg, useMemory, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
 	if useMemory {
 		t.Fatalf("expected useMemory false by default")
 	}
-	if !usingDefaultMinio {
-		t.Fatalf("expected default minio true")
-	}
-	if !credsProvided {
-		t.Fatalf("expected default minio creds to be injected")
+	if credsProvided {
+		t.Fatalf("expected no credentials when env vars are empty")
 	}
 	if useReadReplica {
 		t.Fatalf("expected read replica disabled")
 	}
-	if writeCfg.Bucket != defaultMinioBucket || writeCfg.Region != defaultMinioRegion || writeCfg.Endpoint != defaultMinioEndpoint {
-		t.Fatalf("unexpected default write config: %+v", writeCfg)
+	if writeCfg.Bucket != "" || writeCfg.Region != "" || writeCfg.Endpoint != "" {
+		t.Fatalf("expected empty config when env vars are unset: %+v", writeCfg)
 	}
-	if readCfg.Bucket != defaultMinioBucket || readCfg.Region != defaultMinioRegion || readCfg.Endpoint != defaultMinioEndpoint {
-		t.Fatalf("unexpected default read config: %+v", readCfg)
+	if writeCfg.ForcePathStyle {
+		t.Fatalf("expected forcePathStyle false when no endpoint is set")
+	}
+	if readCfg.Bucket != "" || readCfg.Region != "" || readCfg.Endpoint != "" {
+		t.Fatalf("expected empty read config when env vars are unset: %+v", readCfg)
 	}
 }
 
 func TestBuildS3ConfigsFromEnvUseMemory(t *testing.T) {
 	t.Setenv("KAFSCALE_USE_MEMORY_S3", "1")
-	_, _, useMemory, usingDefaultMinio, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
+	_, _, useMemory, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
 	if !useMemory {
 		t.Fatalf("expected useMemory true")
 	}
-	if usingDefaultMinio || credsProvided || useReadReplica {
+	if credsProvided || useReadReplica {
 		t.Fatalf("unexpected flags for memory mode")
+	}
+}
+
+func TestBuildS3ConfigsFromEnvPathStyleDefaultsToEndpoint(t *testing.T) {
+	t.Setenv("KAFSCALE_S3_ENDPOINT", "http://minio.local:9000")
+	t.Setenv("KAFSCALE_S3_PATH_STYLE", "")
+
+	writeCfg, _, _, _, _ := buildS3ConfigsFromEnv()
+	if !writeCfg.ForcePathStyle {
+		t.Fatalf("expected forcePathStyle true when custom endpoint is set")
 	}
 }
 

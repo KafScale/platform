@@ -52,12 +52,7 @@ const (
 	defaultKafkaPort      = 19092
 	defaultMetricsAddr    = ":19093"
 	defaultControlAddr    = ":19094"
-	defaultMinioBucket    = "kafscale"
-	defaultMinioRegion    = "us-east-1"
-	defaultMinioEndpoint  = "http://127.0.0.1:9000"
-	defaultMinioAccessKey = "minioadmin"
-	defaultMinioSecretKey  = "minioadmin"
-	defaultS3Concurrency   = 64
+	defaultS3Concurrency = 64
 	brokerVersion          = "dev"
 )
 
@@ -2170,7 +2165,7 @@ func main() {
 }
 
 func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
-	writeCfg, readCfg, useMemory, usingDefaultMinio, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
+	writeCfg, readCfg, useMemory, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
 	if useMemory {
 		logger.Info("using in-memory S3 client", "env", "KAFSCALE_USE_MEMORY_S3=1")
 		return storage.NewMemoryS3Client()
@@ -2187,7 +2182,7 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 		os.Exit(1)
 	}
 
-	logger.Info("using AWS-compatible S3 client", "bucket", writeCfg.Bucket, "region", writeCfg.Region, "endpoint", writeCfg.Endpoint, "force_path_style", writeCfg.ForcePathStyle, "kms_configured", writeCfg.KMSKeyARN != "", "default_minio", usingDefaultMinio, "credentials_provided", credsProvided)
+	logger.Info("using AWS-compatible S3 client", "bucket", writeCfg.Bucket, "region", writeCfg.Region, "endpoint", writeCfg.Endpoint, "force_path_style", writeCfg.ForcePathStyle, "kms_configured", writeCfg.KMSKeyARN != "", "credentials_provided", credsProvided)
 
 	if useReadReplica {
 		readClient, err := storage.NewS3Client(ctx, readCfg)
@@ -2202,23 +2197,18 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 	return client
 }
 
-func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bool, bool) {
+func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bool) {
 	if parseEnvBool("KAFSCALE_USE_MEMORY_S3", false) {
-		return storage.S3Config{}, storage.S3Config{}, true, false, false, false
+		return storage.S3Config{}, storage.S3Config{}, true, false, false
 	}
-	writeBucket := envOrDefault("KAFSCALE_S3_BUCKET", defaultMinioBucket)
-	writeRegion := envOrDefault("KAFSCALE_S3_REGION", defaultMinioRegion)
-	writeEndpoint := envOrDefault("KAFSCALE_S3_ENDPOINT", defaultMinioEndpoint)
-	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", true)
+	writeBucket := os.Getenv("KAFSCALE_S3_BUCKET")
+	writeRegion := os.Getenv("KAFSCALE_S3_REGION")
+	writeEndpoint := os.Getenv("KAFSCALE_S3_ENDPOINT")
+	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", writeEndpoint != "")
 	kmsARN := os.Getenv("KAFSCALE_S3_KMS_ARN")
-	usingDefaultMinio := writeBucket == defaultMinioBucket && writeRegion == defaultMinioRegion && writeEndpoint == defaultMinioEndpoint
 	accessKey := os.Getenv("KAFSCALE_S3_ACCESS_KEY")
 	secretKey := os.Getenv("KAFSCALE_S3_SECRET_KEY")
 	sessionToken := os.Getenv("KAFSCALE_S3_SESSION_TOKEN")
-	if accessKey == "" && secretKey == "" && usingDefaultMinio {
-		accessKey = defaultMinioAccessKey
-		secretKey = defaultMinioSecretKey
-	}
 	credsProvided := accessKey != "" && secretKey != ""
 	s3Concurrency := parseEnvInt("KAFSCALE_S3_CONCURRENCY", defaultS3Concurrency)
 	writeCfg := storage.S3Config{
@@ -2257,7 +2247,7 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 		KMSKeyARN:       kmsARN,
 		MaxConnections:  s3Concurrency,
 	}
-	return writeCfg, readCfg, false, usingDefaultMinio, credsProvided, useReadReplica
+	return writeCfg, readCfg, false, credsProvided, useReadReplica
 }
 
 func buildConnContextFunc(logger *slog.Logger) broker.ConnContextFunc {
