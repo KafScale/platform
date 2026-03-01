@@ -54,6 +54,11 @@ type proxy struct {
 	cacheMu        sync.RWMutex
 	cachedBackends []string
 	apiVersions    []protocol.ApiVersion
+	router         *metadata.PartitionRouter
+	brokerAddrMu   sync.RWMutex
+	brokerAddrs    map[string]string // brokerID -> "host:port"
+	backendRetries int
+	backendBackoff time.Duration
 }
 
 func main() {
@@ -87,6 +92,14 @@ func main() {
 		logger.Warn("KAFSCALE_PROXY_ADVERTISED_HOST not set; clients may not resolve the proxy address")
 	}
 
+	backendRetries := envInt("KAFSCALE_PROXY_BACKEND_RETRIES", 6)
+	if backendRetries < 1 {
+		backendRetries = 1
+	}
+	if backendBackoff <= 0 {
+		backendBackoff = 500 * time.Millisecond
+	}
+
 	p := &proxy{
 		addr:           addr,
 		advertisedHost: advertisedHost,
@@ -97,6 +110,19 @@ func main() {
 		dialTimeout:    5 * time.Second,
 		cacheTTL:       cacheTTL,
 		apiVersions:    generateProxyApiVersions(),
+		brokerAddrs:    make(map[string]string),
+		backendRetries: backendRetries,
+		backendBackoff: backendBackoff,
+	}
+
+	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
+		router, err := metadata.NewPartitionRouter(ctx, etcdStore.EtcdClient(), logger)
+		if err != nil {
+			logger.Warn("partition router init failed; using round-robin routing", "error", err)
+		} else {
+			p.router = router
+			logger.Info("partition-aware routing enabled")
+		}
 	}
 	if len(backends) > 0 {
 		p.setCachedBackends(backends)
@@ -110,6 +136,9 @@ func main() {
 	if err := p.listenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("proxy server error", "error", err)
 		os.Exit(1)
+	}
+	if p.router != nil {
+		p.router.Stop()
 	}
 }
 
@@ -269,12 +298,14 @@ func (p *proxy) cacheFresh() bool {
 }
 
 func (p *proxy) startBackendRefresh(ctx context.Context, backoff time.Duration) {
-	if p.store == nil || len(p.backends) > 0 {
+	if p.store == nil {
 		return
 	}
 	if backoff <= 0 {
 		backoff = 500 * time.Millisecond
 	}
+	// Eagerly populate broker ID -> address mapping before accepting connections.
+	p.refreshBrokerAddrs(ctx)
 	ticker := time.NewTicker(3 * time.Second)
 	go func() {
 		defer ticker.Stop()
@@ -283,6 +314,11 @@ func (p *proxy) startBackendRefresh(ctx context.Context, backoff time.Duration) 
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if len(p.backends) > 0 {
+					// Static backends: only refresh broker ID mapping.
+					p.refreshBrokerAddrs(ctx)
+					continue
+				}
 				_, err := p.refreshBackends(ctx)
 				if err != nil {
 					if !p.cacheFresh() {
@@ -338,6 +374,13 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	var backendConn net.Conn
 	var backendAddr string
+	defer func() {
+		if backendConn != nil {
+			backendConn.Close()
+		}
+	}()
+	pool := newConnPool(p.dialTimeout)
+	defer pool.Close()
 
 	for {
 		frame, err := protocol.ReadFrame(conn)
@@ -400,6 +443,22 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				return
 			}
 			continue
+		case protocol.APIKeyProduce:
+			resp, err := p.handleProduceRouting(ctx, header, frame.Payload, pool)
+			if err != nil {
+				p.logger.Warn("produce routing failed", "error", err)
+				p.respondBackendError(conn, header, frame.Payload)
+				return
+			}
+			if resp == nil {
+				// acks=0: no response expected by the client.
+				continue
+			}
+			if err := protocol.WriteFrame(conn, resp); err != nil {
+				p.logger.Warn("write produce response failed", "error", err)
+				return
+			}
+			continue
 		default:
 		}
 
@@ -433,6 +492,408 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+}
+
+// connPool is a per-client-connection pool of backend TCP connections, keyed by
+// broker address. Connections are reused across produces from the same client
+// and cleaned up when the client disconnects.
+type connPool struct {
+	conns       map[string]net.Conn
+	dialTimeout time.Duration
+}
+
+func newConnPool(dialTimeout time.Duration) *connPool {
+	return &connPool{
+		conns:       make(map[string]net.Conn),
+		dialTimeout: dialTimeout,
+	}
+}
+
+// Borrow returns a pooled connection for addr (removing it from the pool), or
+// dials a new one. The caller must either Return or close the connection.
+func (cp *connPool) Borrow(ctx context.Context, addr string) (net.Conn, error) {
+	if c, ok := cp.conns[addr]; ok {
+		delete(cp.conns, addr)
+		return c, nil
+	}
+	dialer := net.Dialer{Timeout: cp.dialTimeout}
+	return dialer.DialContext(ctx, "tcp", addr)
+}
+
+// Return puts a connection back into the pool, closing any existing connection
+// for the same address.
+func (cp *connPool) Return(addr string, conn net.Conn) {
+	if old, ok := cp.conns[addr]; ok {
+		old.Close()
+	}
+	cp.conns[addr] = conn
+}
+
+// Close closes all pooled connections.
+func (cp *connPool) Close() {
+	for addr, c := range cp.conns {
+		c.Close()
+		delete(cp.conns, addr)
+	}
+}
+
+// handleProduceRouting routes produce requests to the partition-owning broker(s).
+// The request is split by owning broker, forwarded concurrently, and responses
+// are merged. On NOT_LEADER_OR_FOLLOWER, failed partitions are retried on a
+// different broker.
+//
+// Returns (nil, nil) for acks=0 produces (fire-and-forget, no client response).
+func (p *proxy) handleProduceRouting(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
+	_, req, err := protocol.ParseRequest(payload)
+	if err != nil {
+		return p.forwardProduceRaw(ctx, payload, pool)
+	}
+	produceReq, ok := req.(*protocol.ProduceRequest)
+	if !ok || len(produceReq.Topics) == 0 {
+		return p.forwardProduceRaw(ctx, payload, pool)
+	}
+
+	if produceReq.Acks == 0 {
+		p.fireAndForgetProduce(ctx, header, produceReq, payload, pool)
+		return nil, nil
+	}
+
+	groups := p.groupPartitionsByBroker(produceReq, nil)
+	return p.forwardProduce(ctx, header, produceReq, payload, groups, pool)
+}
+
+// forwardProduceRaw forwards an unparseable produce payload to any backend.
+// Used when the request can't be parsed (e.g. unsupported version).
+func (p *proxy) forwardProduceRaw(ctx context.Context, payload []byte, pool *connPool) ([]byte, error) {
+	conn, addr, err := p.connectForAddr(ctx, "", nil, pool)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.forwardToBackend(ctx, conn, addr, payload)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	pool.Return(addr, conn)
+	return resp, nil
+}
+
+// fireAndForgetProduce writes a produce request to backends without reading a
+// response. Used for acks=0 produces where the Kafka protocol specifies no
+// server response.
+func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.RequestHeader, req *protocol.ProduceRequest, originalPayload []byte, pool *connPool) {
+	groups := p.groupPartitionsByBroker(req, nil)
+
+	for addr, subReq := range groups {
+		var payload []byte
+		if len(groups) == 1 {
+			payload = originalPayload
+		} else {
+			encoded, err := protocol.EncodeProduceRequest(header, subReq, header.APIVersion)
+			if err != nil {
+				p.logger.Warn("fire-and-forget encode failed", "error", err)
+				continue
+			}
+			payload = encoded
+		}
+
+		conn, targetAddr, err := p.connectForAddr(ctx, addr, nil, pool)
+		if err != nil {
+			p.logger.Debug("fire-and-forget connect failed", "target", addr, "error", err)
+			continue
+		}
+		if writeErr := protocol.WriteFrame(conn, payload); writeErr != nil {
+			conn.Close()
+			p.logger.Debug("fire-and-forget write failed", "target", targetAddr, "error", writeErr)
+			continue
+		}
+		pool.Return(targetAddr, conn)
+	}
+}
+
+// groupPartitionsByBroker groups topic-partitions by the owning broker's address.
+// If include is non-nil, only partitions present in the include map are grouped.
+// Partitions with no known owner are grouped under "" for round-robin fallback.
+func (p *proxy) groupPartitionsByBroker(req *protocol.ProduceRequest, include map[string]map[int32]bool) map[string]*protocol.ProduceRequest {
+	groups := make(map[string]*protocol.ProduceRequest)
+	topicIndices := make(map[string]map[string]int) // addr -> topic name -> index in subReq.Topics
+
+	for _, topic := range req.Topics {
+		var includeParts map[int32]bool
+		if include != nil {
+			includeParts = include[topic.Name]
+			if len(includeParts) == 0 {
+				continue
+			}
+		}
+		for _, part := range topic.Partitions {
+			if includeParts != nil && !includeParts[part.Partition] {
+				continue
+			}
+			addr := ""
+			if p.router != nil {
+				if ownerID := p.router.LookupOwner(topic.Name, part.Partition); ownerID != "" {
+					addr = p.brokerIDToAddr(ownerID)
+				}
+			}
+			subReq, ok := groups[addr]
+			if !ok {
+				subReq = &protocol.ProduceRequest{
+					Acks:            req.Acks,
+					TimeoutMs:       req.TimeoutMs,
+					TransactionalID: req.TransactionalID,
+				}
+				groups[addr] = subReq
+				topicIndices[addr] = make(map[string]int)
+			}
+			idx, ok := topicIndices[addr][topic.Name]
+			if !ok {
+				idx = len(subReq.Topics)
+				subReq.Topics = append(subReq.Topics, protocol.ProduceTopic{Name: topic.Name})
+				topicIndices[addr][topic.Name] = idx
+			}
+			subReq.Topics[idx].Partitions = append(subReq.Topics[idx].Partitions, part)
+		}
+	}
+	return groups
+}
+
+// forwardProduce splits a produce request by broker, forwards each sub-request
+// concurrently, and merges the responses. If any partitions are rejected with
+// NOT_LEADER_OR_FOLLOWER, those partitions are retried on a different broker
+// (up to maxRetries total attempts).
+func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHeader, fullReq *protocol.ProduceRequest, originalPayload []byte, groups map[string]*protocol.ProduceRequest, pool *connPool) ([]byte, error) {
+	const maxRetries = 3
+
+	merged := &protocol.ProduceResponse{
+		CorrelationID: header.CorrelationID,
+	}
+
+	var failedPartitions map[string]map[int32]bool
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		failedPartitions = nil
+		// Scope triedBackends per attempt so that retries can revisit brokers
+		// from earlier attempts. Without this, with N brokers all N get excluded
+		// after the first attempt and subsequent retries always fail to connect.
+		triedBackends := make(map[string]bool)
+		subResults := p.fanOutProduce(ctx, header, groups, originalPayload, triedBackends, pool)
+
+		for _, r := range subResults {
+			if r.err != nil {
+				p.logger.Warn("produce forward failed", "target", r.target, "error", r.err)
+				addErrorForAllPartitions(merged, r.subReq, protocol.REQUEST_TIMED_OUT)
+				continue
+			}
+			if r.conn != nil {
+				pool.Return(r.target, r.conn)
+			}
+			for _, topic := range r.subResp.Topics {
+				for _, part := range topic.Partitions {
+					if part.ErrorCode == protocol.NOT_LEADER_OR_FOLLOWER {
+						if failedPartitions == nil {
+							failedPartitions = make(map[string]map[int32]bool)
+						}
+						if failedPartitions[topic.Name] == nil {
+							failedPartitions[topic.Name] = make(map[int32]bool)
+						}
+						failedPartitions[topic.Name][part.Partition] = true
+						if p.router != nil {
+							p.router.Invalidate(topic.Name, part.Partition)
+						}
+					} else {
+						tr := findOrAddTopicResponse(merged, topic.Name)
+						tr.Partitions = append(tr.Partitions, part)
+					}
+				}
+			}
+			if r.subResp.ThrottleMs > merged.ThrottleMs {
+				merged.ThrottleMs = r.subResp.ThrottleMs
+			}
+		}
+
+		if len(failedPartitions) == 0 {
+			return protocol.EncodeProduceResponse(merged, header.APIVersion)
+		}
+
+		groups = p.groupPartitionsByBroker(fullReq, failedPartitions)
+		originalPayload = nil // force re-encoding on retry
+		if len(groups) == 0 {
+			break
+		}
+		p.logger.Debug("retrying NOT_LEADER partitions", "attempt", attempt+1, "partitions", len(failedPartitions))
+	}
+
+	for _, topic := range fullReq.Topics {
+		failedParts, ok := failedPartitions[topic.Name]
+		if !ok {
+			continue
+		}
+		tr := findOrAddTopicResponse(merged, topic.Name)
+		for _, part := range topic.Partitions {
+			if failedParts[part.Partition] {
+				tr.Partitions = append(tr.Partitions, protocol.ProducePartitionResponse{
+					Partition:  part.Partition,
+					ErrorCode:  protocol.NOT_LEADER_OR_FOLLOWER,
+					BaseOffset: -1,
+				})
+			}
+		}
+	}
+	return protocol.EncodeProduceResponse(merged, header.APIVersion)
+}
+
+type fanOutResult struct {
+	subReq  *protocol.ProduceRequest
+	subResp *protocol.ProduceResponse
+	conn    net.Conn // non-nil on success; caller must Return or Close
+	target  string
+	err     error
+}
+
+// fanOutProduce borrows connections and forwards sub-requests concurrently.
+// When there's only one group and originalPayload is non-nil, the original
+// payload is forwarded as-is (avoiding re-encoding).
+func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeader, groups map[string]*protocol.ProduceRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fanOutResult {
+	type workItem struct {
+		subReq  *protocol.ProduceRequest
+		conn    net.Conn
+		target  string
+		payload []byte
+	}
+	work := make([]workItem, 0, len(groups))
+	var connectErrors []fanOutResult
+
+	canUseOriginal := originalPayload != nil && len(groups) == 1
+	for addr, subReq := range groups {
+		conn, targetAddr, err := p.connectForAddr(ctx, addr, triedBackends, pool)
+		if err != nil {
+			connectErrors = append(connectErrors, fanOutResult{subReq: subReq, target: addr, err: err})
+			continue
+		}
+		triedBackends[targetAddr] = true
+
+		var payload []byte
+		if canUseOriginal {
+			payload = originalPayload
+		} else {
+			encoded, encErr := protocol.EncodeProduceRequest(header, subReq, header.APIVersion)
+			if encErr != nil {
+				conn.Close()
+				connectErrors = append(connectErrors, fanOutResult{subReq: subReq, target: targetAddr, err: encErr})
+				continue
+			}
+			payload = encoded
+		}
+		work = append(work, workItem{subReq: subReq, conn: conn, target: targetAddr, payload: payload})
+	}
+
+	results := make([]fanOutResult, len(work))
+	var wg sync.WaitGroup
+	for i := range work {
+		i := i
+		w := work[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			respBytes, err := p.forwardToBackend(ctx, w.conn, w.target, w.payload)
+			if err != nil {
+				w.conn.Close()
+				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: err}
+				return
+			}
+			subResp, parseErr := protocol.ParseProduceResponse(respBytes, header.APIVersion)
+			if parseErr != nil {
+				w.conn.Close()
+				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: parseErr}
+				return
+			}
+			results[i] = fanOutResult{subReq: w.subReq, subResp: subResp, conn: w.conn, target: w.target}
+		}()
+	}
+	wg.Wait()
+
+	return append(connectErrors, results...)
+}
+
+// connectForAddr borrows or dials a connection for the given addr. If addr is
+// empty, a round-robin backend is selected (excluding triedBackends).
+func (p *proxy) connectForAddr(ctx context.Context, addr string, exclude map[string]bool, pool *connPool) (net.Conn, string, error) {
+	if addr != "" && !exclude[addr] {
+		conn, err := pool.Borrow(ctx, addr)
+		if err == nil {
+			return conn, addr, nil
+		}
+	}
+	return p.connectBackendExcluding(ctx, exclude)
+}
+
+func findOrAddTopicResponse(resp *protocol.ProduceResponse, name string) *protocol.ProduceTopicResponse {
+	for i := range resp.Topics {
+		if resp.Topics[i].Name == name {
+			return &resp.Topics[i]
+		}
+	}
+	resp.Topics = append(resp.Topics, protocol.ProduceTopicResponse{Name: name})
+	return &resp.Topics[len(resp.Topics)-1]
+}
+
+// addErrorForAllPartitions fills the response with errorCode for every partition
+// in the sub-request (used when a broker is unreachable).
+func addErrorForAllPartitions(resp *protocol.ProduceResponse, req *protocol.ProduceRequest, errorCode int16) {
+	for _, topic := range req.Topics {
+		topicResp := findOrAddTopicResponse(resp, topic.Name)
+		for _, part := range topic.Partitions {
+			topicResp.Partitions = append(topicResp.Partitions, protocol.ProducePartitionResponse{
+				Partition:  part.Partition,
+				ErrorCode:  errorCode,
+				BaseOffset: -1,
+			})
+		}
+	}
+}
+
+func (p *proxy) brokerIDToAddr(brokerID string) string {
+	p.brokerAddrMu.RLock()
+	addr := p.brokerAddrs[brokerID]
+	p.brokerAddrMu.RUnlock()
+	return addr
+}
+
+// connectBackendExcluding connects to a backend not in the exclude set.
+// Uses the retry/backoff configured at startup.
+func (p *proxy) connectBackendExcluding(ctx context.Context, exclude map[string]bool) (net.Conn, string, error) {
+	var lastErr error
+	for attempt := 0; attempt < p.backendRetries; attempt++ {
+		backends, err := p.currentBackends(ctx)
+		if err != nil || len(backends) == 0 {
+			if cached := p.cachedBackendsSnapshot(); len(cached) > 0 && p.cacheFresh() {
+				backends = cached
+			} else {
+				lastErr = err
+				time.Sleep(p.backendBackoff)
+				continue
+			}
+		}
+
+		startIndex := int(atomic.AddUint32(&p.rr, 1))
+		for i := 0; i < len(backends); i++ {
+			addr := backends[(startIndex+i)%len(backends)]
+			if exclude[addr] {
+				continue
+			}
+			dialer := net.Dialer{Timeout: p.dialTimeout}
+			conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+			if dialErr == nil {
+				return conn, addr, nil
+			}
+			lastErr = dialErr
+		}
+		time.Sleep(p.backendBackoff)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no backends available")
+	}
+	return nil, "", lastErr
 }
 
 func (p *proxy) handleApiVersions(header *protocol.RequestHeader) ([]byte, error) {
@@ -973,42 +1434,7 @@ func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID in
 }
 
 func (p *proxy) connectBackend(ctx context.Context) (net.Conn, string, error) {
-	retries := envInt("KAFSCALE_PROXY_BACKEND_RETRIES", 6)
-	if retries < 1 {
-		retries = 1
-	}
-	backoff := time.Duration(envInt("KAFSCALE_PROXY_BACKEND_BACKOFF_MS", 500)) * time.Millisecond
-	if backoff <= 0 {
-		backoff = 500 * time.Millisecond
-	}
-	var lastErr error
-	for attempt := 0; attempt < retries; attempt++ {
-		backends, err := p.currentBackends(ctx)
-		if err != nil || len(backends) == 0 {
-			if cached := p.cachedBackendsSnapshot(); len(cached) > 0 && p.cacheFresh() {
-				backends = cached
-				err = nil
-			}
-		}
-		if err != nil || len(backends) == 0 {
-			lastErr = err
-			time.Sleep(backoff)
-			continue
-		}
-		index := atomic.AddUint32(&p.rr, 1)
-		addr := backends[int(index)%len(backends)]
-		dialer := net.Dialer{Timeout: p.dialTimeout}
-		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
-		if dialErr == nil {
-			return conn, addr, nil
-		}
-		lastErr = dialErr
-		time.Sleep(backoff)
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no backends available")
-	}
-	return nil, "", lastErr
+	return p.connectBackendExcluding(ctx, nil)
 }
 
 func (p *proxy) currentBackends(ctx context.Context) ([]string, error) {
@@ -1031,7 +1457,36 @@ func (p *proxy) currentBackends(ctx context.Context) ([]string, error) {
 		p.touchHealthy()
 		p.setReady(true)
 	}
+	p.updateBrokerAddrs(meta.Brokers)
 	return addrs, nil
+}
+
+// updateBrokerAddrs rebuilds the broker ID -> address mapping from metadata.
+func (p *proxy) updateBrokerAddrs(brokers []protocol.MetadataBroker) {
+	brokerAddrs := make(map[string]string, len(brokers))
+	for _, broker := range brokers {
+		if broker.Host == "" || broker.Port == 0 {
+			continue
+		}
+		brokerAddrs[fmt.Sprintf("%d", broker.NodeID)] = fmt.Sprintf("%s:%d", broker.Host, broker.Port)
+	}
+	p.brokerAddrMu.Lock()
+	p.brokerAddrs = brokerAddrs
+	p.brokerAddrMu.Unlock()
+}
+
+// refreshBrokerAddrs queries metadata solely to update the broker ID -> address
+// mapping. Used when static backends are configured (so currentBackends returns
+// early) but partition-aware routing still needs broker ID resolution.
+func (p *proxy) refreshBrokerAddrs(ctx context.Context) {
+	if p.store == nil {
+		return
+	}
+	meta, err := p.store.Metadata(ctx, nil)
+	if err != nil {
+		return
+	}
+	p.updateBrokerAddrs(meta.Brokers)
 }
 
 func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr string, payload []byte) ([]byte, error) {

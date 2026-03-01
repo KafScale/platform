@@ -596,6 +596,149 @@ func EncodeProduceResponse(resp *ProduceResponse, version int16) ([]byte, error)
 	return w.Bytes(), nil
 }
 
+// ParseProduceResponse decodes a produce response from wire-format bytes.
+// This is the inverse of EncodeProduceResponse and supports the same version range.
+func ParseProduceResponse(payload []byte, version int16) (*ProduceResponse, error) {
+	r := newByteReader(payload)
+	flexible := version >= 9
+
+	corrID, err := r.Int32()
+	if err != nil {
+		return nil, fmt.Errorf("read correlation id: %w", err)
+	}
+	if flexible {
+		if err := r.SkipTaggedFields(); err != nil {
+			return nil, fmt.Errorf("skip response header tags: %w", err)
+		}
+	}
+
+	var topicCount int32
+	if flexible {
+		topicCount, err = compactArrayLenNonNull(r)
+	} else {
+		topicCount, err = r.Int32()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read topic count: %w", err)
+	}
+
+	topics := make([]ProduceTopicResponse, 0, topicCount)
+	for i := int32(0); i < topicCount; i++ {
+		var name string
+		if flexible {
+			name, err = r.CompactString()
+		} else {
+			name, err = r.String()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read topic name: %w", err)
+		}
+
+		var partCount int32
+		if flexible {
+			partCount, err = compactArrayLenNonNull(r)
+		} else {
+			partCount, err = r.Int32()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read partition count: %w", err)
+		}
+
+		partitions := make([]ProducePartitionResponse, 0, partCount)
+		for j := int32(0); j < partCount; j++ {
+			partIdx, err := r.Int32()
+			if err != nil {
+				return nil, fmt.Errorf("read partition index: %w", err)
+			}
+			errorCode, err := r.Int16()
+			if err != nil {
+				return nil, fmt.Errorf("read error code: %w", err)
+			}
+			baseOffset, err := r.Int64()
+			if err != nil {
+				return nil, fmt.Errorf("read base offset: %w", err)
+			}
+			var logAppendTimeMs, logStartOffset int64
+			if version >= 3 {
+				logAppendTimeMs, err = r.Int64()
+				if err != nil {
+					return nil, fmt.Errorf("read log append time: %w", err)
+				}
+			}
+			if version >= 5 {
+				logStartOffset, err = r.Int64()
+				if err != nil {
+					return nil, fmt.Errorf("read log start offset: %w", err)
+				}
+			}
+			if version >= 8 {
+				if flexible {
+					arrLen, err := r.CompactArrayLen()
+					if err != nil {
+						return nil, fmt.Errorf("read error records len: %w", err)
+					}
+					for k := int32(0); k < arrLen; k++ {
+						if _, err := r.CompactBytes(); err != nil {
+							return nil, fmt.Errorf("skip error record: %w", err)
+						}
+					}
+					if _, err := r.CompactNullableString(); err != nil {
+						return nil, fmt.Errorf("read error message: %w", err)
+					}
+				} else {
+					arrLen, err := r.Int32()
+					if err != nil {
+						return nil, fmt.Errorf("read error records len: %w", err)
+					}
+					for k := int32(0); k < arrLen; k++ {
+						if _, err := r.Bytes(); err != nil {
+							return nil, fmt.Errorf("skip error record: %w", err)
+						}
+					}
+					if _, err := r.NullableString(); err != nil {
+						return nil, fmt.Errorf("read error message: %w", err)
+					}
+				}
+			}
+			if flexible {
+				if err := r.SkipTaggedFields(); err != nil {
+					return nil, fmt.Errorf("skip partition tags: %w", err)
+				}
+			}
+			partitions = append(partitions, ProducePartitionResponse{
+				Partition:       partIdx,
+				ErrorCode:       errorCode,
+				BaseOffset:      baseOffset,
+				LogAppendTimeMs: logAppendTimeMs,
+				LogStartOffset:  logStartOffset,
+			})
+		}
+		if flexible {
+			if err := r.SkipTaggedFields(); err != nil {
+				return nil, fmt.Errorf("skip topic tags: %w", err)
+			}
+		}
+		topics = append(topics, ProduceTopicResponse{Name: name, Partitions: partitions})
+	}
+
+	var throttleMs int32
+	if version >= 1 {
+		throttleMs, err = r.Int32()
+		if err != nil {
+			return nil, fmt.Errorf("read throttle ms: %w", err)
+		}
+	}
+	if flexible {
+		_ = r.SkipTaggedFields()
+	}
+
+	return &ProduceResponse{
+		CorrelationID: corrID,
+		Topics:        topics,
+		ThrottleMs:    throttleMs,
+	}, nil
+}
+
 // EncodeFetchResponse renders bytes for fetch responses.
 func EncodeFetchResponse(resp *FetchResponse, version int16) ([]byte, error) {
 	if version < 1 || version > 13 {

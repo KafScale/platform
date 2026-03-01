@@ -17,8 +17,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -366,3 +369,225 @@ func readString(r *bytes.Reader) (string, error) {
 	}
 	return string(buf), nil
 }
+
+func makeProduceRequest(topics map[string][]int32) *protocol.ProduceRequest {
+	req := &protocol.ProduceRequest{Acks: -1, TimeoutMs: 5000}
+	for name, parts := range topics {
+		topic := protocol.ProduceTopic{Name: name}
+		for _, p := range parts {
+			topic.Partitions = append(topic.Partitions, protocol.ProducePartition{
+				Partition: p,
+				Records:   []byte{1, 2, 3},
+			})
+		}
+		req.Topics = append(req.Topics, topic)
+	}
+	return req
+}
+
+func TestGroupPartitionsByBrokerNoRouter(t *testing.T) {
+	p := &proxy{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0},
+	})
+	groups := p.groupPartitionsByBroker(req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (all round-robin), got %d", len(groups))
+	}
+	rr, ok := groups[""]
+	if !ok {
+		t.Fatalf("expected round-robin group (key=\"\"), got keys: %v", mapKeys(groups))
+	}
+	totalParts := 0
+	for _, topic := range rr.Topics {
+		totalParts += len(topic.Partitions)
+	}
+	if totalParts != 4 {
+		t.Fatalf("expected 4 total partitions, got %d", totalParts)
+	}
+	if rr.Acks != -1 || rr.TimeoutMs != 5000 {
+		t.Fatalf("sub-request should preserve acks/timeout: got acks=%d timeout=%d", rr.Acks, rr.TimeoutMs)
+	}
+}
+
+func TestGroupPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
+	p := &proxy{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0, 1, 2},
+	})
+	groups := p.groupPartitionsByBroker(req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("expected round-robin group")
+	}
+	if countPartitions(rr) != 5 {
+		t.Fatalf("expected 5 partitions, got %d", countPartitions(rr))
+	}
+	topicNames := make(map[string]int)
+	for _, topic := range rr.Topics {
+		topicNames[topic.Name] = len(topic.Partitions)
+	}
+	if topicNames["orders"] != 2 || topicNames["events"] != 3 {
+		t.Fatalf("unexpected topic grouping: %v", topicNames)
+	}
+}
+
+func TestGroupPartitionsByBrokerFiltersCorrectly(t *testing.T) {
+	p := &proxy{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0, 1},
+	})
+	include := map[string]map[int32]bool{
+		"orders": {1: true},
+		"events": {0: true},
+	}
+	groups := p.groupPartitionsByBroker(req, include)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (no router), got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("missing round-robin group")
+	}
+	if countPartitions(rr) != 2 {
+		t.Fatalf("expected 2 filtered partitions, got %d", countPartitions(rr))
+	}
+}
+
+func TestFindOrAddTopicResponse(t *testing.T) {
+	resp := &protocol.ProduceResponse{}
+
+	tr := findOrAddTopicResponse(resp, "orders")
+	tr.Partitions = append(tr.Partitions, protocol.ProducePartitionResponse{Partition: 0})
+
+	// Second call should return the same topic, not create a new one.
+	tr2 := findOrAddTopicResponse(resp, "orders")
+	if len(tr2.Partitions) != 1 {
+		t.Fatalf("expected 1 partition in existing topic, got %d", len(tr2.Partitions))
+	}
+
+	// Different topic.
+	tr3 := findOrAddTopicResponse(resp, "events")
+	if len(tr3.Partitions) != 0 {
+		t.Fatalf("expected 0 partitions in new topic, got %d", len(tr3.Partitions))
+	}
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics in response, got %d", len(resp.Topics))
+	}
+}
+
+func TestAddErrorForAllPartitions(t *testing.T) {
+	resp := &protocol.ProduceResponse{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0},
+	})
+	addErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics, got %d", len(resp.Topics))
+	}
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected error %d, got %d", protocol.REQUEST_TIMED_OUT, part.ErrorCode)
+			}
+			if part.BaseOffset != -1 {
+				t.Fatalf("expected base offset -1, got %d", part.BaseOffset)
+			}
+			total++
+		}
+	}
+	if total != 3 {
+		t.Fatalf("expected 3 partition errors, got %d", total)
+	}
+}
+
+func TestUpdateBrokerAddrs(t *testing.T) {
+	p := &proxy{brokerAddrs: make(map[string]string)}
+	brokers := []protocol.MetadataBroker{
+		{NodeID: 1, Host: "broker1", Port: 9092},
+		{NodeID: 2, Host: "broker2", Port: 9093},
+		{NodeID: 3, Host: "", Port: 0}, // should be skipped
+	}
+	p.updateBrokerAddrs(brokers)
+
+	if got := p.brokerIDToAddr("1"); got != "broker1:9092" {
+		t.Fatalf("broker 1: got %q, want %q", got, "broker1:9092")
+	}
+	if got := p.brokerIDToAddr("2"); got != "broker2:9093" {
+		t.Fatalf("broker 2: got %q, want %q", got, "broker2:9093")
+	}
+	if got := p.brokerIDToAddr("3"); got != "" {
+		t.Fatalf("broker 3 (empty host): got %q, want %q", got, "")
+	}
+}
+
+func TestConnPoolBorrowReturn(t *testing.T) {
+	pool := newConnPool(5 * time.Second)
+	defer pool.Close()
+
+	// No pooled connection: Borrow should fail for non-existent address
+	// (we can't dial in a unit test, but we can test the pool hit path).
+	// Simulate by manually inserting a connection.
+	fakeConn := &fakeNetConn{}
+	pool.Return("addr1", fakeConn)
+
+	conn, err := pool.Borrow(context.Background(), "addr1")
+	if err != nil {
+		t.Fatalf("borrow should succeed for pooled conn: %v", err)
+	}
+	if conn != fakeConn {
+		t.Fatalf("borrow should return the pooled conn")
+	}
+	// After borrow, pool should be empty for that address.
+	if _, ok := pool.conns["addr1"]; ok {
+		t.Fatalf("pool should be empty for addr1 after borrow")
+	}
+
+	// Return then Close should close all.
+	pool.Return("addr1", fakeConn)
+	pool.Close()
+	if !fakeConn.closed {
+		t.Fatalf("pool.Close should close all connections")
+	}
+}
+
+// --- Test helpers ---
+
+func countPartitions(req *protocol.ProduceRequest) int {
+	n := 0
+	for _, t := range req.Topics {
+		n += len(t.Partitions)
+	}
+	return n
+}
+
+func mapKeys(m map[string]*protocol.ProduceRequest) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// fakeNetConn is a minimal net.Conn for pool tests.
+type fakeNetConn struct {
+	closed bool
+}
+
+func (c *fakeNetConn) Read(b []byte) (int, error)         { return 0, nil }
+func (c *fakeNetConn) Write(b []byte) (int, error)        { return len(b), nil }
+func (c *fakeNetConn) Close() error                       { c.closed = true; return nil }
+func (c *fakeNetConn) LocalAddr() net.Addr                { return nil }
+func (c *fakeNetConn) RemoteAddr() net.Addr               { return nil }
+func (c *fakeNetConn) SetDeadline(time.Time) error        { return nil }
+func (c *fakeNetConn) SetReadDeadline(time.Time) error    { return nil }
+func (c *fakeNetConn) SetWriteDeadline(time.Time) error   { return nil }
