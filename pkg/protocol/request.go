@@ -1790,8 +1790,7 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 	return header, req, nil
 }
 
-// EncodeFetchRequest serializes a RequestHeader + FetchRequest into wire-format
-// bytes suitable for WriteFrame. The encoding mirrors what ParseRequest expects.
+// EncodeFetchRequest encodes a fetch request. Mirrors ParseRequest's fetch case.
 func EncodeFetchRequest(header *RequestHeader, req *FetchRequest, version int16) ([]byte, error) {
 	w := newByteWriter(256)
 	flexible := isFlexibleRequest(APIKeyFetch, version)

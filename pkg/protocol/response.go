@@ -825,8 +825,7 @@ func EncodeFetchResponse(resp *FetchResponse, version int16) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-// ParseFetchResponse decodes a fetch response from wire-format bytes.
-// This is the inverse of EncodeFetchResponse.
+// ParseFetchResponse decodes a fetch response. Inverse of EncodeFetchResponse.
 func ParseFetchResponse(payload []byte, version int16) (*FetchResponse, error) {
 	if version < 1 || version > 13 {
 		return nil, fmt.Errorf("fetch response version %d not supported", version)

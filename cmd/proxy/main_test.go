@@ -391,7 +391,7 @@ func TestGroupPartitionsByBrokerNoRouter(t *testing.T) {
 		"orders": {0, 1, 2},
 		"events": {0},
 	})
-	groups := p.groupPartitionsByBroker(req, nil)
+	groups := p.groupPartitionsByBroker(context.Background(), req, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group (all round-robin), got %d", len(groups))
 	}
@@ -417,7 +417,7 @@ func TestGroupPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
 		"orders": {0, 1},
 		"events": {0, 1, 2},
 	})
-	groups := p.groupPartitionsByBroker(req, nil)
+	groups := p.groupPartitionsByBroker(context.Background(), req, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
@@ -447,7 +447,7 @@ func TestGroupPartitionsByBrokerFiltersCorrectly(t *testing.T) {
 		"orders": {1: true},
 		"events": {0: true},
 	}
-	groups := p.groupPartitionsByBroker(req, include)
+	groups := p.groupPartitionsByBroker(context.Background(), req, include)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group (no router), got %d", len(groups))
 	}
@@ -519,13 +519,14 @@ func TestUpdateBrokerAddrs(t *testing.T) {
 	}
 	p.updateBrokerAddrs(brokers)
 
-	if got := p.brokerIDToAddr("1"); got != "broker1:9092" {
+	ctx := context.Background()
+	if got := p.brokerIDToAddr(ctx, "1"); got != "broker1:9092" {
 		t.Fatalf("broker 1: got %q, want %q", got, "broker1:9092")
 	}
-	if got := p.brokerIDToAddr("2"); got != "broker2:9093" {
+	if got := p.brokerIDToAddr(ctx, "2"); got != "broker2:9093" {
 		t.Fatalf("broker 2: got %q, want %q", got, "broker2:9093")
 	}
-	if got := p.brokerIDToAddr("3"); got != "" {
+	if got := p.brokerIDToAddr(ctx, "3"); got != "" {
 		t.Fatalf("broker 3 (empty host): got %q, want %q", got, "")
 	}
 }
@@ -797,7 +798,7 @@ func TestGroupFetchPartitionsByBrokerNoRouter(t *testing.T) {
 		"orders": {0, 1, 2},
 		"events": {0},
 	})
-	groups := p.groupFetchPartitionsByBroker(req, nil)
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group (all round-robin), got %d", len(groups))
 	}
@@ -819,7 +820,7 @@ func TestGroupFetchPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
 		"orders": {0, 1},
 		"events": {0, 1, 2},
 	})
-	groups := p.groupFetchPartitionsByBroker(req, nil)
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group, got %d", len(groups))
 	}
@@ -849,7 +850,7 @@ func TestGroupFetchPartitionsByBrokerFiltersCorrectly(t *testing.T) {
 		"orders": {1: true},
 		"events": {0: true},
 	}
-	groups := p.groupFetchPartitionsByBroker(req, include)
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, include)
 	if len(groups) != 1 {
 		t.Fatalf("expected 1 group (no router), got %d", len(groups))
 	}
@@ -944,13 +945,14 @@ func TestUpdateTopicNames(t *testing.T) {
 	}
 	p.updateTopicNames(topics)
 
-	if got := p.resolveTopicID(topicID1); got != "orders" {
+	ctx := context.Background()
+	if got := p.resolveTopicID(ctx, topicID1); got != "orders" {
 		t.Fatalf("resolveTopicID(1): got %q, want %q", got, "orders")
 	}
-	if got := p.resolveTopicID(topicID2); got != "events" {
+	if got := p.resolveTopicID(ctx, topicID2); got != "events" {
 		t.Fatalf("resolveTopicID(2): got %q, want %q", got, "events")
 	}
-	if got := p.resolveTopicID([16]byte{9, 9, 9}); got != "" {
+	if got := p.resolveTopicID(ctx, [16]byte{9, 9, 9}); got != "" {
 		t.Fatalf("resolveTopicID(unknown): got %q, want %q", got, "")
 	}
 }
@@ -972,7 +974,7 @@ func TestGroupFetchPartitionsByBrokerUnresolvedTopicIDs(t *testing.T) {
 			{TopicID: idB, Partitions: []protocol.FetchPartitionRequest{{Partition: 0, MaxBytes: 1048576}}},
 		},
 	}
-	groups := p.groupFetchPartitionsByBroker(req, nil)
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
 	rr := groups[""]
 	if rr == nil {
 		t.Fatal("expected round-robin group")
@@ -1011,7 +1013,7 @@ func TestGroupFetchPartitionsByBrokerUnresolvedFilter(t *testing.T) {
 	include := map[string]map[int32]bool{
 		fetchTopicKey("", idA): {1: true},
 	}
-	groups := p.groupFetchPartitionsByBroker(req, include)
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, include)
 	rr := groups[""]
 	if rr == nil {
 		t.Fatal("expected round-robin group")
@@ -1038,7 +1040,7 @@ func TestResolveFetchTopicNames(t *testing.T) {
 			{Name: "events"},  // already has name, should be left alone
 		},
 	}
-	p.resolveFetchTopicNames(req)
+	p.resolveFetchTopicNames(context.Background(), req)
 
 	if req.Topics[0].Name != "orders" {
 		t.Fatalf("topic[0] name: got %q, want %q", req.Topics[0].Name, "orders")
