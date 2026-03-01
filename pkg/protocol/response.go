@@ -1383,3 +1383,207 @@ func EncodeResponse(payload []byte) ([]byte, error) {
 	w.write(payload)
 	return w.Bytes(), nil
 }
+
+// GroupResponseErrorCode extracts the top-level error code from a group-related
+// response. It accounts for version-dependent encoding (flexible headers,
+// optional throttle_ms). Returns (errorCode, true) on success, or (0, false)
+// if the response cannot be parsed.
+//
+// For DescribeGroups, which can contain multiple groups, this returns the error
+// code of the first group in the response.
+func GroupResponseErrorCode(apiKey int16, apiVersion int16, resp []byte) (int16, bool) {
+	r := newByteReader(resp)
+
+	// All responses start with correlation_id.
+	if _, err := r.Int32(); err != nil {
+		return 0, false
+	}
+
+	switch apiKey {
+	case APIKeyJoinGroup:
+		return readGroupErrorCode(r, apiVersion >= 6, apiVersion >= 2)
+	case APIKeySyncGroup:
+		return readGroupErrorCode(r, apiVersion >= 4, apiVersion >= 1)
+	case APIKeyHeartbeat:
+		return readGroupErrorCode(r, apiVersion >= 4, apiVersion >= 1)
+	case APIKeyLeaveGroup:
+		// LeaveGroupResponse: correlation_id + error_code (no throttle_ms, no flex header in supported versions).
+		ec, err := r.Int16()
+		if err != nil {
+			return 0, false
+		}
+		return ec, true
+	case APIKeyOffsetCommit:
+		return readOffsetCommitErrorCode(r)
+	case APIKeyOffsetFetch:
+		return readOffsetFetchErrorCode(r, apiVersion)
+	case APIKeyDescribeGroups:
+		return readDescribeGroupsFirstErrorCode(r, apiVersion)
+	default:
+		return 0, false
+	}
+}
+
+// readGroupErrorCode reads the error code from a response with the layout:
+// [tagged_fields if flexible] [throttle_ms(4) if hasThrottle] error_code(2)
+func readGroupErrorCode(r *byteReader, flexible bool, hasThrottle bool) (int16, bool) {
+	if flexible {
+		if err := r.SkipTaggedFields(); err != nil {
+			return 0, false
+		}
+	}
+	if hasThrottle {
+		if _, err := r.Int32(); err != nil {
+			return 0, false
+		}
+	}
+	ec, err := r.Int16()
+	if err != nil {
+		return 0, false
+	}
+	return ec, true
+}
+
+// readOffsetCommitErrorCode reads the first partition error code from an OffsetCommitResponse.
+// Layout: correlation_id(4) + throttle_ms(4) + topics...
+func readOffsetCommitErrorCode(r *byteReader) (int16, bool) {
+	// throttle_ms
+	if _, err := r.Int32(); err != nil {
+		return 0, false
+	}
+	// topic count
+	topicCount, err := r.Int32()
+	if err != nil {
+		return 0, false
+	}
+	for i := int32(0); i < topicCount; i++ {
+		// topic name
+		if _, err := r.String(); err != nil {
+			return 0, false
+		}
+		// partition count
+		partCount, err := r.Int32()
+		if err != nil {
+			return 0, false
+		}
+		for j := int32(0); j < partCount; j++ {
+			// partition index
+			if _, err := r.Int32(); err != nil {
+				return 0, false
+			}
+			// error code
+			ec, err := r.Int16()
+			if err != nil {
+				return 0, false
+			}
+			if ec != 0 {
+				return ec, true
+			}
+		}
+	}
+	return 0, true
+}
+
+// readOffsetFetchErrorCode reads the top-level error code from an OffsetFetchResponse.
+// The top-level error code exists at version >= 2 and is at the end of the response.
+// For simplicity, we read through the structure to find it.
+func readOffsetFetchErrorCode(r *byteReader, version int16) (int16, bool) {
+	if version >= 3 {
+		// throttle_ms
+		if _, err := r.Int32(); err != nil {
+			return 0, false
+		}
+	}
+	// topic count
+	topicCount, err := r.Int32()
+	if err != nil {
+		return 0, false
+	}
+	for i := int32(0); i < topicCount; i++ {
+		if _, err := r.String(); err != nil {
+			return 0, false
+		}
+		partCount, err := r.Int32()
+		if err != nil {
+			return 0, false
+		}
+		for j := int32(0); j < partCount; j++ {
+			// partition
+			if _, err := r.Int32(); err != nil {
+				return 0, false
+			}
+			// offset
+			if _, err := r.Int64(); err != nil {
+				return 0, false
+			}
+			// leader_epoch (version >= 5)
+			if version >= 5 {
+				if _, err := r.Int32(); err != nil {
+					return 0, false
+				}
+			}
+			// metadata (nullable string)
+			if _, err := r.NullableString(); err != nil {
+				return 0, false
+			}
+			// partition error code
+			ec, err := r.Int16()
+			if err != nil {
+				return 0, false
+			}
+			if ec != 0 {
+				return ec, true
+			}
+		}
+	}
+	// top-level error code (version >= 2)
+	if version >= 2 {
+		ec, err := r.Int16()
+		if err != nil {
+			return 0, false
+		}
+		return ec, true
+	}
+	return 0, true
+}
+
+// readDescribeGroupsFirstErrorCode reads the error code of the first group
+// in a DescribeGroupsResponse.
+func readDescribeGroupsFirstErrorCode(r *byteReader, version int16) (int16, bool) {
+	flexible := version >= 5
+	if flexible {
+		if err := r.SkipTaggedFields(); err != nil {
+			return 0, false
+		}
+	}
+	// throttle_ms (version >= 1)
+	if version >= 1 {
+		if _, err := r.Int32(); err != nil {
+			return 0, false
+		}
+	}
+	// group count
+	var groupCount int32
+	if flexible {
+		gc, err := r.CompactArrayLen()
+		if err != nil {
+			return 0, false
+		}
+		groupCount = gc
+	} else {
+		gc, err := r.Int32()
+		if err != nil {
+			return 0, false
+		}
+		groupCount = gc
+	}
+	if groupCount == 0 {
+		return 0, true
+	}
+	// first group error code
+	ec, err := r.Int16()
+	if err != nil {
+		return 0, false
+	}
+	return ec, true
+}

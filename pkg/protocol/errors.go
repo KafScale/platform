@@ -38,4 +38,5 @@ const (
 	INVALID_PARTITIONS           int16 = 37
 	UNSUPPORTED_VERSION          int16 = 35
 	NOT_LEADER_OR_FOLLOWER       int16 = 6
+	NOT_COORDINATOR              int16 = 16
 )

@@ -591,3 +591,161 @@ func (c *fakeNetConn) RemoteAddr() net.Addr               { return nil }
 func (c *fakeNetConn) SetDeadline(time.Time) error        { return nil }
 func (c *fakeNetConn) SetReadDeadline(time.Time) error    { return nil }
 func (c *fakeNetConn) SetWriteDeadline(time.Time) error   { return nil }
+
+func TestExtractGroupID(t *testing.T) {
+	p := &proxy{}
+	clientID := "test-client"
+
+	// Helper to write a non-flexible request header.
+	writeHeader := func(w *testWriter, apiKey, version int16) {
+		w.Int16(apiKey)
+		w.Int16(version)
+		w.Int32(1) // correlation_id
+		w.NullableString(&clientID)
+	}
+
+	tests := []struct {
+		name    string
+		apiKey  int16
+		payload func() []byte
+		want    string
+	}{
+		{
+			name:   "JoinGroup",
+			apiKey: protocol.APIKeyJoinGroup,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyJoinGroup, 2)
+				w.String("my-join-group")       // group_id
+				w.Int32(30000)                   // session_timeout
+				w.Int32(10000)                   // rebalance_timeout
+				w.String("")                     // member_id
+				w.String("consumer")             // protocol_type
+				w.Int32(1)                       // protocol count
+				w.String("range")                // protocol name
+				w.Bytes([]byte{0x00, 0x01})      // protocol metadata
+				return w.buf.Bytes()
+			},
+			want: "my-join-group",
+		},
+		{
+			name:   "SyncGroup",
+			apiKey: protocol.APIKeySyncGroup,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeySyncGroup, 1)
+				w.String("my-sync-group") // group_id
+				w.Int32(1)                // generation_id
+				w.String("member-1")      // member_id
+				w.Int32(0)                // assignments count
+				return w.buf.Bytes()
+			},
+			want: "my-sync-group",
+		},
+		{
+			name:   "Heartbeat",
+			apiKey: protocol.APIKeyHeartbeat,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyHeartbeat, 1)
+				w.String("my-heartbeat-group") // group_id
+				w.Int32(1)                     // generation_id
+				w.String("member-1")           // member_id
+				return w.buf.Bytes()
+			},
+			want: "my-heartbeat-group",
+		},
+		{
+			name:   "LeaveGroup",
+			apiKey: protocol.APIKeyLeaveGroup,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyLeaveGroup, 0)
+				w.String("my-leave-group") // group_id
+				w.String("member-1")       // member_id
+				return w.buf.Bytes()
+			},
+			want: "my-leave-group",
+		},
+		{
+			name:   "OffsetCommit",
+			apiKey: protocol.APIKeyOffsetCommit,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyOffsetCommit, 3)
+				w.String("my-commit-group") // group_id
+				w.Int32(1)                  // generation_id
+				w.String("member-1")        // member_id
+				w.Int64(-1)                 // retention_time_ms (v2-v4)
+				w.Int32(0)                  // topics count
+				return w.buf.Bytes()
+			},
+			want: "my-commit-group",
+		},
+		{
+			name:   "OffsetFetch",
+			apiKey: protocol.APIKeyOffsetFetch,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyOffsetFetch, 3)
+				w.String("my-fetch-group") // group_id
+				w.Int32(0)                 // topics count
+				return w.buf.Bytes()
+			},
+			want: "my-fetch-group",
+		},
+		{
+			name:   "DescribeGroups single",
+			apiKey: protocol.APIKeyDescribeGroups,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyDescribeGroups, 2)
+				w.Int32(1)                      // groups count
+				w.String("my-describe-group-1") // group[0]
+				return w.buf.Bytes()
+			},
+			want: "my-describe-group-1",
+		},
+		{
+			name:   "DescribeGroups multiple returns first",
+			apiKey: protocol.APIKeyDescribeGroups,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyDescribeGroups, 2)
+				w.Int32(2)                      // groups count
+				w.String("my-describe-group-1") // group[0]
+				w.String("my-describe-group-2") // group[1]
+				return w.buf.Bytes()
+			},
+			want: "my-describe-group-1",
+		},
+		{
+			name:   "DescribeGroups empty returns blank",
+			apiKey: protocol.APIKeyDescribeGroups,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyDescribeGroups, 2)
+				w.Int32(0) // groups count
+				return w.buf.Bytes()
+			},
+			want: "",
+		},
+		{
+			name:   "truncated payload returns blank",
+			apiKey: protocol.APIKeyJoinGroup,
+			payload: func() []byte {
+				return []byte{0, 11, 0, 2} // just api_key + version, no body
+			},
+			want: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := p.extractGroupID(tc.apiKey, tc.payload())
+			if got != tc.want {
+				t.Fatalf("extractGroupID() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

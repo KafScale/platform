@@ -55,6 +55,7 @@ type proxy struct {
 	cachedBackends []string
 	apiVersions    []protocol.ApiVersion
 	router         *metadata.PartitionRouter
+	groupRouter    *metadata.GroupRouter
 	brokerAddrMu   sync.RWMutex
 	brokerAddrs    map[string]string // brokerID -> "host:port"
 	backendRetries int
@@ -123,6 +124,13 @@ func main() {
 			p.router = router
 			logger.Info("partition-aware routing enabled")
 		}
+		groupRouter, err := metadata.NewGroupRouter(ctx, etcdStore.EtcdClient(), logger)
+		if err != nil {
+			logger.Warn("group router init failed; using round-robin routing for group ops", "error", err)
+		} else {
+			p.groupRouter = groupRouter
+			logger.Info("group-aware routing enabled")
+		}
 	}
 	if len(backends) > 0 {
 		p.setCachedBackends(backends)
@@ -139,6 +147,9 @@ func main() {
 	}
 	if p.router != nil {
 		p.router.Stop()
+	}
+	if p.groupRouter != nil {
+		p.groupRouter.Stop()
 	}
 }
 
@@ -456,6 +467,24 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			}
 			if err := protocol.WriteFrame(conn, resp); err != nil {
 				p.logger.Warn("write produce response failed", "error", err)
+				return
+			}
+			continue
+		case protocol.APIKeyJoinGroup,
+			protocol.APIKeySyncGroup,
+			protocol.APIKeyHeartbeat,
+			protocol.APIKeyLeaveGroup,
+			protocol.APIKeyOffsetCommit,
+			protocol.APIKeyOffsetFetch,
+			protocol.APIKeyDescribeGroups:
+			resp, err := p.handleGroupRouting(ctx, header, frame.Payload, pool)
+			if err != nil {
+				p.logger.Warn("group routing failed", "error", err)
+				p.respondBackendError(conn, header, frame.Payload)
+				return
+			}
+			if err := protocol.WriteFrame(conn, resp); err != nil {
+				p.logger.Warn("write group response failed", "error", err)
 				return
 			}
 			continue
@@ -1498,4 +1527,90 @@ func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr
 		return nil, err
 	}
 	return frame.Payload, nil
+}
+
+// handleGroupRouting routes group-related requests to the broker that owns the
+// group coordination lease. If no owner is cached, or the owner returns
+// NOT_COORDINATOR, the request is retried on a different broker.
+//
+// DescribeGroups requests are forwarded once without retry since different
+// groups may live on different brokers. The broker returns per-group
+// NOT_COORDINATOR errors that the Kafka client handles natively.
+func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
+	groupID := p.extractGroupID(header.APIKey, payload)
+
+	// DescribeGroups with multiple groups cannot be reliably split/retried at
+	// the proxy level. Forward once and let the client handle per-group errors.
+	maxAttempts := 3
+	if header.APIKey == protocol.APIKeyDescribeGroups {
+		maxAttempts = 1
+	}
+
+	triedBackends := make(map[string]bool)
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		targetAddr := ""
+		if p.groupRouter != nil && groupID != "" {
+			if ownerID := p.groupRouter.LookupOwner(groupID); ownerID != "" {
+				targetAddr = p.brokerIDToAddr(ownerID)
+			}
+		}
+
+		conn, actualAddr, err := p.connectForAddr(ctx, targetAddr, triedBackends, pool)
+		if err != nil {
+			continue
+		}
+		triedBackends[actualAddr] = true
+
+		resp, err := p.forwardToBackend(ctx, conn, actualAddr, payload)
+		if err != nil {
+			conn.Close()
+			continue
+		}
+
+		if p.groupRouter != nil && groupID != "" {
+			if ec, ok := protocol.GroupResponseErrorCode(header.APIKey, header.APIVersion, resp); ok && ec == protocol.NOT_COORDINATOR {
+				pool.Return(actualAddr, conn)
+				p.groupRouter.Invalidate(groupID)
+				p.logger.Debug("NOT_COORDINATOR, retrying group request",
+					"group", groupID, "attempt", attempt+1, "broker", actualAddr)
+				continue
+			}
+		}
+
+		pool.Return(actualAddr, conn)
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("group request for %q failed after %d attempts", groupID, maxAttempts)
+}
+
+// extractGroupID parses the request payload to extract the group ID for routing.
+// Returns "" if the group ID cannot be determined.
+func (p *proxy) extractGroupID(apiKey int16, payload []byte) string {
+	_, req, err := protocol.ParseRequest(payload)
+	if err != nil {
+		return ""
+	}
+	switch r := req.(type) {
+	case *protocol.JoinGroupRequest:
+		return r.GroupID
+	case *protocol.SyncGroupRequest:
+		return r.GroupID
+	case *protocol.HeartbeatRequest:
+		return r.GroupID
+	case *protocol.LeaveGroupRequest:
+		return r.GroupID
+	case *protocol.OffsetCommitRequest:
+		return r.GroupID
+	case *protocol.OffsetFetchRequest:
+		return r.GroupID
+	case *protocol.DescribeGroupsRequest:
+		if len(r.Groups) > 0 {
+			return r.Groups[0]
+		}
+		return ""
+	default:
+		return ""
+	}
 }

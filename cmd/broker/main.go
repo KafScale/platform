@@ -67,6 +67,7 @@ type handler struct {
 	logConfig            storage.PartitionLogConfig
 	coordinator          *broker.GroupCoordinator
 	leaseManager         *metadata.PartitionLeaseManager
+	groupLeaseManager    *metadata.GroupLeaseManager
 	s3Health             *broker.S3HealthMonitor
 	s3Namespace          string
 	brokerInfo           protocol.MetadataBroker
@@ -224,10 +225,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
 			}, header.APIVersion)
 		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
 				CorrelationID: header.CorrelationID,
-				ThrottleMs:    0,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
@@ -246,10 +252,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
 			}, header.APIVersion)
 		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
 				CorrelationID: header.CorrelationID,
-				ThrottleMs:    0,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
@@ -263,13 +274,18 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
 			allowed := make([]string, 0, len(req.Groups))
 			denied := make(map[string]struct{})
+			leaseErrors := make(map[string]int16)
 			for _, groupID := range req.Groups {
-				if h.allowGroup(principal, groupID, acl.ActionGroupRead) {
-					allowed = append(allowed, groupID)
-				} else {
+				if !h.allowGroup(principal, groupID, acl.ActionGroupRead) {
 					denied[groupID] = struct{}{}
 					h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, groupID)
+					continue
 				}
+				if errCode := h.acquireGroupLease(ctx, groupID); errCode != 0 {
+					leaseErrors[groupID] = errCode
+					continue
+				}
+				allowed = append(allowed, groupID)
 			}
 
 			responseByGroup := make(map[string]protocol.DescribeGroupsResponseGroup, len(req.Groups))
@@ -296,9 +312,16 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 
 			results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
 			for _, groupID := range req.Groups {
-				if _, denied := denied[groupID]; denied {
+				if _, ok := denied[groupID]; ok {
 					results = append(results, protocol.DescribeGroupsResponseGroup{
 						ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+						GroupID:   groupID,
+					})
+					continue
+				}
+				if errCode, ok := leaseErrors[groupID]; ok {
+					results = append(results, protocol.DescribeGroupsResponseGroup{
+						ErrorCode: errCode,
 						GroupID:   groupID,
 					})
 					continue
@@ -354,10 +377,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
 			}, header.APIVersion)
 		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
 				CorrelationID: header.CorrelationID,
-				ThrottleMs:    0,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
@@ -370,6 +398,12 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
 				CorrelationID: header.CorrelationID,
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			})
+		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
 			})
 		}
 		if !h.etcdAvailable() {
@@ -401,6 +435,26 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeOffsetCommitResponse(&protocol.OffsetCommitResponse{
 				CorrelationID: header.CorrelationID,
 				ThrottleMs:    0,
+				Topics:        topics,
+			})
+		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			topics := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetCommitPartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: errCode,
+					})
+				}
+				topics = append(topics, protocol.OffsetCommitTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetCommitResponse(&protocol.OffsetCommitResponse{
+				CorrelationID: header.CorrelationID,
 				Topics:        topics,
 			})
 		}
@@ -455,6 +509,29 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ThrottleMs:    0,
 				Topics:        topics,
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			}, header.APIVersion)
+		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			topics := make([]protocol.OffsetFetchTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
+						Partition:   part.Partition,
+						Offset:      -1,
+						LeaderEpoch: -1,
+						ErrorCode:   errCode,
+					})
+				}
+				topics = append(topics, protocol.OffsetFetchTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetFetchResponse(&protocol.OffsetFetchResponse{
+				CorrelationID: header.CorrelationID,
+				Topics:        topics,
+				ErrorCode:     errCode,
 			}, header.APIVersion)
 		}
 		if !h.etcdAvailable() {
@@ -949,6 +1026,27 @@ func (h *handler) unauthorizedListOffsets(principal string, header *protocol.Req
 		CorrelationID: header.CorrelationID,
 		Topics:        topicResponses,
 	})
+}
+
+// acquireGroupLease attempts to acquire the coordination lease for the given
+// group. Returns 0 if this broker is (or becomes) the coordinator. Returns a
+// non-zero Kafka error code if the request should be rejected:
+//   - NOT_COORDINATOR when another broker owns the group or this broker is
+//     shutting down (so the proxy can redirect to the correct broker).
+//   - REQUEST_TIMED_OUT for transient errors (etcd timeout, session failure).
+func (h *handler) acquireGroupLease(ctx context.Context, groupID string) int16 {
+	if h.groupLeaseManager == nil {
+		return 0
+	}
+	err := h.groupLeaseManager.Acquire(ctx, groupID)
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, metadata.ErrNotOwner) || errors.Is(err, metadata.ErrShuttingDown) {
+		return protocol.NOT_COORDINATOR
+	}
+	h.logger.Warn("group lease acquire failed", "group", groupID, "error", err)
+	return protocol.REQUEST_TIMED_OUT
 }
 
 // acquirePartitionLeases acquires leases for all partitions in the request
@@ -2097,9 +2195,15 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	health := broker.NewS3HealthMonitor(s3HealthConfigFromEnv())
 	authorizer := buildAuthorizerFromEnv(logger)
 	var leaseManager *metadata.PartitionLeaseManager
+	var groupLeaseManager *metadata.GroupLeaseManager
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
+		brokerIDStr := fmt.Sprintf("%d", brokerInfo.NodeID)
 		leaseManager = metadata.NewPartitionLeaseManager(etcdStore.EtcdClient(), metadata.PartitionLeaseConfig{
-			BrokerID: fmt.Sprintf("%d", brokerInfo.NodeID),
+			BrokerID: brokerIDStr,
+			Logger:   logger,
+		})
+		groupLeaseManager = metadata.NewGroupLeaseManager(etcdStore.EtcdClient(), metadata.GroupLeaseConfig{
+			BrokerID: brokerIDStr,
 			Logger:   logger,
 		})
 	}
@@ -2123,6 +2227,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		},
 		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
 		leaseManager:         leaseManager,
+		groupLeaseManager:    groupLeaseManager,
 		s3Health:             health,
 		s3Namespace:          s3Namespace,
 		brokerInfo:           brokerInfo,
@@ -2227,6 +2332,9 @@ func main() {
 	// requests already hold partition logs and don't need the etcd lease.
 	if handler.leaseManager != nil {
 		handler.leaseManager.ReleaseAll()
+	}
+	if handler.groupLeaseManager != nil {
+		handler.groupLeaseManager.ReleaseAll()
 	}
 	srv.Wait()
 }
