@@ -1460,6 +1460,142 @@ func TestEncodeOffsetFetchResponse(t *testing.T) {
 	}
 }
 
+func TestParseProduceResponseRoundTrip(t *testing.T) {
+	resp := &ProduceResponse{
+		CorrelationID: 99,
+		Topics: []ProduceTopicResponse{
+			{
+				Name: "orders",
+				Partitions: []ProducePartitionResponse{
+					{Partition: 0, ErrorCode: NONE, BaseOffset: 42, LogAppendTimeMs: 1000, LogStartOffset: 5},
+					{Partition: 1, ErrorCode: NOT_LEADER_OR_FOLLOWER, BaseOffset: -1},
+				},
+			},
+			{
+				Name: "events",
+				Partitions: []ProducePartitionResponse{
+					{Partition: 0, ErrorCode: NONE, BaseOffset: 100, LogAppendTimeMs: 2000, LogStartOffset: 10},
+				},
+			},
+		},
+		ThrottleMs: 7,
+	}
+	for _, version := range []int16{3, 5, 7, 8, 9, 10} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			encoded, err := EncodeProduceResponse(resp, version)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			parsed, err := ParseProduceResponse(encoded, version)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if parsed.CorrelationID != resp.CorrelationID {
+				t.Fatalf("correlation id: got %d want %d", parsed.CorrelationID, resp.CorrelationID)
+			}
+			if len(parsed.Topics) != len(resp.Topics) {
+				t.Fatalf("topic count: got %d want %d", len(parsed.Topics), len(resp.Topics))
+			}
+			for ti, topic := range parsed.Topics {
+				if topic.Name != resp.Topics[ti].Name {
+					t.Fatalf("topic[%d] name: got %q want %q", ti, topic.Name, resp.Topics[ti].Name)
+				}
+				if len(topic.Partitions) != len(resp.Topics[ti].Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d want %d", ti, len(topic.Partitions), len(resp.Topics[ti].Partitions))
+				}
+				for pi, part := range topic.Partitions {
+					want := resp.Topics[ti].Partitions[pi]
+					if part.Partition != want.Partition || part.ErrorCode != want.ErrorCode || part.BaseOffset != want.BaseOffset {
+						t.Fatalf("topic[%d].part[%d]: got %+v want %+v", ti, pi, part, want)
+					}
+				}
+			}
+			if version >= 1 && parsed.ThrottleMs != resp.ThrottleMs {
+				t.Fatalf("throttle: got %d want %d", parsed.ThrottleMs, resp.ThrottleMs)
+			}
+		})
+	}
+}
+
+func TestEncodeProduceRequestRoundTrip(t *testing.T) {
+	header := &RequestHeader{
+		APIKey:        APIKeyProduce,
+		APIVersion:    9,
+		CorrelationID: 77,
+		ClientID:      strPtr("test-client"),
+	}
+	req := &ProduceRequest{
+		Acks:      -1,
+		TimeoutMs: 5000,
+		Topics: []ProduceTopic{
+			{
+				Name: "orders",
+				Partitions: []ProducePartition{
+					{Partition: 0, Records: []byte{1, 2, 3, 4}},
+					{Partition: 1, Records: []byte{5, 6}},
+				},
+			},
+			{
+				Name: "events",
+				Partitions: []ProducePartition{
+					{Partition: 0, Records: []byte{7, 8, 9}},
+				},
+			},
+		},
+	}
+	for _, version := range []int16{3, 5, 7, 8, 9, 10} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			h := &RequestHeader{
+				APIKey:        APIKeyProduce,
+				APIVersion:    version,
+				CorrelationID: header.CorrelationID,
+				ClientID:      header.ClientID,
+			}
+			encoded, err := EncodeProduceRequest(h, req, version)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			parsedHeader, parsedReq, err := ParseRequest(encoded)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if parsedHeader.CorrelationID != h.CorrelationID {
+				t.Fatalf("correlation id: got %d want %d", parsedHeader.CorrelationID, h.CorrelationID)
+			}
+			produceReq, ok := parsedReq.(*ProduceRequest)
+			if !ok {
+				t.Fatalf("expected *ProduceRequest, got %T", parsedReq)
+			}
+			if produceReq.Acks != req.Acks {
+				t.Fatalf("acks: got %d want %d", produceReq.Acks, req.Acks)
+			}
+			if produceReq.TimeoutMs != req.TimeoutMs {
+				t.Fatalf("timeout: got %d want %d", produceReq.TimeoutMs, req.TimeoutMs)
+			}
+			if len(produceReq.Topics) != len(req.Topics) {
+				t.Fatalf("topic count: got %d want %d", len(produceReq.Topics), len(req.Topics))
+			}
+			for ti, topic := range produceReq.Topics {
+				if topic.Name != req.Topics[ti].Name {
+					t.Fatalf("topic[%d] name: got %q want %q", ti, topic.Name, req.Topics[ti].Name)
+				}
+				if len(topic.Partitions) != len(req.Topics[ti].Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d want %d", ti, len(topic.Partitions), len(req.Topics[ti].Partitions))
+				}
+				for pi, part := range topic.Partitions {
+					want := req.Topics[ti].Partitions[pi]
+					if part.Partition != want.Partition {
+						t.Fatalf("topic[%d].part[%d] index: got %d want %d", ti, pi, part.Partition, want.Partition)
+					}
+					if string(part.Records) != string(want.Records) {
+						t.Fatalf("topic[%d].part[%d] records: got %v want %v", ti, pi, part.Records, want.Records)
+					}
+				}
+			}
+		})
+	}
+}
+
 func makeTestRecordBatch(count int32, baseOffset int64) []byte {
 	const size = 90
 	data := make([]byte, size)

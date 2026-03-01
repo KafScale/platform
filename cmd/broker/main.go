@@ -66,6 +66,7 @@ type handler struct {
 	logInit              singleflight.Group
 	logConfig            storage.PartitionLogConfig
 	coordinator          *broker.GroupCoordinator
+	leaseManager         *metadata.PartitionLeaseManager
 	s3Health             *broker.S3HealthMonitor
 	s3Namespace          string
 	brokerInfo           protocol.MetadataBroker
@@ -950,6 +951,38 @@ func (h *handler) unauthorizedListOffsets(principal string, header *protocol.Req
 	})
 }
 
+// acquirePartitionLeases acquires leases for all partitions in the request
+// concurrently. Returns a map of partition -> error for partitions that failed.
+// Partitions already owned by this broker complete instantly (map lookup).
+func (h *handler) acquirePartitionLeases(ctx context.Context, req *protocol.ProduceRequest) map[metadata.PartitionID]error {
+	if h.leaseManager == nil {
+		return nil
+	}
+	var partitions []metadata.PartitionID
+	for _, topic := range req.Topics {
+		for _, part := range topic.Partitions {
+			partitions = append(partitions, metadata.PartitionID{
+				Topic:     topic.Name,
+				Partition: part.Partition,
+			})
+		}
+	}
+	if len(partitions) == 0 {
+		return nil
+	}
+	results := h.leaseManager.AcquireAll(ctx, partitions)
+	var errs map[metadata.PartitionID]error
+	for _, r := range results {
+		if r.Err != nil {
+			if errs == nil {
+				errs = make(map[metadata.PartitionID]error)
+			}
+			errs[r.Partition] = r.Err
+		}
+	}
+	return errs
+}
+
 func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHeader, req *protocol.ProduceRequest) ([]byte, error) {
 	start := time.Now()
 	defer func() {
@@ -959,6 +992,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	now := time.Now().UnixMilli()
 	var producedMessages int64
 	principal := principalFromContext(ctx, header)
+
+	leaseErrors := h.acquirePartitionLeases(ctx, req)
 
 	for _, topic := range req.Topics {
 		if h.traceKafka {
@@ -988,6 +1023,24 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				if h.traceKafka {
 					h.logger.Debug("produce rejected due to etcd availability", "topic", topic.Name, "partition", part.Partition)
 				}
+				continue
+			}
+			if leaseErr, hasErr := leaseErrors[metadata.PartitionID{Topic: topic.Name, Partition: part.Partition}]; hasErr {
+				if errors.Is(leaseErr, metadata.ErrNotOwner) || errors.Is(leaseErr, metadata.ErrShuttingDown) {
+					partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: protocol.NOT_LEADER_OR_FOLLOWER,
+					})
+					if h.traceKafka {
+						h.logger.Debug("produce rejected: not partition owner", "topic", topic.Name, "partition", part.Partition)
+					}
+					continue
+				}
+				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: protocol.REQUEST_TIMED_OUT,
+				})
+				h.logger.Warn("partition lease acquire failed", "topic", topic.Name, "partition", part.Partition, "error", leaseErr)
 				continue
 			}
 			if h.s3Health.State() != broker.S3StateHealthy {
@@ -2043,6 +2096,13 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	}
 	health := broker.NewS3HealthMonitor(s3HealthConfigFromEnv())
 	authorizer := buildAuthorizerFromEnv(logger)
+	var leaseManager *metadata.PartitionLeaseManager
+	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
+		leaseManager = metadata.NewPartitionLeaseManager(etcdStore.EtcdClient(), metadata.PartitionLeaseConfig{
+			BrokerID: fmt.Sprintf("%d", brokerInfo.NodeID),
+			Logger:   logger,
+		})
+	}
 	return &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
@@ -2062,6 +2122,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			Logger:            logger,
 		},
 		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
+		leaseManager:         leaseManager,
 		s3Health:             health,
 		s3Namespace:          s3Namespace,
 		brokerInfo:           brokerInfo,
@@ -2160,6 +2221,12 @@ func main() {
 	if err := srv.ListenAndServe(ctx); err != nil {
 		logger.Error("broker server error", "error", err)
 		os.Exit(1)
+	}
+	// Release partition leases immediately on shutdown signal so other brokers
+	// can take over while this broker drains in-flight requests. In-flight
+	// requests already hold partition logs and don't need the etcd lease.
+	if handler.leaseManager != nil {
+		handler.leaseManager.ReleaseAll()
 	}
 	srv.Wait()
 }

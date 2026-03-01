@@ -1789,3 +1789,67 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 
 	return header, req, nil
 }
+
+// EncodeProduceRequest serializes a RequestHeader + ProduceRequest into wire-format
+// bytes suitable for WriteFrame. The encoding mirrors what ParseRequest expects.
+func EncodeProduceRequest(header *RequestHeader, req *ProduceRequest, version int16) ([]byte, error) {
+	w := newByteWriter(256)
+	flexible := isFlexibleRequest(APIKeyProduce, version)
+
+	w.Int16(header.APIKey)
+	w.Int16(header.APIVersion)
+	w.Int32(header.CorrelationID)
+	w.NullableString(header.ClientID)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+
+	// Body: transactional_id (v3+), acks, timeout, topics.
+	if version >= 3 {
+		if flexible {
+			w.CompactNullableString(req.TransactionalID)
+		} else {
+			w.NullableString(req.TransactionalID)
+		}
+	}
+	w.Int16(req.Acks)
+	w.Int32(req.TimeoutMs)
+
+	if flexible {
+		w.CompactArrayLen(len(req.Topics))
+	} else {
+		w.Int32(int32(len(req.Topics)))
+	}
+	for _, topic := range req.Topics {
+		if flexible {
+			w.CompactString(topic.Name)
+		} else {
+			w.String(topic.Name)
+		}
+		if flexible {
+			w.CompactArrayLen(len(topic.Partitions))
+		} else {
+			w.Int32(int32(len(topic.Partitions)))
+		}
+		for _, part := range topic.Partitions {
+			w.Int32(part.Partition)
+			if flexible {
+				w.CompactBytes(part.Records)
+			} else {
+				w.BytesWithLength(part.Records)
+			}
+		}
+		// Match the parser: two tagged-field blocks after the partition array.
+		// The Kafka protocol spec places per-partition tags inside the partition
+		// loop, but our parser (ParseRequest) reads them outside. Since the
+		// broker is always KafScale (not vanilla Kafka), this is intentional.
+		if flexible {
+			w.WriteTaggedFields(0)
+			w.WriteTaggedFields(0)
+		}
+	}
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+	return w.Bytes(), nil
+}
