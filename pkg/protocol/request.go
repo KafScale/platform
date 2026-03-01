@@ -505,15 +505,15 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 				if err != nil {
 					return nil, nil, fmt.Errorf("read produce records: %w", err)
 				}
+				if flexible {
+					if err := reader.SkipTaggedFields(); err != nil {
+						return nil, nil, fmt.Errorf("skip partition tags: %w", err)
+					}
+				}
 				partitions = append(partitions, ProducePartition{
 					Partition: index,
 					Records:   records,
 				})
-			}
-			if flexible {
-				if err := reader.SkipTaggedFields(); err != nil {
-					return nil, nil, fmt.Errorf("skip partition tags: %w", err)
-				}
 			}
 			if flexible {
 				if err := reader.SkipTaggedFields(); err != nil {
@@ -1931,13 +1931,11 @@ func EncodeProduceRequest(header *RequestHeader, req *ProduceRequest, version in
 			} else {
 				w.BytesWithLength(part.Records)
 			}
+			if flexible {
+				w.WriteTaggedFields(0)
+			}
 		}
-		// Match the parser: two tagged-field blocks after the partition array.
-		// The Kafka protocol spec places per-partition tags inside the partition
-		// loop, but our parser (ParseRequest) reads them outside. Since the
-		// broker is always KafScale (not vanilla Kafka), this is intentional.
 		if flexible {
-			w.WriteTaggedFields(0)
 			w.WriteTaggedFields(0)
 		}
 	}

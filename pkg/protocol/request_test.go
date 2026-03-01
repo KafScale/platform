@@ -1033,3 +1033,113 @@ func TestEncodeFetchRequest_KmsgValidation(t *testing.T) {
 		t.Fatalf("fetch offset: got %d, want 42", kmsgReq.Topics[0].Partitions[0].FetchOffset)
 	}
 }
+
+// TestProduceMultiPartitionFranzCompat tests byte-level compatibility with
+// franz-go for multi-partition produce requests in both directions:
+//   - franz-go encodes → KafScale parses
+//   - KafScale encodes → franz-go decodes
+func TestProduceMultiPartitionFranzCompat(t *testing.T) {
+	t.Run("franz-encode-kafscale-parse", func(t *testing.T) {
+		req := kmsg.NewPtrProduceRequest()
+		req.Version = 9
+		req.Acks = -1
+		req.TimeoutMillis = 3000
+		topic := kmsg.NewProduceRequestTopic()
+		topic.Topic = "orders"
+		for _, pi := range []int32{0, 1, 2} {
+			part := kmsg.NewProduceRequestTopicPartition()
+			part.Partition = pi
+			part.Records = []byte{byte(pi + 1), byte(pi + 2)}
+			topic.Partitions = append(topic.Partitions, part)
+		}
+		req.Topics = append(req.Topics, topic)
+		body := req.AppendTo(nil)
+
+		w := newByteWriter(len(body) + 32)
+		w.Int16(APIKeyProduce)
+		w.Int16(9)
+		w.Int32(55)
+		clientID := "kgo"
+		w.NullableString(&clientID)
+		w.WriteTaggedFields(0)
+		w.write(body)
+
+		_, parsed, err := ParseRequest(w.Bytes())
+		if err != nil {
+			t.Fatalf("ParseRequest: %v", err)
+		}
+		got, ok := parsed.(*ProduceRequest)
+		if !ok {
+			t.Fatalf("expected *ProduceRequest, got %T", parsed)
+		}
+		if len(got.Topics) != 1 {
+			t.Fatalf("topic count: got %d want 1", len(got.Topics))
+		}
+		if len(got.Topics[0].Partitions) != 3 {
+			t.Fatalf("partition count: got %d want 3", len(got.Topics[0].Partitions))
+		}
+		for pi, part := range got.Topics[0].Partitions {
+			if part.Partition != int32(pi) {
+				t.Fatalf("part[%d] index: got %d want %d", pi, part.Partition, pi)
+			}
+			want := []byte{byte(pi + 1), byte(pi + 2)}
+			if string(part.Records) != string(want) {
+				t.Fatalf("part[%d] records: got %x want %x", pi, part.Records, want)
+			}
+		}
+	})
+
+	t.Run("kafscale-encode-franz-parse", func(t *testing.T) {
+		header := &RequestHeader{
+			APIKey:        APIKeyProduce,
+			APIVersion:    9,
+			CorrelationID: 66,
+			ClientID:      strPtr("test"),
+		}
+		req := &ProduceRequest{
+			Acks:      -1,
+			TimeoutMs: 3000,
+			Topics: []ProduceTopic{
+				{
+					Name: "orders",
+					Partitions: []ProducePartition{
+						{Partition: 0, Records: []byte{1, 2}},
+						{Partition: 1, Records: []byte{3, 4}},
+						{Partition: 2, Records: []byte{5, 6}},
+					},
+				},
+			},
+		}
+		encoded, err := EncodeProduceRequest(header, req, 9)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+
+		_, reader, err := ParseRequestHeader(encoded)
+		if err != nil {
+			t.Fatalf("ParseRequestHeader: %v", err)
+		}
+		bodyStart := len(encoded) - reader.remaining()
+
+		kmsgReq := kmsg.NewPtrProduceRequest()
+		kmsgReq.Version = 9
+		if err := kmsgReq.ReadFrom(encoded[bodyStart:]); err != nil {
+			t.Fatalf("kmsg.ReadFrom: %v", err)
+		}
+		if len(kmsgReq.Topics) != 1 {
+			t.Fatalf("topic count: got %d want 1", len(kmsgReq.Topics))
+		}
+		if len(kmsgReq.Topics[0].Partitions) != 3 {
+			t.Fatalf("partition count: got %d want 3", len(kmsgReq.Topics[0].Partitions))
+		}
+		for pi, part := range kmsgReq.Topics[0].Partitions {
+			if part.Partition != int32(pi) {
+				t.Fatalf("part[%d] index: got %d want %d", pi, part.Partition, pi)
+			}
+			want := []byte{byte(pi*2 + 1), byte(pi*2 + 2)}
+			if string(part.Records) != string(want) {
+				t.Fatalf("part[%d] records: got %x want %x", pi, part.Records, want)
+			}
+		}
+	})
+}
