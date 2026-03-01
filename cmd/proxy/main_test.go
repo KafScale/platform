@@ -749,3 +749,301 @@ func TestExtractGroupID(t *testing.T) {
 		})
 	}
 }
+
+// --- Fetch routing tests ---
+
+func makeFetchRequest(topics map[string][]int32) *protocol.FetchRequest {
+	req := &protocol.FetchRequest{
+		ReplicaID:    -1,
+		MaxWaitMs:    500,
+		MinBytes:     1,
+		MaxBytes:     1048576,
+		SessionID:    0,
+		SessionEpoch: -1,
+	}
+	for name, parts := range topics {
+		topic := protocol.FetchTopicRequest{Name: name}
+		for _, p := range parts {
+			topic.Partitions = append(topic.Partitions, protocol.FetchPartitionRequest{
+				Partition:   p,
+				FetchOffset: 0,
+				MaxBytes:    1048576,
+			})
+		}
+		req.Topics = append(req.Topics, topic)
+	}
+	return req
+}
+
+func countFetchPartitions(req *protocol.FetchRequest) int {
+	n := 0
+	for _, t := range req.Topics {
+		n += len(t.Partitions)
+	}
+	return n
+}
+
+func fetchMapKeys(m map[string]*protocol.FetchRequest) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func TestGroupFetchPartitionsByBrokerNoRouter(t *testing.T) {
+	p := &proxy{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0},
+	})
+	groups := p.groupFetchPartitionsByBroker(req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (all round-robin), got %d", len(groups))
+	}
+	rr, ok := groups[""]
+	if !ok {
+		t.Fatalf("expected round-robin group (key=\"\"), got keys: %v", fetchMapKeys(groups))
+	}
+	if countFetchPartitions(rr) != 4 {
+		t.Fatalf("expected 4 total partitions, got %d", countFetchPartitions(rr))
+	}
+	if rr.MaxWaitMs != 500 || rr.MaxBytes != 1048576 {
+		t.Fatalf("sub-request should preserve settings: got maxWait=%d maxBytes=%d", rr.MaxWaitMs, rr.MaxBytes)
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
+	p := &proxy{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0, 1, 2},
+	})
+	groups := p.groupFetchPartitionsByBroker(req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("expected round-robin group")
+	}
+	if countFetchPartitions(rr) != 5 {
+		t.Fatalf("expected 5 partitions, got %d", countFetchPartitions(rr))
+	}
+	topicNames := make(map[string]int)
+	for _, topic := range rr.Topics {
+		topicNames[topic.Name] = len(topic.Partitions)
+	}
+	if topicNames["orders"] != 2 || topicNames["events"] != 3 {
+		t.Fatalf("unexpected topic grouping: %v", topicNames)
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerFiltersCorrectly(t *testing.T) {
+	p := &proxy{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0, 1},
+	})
+	include := map[string]map[int32]bool{
+		"orders": {1: true},
+		"events": {0: true},
+	}
+	groups := p.groupFetchPartitionsByBroker(req, include)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (no router), got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("missing round-robin group")
+	}
+	if countFetchPartitions(rr) != 2 {
+		t.Fatalf("expected 2 filtered partitions, got %d", countFetchPartitions(rr))
+	}
+}
+
+func TestFindOrAddFetchTopicResponse(t *testing.T) {
+	resp := &protocol.FetchResponse{}
+	topicID := [16]byte{1, 2, 3}
+
+	tr := findOrAddFetchTopicResponse(resp, "orders", topicID)
+	tr.Partitions = append(tr.Partitions, protocol.FetchPartitionResponse{Partition: 0})
+
+	// Same topic should return the existing entry.
+	tr2 := findOrAddFetchTopicResponse(resp, "orders", topicID)
+	if len(tr2.Partitions) != 1 {
+		t.Fatalf("expected 1 partition in existing topic, got %d", len(tr2.Partitions))
+	}
+
+	// Different topic.
+	tr3 := findOrAddFetchTopicResponse(resp, "events", [16]byte{4, 5, 6})
+	if len(tr3.Partitions) != 0 {
+		t.Fatalf("expected 0 partitions in new topic, got %d", len(tr3.Partitions))
+	}
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics in response, got %d", len(resp.Topics))
+	}
+
+	// v12+: same topicID but different name should match on topicID alone.
+	tr4 := findOrAddFetchTopicResponse(resp, "", topicID)
+	tr4.Partitions = append(tr4.Partitions, protocol.FetchPartitionResponse{Partition: 1})
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics after topicID-only match, got %d", len(resp.Topics))
+	}
+	// The entry found by topicID should now have 2 partitions (0 from before, 1 just added).
+	tr5 := findOrAddFetchTopicResponse(resp, "orders", topicID)
+	if len(tr5.Partitions) != 2 {
+		t.Fatalf("expected 2 partitions after topicID-only merge, got %d", len(tr5.Partitions))
+	}
+
+	// Name-only match (zero topicID) should work for pre-v12 topics.
+	tr6 := findOrAddFetchTopicResponse(resp, "logs", [16]byte{})
+	tr6.Partitions = append(tr6.Partitions, protocol.FetchPartitionResponse{Partition: 0})
+	tr7 := findOrAddFetchTopicResponse(resp, "logs", [16]byte{})
+	if len(tr7.Partitions) != 1 {
+		t.Fatalf("expected 1 partition for name-only topic, got %d", len(tr7.Partitions))
+	}
+	if len(resp.Topics) != 3 {
+		t.Fatalf("expected 3 topics total, got %d", len(resp.Topics))
+	}
+}
+
+func TestAddFetchErrorForAllPartitions(t *testing.T) {
+	resp := &protocol.FetchResponse{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0},
+	})
+	addFetchErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics, got %d", len(resp.Topics))
+	}
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected error %d, got %d", protocol.REQUEST_TIMED_OUT, part.ErrorCode)
+			}
+			total++
+		}
+	}
+	if total != 3 {
+		t.Fatalf("expected 3 partition errors, got %d", total)
+	}
+}
+
+func TestUpdateTopicNames(t *testing.T) {
+	p := &proxy{topicNames: make(map[[16]byte]string)}
+	topicID1 := [16]byte{1, 2, 3}
+	topicID2 := [16]byte{4, 5, 6}
+	topics := []protocol.MetadataTopic{
+		{Name: "orders", TopicID: topicID1},
+		{Name: "events", TopicID: topicID2},
+		{Name: "", TopicID: [16]byte{}}, // should be skipped
+	}
+	p.updateTopicNames(topics)
+
+	if got := p.resolveTopicID(topicID1); got != "orders" {
+		t.Fatalf("resolveTopicID(1): got %q, want %q", got, "orders")
+	}
+	if got := p.resolveTopicID(topicID2); got != "events" {
+		t.Fatalf("resolveTopicID(2): got %q, want %q", got, "events")
+	}
+	if got := p.resolveTopicID([16]byte{9, 9, 9}); got != "" {
+		t.Fatalf("resolveTopicID(unknown): got %q, want %q", got, "")
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerUnresolvedTopicIDs(t *testing.T) {
+	// When multiple topics have unresolved names (empty string) but different
+	// topic IDs, they must not be merged into a single FetchTopicRequest.
+	idA := [16]byte{1, 2, 3}
+	idB := [16]byte{4, 5, 6}
+	p := &proxy{}
+	req := &protocol.FetchRequest{
+		ReplicaID:    -1,
+		MaxWaitMs:    500,
+		MinBytes:     1,
+		MaxBytes:     1048576,
+		SessionEpoch: -1,
+		Topics: []protocol.FetchTopicRequest{
+			{TopicID: idA, Partitions: []protocol.FetchPartitionRequest{{Partition: 0, MaxBytes: 1048576}}},
+			{TopicID: idB, Partitions: []protocol.FetchPartitionRequest{{Partition: 0, MaxBytes: 1048576}}},
+		},
+	}
+	groups := p.groupFetchPartitionsByBroker(req, nil)
+	rr := groups[""]
+	if rr == nil {
+		t.Fatal("expected round-robin group")
+	}
+	if len(rr.Topics) != 2 {
+		t.Fatalf("expected 2 topics (separate entries for different IDs), got %d", len(rr.Topics))
+	}
+	if rr.Topics[0].TopicID != idA || rr.Topics[1].TopicID != idB {
+		t.Fatalf("topic IDs not preserved: got %x and %x", rr.Topics[0].TopicID, rr.Topics[1].TopicID)
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerUnresolvedFilter(t *testing.T) {
+	// Verify that the include filter works correctly with fetchTopicKey for
+	// unresolved topic IDs.
+	idA := [16]byte{1, 2, 3}
+	idB := [16]byte{4, 5, 6}
+	p := &proxy{}
+	req := &protocol.FetchRequest{
+		ReplicaID:    -1,
+		MaxWaitMs:    500,
+		MinBytes:     1,
+		MaxBytes:     1048576,
+		SessionEpoch: -1,
+		Topics: []protocol.FetchTopicRequest{
+			{TopicID: idA, Partitions: []protocol.FetchPartitionRequest{
+				{Partition: 0, MaxBytes: 1048576},
+				{Partition: 1, MaxBytes: 1048576},
+			}},
+			{TopicID: idB, Partitions: []protocol.FetchPartitionRequest{
+				{Partition: 0, MaxBytes: 1048576},
+			}},
+		},
+	}
+	// Only retry partition 1 of topic A.
+	include := map[string]map[int32]bool{
+		fetchTopicKey("", idA): {1: true},
+	}
+	groups := p.groupFetchPartitionsByBroker(req, include)
+	rr := groups[""]
+	if rr == nil {
+		t.Fatal("expected round-robin group")
+	}
+	if len(rr.Topics) != 1 {
+		t.Fatalf("expected 1 topic after filter, got %d", len(rr.Topics))
+	}
+	if rr.Topics[0].TopicID != idA {
+		t.Fatalf("expected topic A, got %x", rr.Topics[0].TopicID)
+	}
+	if len(rr.Topics[0].Partitions) != 1 || rr.Topics[0].Partitions[0].Partition != 1 {
+		t.Fatalf("expected only partition 1, got %v", rr.Topics[0].Partitions)
+	}
+}
+
+func TestResolveFetchTopicNames(t *testing.T) {
+	topicID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	p := &proxy{
+		topicNames: map[[16]byte]string{topicID: "orders"},
+	}
+	req := &protocol.FetchRequest{
+		Topics: []protocol.FetchTopicRequest{
+			{TopicID: topicID}, // name not set, should be resolved
+			{Name: "events"},  // already has name, should be left alone
+		},
+	}
+	p.resolveFetchTopicNames(req)
+
+	if req.Topics[0].Name != "orders" {
+		t.Fatalf("topic[0] name: got %q, want %q", req.Topics[0].Name, "orders")
+	}
+	if req.Topics[1].Name != "events" {
+		t.Fatalf("topic[1] name: got %q, want %q", req.Topics[1].Name, "events")
+	}
+}

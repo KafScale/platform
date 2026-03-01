@@ -825,6 +825,202 @@ func EncodeFetchResponse(resp *FetchResponse, version int16) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
+// ParseFetchResponse decodes a fetch response from wire-format bytes.
+// This is the inverse of EncodeFetchResponse.
+func ParseFetchResponse(payload []byte, version int16) (*FetchResponse, error) {
+	if version < 1 || version > 13 {
+		return nil, fmt.Errorf("fetch response version %d not supported", version)
+	}
+	r := newByteReader(payload)
+	flexible := version >= 12
+
+	corrID, err := r.Int32()
+	if err != nil {
+		return nil, fmt.Errorf("read correlation id: %w", err)
+	}
+	if flexible {
+		if err := r.SkipTaggedFields(); err != nil {
+			return nil, fmt.Errorf("skip response header tags: %w", err)
+		}
+	}
+
+	throttleMs, err := r.Int32()
+	if err != nil {
+		return nil, fmt.Errorf("read throttle ms: %w", err)
+	}
+
+	var errorCode int16
+	var sessionID int32
+	if version >= 7 {
+		errorCode, err = r.Int16()
+		if err != nil {
+			return nil, fmt.Errorf("read error code: %w", err)
+		}
+		sessionID, err = r.Int32()
+		if err != nil {
+			return nil, fmt.Errorf("read session id: %w", err)
+		}
+	}
+
+	var topicCount int32
+	if flexible {
+		topicCount, err = compactArrayLenNonNull(r)
+	} else {
+		topicCount, err = r.Int32()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read topic count: %w", err)
+	}
+
+	topics := make([]FetchTopicResponse, 0, topicCount)
+	for i := int32(0); i < topicCount; i++ {
+		var (
+			name    string
+			topicID [16]byte
+		)
+		if flexible {
+			topicID, err = r.UUID()
+			if err != nil {
+				return nil, fmt.Errorf("read topic id: %w", err)
+			}
+		} else {
+			name, err = r.String()
+			if err != nil {
+				return nil, fmt.Errorf("read topic name: %w", err)
+			}
+		}
+
+		var partCount int32
+		if flexible {
+			partCount, err = compactArrayLenNonNull(r)
+		} else {
+			partCount, err = r.Int32()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read partition count: %w", err)
+		}
+
+		partitions := make([]FetchPartitionResponse, 0, partCount)
+		for j := int32(0); j < partCount; j++ {
+			partIdx, err := r.Int32()
+			if err != nil {
+				return nil, fmt.Errorf("read partition index: %w", err)
+			}
+			ec, err := r.Int16()
+			if err != nil {
+				return nil, fmt.Errorf("read partition error code: %w", err)
+			}
+			highWatermark, err := r.Int64()
+			if err != nil {
+				return nil, fmt.Errorf("read high watermark: %w", err)
+			}
+			var lastStableOffset, logStartOffset int64
+			if version >= 4 {
+				lastStableOffset, err = r.Int64()
+				if err != nil {
+					return nil, fmt.Errorf("read last stable offset: %w", err)
+				}
+			}
+			if version >= 5 {
+				logStartOffset, err = r.Int64()
+				if err != nil {
+					return nil, fmt.Errorf("read log start offset: %w", err)
+				}
+			}
+
+			var abortedTransactions []FetchAbortedTransaction
+			if version >= 4 {
+				var abortedCount int32
+				// Nullable: brokers may return null (no aborted transactions).
+				if flexible {
+					abortedCount, err = r.CompactArrayLen()
+				} else {
+					abortedCount, err = r.Int32()
+				}
+				if err != nil {
+					return nil, fmt.Errorf("read aborted count: %w", err)
+				}
+				if abortedCount > 0 {
+					abortedTransactions = make([]FetchAbortedTransaction, 0, abortedCount)
+					for k := int32(0); k < abortedCount; k++ {
+						producerID, err := r.Int64()
+						if err != nil {
+							return nil, fmt.Errorf("read aborted producer id: %w", err)
+						}
+						firstOffset, err := r.Int64()
+						if err != nil {
+							return nil, fmt.Errorf("read aborted first offset: %w", err)
+						}
+						abortedTransactions = append(abortedTransactions, FetchAbortedTransaction{
+							ProducerID:  producerID,
+							FirstOffset: firstOffset,
+						})
+					}
+				}
+			}
+
+			var preferredReadReplica int32
+			if version >= 11 {
+				preferredReadReplica, err = r.Int32()
+				if err != nil {
+					return nil, fmt.Errorf("read preferred read replica: %w", err)
+				}
+			}
+
+			var recordSet []byte
+			if flexible {
+				recordSet, err = r.CompactBytes()
+			} else {
+				recordSet, err = r.Bytes()
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read record set: %w", err)
+			}
+
+			if flexible {
+				if err := r.SkipTaggedFields(); err != nil {
+					return nil, fmt.Errorf("skip partition tags: %w", err)
+				}
+			}
+
+			partitions = append(partitions, FetchPartitionResponse{
+				Partition:            partIdx,
+				ErrorCode:            ec,
+				HighWatermark:        highWatermark,
+				LastStableOffset:     lastStableOffset,
+				LogStartOffset:       logStartOffset,
+				PreferredReadReplica: preferredReadReplica,
+				RecordSet:            recordSet,
+				AbortedTransactions:  abortedTransactions,
+			})
+		}
+
+		if flexible {
+			if err := r.SkipTaggedFields(); err != nil {
+				return nil, fmt.Errorf("skip topic tags: %w", err)
+			}
+		}
+
+		topics = append(topics, FetchTopicResponse{
+			Name:       name,
+			TopicID:    topicID,
+			Partitions: partitions,
+		})
+	}
+
+	if flexible {
+		_ = r.SkipTaggedFields()
+	}
+
+	return &FetchResponse{
+		CorrelationID: corrID,
+		ThrottleMs:    throttleMs,
+		ErrorCode:     errorCode,
+		SessionID:     sessionID,
+		Topics:        topics,
+	}, nil
+}
+
 func EncodeCreateTopicsResponse(resp *CreateTopicsResponse, version int16) ([]byte, error) {
 	if version < 0 || version > 2 {
 		return nil, fmt.Errorf("create topics response version %d not supported", version)

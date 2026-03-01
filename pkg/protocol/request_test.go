@@ -849,3 +849,187 @@ func TestParseFetchRequest(t *testing.T) {
 		t.Fatalf("unexpected fetch data: %#v", fetchReq.Topics)
 	}
 }
+
+func TestEncodeFetchRequest_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int16
+		req     *FetchRequest
+		topicID [16]byte
+	}{
+		{
+			name:    "v11 name-based",
+			version: 11,
+			req: &FetchRequest{
+				ReplicaID:      -1,
+				MaxWaitMs:      500,
+				MinBytes:       1,
+				MaxBytes:       1048576,
+				IsolationLevel: 0,
+				SessionID:      0,
+				SessionEpoch:   -1,
+				Topics: []FetchTopicRequest{
+					{
+						Name: "orders",
+						Partitions: []FetchPartitionRequest{
+							{Partition: 0, FetchOffset: 10, MaxBytes: 1048576},
+							{Partition: 1, FetchOffset: 20, MaxBytes: 1048576},
+						},
+					},
+					{
+						Name: "events",
+						Partitions: []FetchPartitionRequest{
+							{Partition: 0, FetchOffset: 0, MaxBytes: 524288},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:    "v13 topic-id-based",
+			version: 13,
+			topicID: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+			req: &FetchRequest{
+				ReplicaID:      -1,
+				MaxWaitMs:      500,
+				MinBytes:       1,
+				MaxBytes:       1048576,
+				IsolationLevel: 1,
+				SessionID:      42,
+				SessionEpoch:   3,
+				Topics: []FetchTopicRequest{
+					{
+						TopicID: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+						Partitions: []FetchPartitionRequest{
+							{Partition: 0, FetchOffset: 100, MaxBytes: 1048576},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			header := &RequestHeader{
+				APIKey:        APIKeyFetch,
+				APIVersion:    tc.version,
+				CorrelationID: 42,
+				ClientID:      strPtr("test-client"),
+			}
+			encoded, err := EncodeFetchRequest(header, tc.req, tc.version)
+			if err != nil {
+				t.Fatalf("EncodeFetchRequest: %v", err)
+			}
+
+			parsedHeader, parsedReq, err := ParseRequest(encoded)
+			if err != nil {
+				t.Fatalf("ParseRequest: %v", err)
+			}
+			if parsedHeader.APIKey != APIKeyFetch {
+				t.Fatalf("expected APIKeyFetch, got %d", parsedHeader.APIKey)
+			}
+			if parsedHeader.CorrelationID != 42 {
+				t.Fatalf("expected correlation 42, got %d", parsedHeader.CorrelationID)
+			}
+
+			fetchReq, ok := parsedReq.(*FetchRequest)
+			if !ok {
+				t.Fatalf("expected *FetchRequest, got %T", parsedReq)
+			}
+			if fetchReq.MaxWaitMs != tc.req.MaxWaitMs {
+				t.Fatalf("MaxWaitMs: got %d, want %d", fetchReq.MaxWaitMs, tc.req.MaxWaitMs)
+			}
+			if fetchReq.SessionID != tc.req.SessionID {
+				t.Fatalf("SessionID: got %d, want %d", fetchReq.SessionID, tc.req.SessionID)
+			}
+			if len(fetchReq.Topics) != len(tc.req.Topics) {
+				t.Fatalf("topic count: got %d, want %d", len(fetchReq.Topics), len(tc.req.Topics))
+			}
+			for ti, topic := range fetchReq.Topics {
+				wantTopic := tc.req.Topics[ti]
+				if tc.version >= 12 {
+					if topic.TopicID != wantTopic.TopicID {
+						t.Fatalf("topic[%d] ID mismatch", ti)
+					}
+				} else {
+					if topic.Name != wantTopic.Name {
+						t.Fatalf("topic[%d] name: got %q, want %q", ti, topic.Name, wantTopic.Name)
+					}
+				}
+				if len(topic.Partitions) != len(wantTopic.Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d, want %d", ti, len(topic.Partitions), len(wantTopic.Partitions))
+				}
+				for pi, part := range topic.Partitions {
+					wantPart := wantTopic.Partitions[pi]
+					if part.Partition != wantPart.Partition {
+						t.Fatalf("topic[%d] part[%d] id: got %d, want %d", ti, pi, part.Partition, wantPart.Partition)
+					}
+					if part.FetchOffset != wantPart.FetchOffset {
+						t.Fatalf("topic[%d] part[%d] offset: got %d, want %d", ti, pi, part.FetchOffset, wantPart.FetchOffset)
+					}
+					if part.MaxBytes != wantPart.MaxBytes {
+						t.Fatalf("topic[%d] part[%d] maxBytes: got %d, want %d", ti, pi, part.MaxBytes, wantPart.MaxBytes)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestEncodeFetchRequest_KmsgValidation(t *testing.T) {
+	// Encode a v13 request and validate it parses with franz-go's kmsg.
+	header := &RequestHeader{
+		APIKey:        APIKeyFetch,
+		APIVersion:    13,
+		CorrelationID: 99,
+		ClientID:      strPtr("kmsg-test"),
+	}
+	topicID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	req := &FetchRequest{
+		ReplicaID:      -1,
+		MaxWaitMs:      500,
+		MinBytes:       1,
+		MaxBytes:       1048576,
+		IsolationLevel: 0,
+		SessionID:      0,
+		SessionEpoch:   -1,
+		Topics: []FetchTopicRequest{
+			{
+				TopicID: topicID,
+				Partitions: []FetchPartitionRequest{
+					{Partition: 0, FetchOffset: 42, MaxBytes: 1048576},
+				},
+			},
+		},
+	}
+	encoded, err := EncodeFetchRequest(header, req, 13)
+	if err != nil {
+		t.Fatalf("EncodeFetchRequest: %v", err)
+	}
+
+	// Use ParseRequestHeader to find where the body starts (same as the real code).
+	_, reader, err := ParseRequestHeader(encoded)
+	if err != nil {
+		t.Fatalf("ParseRequestHeader: %v", err)
+	}
+	bodyStart := len(encoded) - reader.remaining()
+
+	kmsgReq := kmsg.NewPtrFetchRequest()
+	kmsgReq.Version = 13
+	if err := kmsgReq.ReadFrom(encoded[bodyStart:]); err != nil {
+		t.Fatalf("kmsg.ReadFrom: %v", err)
+	}
+	if len(kmsgReq.Topics) != 1 {
+		t.Fatalf("expected 1 topic, got %d", len(kmsgReq.Topics))
+	}
+	if kmsgReq.Topics[0].TopicID != topicID {
+		t.Fatalf("topic ID mismatch")
+	}
+	if len(kmsgReq.Topics[0].Partitions) != 1 {
+		t.Fatalf("expected 1 partition, got %d", len(kmsgReq.Topics[0].Partitions))
+	}
+	if kmsgReq.Topics[0].Partitions[0].FetchOffset != 42 {
+		t.Fatalf("fetch offset: got %d, want 42", kmsgReq.Topics[0].Partitions[0].FetchOffset)
+	}
+}

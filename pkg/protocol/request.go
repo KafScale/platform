@@ -1790,6 +1790,100 @@ func ParseRequest(b []byte) (*RequestHeader, Request, error) {
 	return header, req, nil
 }
 
+// EncodeFetchRequest serializes a RequestHeader + FetchRequest into wire-format
+// bytes suitable for WriteFrame. The encoding mirrors what ParseRequest expects.
+func EncodeFetchRequest(header *RequestHeader, req *FetchRequest, version int16) ([]byte, error) {
+	w := newByteWriter(256)
+	flexible := isFlexibleRequest(APIKeyFetch, version)
+
+	w.Int16(header.APIKey)
+	w.Int16(header.APIVersion)
+	w.Int32(header.CorrelationID)
+	w.NullableString(header.ClientID)
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+
+	w.Int32(req.ReplicaID)
+	w.Int32(req.MaxWaitMs)
+	w.Int32(req.MinBytes)
+	if version >= 3 {
+		w.Int32(req.MaxBytes)
+	}
+	if version >= 4 {
+		w.Int8(req.IsolationLevel)
+	}
+	if version >= 7 {
+		w.Int32(req.SessionID)
+		w.Int32(req.SessionEpoch)
+	}
+
+	if flexible {
+		w.CompactArrayLen(len(req.Topics))
+	} else {
+		w.Int32(int32(len(req.Topics)))
+	}
+	for _, topic := range req.Topics {
+		if version >= 12 {
+			w.UUID(topic.TopicID)
+		} else {
+			if flexible {
+				w.CompactString(topic.Name)
+			} else {
+				w.String(topic.Name)
+			}
+		}
+		if flexible {
+			w.CompactArrayLen(len(topic.Partitions))
+		} else {
+			w.Int32(int32(len(topic.Partitions)))
+		}
+		for _, part := range topic.Partitions {
+			w.Int32(part.Partition)
+			if version >= 9 {
+				w.Int32(-1) // leader epoch (unknown)
+			}
+			w.Int64(part.FetchOffset)
+			if version >= 12 {
+				w.Int32(-1) // last fetched epoch (unknown)
+			}
+			if version >= 5 {
+				w.Int64(-1) // log start offset
+			}
+			w.Int32(part.MaxBytes)
+			if flexible {
+				w.WriteTaggedFields(0)
+			}
+		}
+		if flexible {
+			w.WriteTaggedFields(0)
+		}
+	}
+
+	// Forgotten topics (empty)
+	if version >= 7 {
+		if flexible {
+			w.CompactArrayLen(0)
+		} else {
+			w.Int32(0)
+		}
+	}
+
+	// Rack ID (v11+)
+	if version >= 11 {
+		if flexible {
+			w.CompactString("")
+		} else {
+			w.String("")
+		}
+	}
+
+	if flexible {
+		w.WriteTaggedFields(0)
+	}
+	return w.Bytes(), nil
+}
+
 // EncodeProduceRequest serializes a RequestHeader + ProduceRequest into wire-format
 // bytes suitable for WriteFrame. The encoding mirrors what ParseRequest expects.
 func EncodeProduceRequest(header *RequestHeader, req *ProduceRequest, version int16) ([]byte, error) {

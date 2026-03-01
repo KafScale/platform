@@ -1843,6 +1843,160 @@ func TestGroupResponseErrorCode_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestParseFetchResponse_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name    string
+		version int16
+		resp    *FetchResponse
+	}{
+		{
+			name:    "v11 name-based",
+			version: 11,
+			resp: &FetchResponse{
+				CorrelationID: 7,
+				ThrottleMs:    0,
+				ErrorCode:     NONE,
+				SessionID:     0,
+				Topics: []FetchTopicResponse{
+					{
+						Name: "orders",
+						Partitions: []FetchPartitionResponse{
+							{
+								Partition:            0,
+								ErrorCode:            NONE,
+								HighWatermark:        100,
+								LastStableOffset:     100,
+								LogStartOffset:       0,
+								PreferredReadReplica: -1,
+								RecordSet:            []byte("test-records"),
+							},
+							{
+								Partition:            1,
+								ErrorCode:            NOT_LEADER_OR_FOLLOWER,
+								HighWatermark:        0,
+								LastStableOffset:     0,
+								LogStartOffset:       0,
+								PreferredReadReplica: -1,
+								RecordSet:            []byte{},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:    "v13 topic-id-based",
+			version: 13,
+			resp: &FetchResponse{
+				CorrelationID: 11,
+				ThrottleMs:    5,
+				ErrorCode:     NONE,
+				SessionID:     42,
+				Topics: []FetchTopicResponse{
+					{
+						TopicID: [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+						Partitions: []FetchPartitionResponse{
+							{
+								Partition:            0,
+								ErrorCode:            NONE,
+								HighWatermark:        50,
+								LastStableOffset:     50,
+								LogStartOffset:       0,
+								PreferredReadReplica: -1,
+								RecordSet:            []byte("hello"),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:    "v11 multiple topics",
+			version: 11,
+			resp: &FetchResponse{
+				CorrelationID: 99,
+				ThrottleMs:    0,
+				ErrorCode:     NONE,
+				SessionID:     0,
+				Topics: []FetchTopicResponse{
+					{
+						Name: "orders",
+						Partitions: []FetchPartitionResponse{
+							{Partition: 0, ErrorCode: NONE, HighWatermark: 10, LastStableOffset: 10, PreferredReadReplica: -1, RecordSet: []byte("a")},
+						},
+					},
+					{
+						Name: "events",
+						Partitions: []FetchPartitionResponse{
+							{Partition: 0, ErrorCode: NONE, HighWatermark: 20, LastStableOffset: 20, PreferredReadReplica: -1, RecordSet: []byte("b")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := EncodeFetchResponse(tc.resp, tc.version)
+			if err != nil {
+				t.Fatalf("EncodeFetchResponse: %v", err)
+			}
+
+			parsed, err := ParseFetchResponse(encoded, tc.version)
+			if err != nil {
+				t.Fatalf("ParseFetchResponse: %v", err)
+			}
+
+			if parsed.CorrelationID != tc.resp.CorrelationID {
+				t.Fatalf("CorrelationID: got %d, want %d", parsed.CorrelationID, tc.resp.CorrelationID)
+			}
+			if parsed.ThrottleMs != tc.resp.ThrottleMs {
+				t.Fatalf("ThrottleMs: got %d, want %d", parsed.ThrottleMs, tc.resp.ThrottleMs)
+			}
+			if parsed.ErrorCode != tc.resp.ErrorCode {
+				t.Fatalf("ErrorCode: got %d, want %d", parsed.ErrorCode, tc.resp.ErrorCode)
+			}
+			if parsed.SessionID != tc.resp.SessionID {
+				t.Fatalf("SessionID: got %d, want %d", parsed.SessionID, tc.resp.SessionID)
+			}
+			if len(parsed.Topics) != len(tc.resp.Topics) {
+				t.Fatalf("topic count: got %d, want %d", len(parsed.Topics), len(tc.resp.Topics))
+			}
+			for ti, topic := range parsed.Topics {
+				wantTopic := tc.resp.Topics[ti]
+				if tc.version >= 12 {
+					if topic.TopicID != wantTopic.TopicID {
+						t.Fatalf("topic[%d] ID mismatch", ti)
+					}
+				} else {
+					if topic.Name != wantTopic.Name {
+						t.Fatalf("topic[%d] name: got %q, want %q", ti, topic.Name, wantTopic.Name)
+					}
+				}
+				if len(topic.Partitions) != len(wantTopic.Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d, want %d", ti, len(topic.Partitions), len(wantTopic.Partitions))
+				}
+				for pi, part := range topic.Partitions {
+					wantPart := wantTopic.Partitions[pi]
+					if part.Partition != wantPart.Partition {
+						t.Fatalf("topic[%d] part[%d]: got %d, want %d", ti, pi, part.Partition, wantPart.Partition)
+					}
+					if part.ErrorCode != wantPart.ErrorCode {
+						t.Fatalf("topic[%d] part[%d] error: got %d, want %d", ti, pi, part.ErrorCode, wantPart.ErrorCode)
+					}
+					if part.HighWatermark != wantPart.HighWatermark {
+						t.Fatalf("topic[%d] part[%d] HW: got %d, want %d", ti, pi, part.HighWatermark, wantPart.HighWatermark)
+					}
+					if string(part.RecordSet) != string(wantPart.RecordSet) {
+						t.Fatalf("topic[%d] part[%d] records: got %q, want %q", ti, pi, part.RecordSet, wantPart.RecordSet)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestGroupResponseErrorCode_Truncated(t *testing.T) {
 	// A truncated response should return ok=false.
 	_, ok := GroupResponseErrorCode(APIKeyJoinGroup, 2, []byte{0, 0, 0, 1})
