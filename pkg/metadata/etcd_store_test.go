@@ -19,25 +19,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/url"
-	"os/exec"
-	"strconv"
-	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.etcd.io/etcd/server/v3/embed"
 
+	"github.com/KafScale/platform/internal/testutil"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func TestEtcdStoreCreateTopicPersistsSnapshot(t *testing.T) {
-	e, endpoints := startEmbeddedEtcd(t)
-	defer e.Close()
+	endpoints := testutil.StartEmbeddedEtcd(t)
 
 	ctx := context.Background()
 	initial := ClusterMetadata{
@@ -64,8 +57,7 @@ func TestEtcdStoreCreateTopicPersistsSnapshot(t *testing.T) {
 }
 
 func TestEtcdStoreTopicConfigAndPartitions(t *testing.T) {
-	e, endpoints := startEmbeddedEtcd(t)
-	defer e.Close()
+	endpoints := testutil.StartEmbeddedEtcd(t)
 
 	ctx := context.Background()
 	initial := ClusterMetadata{
@@ -114,8 +106,7 @@ func TestEtcdStoreTopicConfigAndPartitions(t *testing.T) {
 }
 
 func TestEtcdStoreDeleteTopicRemovesOffsets(t *testing.T) {
-	e, endpoints := startEmbeddedEtcd(t)
-	defer e.Close()
+	endpoints := testutil.StartEmbeddedEtcd(t)
 
 	ctx := context.Background()
 	initial := ClusterMetadata{
@@ -178,8 +169,7 @@ func TestEtcdStoreDeleteTopicRemovesOffsets(t *testing.T) {
 }
 
 func TestEtcdStoreConsumerGroupPersistence(t *testing.T) {
-	e, endpoints := startEmbeddedEtcd(t)
-	defer e.Close()
+	endpoints := testutil.StartEmbeddedEtcd(t)
 
 	ctx := context.Background()
 	store, err := NewEtcdStore(ctx, ClusterMetadata{}, EtcdStoreConfig{Endpoints: endpoints})
@@ -230,98 +220,6 @@ func TestEtcdStoreConsumerGroupPersistence(t *testing.T) {
 	if loaded != nil {
 		t.Fatalf("expected group deleted, got %#v", loaded)
 	}
-}
-
-func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
-	t.Helper()
-	if err := ensureEtcdPortsFree(); err != nil {
-		t.Skipf("skipping etcd store tests: %v", err)
-	}
-	cfg := embed.NewConfig()
-	cfg.Dir = t.TempDir()
-	cfg.LogLevel = "error"
-	cfg.Logger = "zap"
-	setEtcdPorts(t, cfg, "32379", "32380")
-
-	e, err := embed.StartEtcd(cfg)
-	if err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("skipping etcd store tests: %v", err)
-		}
-		t.Fatalf("start embedded etcd: %v", err)
-	}
-	select {
-	case <-e.Server.ReadyNotify():
-	case <-time.After(10 * time.Second):
-		e.Server.Stop()
-		t.Fatalf("etcd server took too long to start")
-	}
-
-	clientURL := e.Clients[0].Addr().String()
-	return e, []string{fmt.Sprintf("http://%s", clientURL)}
-}
-
-func ensureEtcdPortsFree() error {
-	if err := killProcessesOnPort("32379"); err != nil {
-		return err
-	}
-	if err := killProcessesOnPort("32380"); err != nil {
-		return err
-	}
-	if err := portAvailable("127.0.0.1:32379"); err != nil {
-		return err
-	}
-	if err := portAvailable("127.0.0.1:32380"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func setEtcdPorts(t *testing.T, cfg *embed.Config, clientPort, peerPort string) {
-	t.Helper()
-	clientURL, err := url.Parse("http://127.0.0.1:" + clientPort)
-	if err != nil {
-		t.Fatalf("parse client url: %v", err)
-	}
-	peerURL, err := url.Parse("http://127.0.0.1:" + peerPort)
-	if err != nil {
-		t.Fatalf("parse peer url: %v", err)
-	}
-	cfg.ListenClientUrls = []url.URL{*clientURL}
-	cfg.AdvertiseClientUrls = []url.URL{*clientURL}
-	cfg.ListenPeerUrls = []url.URL{*peerURL}
-	cfg.AdvertisePeerUrls = []url.URL{*peerURL}
-	cfg.Name = "default"
-	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
-}
-
-func killProcessesOnPort(port string) error {
-	out, err := exec.Command("lsof", "-nP", "-iTCP:"+port, "-sTCP:LISTEN", "-t").Output()
-	if err != nil {
-		return nil
-	}
-	pids := strings.Fields(string(out))
-	for _, pidStr := range pids {
-		pid, convErr := strconv.Atoi(strings.TrimSpace(pidStr))
-		if convErr != nil {
-			continue
-		}
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-		time.Sleep(100 * time.Millisecond)
-		if alive := syscall.Kill(pid, 0); alive == nil {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-		}
-	}
-	return nil
-}
-
-func portAvailable(addr string) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("port %s already in use", addr)
-	}
-	_ = ln.Close()
-	return nil
 }
 
 func waitForTopicInSnapshot(t *testing.T, endpoints []string, topic string) {

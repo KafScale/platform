@@ -40,6 +40,7 @@ import (
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/KafScale/platform/pkg/storage"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,12 +52,7 @@ const (
 	defaultKafkaPort      = 19092
 	defaultMetricsAddr    = ":19093"
 	defaultControlAddr    = ":19094"
-	defaultMinioBucket    = "kafscale"
-	defaultMinioRegion    = "us-east-1"
-	defaultMinioEndpoint  = "http://127.0.0.1:9000"
-	defaultMinioAccessKey = "minioadmin"
-	defaultMinioSecretKey  = "minioadmin"
-	defaultS3Concurrency   = 64
+	defaultS3Concurrency = 64
 	brokerVersion          = "dev"
 )
 
@@ -66,9 +62,12 @@ type handler struct {
 	s3                   storage.S3Client
 	cache                *cache.SegmentCache
 	logs                 map[string]map[int32]*storage.PartitionLog
-	logMu                sync.Mutex
+	logMu                sync.RWMutex
+	logInit              singleflight.Group
 	logConfig            storage.PartitionLogConfig
 	coordinator          *broker.GroupCoordinator
+	leaseManager         *metadata.PartitionLeaseManager
+	groupLeaseManager    *metadata.GroupLeaseManager
 	s3Health             *broker.S3HealthMonitor
 	s3Namespace          string
 	brokerInfo           protocol.MetadataBroker
@@ -226,10 +225,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
 			}, header.APIVersion)
 		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeJoinGroupResponse(&protocol.JoinGroupResponse{
 				CorrelationID: header.CorrelationID,
-				ThrottleMs:    0,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
@@ -248,10 +252,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
 			}, header.APIVersion)
 		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeSyncGroupResponse(&protocol.SyncGroupResponse{
 				CorrelationID: header.CorrelationID,
-				ThrottleMs:    0,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
@@ -265,13 +274,18 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
 			allowed := make([]string, 0, len(req.Groups))
 			denied := make(map[string]struct{})
+			leaseErrors := make(map[string]int16)
 			for _, groupID := range req.Groups {
-				if h.allowGroup(principal, groupID, acl.ActionGroupRead) {
-					allowed = append(allowed, groupID)
-				} else {
+				if !h.allowGroup(principal, groupID, acl.ActionGroupRead) {
 					denied[groupID] = struct{}{}
 					h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, groupID)
+					continue
 				}
+				if errCode := h.acquireGroupLease(ctx, groupID); errCode != 0 {
+					leaseErrors[groupID] = errCode
+					continue
+				}
+				allowed = append(allowed, groupID)
 			}
 
 			responseByGroup := make(map[string]protocol.DescribeGroupsResponseGroup, len(req.Groups))
@@ -298,9 +312,16 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 
 			results := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
 			for _, groupID := range req.Groups {
-				if _, denied := denied[groupID]; denied {
+				if _, ok := denied[groupID]; ok {
 					results = append(results, protocol.DescribeGroupsResponseGroup{
 						ErrorCode: protocol.GROUP_AUTHORIZATION_FAILED,
+						GroupID:   groupID,
+					})
+					continue
+				}
+				if errCode, ok := leaseErrors[groupID]; ok {
+					results = append(results, protocol.DescribeGroupsResponseGroup{
+						ErrorCode: errCode,
 						GroupID:   groupID,
 					})
 					continue
@@ -356,10 +377,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
 			}, header.APIVersion)
 		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
+			}, header.APIVersion)
+		}
 		if !h.etcdAvailable() {
 			return protocol.EncodeHeartbeatResponse(&protocol.HeartbeatResponse{
 				CorrelationID: header.CorrelationID,
-				ThrottleMs:    0,
 				ErrorCode:     protocol.REQUEST_TIMED_OUT,
 			}, header.APIVersion)
 		}
@@ -372,6 +398,12 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
 				CorrelationID: header.CorrelationID,
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			})
+		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			return protocol.EncodeLeaveGroupResponse(&protocol.LeaveGroupResponse{
+				CorrelationID: header.CorrelationID,
+				ErrorCode:     errCode,
 			})
 		}
 		if !h.etcdAvailable() {
@@ -403,6 +435,26 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeOffsetCommitResponse(&protocol.OffsetCommitResponse{
 				CorrelationID: header.CorrelationID,
 				ThrottleMs:    0,
+				Topics:        topics,
+			})
+		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			topics := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetCommitPartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: errCode,
+					})
+				}
+				topics = append(topics, protocol.OffsetCommitTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetCommitResponse(&protocol.OffsetCommitResponse{
+				CorrelationID: header.CorrelationID,
 				Topics:        topics,
 			})
 		}
@@ -457,6 +509,29 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				ThrottleMs:    0,
 				Topics:        topics,
 				ErrorCode:     protocol.GROUP_AUTHORIZATION_FAILED,
+			}, header.APIVersion)
+		}
+		if errCode := h.acquireGroupLease(ctx, req.GroupID); errCode != 0 {
+			topics := make([]protocol.OffsetFetchTopicResponse, 0, len(req.Topics))
+			for _, topic := range req.Topics {
+				partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
+				for _, part := range topic.Partitions {
+					partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
+						Partition:   part.Partition,
+						Offset:      -1,
+						LeaderEpoch: -1,
+						ErrorCode:   errCode,
+					})
+				}
+				topics = append(topics, protocol.OffsetFetchTopicResponse{
+					Name:       topic.Name,
+					Partitions: partitions,
+				})
+			}
+			return protocol.EncodeOffsetFetchResponse(&protocol.OffsetFetchResponse{
+				CorrelationID: header.CorrelationID,
+				Topics:        topics,
+				ErrorCode:     errCode,
 			}, header.APIVersion)
 		}
 		if !h.etcdAvailable() {
@@ -953,6 +1028,59 @@ func (h *handler) unauthorizedListOffsets(principal string, header *protocol.Req
 	})
 }
 
+// acquireGroupLease attempts to acquire the coordination lease for the given
+// group. Returns 0 if this broker is (or becomes) the coordinator. Returns a
+// non-zero Kafka error code if the request should be rejected:
+//   - NOT_COORDINATOR when another broker owns the group or this broker is
+//     shutting down (so the proxy can redirect to the correct broker).
+//   - REQUEST_TIMED_OUT for transient errors (etcd timeout, session failure).
+func (h *handler) acquireGroupLease(ctx context.Context, groupID string) int16 {
+	if h.groupLeaseManager == nil {
+		return 0
+	}
+	err := h.groupLeaseManager.Acquire(ctx, groupID)
+	if err == nil {
+		return 0
+	}
+	if errors.Is(err, metadata.ErrNotOwner) || errors.Is(err, metadata.ErrShuttingDown) {
+		return protocol.NOT_COORDINATOR
+	}
+	h.logger.Warn("group lease acquire failed", "group", groupID, "error", err)
+	return protocol.REQUEST_TIMED_OUT
+}
+
+// acquirePartitionLeases acquires leases for all partitions in the request
+// concurrently. Returns a map of partition -> error for partitions that failed.
+// Partitions already owned by this broker complete instantly (map lookup).
+func (h *handler) acquirePartitionLeases(ctx context.Context, req *protocol.ProduceRequest) map[metadata.PartitionID]error {
+	if h.leaseManager == nil {
+		return nil
+	}
+	var partitions []metadata.PartitionID
+	for _, topic := range req.Topics {
+		for _, part := range topic.Partitions {
+			partitions = append(partitions, metadata.PartitionID{
+				Topic:     topic.Name,
+				Partition: part.Partition,
+			})
+		}
+	}
+	if len(partitions) == 0 {
+		return nil
+	}
+	results := h.leaseManager.AcquireAll(ctx, partitions)
+	var errs map[metadata.PartitionID]error
+	for _, r := range results {
+		if r.Err != nil {
+			if errs == nil {
+				errs = make(map[metadata.PartitionID]error)
+			}
+			errs[r.Partition] = r.Err
+		}
+	}
+	return errs
+}
+
 func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHeader, req *protocol.ProduceRequest) ([]byte, error) {
 	start := time.Now()
 	defer func() {
@@ -962,6 +1090,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	now := time.Now().UnixMilli()
 	var producedMessages int64
 	principal := principalFromContext(ctx, header)
+
+	leaseErrors := h.acquirePartitionLeases(ctx, req)
 
 	for _, topic := range req.Topics {
 		if h.traceKafka {
@@ -991,6 +1121,24 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				if h.traceKafka {
 					h.logger.Debug("produce rejected due to etcd availability", "topic", topic.Name, "partition", part.Partition)
 				}
+				continue
+			}
+			if leaseErr, hasErr := leaseErrors[metadata.PartitionID{Topic: topic.Name, Partition: part.Partition}]; hasErr {
+				if errors.Is(leaseErr, metadata.ErrNotOwner) || errors.Is(leaseErr, metadata.ErrShuttingDown) {
+					partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+						Partition: part.Partition,
+						ErrorCode: protocol.NOT_LEADER_OR_FOLLOWER,
+					})
+					if h.traceKafka {
+						h.logger.Debug("produce rejected: not partition owner", "topic", topic.Name, "partition", part.Partition)
+					}
+					continue
+				}
+				partitionResponses = append(partitionResponses, protocol.ProducePartitionResponse{
+					Partition: part.Partition,
+					ErrorCode: protocol.REQUEST_TIMED_OUT,
+				})
+				h.logger.Warn("partition lease acquire failed", "topic", topic.Name, "partition", part.Partition, "error", leaseErr)
 				continue
 			}
 			if h.s3Health.State() != broker.S3StateHealthy {
@@ -1948,20 +2096,61 @@ func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32
 }
 
 func (h *handler) getPartitionLog(ctx context.Context, topic string, partition int32) (*storage.PartitionLog, error) {
+	h.logMu.RLock()
+	if partitions, ok := h.logs[topic]; ok {
+		if plog, ok := partitions[partition]; ok {
+			h.logMu.RUnlock()
+			return plog, nil
+		}
+	}
+	h.logMu.RUnlock()
+
+	// Requests for other partitions proceed in parallel; only one goroutine
+	// per partition does the actual initialization.
 	for {
-		h.logMu.Lock()
-		partitions := h.logs[topic]
-		if partitions == nil {
-			partitions = make(map[int32]*storage.PartitionLog)
-			h.logs[topic] = partitions
-		}
-		if log, ok := partitions[partition]; ok {
+		key := fmt.Sprintf("%s/%d", topic, partition)
+		result, err, _ := h.logInit.Do(key, func() (interface{}, error) {
+			// Double-check under read lock in case another goroutine just finished.
+			h.logMu.RLock()
+			if partitions, ok := h.logs[topic]; ok {
+				if plog, ok := partitions[partition]; ok {
+					h.logMu.RUnlock()
+					return plog, nil
+				}
+			}
+			h.logMu.RUnlock()
+
+			// All I/O happens outside the lock.
+			nextOffset, err := h.store.NextOffset(ctx, topic, partition)
+			if err != nil {
+				return nil, err
+			}
+			plog := storage.NewPartitionLog(h.s3Namespace, topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
+				if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
+					h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
+				}
+			}, h.recordS3Op, h.s3sem)
+			lastOffset, err := plog.RestoreFromS3(ctx)
+			if err != nil {
+				h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
+				return nil, err
+			}
+			if lastOffset >= nextOffset {
+				if err := h.store.UpdateOffsets(ctx, topic, partition, lastOffset); err != nil {
+					h.logger.Error("sync offsets from S3 failed", "error", err, "topic", topic, "partition", partition)
+				}
+			}
+
+			h.logMu.Lock()
+			if h.logs[topic] == nil {
+				h.logs[topic] = make(map[int32]*storage.PartitionLog)
+			}
+			h.logs[topic][partition] = plog
 			h.logMu.Unlock()
-			return log, nil
-		}
-		nextOffset, err := h.store.NextOffset(ctx, topic, partition)
+
+			return plog, nil
+		})
 		if err != nil {
-			h.logMu.Unlock()
 			if errors.Is(err, metadata.ErrUnknownTopic) && h.autoCreateTopics {
 				if err := h.ensureTopic(ctx, topic, partition); err != nil {
 					return nil, err
@@ -1970,25 +2159,7 @@ func (h *handler) getPartitionLog(ctx context.Context, topic string, partition i
 			}
 			return nil, err
 		}
-		plog := storage.NewPartitionLog(h.s3Namespace, topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
-			if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
-				h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
-			}
-		}, h.recordS3Op, h.s3sem)
-		lastOffset, err := plog.RestoreFromS3(ctx)
-		if err != nil {
-			h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
-			h.logMu.Unlock()
-			return nil, err
-		}
-		if lastOffset >= nextOffset {
-			if err := h.store.UpdateOffsets(ctx, topic, partition, lastOffset); err != nil {
-				h.logger.Error("sync offsets from S3 failed", "error", err, "topic", topic, "partition", partition)
-			}
-		}
-		partitions[partition] = plog
-		h.logMu.Unlock()
-		return plog, nil
+		return result.(*storage.PartitionLog), nil
 	}
 }
 
@@ -2023,6 +2194,19 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	}
 	health := broker.NewS3HealthMonitor(s3HealthConfigFromEnv())
 	authorizer := buildAuthorizerFromEnv(logger)
+	var leaseManager *metadata.PartitionLeaseManager
+	var groupLeaseManager *metadata.GroupLeaseManager
+	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
+		brokerIDStr := fmt.Sprintf("%d", brokerInfo.NodeID)
+		leaseManager = metadata.NewPartitionLeaseManager(etcdStore.EtcdClient(), metadata.PartitionLeaseConfig{
+			BrokerID: brokerIDStr,
+			Logger:   logger,
+		})
+		groupLeaseManager = metadata.NewGroupLeaseManager(etcdStore.EtcdClient(), metadata.GroupLeaseConfig{
+			BrokerID: brokerIDStr,
+			Logger:   logger,
+		})
+	}
 	return &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
@@ -2042,6 +2226,8 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			Logger:            logger,
 		},
 		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
+		leaseManager:         leaseManager,
+		groupLeaseManager:    groupLeaseManager,
 		s3Health:             health,
 		s3Namespace:          s3Namespace,
 		brokerInfo:           brokerInfo,
@@ -2141,11 +2327,20 @@ func main() {
 		logger.Error("broker server error", "error", err)
 		os.Exit(1)
 	}
+	// Release partition leases immediately on shutdown signal so other brokers
+	// can take over while this broker drains in-flight requests. In-flight
+	// requests already hold partition logs and don't need the etcd lease.
+	if handler.leaseManager != nil {
+		handler.leaseManager.ReleaseAll()
+	}
+	if handler.groupLeaseManager != nil {
+		handler.groupLeaseManager.ReleaseAll()
+	}
 	srv.Wait()
 }
 
 func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
-	writeCfg, readCfg, useMemory, usingDefaultMinio, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
+	writeCfg, readCfg, useMemory, credsProvided, useReadReplica := buildS3ConfigsFromEnv()
 	if useMemory {
 		logger.Info("using in-memory S3 client", "env", "KAFSCALE_USE_MEMORY_S3=1")
 		return storage.NewMemoryS3Client()
@@ -2162,7 +2357,7 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 		os.Exit(1)
 	}
 
-	logger.Info("using AWS-compatible S3 client", "bucket", writeCfg.Bucket, "region", writeCfg.Region, "endpoint", writeCfg.Endpoint, "force_path_style", writeCfg.ForcePathStyle, "kms_configured", writeCfg.KMSKeyARN != "", "default_minio", usingDefaultMinio, "credentials_provided", credsProvided)
+	logger.Info("using AWS-compatible S3 client", "bucket", writeCfg.Bucket, "region", writeCfg.Region, "endpoint", writeCfg.Endpoint, "force_path_style", writeCfg.ForcePathStyle, "kms_configured", writeCfg.KMSKeyARN != "", "credentials_provided", credsProvided)
 
 	if useReadReplica {
 		readClient, err := storage.NewS3Client(ctx, readCfg)
@@ -2177,23 +2372,18 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 	return client
 }
 
-func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bool, bool) {
+func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bool) {
 	if parseEnvBool("KAFSCALE_USE_MEMORY_S3", false) {
-		return storage.S3Config{}, storage.S3Config{}, true, false, false, false
+		return storage.S3Config{}, storage.S3Config{}, true, false, false
 	}
-	writeBucket := envOrDefault("KAFSCALE_S3_BUCKET", defaultMinioBucket)
-	writeRegion := envOrDefault("KAFSCALE_S3_REGION", defaultMinioRegion)
-	writeEndpoint := envOrDefault("KAFSCALE_S3_ENDPOINT", defaultMinioEndpoint)
-	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", true)
+	writeBucket := os.Getenv("KAFSCALE_S3_BUCKET")
+	writeRegion := os.Getenv("KAFSCALE_S3_REGION")
+	writeEndpoint := os.Getenv("KAFSCALE_S3_ENDPOINT")
+	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", writeEndpoint != "")
 	kmsARN := os.Getenv("KAFSCALE_S3_KMS_ARN")
-	usingDefaultMinio := writeBucket == defaultMinioBucket && writeRegion == defaultMinioRegion && writeEndpoint == defaultMinioEndpoint
 	accessKey := os.Getenv("KAFSCALE_S3_ACCESS_KEY")
 	secretKey := os.Getenv("KAFSCALE_S3_SECRET_KEY")
 	sessionToken := os.Getenv("KAFSCALE_S3_SESSION_TOKEN")
-	if accessKey == "" && secretKey == "" && usingDefaultMinio {
-		accessKey = defaultMinioAccessKey
-		secretKey = defaultMinioSecretKey
-	}
 	credsProvided := accessKey != "" && secretKey != ""
 	s3Concurrency := parseEnvInt("KAFSCALE_S3_CONCURRENCY", defaultS3Concurrency)
 	writeCfg := storage.S3Config{
@@ -2232,7 +2422,7 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 		KMSKeyARN:       kmsARN,
 		MaxConnections:  s3Concurrency,
 	}
-	return writeCfg, readCfg, false, usingDefaultMinio, credsProvided, useReadReplica
+	return writeCfg, readCfg, false, credsProvided, useReadReplica
 }
 
 func buildConnContextFunc(logger *slog.Logger) broker.ConnContextFunc {

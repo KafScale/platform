@@ -3,8 +3,8 @@
 ARG GO_VERSION=1.25.2
 FROM golang:${GO_VERSION}-alpine@sha256:06cdd34bd531b810650e47762c01e025eb9b1c7eadd191553b91c9f2d549fae8 AS builder
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 RUN apk add --no-cache git ca-certificates
 

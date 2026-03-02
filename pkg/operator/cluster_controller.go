@@ -247,6 +247,12 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 	if val := strings.TrimSpace(os.Getenv("KAFSCALE_PROXY_PROTOCOL")); val != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_PROXY_PROTOCOL", Value: val})
 	}
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_LOG_LEVEL")); val != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LOG_LEVEL", Value: val})
+	}
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_TRACE_KAFKA")); val != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_TRACE_KAFKA", Value: val})
+	}
 	var envFrom []corev1.EnvFromSource
 	if cluster.Spec.S3.CredentialsSecretRef != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{

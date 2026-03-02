@@ -48,6 +48,10 @@ type EtcdStore struct {
 	lastError atomic.Value
 }
 
+func (s *EtcdStore) EtcdClient() *clientv3.Client {
+	return s.client
+}
+
 type consumerOffsetRecord struct {
 	Offset      int64  `json:"offset"`
 	Metadata    string `json:"metadata"`

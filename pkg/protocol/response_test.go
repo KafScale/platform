@@ -1460,6 +1460,142 @@ func TestEncodeOffsetFetchResponse(t *testing.T) {
 	}
 }
 
+func TestParseProduceResponseRoundTrip(t *testing.T) {
+	resp := &ProduceResponse{
+		CorrelationID: 99,
+		Topics: []ProduceTopicResponse{
+			{
+				Name: "orders",
+				Partitions: []ProducePartitionResponse{
+					{Partition: 0, ErrorCode: NONE, BaseOffset: 42, LogAppendTimeMs: 1000, LogStartOffset: 5},
+					{Partition: 1, ErrorCode: NOT_LEADER_OR_FOLLOWER, BaseOffset: -1},
+				},
+			},
+			{
+				Name: "events",
+				Partitions: []ProducePartitionResponse{
+					{Partition: 0, ErrorCode: NONE, BaseOffset: 100, LogAppendTimeMs: 2000, LogStartOffset: 10},
+				},
+			},
+		},
+		ThrottleMs: 7,
+	}
+	for _, version := range []int16{3, 5, 7, 8, 9, 10} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			encoded, err := EncodeProduceResponse(resp, version)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			parsed, err := ParseProduceResponse(encoded, version)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if parsed.CorrelationID != resp.CorrelationID {
+				t.Fatalf("correlation id: got %d want %d", parsed.CorrelationID, resp.CorrelationID)
+			}
+			if len(parsed.Topics) != len(resp.Topics) {
+				t.Fatalf("topic count: got %d want %d", len(parsed.Topics), len(resp.Topics))
+			}
+			for ti, topic := range parsed.Topics {
+				if topic.Name != resp.Topics[ti].Name {
+					t.Fatalf("topic[%d] name: got %q want %q", ti, topic.Name, resp.Topics[ti].Name)
+				}
+				if len(topic.Partitions) != len(resp.Topics[ti].Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d want %d", ti, len(topic.Partitions), len(resp.Topics[ti].Partitions))
+				}
+				for pi, part := range topic.Partitions {
+					want := resp.Topics[ti].Partitions[pi]
+					if part.Partition != want.Partition || part.ErrorCode != want.ErrorCode || part.BaseOffset != want.BaseOffset {
+						t.Fatalf("topic[%d].part[%d]: got %+v want %+v", ti, pi, part, want)
+					}
+				}
+			}
+			if version >= 1 && parsed.ThrottleMs != resp.ThrottleMs {
+				t.Fatalf("throttle: got %d want %d", parsed.ThrottleMs, resp.ThrottleMs)
+			}
+		})
+	}
+}
+
+func TestEncodeProduceRequestRoundTrip(t *testing.T) {
+	header := &RequestHeader{
+		APIKey:        APIKeyProduce,
+		APIVersion:    9,
+		CorrelationID: 77,
+		ClientID:      strPtr("test-client"),
+	}
+	req := &ProduceRequest{
+		Acks:      -1,
+		TimeoutMs: 5000,
+		Topics: []ProduceTopic{
+			{
+				Name: "orders",
+				Partitions: []ProducePartition{
+					{Partition: 0, Records: []byte{1, 2, 3, 4}},
+					{Partition: 1, Records: []byte{5, 6}},
+				},
+			},
+			{
+				Name: "events",
+				Partitions: []ProducePartition{
+					{Partition: 0, Records: []byte{7, 8, 9}},
+				},
+			},
+		},
+	}
+	for _, version := range []int16{3, 5, 7, 8, 9, 10} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			h := &RequestHeader{
+				APIKey:        APIKeyProduce,
+				APIVersion:    version,
+				CorrelationID: header.CorrelationID,
+				ClientID:      header.ClientID,
+			}
+			encoded, err := EncodeProduceRequest(h, req, version)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			parsedHeader, parsedReq, err := ParseRequest(encoded)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if parsedHeader.CorrelationID != h.CorrelationID {
+				t.Fatalf("correlation id: got %d want %d", parsedHeader.CorrelationID, h.CorrelationID)
+			}
+			produceReq, ok := parsedReq.(*ProduceRequest)
+			if !ok {
+				t.Fatalf("expected *ProduceRequest, got %T", parsedReq)
+			}
+			if produceReq.Acks != req.Acks {
+				t.Fatalf("acks: got %d want %d", produceReq.Acks, req.Acks)
+			}
+			if produceReq.TimeoutMs != req.TimeoutMs {
+				t.Fatalf("timeout: got %d want %d", produceReq.TimeoutMs, req.TimeoutMs)
+			}
+			if len(produceReq.Topics) != len(req.Topics) {
+				t.Fatalf("topic count: got %d want %d", len(produceReq.Topics), len(req.Topics))
+			}
+			for ti, topic := range produceReq.Topics {
+				if topic.Name != req.Topics[ti].Name {
+					t.Fatalf("topic[%d] name: got %q want %q", ti, topic.Name, req.Topics[ti].Name)
+				}
+				if len(topic.Partitions) != len(req.Topics[ti].Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d want %d", ti, len(topic.Partitions), len(req.Topics[ti].Partitions))
+				}
+				for pi, part := range topic.Partitions {
+					want := req.Topics[ti].Partitions[pi]
+					if part.Partition != want.Partition {
+						t.Fatalf("topic[%d].part[%d] index: got %d want %d", ti, pi, part.Partition, want.Partition)
+					}
+					if string(part.Records) != string(want.Records) {
+						t.Fatalf("topic[%d].part[%d] records: got %v want %v", ti, pi, part.Records, want.Records)
+					}
+				}
+			}
+		})
+	}
+}
+
 func makeTestRecordBatch(count int32, baseOffset int64) []byte {
 	const size = 90
 	data := make([]byte, size)
@@ -1468,4 +1604,254 @@ func makeTestRecordBatch(count int32, baseOffset int64) []byte {
 	binary.BigEndian.PutUint32(data[23:27], uint32(count-1))
 	binary.BigEndian.PutUint32(data[57:61], uint32(count))
 	return data
+}
+
+// TestGroupResponseErrorCode_RoundTrip encodes known responses via the standard
+// Encode* functions, then verifies GroupResponseErrorCode extracts the error.
+func TestGroupResponseErrorCode_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name       string
+		apiKey     int16
+		apiVersion int16
+		encode     func() ([]byte, error)
+		wantCode   int16
+	}{
+		{
+			name:       "JoinGroup v2 NOT_COORDINATOR",
+			apiKey:     APIKeyJoinGroup,
+			apiVersion: 2,
+			encode: func() ([]byte, error) {
+				return EncodeJoinGroupResponse(&JoinGroupResponse{
+					CorrelationID: 1,
+					ThrottleMs:    0,
+					ErrorCode:     NOT_COORDINATOR,
+				}, 2)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "JoinGroup v5 NOT_COORDINATOR",
+			apiKey:     APIKeyJoinGroup,
+			apiVersion: 5,
+			encode: func() ([]byte, error) {
+				return EncodeJoinGroupResponse(&JoinGroupResponse{
+					CorrelationID: 2,
+					ThrottleMs:    0,
+					ErrorCode:     NOT_COORDINATOR,
+				}, 5)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "JoinGroup v2 success",
+			apiKey:     APIKeyJoinGroup,
+			apiVersion: 2,
+			encode: func() ([]byte, error) {
+				return EncodeJoinGroupResponse(&JoinGroupResponse{
+					CorrelationID: 3,
+					ThrottleMs:    0,
+					ErrorCode:     0,
+					ProtocolName:  "range",
+					LeaderID:      "member-1",
+					MemberID:      "member-1",
+				}, 2)
+			},
+			wantCode: 0,
+		},
+		{
+			name:       "SyncGroup v1 NOT_COORDINATOR",
+			apiKey:     APIKeySyncGroup,
+			apiVersion: 1,
+			encode: func() ([]byte, error) {
+				return EncodeSyncGroupResponse(&SyncGroupResponse{
+					CorrelationID: 4,
+					ErrorCode:     NOT_COORDINATOR,
+				}, 1)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "SyncGroup v4 NOT_COORDINATOR (flexible)",
+			apiKey:     APIKeySyncGroup,
+			apiVersion: 4,
+			encode: func() ([]byte, error) {
+				return EncodeSyncGroupResponse(&SyncGroupResponse{
+					CorrelationID: 5,
+					ErrorCode:     NOT_COORDINATOR,
+				}, 4)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "Heartbeat v1 NOT_COORDINATOR",
+			apiKey:     APIKeyHeartbeat,
+			apiVersion: 1,
+			encode: func() ([]byte, error) {
+				return EncodeHeartbeatResponse(&HeartbeatResponse{
+					CorrelationID: 6,
+					ErrorCode:     NOT_COORDINATOR,
+				}, 1)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "Heartbeat v4 NOT_COORDINATOR (flexible)",
+			apiKey:     APIKeyHeartbeat,
+			apiVersion: 4,
+			encode: func() ([]byte, error) {
+				return EncodeHeartbeatResponse(&HeartbeatResponse{
+					CorrelationID: 7,
+					ErrorCode:     NOT_COORDINATOR,
+				}, 4)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "LeaveGroup NOT_COORDINATOR",
+			apiKey:     APIKeyLeaveGroup,
+			apiVersion: 0,
+			encode: func() ([]byte, error) {
+				return EncodeLeaveGroupResponse(&LeaveGroupResponse{
+					CorrelationID: 8,
+					ErrorCode:     NOT_COORDINATOR,
+				})
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "OffsetCommit with NOT_COORDINATOR on partition",
+			apiKey:     APIKeyOffsetCommit,
+			apiVersion: 3,
+			encode: func() ([]byte, error) {
+				return EncodeOffsetCommitResponse(&OffsetCommitResponse{
+					CorrelationID: 9,
+					Topics: []OffsetCommitTopicResponse{
+						{
+							Name: "test-topic",
+							Partitions: []OffsetCommitPartitionResponse{
+								{Partition: 0, ErrorCode: NOT_COORDINATOR},
+							},
+						},
+					},
+				})
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "OffsetCommit success (no false positive for partition 16)",
+			apiKey:     APIKeyOffsetCommit,
+			apiVersion: 3,
+			encode: func() ([]byte, error) {
+				return EncodeOffsetCommitResponse(&OffsetCommitResponse{
+					CorrelationID: 10,
+					Topics: []OffsetCommitTopicResponse{
+						{
+							Name: "test-topic",
+							Partitions: []OffsetCommitPartitionResponse{
+								{Partition: 16, ErrorCode: 0},
+							},
+						},
+					},
+				})
+			},
+			wantCode: 0,
+		},
+		{
+			name:       "OffsetFetch v3 NOT_COORDINATOR (top-level)",
+			apiKey:     APIKeyOffsetFetch,
+			apiVersion: 3,
+			encode: func() ([]byte, error) {
+				return EncodeOffsetFetchResponse(&OffsetFetchResponse{
+					CorrelationID: 11,
+					Topics: []OffsetFetchTopicResponse{
+						{
+							Name: "test-topic",
+							Partitions: []OffsetFetchPartitionResponse{
+								{Partition: 0, Offset: -1, LeaderEpoch: -1, ErrorCode: NOT_COORDINATOR},
+							},
+						},
+					},
+					ErrorCode: NOT_COORDINATOR,
+				}, 3)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "OffsetFetch v5 success (offset 16, no false positive)",
+			apiKey:     APIKeyOffsetFetch,
+			apiVersion: 5,
+			encode: func() ([]byte, error) {
+				return EncodeOffsetFetchResponse(&OffsetFetchResponse{
+					CorrelationID: 12,
+					Topics: []OffsetFetchTopicResponse{
+						{
+							Name: "test-topic",
+							Partitions: []OffsetFetchPartitionResponse{
+								{Partition: 0, Offset: 16, LeaderEpoch: 0, ErrorCode: 0},
+							},
+						},
+					},
+					ErrorCode: 0,
+				}, 5)
+			},
+			wantCode: 0,
+		},
+		{
+			name:       "DescribeGroups v5 NOT_COORDINATOR",
+			apiKey:     APIKeyDescribeGroups,
+			apiVersion: 5,
+			encode: func() ([]byte, error) {
+				return EncodeDescribeGroupsResponse(&DescribeGroupsResponse{
+					CorrelationID: 13,
+					Groups: []DescribeGroupsResponseGroup{
+						{ErrorCode: NOT_COORDINATOR, GroupID: "my-group"},
+					},
+				}, 5)
+			},
+			wantCode: NOT_COORDINATOR,
+		},
+		{
+			name:       "DescribeGroups v5 success",
+			apiKey:     APIKeyDescribeGroups,
+			apiVersion: 5,
+			encode: func() ([]byte, error) {
+				return EncodeDescribeGroupsResponse(&DescribeGroupsResponse{
+					CorrelationID: 14,
+					Groups: []DescribeGroupsResponseGroup{
+						{ErrorCode: 0, GroupID: "my-group", State: "Stable"},
+					},
+				}, 5)
+			},
+			wantCode: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := tc.encode()
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			gotCode, ok := GroupResponseErrorCode(tc.apiKey, tc.apiVersion, resp)
+			if !ok {
+				t.Fatalf("GroupResponseErrorCode returned ok=false for valid response")
+			}
+			if gotCode != tc.wantCode {
+				t.Fatalf("GroupResponseErrorCode = %d, want %d", gotCode, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestGroupResponseErrorCode_Truncated(t *testing.T) {
+	// A truncated response should return ok=false.
+	_, ok := GroupResponseErrorCode(APIKeyJoinGroup, 2, []byte{0, 0, 0, 1})
+	if ok {
+		t.Fatalf("expected ok=false for truncated JoinGroup response")
+	}
+
+	_, ok = GroupResponseErrorCode(APIKeyLeaveGroup, 0, []byte{0, 0})
+	if ok {
+		t.Fatalf("expected ok=false for truncated LeaveGroup response")
+	}
 }
