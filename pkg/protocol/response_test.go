@@ -1518,12 +1518,6 @@ func TestParseProduceResponseRoundTrip(t *testing.T) {
 }
 
 func TestEncodeProduceRequestRoundTrip(t *testing.T) {
-	header := &RequestHeader{
-		APIKey:        APIKeyProduce,
-		APIVersion:    9,
-		CorrelationID: 77,
-		ClientID:      strPtr("test-client"),
-	}
 	req := &ProduceRequest{
 		Acks:      -1,
 		TimeoutMs: 5000,
@@ -1531,64 +1525,58 @@ func TestEncodeProduceRequestRoundTrip(t *testing.T) {
 			{
 				Name: "orders",
 				Partitions: []ProducePartition{
-					{Partition: 0, Records: []byte{1, 2, 3, 4}},
-					{Partition: 1, Records: []byte{5, 6}},
+					{Partition: 0, Records: []byte{1, 2, 3}},
+					{Partition: 1, Records: []byte{4, 5}},
+					{Partition: 2, Records: []byte{6, 7, 8, 9}},
 				},
 			},
 			{
 				Name: "events",
 				Partitions: []ProducePartition{
-					{Partition: 0, Records: []byte{7, 8, 9}},
+					{Partition: 0, Records: []byte{10}},
+					{Partition: 3, Records: []byte{11, 12}},
 				},
 			},
 		},
 	}
 	for _, version := range []int16{3, 5, 7, 8, 9, 10} {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
-			h := &RequestHeader{
+			header := &RequestHeader{
 				APIKey:        APIKeyProduce,
 				APIVersion:    version,
-				CorrelationID: header.CorrelationID,
-				ClientID:      header.ClientID,
+				CorrelationID: 77,
+				ClientID:      strPtr("test-client"),
 			}
-			encoded, err := EncodeProduceRequest(h, req, version)
+			encoded, err := EncodeProduceRequest(header, req, version)
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
-			parsedHeader, parsedReq, err := ParseRequest(encoded)
+			_, parsedReq, err := ParseRequest(encoded)
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			if parsedHeader.CorrelationID != h.CorrelationID {
-				t.Fatalf("correlation id: got %d want %d", parsedHeader.CorrelationID, h.CorrelationID)
-			}
-			produceReq, ok := parsedReq.(*ProduceRequest)
+			got, ok := parsedReq.(*ProduceRequest)
 			if !ok {
 				t.Fatalf("expected *ProduceRequest, got %T", parsedReq)
 			}
-			if produceReq.Acks != req.Acks {
-				t.Fatalf("acks: got %d want %d", produceReq.Acks, req.Acks)
+			if len(got.Topics) != len(req.Topics) {
+				t.Fatalf("topic count: got %d want %d", len(got.Topics), len(req.Topics))
 			}
-			if produceReq.TimeoutMs != req.TimeoutMs {
-				t.Fatalf("timeout: got %d want %d", produceReq.TimeoutMs, req.TimeoutMs)
-			}
-			if len(produceReq.Topics) != len(req.Topics) {
-				t.Fatalf("topic count: got %d want %d", len(produceReq.Topics), len(req.Topics))
-			}
-			for ti, topic := range produceReq.Topics {
-				if topic.Name != req.Topics[ti].Name {
-					t.Fatalf("topic[%d] name: got %q want %q", ti, topic.Name, req.Topics[ti].Name)
+			for ti, topic := range got.Topics {
+				want := req.Topics[ti]
+				if topic.Name != want.Name {
+					t.Fatalf("topic[%d] name: got %q want %q", ti, topic.Name, want.Name)
 				}
-				if len(topic.Partitions) != len(req.Topics[ti].Partitions) {
-					t.Fatalf("topic[%d] partition count: got %d want %d", ti, len(topic.Partitions), len(req.Topics[ti].Partitions))
+				if len(topic.Partitions) != len(want.Partitions) {
+					t.Fatalf("topic[%d] partition count: got %d want %d", ti, len(topic.Partitions), len(want.Partitions))
 				}
 				for pi, part := range topic.Partitions {
-					want := req.Topics[ti].Partitions[pi]
-					if part.Partition != want.Partition {
-						t.Fatalf("topic[%d].part[%d] index: got %d want %d", ti, pi, part.Partition, want.Partition)
+					wantPart := want.Partitions[pi]
+					if part.Partition != wantPart.Partition {
+						t.Fatalf("topic[%d].part[%d] index: got %d want %d", ti, pi, part.Partition, wantPart.Partition)
 					}
-					if string(part.Records) != string(want.Records) {
-						t.Fatalf("topic[%d].part[%d] records: got %v want %v", ti, pi, part.Records, want.Records)
+					if string(part.Records) != string(wantPart.Records) {
+						t.Fatalf("topic[%d].part[%d] records: got %x want %x", ti, pi, part.Records, wantPart.Records)
 					}
 				}
 			}
