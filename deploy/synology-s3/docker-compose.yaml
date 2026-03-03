@@ -1,0 +1,252 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# KafScale Platform with Synology NAS S3 Storage
+# ==============================================
+# Uses external MinIO on Synology NAS at 192.168.0.131:9100
+#
+# Prerequisites:
+#   - Synology NAS MinIO running at 192.168.0.131:9100
+#   - MinIO console available at 192.168.0.131:9101
+#   - Bucket will be auto-created by s3-init service
+#
+# Usage:
+#   cd deploy/synology-s3
+#   docker-compose up -d
+#
+# Services:
+#   - etcd:        http://localhost:2379
+#   - broker:      localhost:9092
+#   - lfs-proxy:   localhost:9093 (kafka), http://localhost:8080 (HTTP API)
+#   - console:     http://localhost:3080
+#
+# S3 Storage (external):
+#   - API:         http://192.168.0.131:9100
+#   - Console:     http://192.168.0.131:9101
+#
+# Test LFS upload:
+#   curl -X POST http://localhost:8080/lfs/produce \
+#     -H "X-Kafka-Topic: test-topic" \
+#     -H "Content-Type: application/octet-stream" \
+#     --data-binary @myfile.bin
+
+x-registry: &registry "192.168.0.131:5100"
+x-tag: &tag "dev"
+
+# Synology NAS S3 configuration
+x-s3-endpoint: &s3-endpoint "http://192.168.0.131:9100"
+x-s3-bucket: &s3-bucket "kafscale"
+x-s3-region: &s3-region "us-east-1"
+x-s3-access-key: &s3-access-key "miniofsadmin"
+x-s3-secret-key: &s3-secret-key "miniofsadmin"
+
+services:
+  # ==========================================================================
+  # Infrastructure
+  # ==========================================================================
+
+  # Initialize S3 bucket on Synology NAS MinIO
+  s3-init:
+    image: minio/mc:latest
+    container_name: kafscale-s3-init-synology
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Connecting to Synology MinIO at 192.168.0.131:9100...';
+      mc alias set synology http://192.168.0.131:9100 miniofsadmin miniofsadmin;
+      mc mb synology/kafscale --ignore-existing;
+      mc anonymous set download synology/kafscale;
+      echo 'Bucket kafscale ready on Synology NAS';
+      exit 0;
+      "
+    networks:
+      - kafscale
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.12
+    container_name: kafscale-etcd-synology
+    command:
+      - etcd
+      - --name=etcd0
+      - --data-dir=/etcd-data
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-cluster=etcd0=http://etcd:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=kafscale-synology
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kafscale
+
+  # ==========================================================================
+  # KafScale Platform
+  # ==========================================================================
+
+  broker:
+    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-broker:${TAG:-dev}
+    container_name: kafscale-broker-synology
+    depends_on:
+      etcd:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      KAFSCALE_BROKER_ID: "0"
+      KAFSCALE_BROKER_ADDR: ":9092"
+      KAFSCALE_BROKER_HOST: "broker"
+      KAFSCALE_BROKER_PORT: "9092"
+      KAFSCALE_BROKER_ETCD_ENDPOINTS: "http://etcd:2379"
+      KAFSCALE_BROKER_DATA_DIR: "/data"
+      KAFSCALE_BROKER_LOG_LEVEL: "info"
+      # S3 settings - Synology NAS MinIO
+      KAFSCALE_S3_BUCKET: *s3-bucket
+      KAFSCALE_S3_REGION: *s3-region
+      KAFSCALE_S3_ENDPOINT: *s3-endpoint
+      KAFSCALE_S3_ACCESS_KEY: *s3-access-key
+      KAFSCALE_S3_SECRET_KEY: *s3-secret-key
+      KAFSCALE_S3_PATH_STYLE: "true"
+    ports:
+      - "9092:9092"
+    volumes:
+      - broker-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - kafscale
+
+  lfs-proxy:
+    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-lfs-proxy:${TAG:-dev}
+    container_name: kafscale-lfs-proxy-synology
+    depends_on:
+      etcd:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+    environment:
+      # Kafka proxy settings
+      KAFSCALE_LFS_PROXY_ADDR: ":9093"
+      KAFSCALE_LFS_PROXY_ADVERTISED_HOST: "lfs-proxy"
+      KAFSCALE_LFS_PROXY_ADVERTISED_PORT: "9093"
+      KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS: "http://etcd:2379"
+      KAFSCALE_LFS_PROXY_BACKENDS: "broker:9092"
+      # HTTP API settings
+      KAFSCALE_LFS_PROXY_HTTP_ADDR: ":8080"
+      # Health & Metrics
+      KAFSCALE_LFS_PROXY_HEALTH_ADDR: ":9094"
+      KAFSCALE_LFS_PROXY_METRICS_ADDR: ":9095"
+      # S3 settings - Synology NAS MinIO
+      KAFSCALE_LFS_PROXY_S3_BUCKET: *s3-bucket
+      KAFSCALE_LFS_PROXY_S3_REGION: *s3-region
+      KAFSCALE_LFS_PROXY_S3_ENDPOINT: *s3-endpoint
+      KAFSCALE_LFS_PROXY_S3_ACCESS_KEY: *s3-access-key
+      KAFSCALE_LFS_PROXY_S3_SECRET_KEY: *s3-secret-key
+      KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE: "true"
+      KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET: "true"  # Create bucket if not exists
+      # Blob settings (Beast mode - leverage Synology NAS storage)
+      KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE: "7516192768"  # 7GB
+      KAFSCALE_LFS_PROXY_CHUNK_SIZE: "16777216"       # 16MB
+      # HTTP timeouts for large uploads
+      KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC: "1800"
+      KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC: "1800"
+      KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC: "120"
+      # Logging
+      KAFSCALE_LFS_PROXY_LOG_LEVEL: "info"
+      # Traceability (LFS Ops Tracker)
+      KAFSCALE_LFS_TRACKER_ENABLED: "true"
+      KAFSCALE_LFS_TRACKER_TOPIC: "__lfs_ops_state"
+      KAFSCALE_LFS_TRACKER_BATCH_SIZE: "100"
+      KAFSCALE_LFS_TRACKER_FLUSH_MS: "100"
+      KAFSCALE_LFS_TRACKER_ENSURE_TOPIC: "true"
+      KAFSCALE_LFS_TRACKER_PARTITIONS: "3"
+      KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR: "1"
+    ports:
+      - "9093:9093"   # Kafka protocol (LFS)
+      - "8080:8080"   # HTTP API + Swagger UI
+      - "9094:9094"   # Health
+      - "9095:9095"   # Metrics
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9094/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - kafscale
+
+  console:
+    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-console:${TAG:-dev}
+    container_name: kafscale-console-synology
+    depends_on:
+      etcd:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    environment:
+      KAFSCALE_CONSOLE_HTTP_ADDR: ":3080"
+      KAFSCALE_CONSOLE_ETCD_ENDPOINTS: "http://etcd:2379"
+      KAFSCALE_CONSOLE_BROKER_METRICS_URL: "http://broker:8080/metrics"
+      KAFSCALE_CONSOLE_LOG_LEVEL: "info"
+      KAFSCALE_UI_USERNAME: "kafscaleadmin"
+      KAFSCALE_UI_PASSWORD: "kafscale"
+      # Traceability (LFS Console Dashboard)
+      KAFSCALE_CONSOLE_LFS_ENABLED: "true"
+      KAFSCALE_CONSOLE_KAFKA_BROKERS: "broker:9092"
+      KAFSCALE_LFS_TRACKER_TOPIC: "__lfs_ops_state"
+      # S3 settings - Synology NAS MinIO (for LFS dashboard S3 browser)
+      KAFSCALE_CONSOLE_LFS_S3_BUCKET: *s3-bucket
+      KAFSCALE_CONSOLE_LFS_S3_REGION: *s3-region
+      KAFSCALE_CONSOLE_LFS_S3_ENDPOINT: *s3-endpoint
+      KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY: *s3-access-key
+      KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY: *s3-secret-key
+      KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL: "300"
+    ports:
+      - "3080:3080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kafscale
+
+  # ==========================================================================
+  # E72 Browser LFS SDK Demo
+  # ==========================================================================
+
+  e72-browser-demo:
+    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-e72-browser-demo:${TAG:-dev}
+    container_name: kafscale-e72-demo-synology
+    depends_on:
+      lfs-proxy:
+        condition: service_healthy
+    ports:
+      - "3072:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/index.html || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - kafscale
+
+volumes:
+  etcd-data:
+  broker-data:
+
+networks:
+  kafscale:
+    driver: bridge

@@ -1,0 +1,40 @@
+{
+  "name": "@kafscale/lfs-browser-sdk",
+  "version": "0.1.0",
+  "description": "Browser-native LFS SDK using fetch API (no librdkafka)",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.esm.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc && esbuild src/index.ts --bundle --format=esm --outfile=dist/index.esm.js --sourcemap",
+    "build:umd": "esbuild src/index.ts --bundle --format=iife --global-name=KafscaleLfs --outfile=dist/index.umd.js --sourcemap",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "esbuild": "^0.24.0",
+    "vitest": "^2.0.0"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "kafka",
+    "lfs",
+    "large-file",
+    "s3",
+    "browser",
+    "streaming"
+  ],
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,1109 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Deploys the E72 Browser LFS Demo inside the cluster.
+# The demo can access lfs-proxy directly via cluster DNS.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e72-browser-demo
+  labels:
+    app: e72-browser-demo
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <!DOCTYPE html>
+    <!--
+    Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+    This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+    
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+    
+        http://www.apache.org/licenses/LICENSE-2.0
+    
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+    -->
+    <!DOCTYPE html>
+    <!--
+    Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+    This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+    
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+    
+        http://www.apache.org/licenses/LICENSE-2.0
+    
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+    -->
+    <!DOCTYPE html>
+    <!--
+    Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+    This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+    
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+    
+        http://www.apache.org/licenses/LICENSE-2.0
+    
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+    -->
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>E72 - Browser LFS SDK Demo</title>
+      <style>
+        :root {
+          --primary: #2563eb;
+          --primary-hover: #1d4ed8;
+          --success: #16a34a;
+          --error: #dc2626;
+          --bg: #f8fafc;
+          --card: #ffffff;
+          --border: #e2e8f0;
+          --text: #1e293b;
+          --text-muted: #64748b;
+        }
+    
+        * {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+        }
+    
+        body {
+          font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+          background: radial-gradient(1200px circle at 10% 10%, #e0f2fe 0%, #f8fafc 45%, #f1f5f9 100%);
+          color: var(--text);
+          line-height: 1.6;
+          padding: 2rem;
+        }
+    
+        .container {
+          max-width: 1100px;
+          margin: 0 auto;
+        }
+    
+        h1 {
+          font-size: 2.125rem;
+          margin-bottom: 0.25rem;
+          letter-spacing: -0.02em;
+        }
+    
+        .subtitle {
+          color: var(--text-muted);
+          margin-bottom: 2rem;
+        }
+    
+        .layout {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1.5rem;
+          align-items: start;
+        }
+    
+        @media (max-width: 900px) {
+          .layout {
+            grid-template-columns: 1fr;
+          }
+        }
+    
+        .section-title {
+          font-size: 0.85rem;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          color: var(--text-muted);
+          margin-bottom: 0.75rem;
+        }
+    
+        .gallery-list {
+          display: grid;
+          gap: 0.75rem;
+        }
+    
+        .gallery-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          padding: 0.75rem;
+          border: 1px solid var(--border);
+          border-radius: 0.5rem;
+          background: #ffffff;
+        }
+    
+        .gallery-meta {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+    
+        .gallery-title {
+          font-weight: 600;
+        }
+    
+        .gallery-subtitle {
+          color: var(--text-muted);
+          font-size: 0.8rem;
+        }
+    
+        .modal {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.72);
+          display: none;
+          align-items: center;
+          justify-content: center;
+          padding: 1.5rem;
+          z-index: 50;
+        }
+    
+        .modal.open {
+          display: flex;
+        }
+    
+        .modal-card {
+          background: #0f172a;
+          color: #f8fafc;
+          border-radius: 0.75rem;
+          max-width: 900px;
+          width: 100%;
+          padding: 1rem;
+        }
+    
+        .modal-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 0.75rem;
+        }
+    
+        .modal-title {
+          font-weight: 600;
+        }
+    
+        .modal-close {
+          background: none;
+          border: 1px solid #334155;
+          color: #e2e8f0;
+          padding: 0.25rem 0.5rem;
+          border-radius: 0.375rem;
+          cursor: pointer;
+        }
+    
+        .card {
+          background: var(--card);
+          border: 1px solid var(--border);
+          border-radius: 0.5rem;
+          padding: 1.5rem;
+          margin-bottom: 1.5rem;
+        }
+    
+        .card h2 {
+          font-size: 1.125rem;
+          margin-bottom: 1rem;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+    
+        .form-group {
+          margin-bottom: 1rem;
+        }
+    
+        label {
+          display: block;
+          font-weight: 500;
+          margin-bottom: 0.25rem;
+          font-size: 0.875rem;
+        }
+    
+        input[type="text"], input[type="url"], select, textarea {
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--border);
+          border-radius: 0.375rem;
+          font-size: 0.875rem;
+        }
+    
+        input:focus, select:focus, textarea:focus {
+          outline: none;
+          border-color: var(--primary);
+          box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+    
+        .drop-zone {
+          border: 2px dashed var(--border);
+          border-radius: 0.5rem;
+          padding: 2rem;
+          text-align: center;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+    
+        .drop-zone:hover, .drop-zone.dragover {
+          border-color: var(--primary);
+          background: rgba(37, 99, 235, 0.05);
+        }
+    
+        .drop-zone input[type="file"] {
+          display: none;
+        }
+    
+        .drop-zone-icon {
+          font-size: 2rem;
+          margin-bottom: 0.5rem;
+        }
+    
+        .drop-zone-text {
+          color: var(--text-muted);
+          font-size: 0.875rem;
+        }
+    
+        .file-info {
+          background: var(--bg);
+          padding: 0.75rem;
+          border-radius: 0.375rem;
+          margin-top: 1rem;
+          display: none;
+        }
+    
+        .file-info.visible {
+          display: block;
+        }
+    
+        .file-name {
+          font-weight: 500;
+        }
+    
+        .file-size {
+          color: var(--text-muted);
+          font-size: 0.875rem;
+        }
+    
+        .progress-container {
+          margin-top: 1rem;
+          display: none;
+        }
+    
+        .progress-container.visible {
+          display: block;
+        }
+    
+        .progress-bar {
+          height: 0.5rem;
+          background: var(--border);
+          border-radius: 0.25rem;
+          overflow: hidden;
+        }
+    
+        .progress-fill {
+          height: 100%;
+          background: var(--primary);
+          width: 0%;
+          transition: width 0.2s;
+        }
+    
+        .progress-text {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+          margin-top: 0.25rem;
+        }
+    
+        .btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 1rem;
+          border: none;
+          border-radius: 0.375rem;
+          font-size: 0.875rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+    
+        .btn-primary {
+          background: var(--primary);
+          color: white;
+        }
+    
+        .btn-primary:hover:not(:disabled) {
+          background: var(--primary-hover);
+        }
+    
+        .btn-primary:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+    
+        .result {
+          margin-top: 1rem;
+          padding: 1rem;
+          border-radius: 0.375rem;
+          font-family: monospace;
+          font-size: 0.75rem;
+          white-space: pre-wrap;
+          word-break: break-all;
+          display: none;
+        }
+    
+        .result.visible {
+          display: block;
+        }
+    
+        .result.success {
+          background: #f0fdf4;
+          border: 1px solid #bbf7d0;
+          color: var(--success);
+        }
+    
+        .result.error {
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          color: var(--error);
+        }
+    
+        .test-results {
+          margin-top: 1rem;
+        }
+    
+        .test-item {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem 0;
+          border-bottom: 1px solid var(--border);
+        }
+    
+        .test-item:last-child {
+          border-bottom: none;
+        }
+    
+        .test-status {
+          width: 1.25rem;
+          height: 1.25rem;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 0.75rem;
+        }
+    
+        .test-status.pass {
+          background: var(--success);
+          color: white;
+        }
+    
+        .test-status.fail {
+          background: var(--error);
+          color: white;
+        }
+    
+        .test-status.pending {
+          background: var(--border);
+          color: var(--text-muted);
+        }
+    
+        .config-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 1rem;
+        }
+    
+        @media (max-width: 640px) {
+          .config-row {
+            grid-template-columns: 1fr;
+          }
+        }
+    
+        .badge {
+          font-size: 0.75rem;
+          padding: 0.125rem 0.5rem;
+          border-radius: 9999px;
+          background: var(--bg);
+          color: var(--text-muted);
+        }
+    
+        .video-preview {
+          width: 100%;
+          border-radius: 12px;
+          background: #0f172a;
+          margin-top: 0.75rem;
+        }
+    
+        .meta-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 0.5rem 1rem;
+          font-size: 0.875rem;
+          color: var(--text-muted);
+        }
+    
+        .meta-grid strong {
+          color: var(--text);
+          font-weight: 600;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>🎬 Team Movie Share</h1>
+        <p class="subtitle">Bring the clips that made you better. Share, review, and watch together.</p>
+    
+        <div class="layout">
+          <div>
+            <div class="section-title">Shared</div>
+    
+            <div class="card">
+              <h2>⚙️ Configuration</h2>
+              <div class="config-row">
+                <div class="form-group">
+                  <label for="endpoint">LFS Proxy Endpoint</label>
+                  <input type="url" id="endpoint" value="http://localhost:8080/lfs/produce" placeholder="http://localhost:8080/lfs/produce">
+                </div>
+                <div class="form-group">
+                  <label for="topic">Kafka Topic</label>
+                  <input type="text" id="topic" value="browser-uploads" placeholder="browser-uploads">
+                </div>
+              </div>
+            </div>
+    
+            <div class="card">
+              <h2>📤 Share a Clip</h2>
+              <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">
+                Upload a movie or training clip to share with the team.
+              </p>
+              <div class="drop-zone" id="dropZone">
+                <input type="file" id="fileInput">
+                <div class="drop-zone-icon">📁</div>
+                <div class="drop-zone-text">Drag & drop a file here or click to browse</div>
+              </div>
+              <div class="file-info" id="fileInfo">
+                <span class="file-name" id="fileName"></span>
+                <span class="file-size" id="fileSize"></span>
+              </div>
+              <div class="progress-container" id="progressContainer">
+                <div class="progress-bar">
+                  <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-text" id="progressText">0% uploaded</div>
+              </div>
+              <div style="margin-top: 1rem;">
+                <button class="btn btn-primary" id="uploadBtn" disabled>
+                  <span>⬆️</span> Upload to LFS
+                </button>
+              </div>
+              <div class="result" id="uploadResult"></div>
+            </div>
+          </div>
+    
+          <div>
+            <div class="section-title">Ready to View</div>
+    
+            <div class="card">
+              <h2>🍿 Watch Queue</h2>
+              <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">
+                Clips ready to view. Tap “Show” to open the player.
+              </p>
+              <div class="gallery-list" id="sharedList"></div>
+              <div style="margin-top: 1rem;">
+                <label for="envelopeJson">Add by Envelope JSON</label>
+                <textarea id="envelopeJson" rows="4" placeholder='{"kfs_lfs":1,"bucket":"kafscale","key":"default/topic/lfs/...","content_type":"video/mp4"}'></textarea>
+                <div style="margin-top: 0.5rem;">
+                  <button class="btn btn-primary" id="loadEnvelopeBtn"><span>➕</span> Add to Queue</button>
+                </div>
+              </div>
+            </div>
+    
+            <div class="card">
+              <h2>⬇️ Download Settings</h2>
+              <div class="config-row">
+                <div class="form-group">
+                  <label for="lfsProxyUrl">LFS Proxy Base URL</label>
+                  <input type="url" id="lfsProxyUrl" value="http://localhost:8080" placeholder="http://localhost:8080">
+                </div>
+                <div class="form-group">
+                  <label for="downloadMode">Download Mode</label>
+                  <select id="downloadMode">
+                    <option value="presign">Presign (recommended)</option>
+                    <option value="stream">Stream via Proxy</option>
+                  </select>
+                </div>
+              </div>
+              <div class="config-row">
+                <div class="form-group">
+                  <label for="s3Bucket">Bucket</label>
+                  <input type="text" id="s3Bucket" value="kafscale" placeholder="kafscale">
+                </div>
+                <div class="form-group">
+                  <label for="s3Key">Object Key</label>
+                  <input type="text" id="s3Key" placeholder="default/topic/lfs/...">
+                </div>
+              </div>
+              <div class="config-row">
+                <div class="form-group">
+                  <label for="downloadUrl">Direct Download URL (optional)</label>
+                  <input type="url" id="downloadUrl" placeholder="https://... (presigned URL)">
+                </div>
+                <div class="form-group">
+                  <label for="downloadExpires">Presign TTL (seconds)</label>
+                  <input type="text" id="downloadExpires" value="120" placeholder="120">
+                </div>
+              </div>
+              <div class="result" id="downloadResult"></div>
+            </div>
+          </div>
+        </div>
+    
+        <div class="card">
+          <h2>🧪 End-to-End Test <span class="badge">automated</span></h2>
+          <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem;">
+            Tests small (1KB), medium (100KB), and large (1MB) synthetic payloads
+          </p>
+          <button class="btn btn-primary" id="runTestsBtn">
+            <span>▶️</span> Run E2E Tests
+          </button>
+          <div class="test-results" id="testResults"></div>
+        </div>
+      </div>
+    
+      <div class="modal" id="viewerModal">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div class="modal-title" id="viewerTitle">Now Playing</div>
+            <button class="modal-close" id="viewerClose">Close</button>
+          </div>
+          <video class="video-preview" id="viewerVideo" controls style="display:none;"></video>
+          <div class="result" id="viewerMeta"></div>
+        </div>
+      </div>
+    
+      <script type="module">
+        // ============================================================
+        // Browser LFS SDK (inline for demo - normally imported)
+        // ============================================================
+    
+        class LfsHttpError extends Error {
+          constructor(statusCode, code, message, requestId, body) {
+            super(message);
+            this.name = 'LfsHttpError';
+            this.statusCode = statusCode;
+            this.code = code;
+            this.requestId = requestId;
+            this.body = body;
+          }
+        }
+    
+        class LfsProducer {
+          constructor(config) {
+            this.endpoint = config.endpoint;
+            this.timeout = config.timeout ?? 300000;
+            this.retries = config.retries ?? 3;
+            this.retryDelay = config.retryDelay ?? 200;
+          }
+    
+          base64Encode(value) {
+            const bytes = new TextEncoder().encode(value);
+            let binary = '';
+            for (const b of bytes) binary += String.fromCharCode(b);
+            return btoa(binary);
+          }
+    
+          async produce(topic, payload, options = {}) {
+            const headers = {
+              'X-Kafka-Topic': topic,
+              'X-Request-ID': crypto.randomUUID(),
+            };
+    
+            if (options.key) headers['X-Kafka-Key'] = this.base64Encode(options.key);
+            if (options.headers) Object.assign(headers, options.headers);
+    
+            const blob = payload instanceof Blob ? payload : new Blob([payload]);
+            headers['X-LFS-Size'] = String(blob.size);
+            headers['X-LFS-Mode'] = blob.size < 5 * 1024 * 1024 ? 'single' : 'multipart';
+    
+            if (!headers['Content-Type'] && blob.type) {
+              headers['Content-Type'] = blob.type;
+            }
+    
+            return this.sendWithRetry(blob, headers, options);
+          }
+    
+          async sendWithRetry(blob, headers, options) {
+            let lastError = null;
+    
+            for (let attempt = 1; attempt <= this.retries; attempt++) {
+              try {
+                return await this.uploadWithProgress(blob, headers, options.onProgress);
+              } catch (error) {
+                lastError = error;
+                if (error instanceof LfsHttpError && error.statusCode < 500) throw error;
+                if (attempt < this.retries) {
+                  await new Promise(r => setTimeout(r, this.retryDelay * Math.pow(2, attempt - 1)));
+                }
+              }
+            }
+            throw lastError ?? new Error('Upload failed');
+          }
+    
+          uploadWithProgress(blob, headers, onProgress) {
+            return new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.open('POST', this.endpoint, true);
+    
+              for (const [key, value] of Object.entries(headers)) {
+                xhr.setRequestHeader(key, value);
+              }
+    
+              if (onProgress) {
+                xhr.upload.onprogress = (e) => {
+                  if (e.lengthComputable) {
+                    onProgress({
+                      loaded: e.loaded,
+                      total: e.total,
+                      percent: Math.round((e.loaded / e.total) * 100)
+                    });
+                  }
+                };
+              }
+    
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  try {
+                    resolve(JSON.parse(xhr.responseText));
+                  } catch {
+                    reject(new Error('Invalid JSON response'));
+                  }
+                } else {
+                  let code = '', message = xhr.responseText, requestId = headers['X-Request-ID'];
+                  try {
+                    const err = JSON.parse(xhr.responseText);
+                    code = err.code ?? '';
+                    message = err.message ?? xhr.responseText;
+                    requestId = err.request_id ?? requestId;
+                  } catch {}
+                  reject(new LfsHttpError(xhr.status, code, message, requestId, xhr.responseText));
+                }
+              };
+    
+              xhr.onerror = () => reject(new Error('Network error'));
+              xhr.onabort = () => reject(new DOMException('Upload aborted', 'AbortError'));
+              xhr.send(blob);
+            });
+          }
+        }
+    
+        // ============================================================
+        // Demo Application
+        // ============================================================
+    
+        const $ = (id) => document.getElementById(id);
+    
+        // Elements
+        const dropZone = $('dropZone');
+        const fileInput = $('fileInput');
+        const fileInfo = $('fileInfo');
+        const fileName = $('fileName');
+        const fileSize = $('fileSize');
+        const progressContainer = $('progressContainer');
+        const progressFill = $('progressFill');
+        const progressText = $('progressText');
+        const uploadBtn = $('uploadBtn');
+        const uploadResult = $('uploadResult');
+        const runTestsBtn = $('runTestsBtn');
+        const testResults = $('testResults');
+        const envelopeJson = $('envelopeJson');
+        const lfsProxyUrl = $('lfsProxyUrl');
+        const downloadMode = $('downloadMode');
+        const s3Bucket = $('s3Bucket');
+        const s3Key = $('s3Key');
+        const downloadUrl = $('downloadUrl');
+        const downloadExpires = $('downloadExpires');
+        const loadEnvelopeBtn = $('loadEnvelopeBtn');
+        const downloadResult = $('downloadResult');
+        const sharedList = $('sharedList');
+        const viewerModal = $('viewerModal');
+        const viewerClose = $('viewerClose');
+        const viewerVideo = $('viewerVideo');
+        const viewerMeta = $('viewerMeta');
+        const viewerTitle = $('viewerTitle');
+    
+        let selectedFile = null;
+        let lastEnvelope = null;
+        const sharedItems = [];
+    
+        // Drag and drop
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropZone.classList.remove('dragover');
+          if (e.dataTransfer.files.length) selectFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', () => {
+          if (fileInput.files.length) selectFile(fileInput.files[0]);
+        });
+    
+        function selectFile(file) {
+          selectedFile = file;
+          fileName.textContent = file.name;
+          fileSize.textContent = ` (${formatBytes(file.size)})`;
+          fileInfo.classList.add('visible');
+          uploadBtn.disabled = false;
+          uploadResult.classList.remove('visible');
+        }
+    
+        function formatBytes(bytes) {
+          if (bytes === 0) return '0 Bytes';
+          const k = 1024;
+          const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+    
+        function addToQueue(env, label = '') {
+          if (!env) return;
+          const key = env.key || '';
+          const title = label || key.split('/').pop() || 'Untitled';
+          sharedItems.unshift({ env, title });
+          renderQueue();
+        }
+    
+        function renderQueue() {
+          if (!sharedItems.length) {
+            sharedList.innerHTML = '<div class="gallery-subtitle">No clips yet. Upload or paste an envelope to add one.</div>';
+            return;
+          }
+          sharedList.innerHTML = sharedItems.map((item, idx) => `
+            <div class="gallery-item" data-index="${idx}">
+              <div class="gallery-meta">
+                <div class="gallery-title">${item.title}</div>
+                <div class="gallery-subtitle">${item.env.key || ''}</div>
+              </div>
+              <button class="btn btn-primary" data-action="show">Show</button>
+            </div>
+          `).join('');
+        }
+    
+        renderQueue();
+    
+        // Upload
+        uploadBtn.addEventListener('click', async () => {
+          if (!selectedFile) return;
+    
+          const endpoint = $('endpoint').value;
+          const topic = $('topic').value;
+    
+          uploadBtn.disabled = true;
+          progressContainer.classList.add('visible');
+          progressFill.style.width = '0%';
+          progressText.textContent = '0% uploaded';
+          uploadResult.classList.remove('visible');
+    
+          const producer = new LfsProducer({ endpoint });
+    
+          try {
+            const envelope = await producer.produce(topic, selectedFile, {
+              key: selectedFile.name,
+              headers: { 'Content-Type': selectedFile.type || 'application/octet-stream' },
+              onProgress: (p) => {
+                progressFill.style.width = `${p.percent}%`;
+                progressText.textContent = `${p.percent}% uploaded (${formatBytes(p.loaded)} / ${formatBytes(p.total)})`;
+              }
+            });
+    
+            uploadResult.className = 'result visible success';
+            uploadResult.textContent = '✅ Upload successful!\n\n' + JSON.stringify(envelope, null, 2);
+            lastEnvelope = envelope;
+            envelopeJson.value = JSON.stringify(envelope, null, 2);
+            if (envelope.bucket) s3Bucket.value = envelope.bucket;
+            if (envelope.key) s3Key.value = envelope.key;
+            addToQueue(envelope, selectedFile?.name || '');
+          } catch (error) {
+            uploadResult.className = 'result visible error';
+            uploadResult.textContent = '❌ Upload failed!\n\n' + (error.message || error);
+          } finally {
+            uploadBtn.disabled = false;
+          }
+        });
+    
+        // Download Test
+        function parseEnvelope() {
+          const raw = envelopeJson.value.trim();
+          if (!raw) return lastEnvelope;
+          try {
+            return JSON.parse(raw);
+          } catch (err) {
+            throw new Error('Invalid JSON for envelope');
+          }
+        }
+    
+        function renderMetadata(env, extra = '') {
+          if (!env) {
+            downloadResult.className = 'result visible error';
+            downloadResult.textContent = '❌ No envelope loaded';
+            return;
+          }
+          const meta = `
+            <div class="meta-grid">
+              <div><strong>Bucket</strong> ${env.bucket || s3Bucket.value}</div>
+              <div><strong>Key</strong> ${env.key || s3Key.value}</div>
+              <div><strong>Size</strong> ${env.size ?? '-'}</div>
+              <div><strong>Content-Type</strong> ${env.content_type || env.contentType || '-'}</div>
+              <div><strong>Checksum</strong> ${(env.sha256 || env.checksum || '-')}</div>
+              <div><strong>Alg</strong> ${(env.checksum_alg || 'sha256')}</div>
+            </div>
+          `;
+          downloadResult.className = 'result visible success';
+          downloadResult.innerHTML = meta + (extra ? `<div style="margin-top:0.5rem;">${extra}</div>` : '');
+        }
+    
+        loadEnvelopeBtn.addEventListener('click', () => {
+          try {
+            const env = parseEnvelope();
+            if (!env) throw new Error('No envelope provided');
+            lastEnvelope = env;
+            if (env.bucket) s3Bucket.value = env.bucket;
+            if (env.key) s3Key.value = env.key;
+            renderMetadata(env, 'Added to queue');
+            addToQueue(env, 'Shared clip');
+          } catch (err) {
+            downloadResult.className = 'result visible error';
+            downloadResult.textContent = `❌ ${err.message || err}`;
+          }
+        });
+    
+        async function fetchObject(env) {
+          const key = env.key || s3Key.value;
+          if (!key) throw new Error('Missing object key');
+          const bucket = env.bucket || s3Bucket.value;
+          if (!bucket) throw new Error('Missing bucket');
+    
+          const directUrl = downloadUrl.value.trim();
+          const mode = downloadMode.value;
+          const proxyBase = lfsProxyUrl.value.trim().replace(/\/+$/, '');
+          if (!proxyBase) throw new Error('Missing LFS proxy base URL');
+    
+          let url = directUrl;
+          let resp = null;
+    
+          if (!url) {
+            const ttl = parseInt(downloadExpires.value || '120', 10);
+            const body = JSON.stringify({
+              bucket,
+              key,
+              mode,
+              expires_seconds: Number.isFinite(ttl) ? ttl : 120
+            });
+            resp = await fetch(`${proxyBase}/lfs/download`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body
+            });
+            if (!resp.ok) {
+              const err = await resp.text();
+              throw new Error(`Download failed (${resp.status}): ${err}`);
+            }
+            if (mode === 'presign') {
+              const data = await resp.json();
+              url = data.url;
+            }
+          }
+    
+          if (mode === 'stream') {
+            resp = resp || await fetch(`${proxyBase}/lfs/download`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bucket, key, mode: 'stream' })
+            });
+            if (!resp.ok) throw new Error(`Download failed (${resp.status})`);
+          } else {
+            resp = await fetch(url);
+            if (!resp.ok && (resp.status === 403 || resp.status === 404)) {
+              const refresh = await fetch(`${proxyBase}/lfs/download`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ bucket, key, mode: 'presign', expires_seconds: 120 })
+              });
+              if (refresh.ok) {
+                const data = await refresh.json();
+                url = data.url;
+                resp = await fetch(url);
+              }
+            }
+            if (!resp.ok) throw new Error(`Download failed (${resp.status})`);
+          }
+    
+          const blob = await resp.blob();
+          return { blob, contentType: env.content_type || env.contentType || blob.type || '', source: mode };
+        }
+    
+        async function openViewer(item) {
+          try {
+            viewerTitle.textContent = item.title || 'Now Playing';
+            viewerMeta.className = 'result visible success';
+            viewerMeta.textContent = 'Loading...';
+            viewerVideo.style.display = 'none';
+            viewerModal.classList.add('open');
+    
+            const { blob, contentType, source } = await fetchObject(item.env);
+            const objectUrl = URL.createObjectURL(blob);
+    
+            if (contentType.startsWith('video/mp4')) {
+              viewerVideo.style.display = 'block';
+              viewerVideo.src = objectUrl;
+              viewerMeta.textContent = `Loaded ${formatBytes(blob.size)} via ${source}`;
+            } else {
+              viewerVideo.style.display = 'none';
+              viewerMeta.textContent = `Downloaded ${formatBytes(blob.size)} via ${source}`;
+            }
+          } catch (err) {
+            viewerMeta.className = 'result visible error';
+            viewerMeta.textContent = `❌ ${err.message || err}`;
+          }
+        }
+    
+        sharedList.addEventListener('click', (event) => {
+          const button = event.target.closest('button[data-action="show"]');
+          if (!button) return;
+          const card = event.target.closest('.gallery-item');
+          if (!card) return;
+          const index = Number(card.dataset.index);
+          if (Number.isNaN(index) || !sharedItems[index]) return;
+          openViewer(sharedItems[index]);
+        });
+    
+        viewerClose.addEventListener('click', () => {
+          viewerModal.classList.remove('open');
+          viewerVideo.pause();
+          viewerVideo.removeAttribute('src');
+          viewerVideo.load();
+        });
+    
+        // E2E Tests
+        runTestsBtn.addEventListener('click', async () => {
+          const endpoint = $('endpoint').value;
+          const topic = $('topic').value;
+    
+          const tests = [
+            { name: 'Small payload (1 KB)', size: 1024 },
+            { name: 'Medium payload (100 KB)', size: 100 * 1024 },
+            { name: 'Large payload (1 MB)', size: 1024 * 1024 },
+          ];
+    
+          testResults.innerHTML = tests.map(t =>
+            `<div class="test-item">
+              <div class="test-status pending">⏳</div>
+              <span>${t.name}</span>
+            </div>`
+          ).join('');
+    
+          runTestsBtn.disabled = true;
+          const producer = new LfsProducer({ endpoint });
+    
+          for (let i = 0; i < tests.length; i++) {
+            const test = tests[i];
+            const item = testResults.children[i];
+            const status = item.querySelector('.test-status');
+    
+            try {
+              // Generate synthetic data
+              const data = new Uint8Array(test.size);
+              for (let j = 0; j < data.length; j++) data[j] = j % 256;
+    
+              const blob = new Blob([data], { type: 'application/octet-stream' });
+              const envelope = await producer.produce(topic, blob, {
+                key: `e2e-test-${test.size}`,
+              });
+    
+              // Verify envelope
+              if (!envelope.key || !envelope.sha256 || envelope.size !== test.size) {
+                throw new Error('Invalid envelope');
+              }
+    
+              status.className = 'test-status pass';
+              status.textContent = '✓';
+              item.innerHTML += `<span style="color: var(--text-muted); font-size: 0.75rem; margin-left: auto;">
+                sha256: ${envelope.sha256.slice(0, 8)}...
+              </span>`;
+            } catch (error) {
+              status.className = 'test-status fail';
+              status.textContent = '✗';
+              item.innerHTML += `<span style="color: var(--error); font-size: 0.75rem; margin-left: auto;">
+                ${error.message || 'Failed'}
+              </span>`;
+            }
+          }
+    
+          runTestsBtn.disabled = false;
+        });
+      </script>
+    </body>
+    </html>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: e72-browser-demo
+  labels:
+    app: e72-browser-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: e72-browser-demo
+  template:
+    metadata:
+      labels:
+        app: e72-browser-demo
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: html
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+      volumes:
+        - name: html
+          configMap:
+            name: e72-browser-demo
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: e72-browser-demo
+  labels:
+    app: e72-browser-demo
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30072
+  selector:
+    app: e72-browser-demo
