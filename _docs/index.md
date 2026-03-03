@@ -38,6 +38,12 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Storage format](/storage-format/)
 - [S3 health](/s3-health/)
 
+## Large File Support (LFS)
+
+- [LFS Proxy](/lfs-proxy/) — Claim-check proxy for large binary payloads via S3 + Kafka
+- [LFS Helm Deployment](/lfs-helm/) — Kubernetes deployment and configuration
+- [LFS Client SDKs](/lfs-sdks/) — Java, Python, JS, and browser SDKs
+
 ## Processors
 
 - [Iceberg Processor](/processors/iceberg/)
