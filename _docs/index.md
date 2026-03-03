@@ -17,6 +17,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 
 - [Quickstart](/quickstart/)
 - [User guide](/user-guide/)
+- [Onboarding Guide](/onboarding-guide/) — E10–E50 progressive tutorial
 - [Installation](/installation/)
 - [Architecture](/architecture/)
 
