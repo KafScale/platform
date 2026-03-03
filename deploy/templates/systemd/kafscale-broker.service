@@ -1,0 +1,20 @@
+[Unit]
+Description=KafScale Broker
+After=network.target kafscale-etcd.service
+Wants=kafscale-etcd.service
+
+[Service]
+Type=simple
+User={{DEPLOY_USER}}
+EnvironmentFile={{REMOTE_DIR}}/etc/kafscale.env
+ExecStart={{REMOTE_DIR}}/bin/broker
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+WorkingDirectory={{REMOTE_DIR}}
+StandardOutput=append:{{REMOTE_DIR}}/var/log/broker.log
+StandardError=append:{{REMOTE_DIR}}/var/log/broker.log
+
+[Install]
+WantedBy=multi-user.target

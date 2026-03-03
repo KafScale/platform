@@ -51,7 +51,7 @@ func main() {
 		opts.LFSHandlers = lfsHandlers
 		if lfsConsumer != nil {
 			lfsConsumer.Start()
-			defer lfsConsumer.Close()
+			defer func() { _ = lfsConsumer.Close() }()
 		}
 	}
 

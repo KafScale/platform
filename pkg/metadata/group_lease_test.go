@@ -85,7 +85,7 @@ func TestGroupLeaseExpiryFailover(t *testing.T) {
 		t.Fatalf("broker-a acquire: %v", err)
 	}
 
-	cliA.Close()
+	_ = cliA.Close()
 
 	if err := brokerB.Acquire(ctx, "my-group"); err == nil {
 		t.Fatalf("broker-b should not acquire before lease expires")
@@ -150,7 +150,7 @@ func TestGroupReacquireAfterRestart(t *testing.T) {
 		t.Fatalf("broker-a (session 1) acquire: %v", err)
 	}
 
-	cliA1.Close()
+	_ = cliA1.Close()
 
 	brokerA2 := newGroupLeaseManager(t, endpoints, "broker-a", ttl)
 

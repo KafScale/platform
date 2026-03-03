@@ -37,7 +37,7 @@ func newEtcdClientForTest(t *testing.T, endpoints []string) *clientv3.Client {
 	if err != nil {
 		t.Fatalf("create etcd client: %v", err)
 	}
-	t.Cleanup(func() { cli.Close() })
+	t.Cleanup(func() { _ = cli.Close() })
 	return cli
 }
 
@@ -105,7 +105,7 @@ func TestLeaseExpiryFailover(t *testing.T) {
 
 	// Simulate broker A crashing by closing its etcd client.
 	// This terminates the session keepalive, so the lease expires after TTL.
-	cliA.Close()
+	_ = cliA.Close()
 
 	if err := brokerB.Acquire(ctx, "orders", 0); err == nil {
 		t.Fatalf("broker-b should not acquire before lease expires")
@@ -177,7 +177,7 @@ func TestReacquireAfterRestart(t *testing.T) {
 
 	// Simulate restart: close the old client but don't wait for expiry.
 	// The lease key still exists in etcd with value "broker-a".
-	cliA1.Close()
+	_ = cliA1.Close()
 
 	brokerA2 := newLeaseManager(t, endpoints, "broker-a", ttl)
 

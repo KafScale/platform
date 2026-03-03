@@ -94,7 +94,7 @@ func TestEtcdStoreTopicConfigAndPartitions(t *testing.T) {
 	}
 
 	cli := newEtcdClient(t, endpoints)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := cli.Get(ctxTimeout, PartitionStateKey("orders", 1))
@@ -144,7 +144,7 @@ func TestEtcdStoreDeleteTopicRemovesOffsets(t *testing.T) {
 	waitForTopicRemoval(t, endpoints, "orders")
 
 	cli := newEtcdClient(t, endpoints)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -257,7 +257,7 @@ func loadSnapshot(endpoints []string) (*ClusterMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	resp, err := cli.Get(ctx, snapshotKey())

@@ -255,7 +255,7 @@ type checksumReader struct {
 func (r *checksumReader) Read(p []byte) (n int, err error) {
 	n, err = r.reader.Read(p)
 	if n > 0 {
-		r.hasher.Write(p[:n])
+		_, _ = r.hasher.Write(p[:n])
 	}
 	return n, err
 }
@@ -269,7 +269,7 @@ func (r *checksumReader) Close() error {
 	// Read any remaining data to complete the hash
 	remaining, _ := io.ReadAll(r.reader)
 	if len(remaining) > 0 {
-		r.hasher.Write(remaining)
+		_, _ = r.hasher.Write(remaining)
 	}
 
 	err := r.reader.Close()

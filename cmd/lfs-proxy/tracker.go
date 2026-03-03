@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -245,7 +246,15 @@ func (t *LfsOpsTracker) eventToRecord(event TrackerEvent) (*kgo.Record, error) {
 
 func ensureTrackerTopic(ctx context.Context, client *kgo.Client, cfg TrackerConfig, logger *slog.Logger) error {
 	admin := kadm.NewClient(client)
-	responses, err := admin.CreateTopics(ctx, int32(cfg.Partitions), int16(cfg.ReplicationFactor), nil, cfg.Topic)
+	partitions := cfg.Partitions
+	if partitions <= 0 || partitions > math.MaxInt32 {
+		partitions = defaultTrackerPartitions
+	}
+	replication := cfg.ReplicationFactor
+	if replication <= 0 || replication > math.MaxInt16 {
+		replication = defaultTrackerReplication
+	}
+	responses, err := admin.CreateTopics(ctx, int32(partitions), int16(replication), nil, cfg.Topic)
 	if err != nil {
 		return err
 	}

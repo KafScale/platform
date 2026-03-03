@@ -98,42 +98,24 @@ func newS3Uploader(ctx context.Context, cfg s3Config) (*s3Uploader, error) {
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		loadOpts = append(loadOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
 	}
-	if cfg.Endpoint != "" {
-		customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{
-					URL:           cfg.Endpoint,
-					PartitionID:   "aws",
-					SigningRegion: cfg.Region,
-				}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		})
-		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(customResolver))
-	}
-
 	awsCfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
-	presignCfg := awsCfg
+	presignEndpoint := cfg.Endpoint
 	if cfg.PublicEndpoint != "" {
-		publicResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{
-					URL:           cfg.PublicEndpoint,
-					PartitionID:   "aws",
-					SigningRegion: cfg.Region,
-				}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		})
-		presignCfg.EndpointResolverWithOptions = publicResolver
+		presignEndpoint = cfg.PublicEndpoint
 	}
-	presignClient := s3.NewFromConfig(presignCfg, func(o *s3.Options) {
+	presignClient := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if presignEndpoint != "" {
+			o.BaseEndpoint = aws.String(presignEndpoint)
+		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
 	presigner := s3.NewPresignClient(presignClient)
@@ -346,7 +328,7 @@ func (u *s3Uploader) UploadStream(ctx context.Context, key string, reader io.Rea
 	}
 	shaHasher.Write(firstBuf[:firstN])
 	if checksumHasher != nil && checksumHasher != shaHasher {
-		checksumHasher.Write(firstBuf[:firstN])
+		_, _ = checksumHasher.Write(firstBuf[:firstN])
 	}
 	partResp, err := u.api.UploadPart(ctx, &s3.UploadPartInput{
 		Bucket:     aws.String(u.bucket),
@@ -525,7 +507,8 @@ func (u *s3Uploader) multipartUpload(ctx context.Context, key string, payload []
 		return errors.New("missing upload id")
 	}
 
-	parts := make([]types.CompletedPart, 0, (len(payload)/int(u.chunkSize))+1)
+	numParts := int64(len(payload))/u.chunkSize + 1
+	parts := make([]types.CompletedPart, 0, numParts)
 	reader := bytes.NewReader(payload)
 	partNum := int32(1)
 	buf := make([]byte, u.chunkSize)

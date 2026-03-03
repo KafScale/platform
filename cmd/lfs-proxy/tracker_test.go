@@ -256,7 +256,7 @@ func TestTrackerConfigDefaults(t *testing.T) {
 		t.Logf("tracker creation returned error (expected if Kafka not running): %v", err)
 	}
 	if tracker != nil {
-		defer tracker.Close()
+		defer func() { _ = tracker.Close() }()
 	}
 }
 

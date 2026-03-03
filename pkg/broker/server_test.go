@@ -99,7 +99,7 @@ func writeNullableString(buf *bytes.Buffer, s *string) {
 
 func TestServerHandleConnection_ApiVersions(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	s := &Server{Handler: &testHandler{}}
 
@@ -128,7 +128,7 @@ func TestServerHandleConnection_ApiVersions(t *testing.T) {
 		t.Fatalf("expected correlation id 42 got %d", corr)
 	}
 
-	clientConn.Close()
+	_ = clientConn.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -138,7 +138,7 @@ func TestServerHandleConnection_ApiVersions(t *testing.T) {
 
 func TestServerHandleConnection_Metadata(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 
 	s := &Server{Handler: &testHandler{}}
 
@@ -166,7 +166,7 @@ func TestServerHandleConnection_Metadata(t *testing.T) {
 		t.Fatalf("expected correlation id 5 got %d", corr)
 	}
 
-	clientConn.Close()
+	_ = clientConn.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

@@ -81,12 +81,12 @@ console:
     pullPolicy: IfNotPresent
   auth:
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   etcdEndpoints: []
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   metrics:
     brokerMetricsURL: ""
     operatorMetricsURL: ""
@@ -139,7 +139,7 @@ proxy:
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   backends: []
   podAnnotations: {}
   resources: {}
@@ -203,7 +203,7 @@ lfsProxy:
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   backends: []
   s3:
     bucket: ""
@@ -283,7 +283,7 @@ mcp:
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   metrics:
     brokerMetricsURL: ""
   sessionTimeout: ""

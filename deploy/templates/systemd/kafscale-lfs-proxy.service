@@ -1,0 +1,20 @@
+[Unit]
+Description=KafScale LFS Proxy
+After=network.target kafscale-broker.service
+Wants=kafscale-broker.service
+
+[Service]
+Type=simple
+User={{DEPLOY_USER}}
+EnvironmentFile={{REMOTE_DIR}}/etc/kafscale.env
+ExecStart={{REMOTE_DIR}}/bin/lfs-proxy
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+WorkingDirectory={{REMOTE_DIR}}
+StandardOutput=append:{{REMOTE_DIR}}/var/log/lfs-proxy.log
+StandardError=append:{{REMOTE_DIR}}/var/log/lfs-proxy.log
+
+[Install]
+WantedBy=multi-user.target

@@ -548,6 +548,12 @@ limitations under the License.
   </div>
 
   <script type="module">
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = String(str ?? '');
+      return d.innerHTML;
+    }
+
     // ============================================================
     // Browser LFS SDK (inline for demo - normally imported)
     // ============================================================
@@ -750,8 +756,8 @@ limitations under the License.
       sharedList.innerHTML = sharedItems.map((item, idx) => `
         <div class="gallery-item" data-index="${idx}">
           <div class="gallery-meta">
-            <div class="gallery-title">${item.title}</div>
-            <div class="gallery-subtitle">${item.env.key || ''}</div>
+            <div class="gallery-title">${esc(item.title)}</div>
+            <div class="gallery-subtitle">${esc(item.env.key || '')}</div>
           </div>
           <button class="btn btn-primary" data-action="show">Show</button>
         </div>
@@ -819,16 +825,16 @@ limitations under the License.
       }
       const meta = `
         <div class="meta-grid">
-          <div><strong>Bucket</strong> ${env.bucket || s3Bucket.value}</div>
-          <div><strong>Key</strong> ${env.key || s3Key.value}</div>
-          <div><strong>Size</strong> ${env.size ?? '-'}</div>
-          <div><strong>Content-Type</strong> ${env.content_type || env.contentType || '-'}</div>
-          <div><strong>Checksum</strong> ${(env.sha256 || env.checksum || '-')}</div>
-          <div><strong>Alg</strong> ${(env.checksum_alg || 'sha256')}</div>
+          <div><strong>Bucket</strong> ${esc(env.bucket || s3Bucket.value)}</div>
+          <div><strong>Key</strong> ${esc(env.key || s3Key.value)}</div>
+          <div><strong>Size</strong> ${esc(env.size ?? '-')}</div>
+          <div><strong>Content-Type</strong> ${esc(env.content_type || env.contentType || '-')}</div>
+          <div><strong>Checksum</strong> ${esc(env.sha256 || env.checksum || '-')}</div>
+          <div><strong>Alg</strong> ${esc(env.checksum_alg || 'sha256')}</div>
         </div>
       `;
       downloadResult.className = 'result visible success';
-      downloadResult.innerHTML = meta + (extra ? `<div style="margin-top:0.5rem;">${extra}</div>` : '');
+      downloadResult.innerHTML = meta + (extra ? `<div style="margin-top:0.5rem;">${esc(extra)}</div>` : '');
     }
 
     loadEnvelopeBtn.addEventListener('click', () => {

@@ -61,25 +61,14 @@ func NewS3Client(ctx context.Context, cfg S3Config) (*S3Client, error) {
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		loadOpts = append(loadOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
 	}
-	if cfg.Endpoint != "" {
-		customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{
-					URL:           cfg.Endpoint,
-					PartitionID:   "aws",
-					SigningRegion: cfg.Region,
-				}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		})
-		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(customResolver))
-	}
-
 	awsCfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
 		o.UsePathStyle = cfg.ForcePathStyle
 	})
 
@@ -98,7 +87,7 @@ func (c *S3Client) Fetch(ctx context.Context, key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 	return io.ReadAll(out.Body)
 }
 

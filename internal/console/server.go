@@ -28,10 +28,6 @@ import (
 	"github.com/KafScale/platform/ui"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
 type MetricsSnapshot struct {
 	S3State                 string
 	S3LatencyMS             int

@@ -311,14 +311,14 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
-func envPort(key string, fallback int) int32 {
+func envPort(key string, fallback int32) int32 {
 	val := strings.TrimSpace(os.Getenv(key))
 	if val == "" {
-		return int32(fallback)
+		return fallback
 	}
 	parsed, err := strconv.ParseInt(val, 10, 32)
 	if err != nil || parsed <= 0 {
-		return int32(fallback)
+		return fallback
 	}
 	return int32(parsed)
 }
@@ -362,16 +362,16 @@ func envBoolDefault(key string, fallback bool) bool {
 	}
 }
 
-func portFromAddr(addr string, fallback int) int {
+func portFromAddr(addr string, fallback int32) int32 {
 	_, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fallback
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
+	port, err := strconv.ParseInt(portStr, 10, 32)
+	if err != nil || port <= 0 || port > 65535 {
 		return fallback
 	}
-	return port
+	return int32(port)
 }
 
 func splitCSV(raw string) []string {

@@ -55,7 +55,7 @@ func (p *lfsProxy) listenAndServe(ctx context.Context) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			if ne, ok := err.(net.Error); ok && !ne.Timeout() {
 				p.logger.Warn("accept temporary error", "error", err)
 				continue
 			}
@@ -252,7 +252,7 @@ func (p *lfsProxy) startHealthServer(ctx context.Context, addr string) {
 }
 
 func (p *lfsProxy) handleConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	var backendConn net.Conn
 	var backendAddr string
 
@@ -349,7 +349,7 @@ func (p *lfsProxy) handleConnection(ctx context.Context, conn net.Conn) {
 
 		resp, err := p.forwardToBackend(ctx, backendConn, backendAddr, frame.Payload)
 		if err != nil {
-			backendConn.Close()
+			_ = backendConn.Close()
 			backendConn, backendAddr, err = p.connectBackend(ctx)
 			if err != nil {
 				p.logger.Warn("backend reconnect failed", "error", err)
@@ -502,7 +502,7 @@ func (p *lfsProxy) handleProduce(ctx context.Context, header *protocol.RequestHe
 		p.trackOrphans(lfsResult.orphans)
 		return nil, true, err
 	}
-	defer backendConn.Close()
+	defer func() { _ = backendConn.Close() }()
 
 	resp, err := p.forwardToBackend(ctx, backendConn, backendAddr, lfsResult.payload)
 	if err != nil {

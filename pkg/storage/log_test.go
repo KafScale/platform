@@ -252,7 +252,7 @@ func TestPartitionLogPrefetchSkippedWhenSemaphoreFull(t *testing.T) {
 
 	// Now create a reader with a full semaphore and a fresh cache.
 	sem := semaphore.NewWeighted(1)
-	sem.Acquire(context.Background(), 1) // exhaust the semaphore
+	_ = sem.Acquire(context.Background(), 1) // exhaust the semaphore
 	c := cache.NewSegmentCache(1 << 20)
 	reader := NewPartitionLog("default", "orders", 0, 0, s3mem, c, PartitionLogConfig{
 		Buffer: WriteBufferConfig{
@@ -270,7 +270,7 @@ func TestPartitionLogPrefetchSkippedWhenSemaphoreFull(t *testing.T) {
 	if _, err := reader.RestoreFromS3(context.Background()); err != nil {
 		t.Fatalf("RestoreFromS3: %v", err)
 	}
-	sem.Acquire(context.Background(), 1) // re-exhaust
+	_ = sem.Acquire(context.Background(), 1) // re-exhaust
 
 	// Trigger prefetch — should be skipped because TryAcquire fails.
 	reader.startPrefetch(context.Background(), 0)

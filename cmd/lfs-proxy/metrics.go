@@ -100,41 +100,41 @@ func (m *lfsMetrics) WritePrometheus(w io.Writer) {
 		return
 	}
 	m.uploadDuration.WritePrometheus(w, "kafscale_lfs_proxy_upload_duration_seconds", "LFS proxy upload durations in seconds")
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_upload_bytes_total Total bytes uploaded via LFS\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_upload_bytes_total counter\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_upload_bytes_total %d\n", atomic.LoadUint64(&m.uploadBytes))
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_requests_total LFS proxy requests\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_requests_total counter\n")
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_upload_bytes_total Total bytes uploaded via LFS\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_upload_bytes_total counter\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_upload_bytes_total %d\n", atomic.LoadUint64(&m.uploadBytes))
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_requests_total LFS proxy requests\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_requests_total counter\n")
 	topics := m.snapshotTopics()
 	for _, topic := range topics {
 		counters := m.requests[topic]
-		fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"ok\",type=\"lfs\"} %d\n", topic, atomic.LoadUint64(&counters.okLfs))
-		fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"error\",type=\"lfs\"} %d\n", topic, atomic.LoadUint64(&counters.errLfs))
-		fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"ok\",type=\"passthrough\"} %d\n", topic, atomic.LoadUint64(&counters.okPas))
-		fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"error\",type=\"passthrough\"} %d\n", topic, atomic.LoadUint64(&counters.errPas))
+		_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"ok\",type=\"lfs\"} %d\n", topic, atomic.LoadUint64(&counters.okLfs))
+		_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"error\",type=\"lfs\"} %d\n", topic, atomic.LoadUint64(&counters.errLfs))
+		_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"ok\",type=\"passthrough\"} %d\n", topic, atomic.LoadUint64(&counters.okPas))
+		_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_requests_total{topic=\"%s\",status=\"error\",type=\"passthrough\"} %d\n", topic, atomic.LoadUint64(&counters.errPas))
 	}
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_s3_errors_total Total S3 errors\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_s3_errors_total counter\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_s3_errors_total %d\n", atomic.LoadUint64(&m.s3Errors))
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_orphan_objects_total LFS objects uploaded but not committed to Kafka\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_orphan_objects_total counter\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_orphan_objects_total %d\n", atomic.LoadUint64(&m.orphans))
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_s3_errors_total Total S3 errors\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_s3_errors_total counter\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_s3_errors_total %d\n", atomic.LoadUint64(&m.s3Errors))
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_orphan_objects_total LFS objects uploaded but not committed to Kafka\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_orphan_objects_total counter\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_orphan_objects_total %d\n", atomic.LoadUint64(&m.orphans))
 
 	// Runtime metrics
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_goroutines Number of goroutines\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_goroutines gauge\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_goroutines %d\n", runtime.NumGoroutine())
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_memory_alloc_bytes Bytes allocated and in use\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_memory_alloc_bytes gauge\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_memory_alloc_bytes %d\n", memStats.Alloc)
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_memory_sys_bytes Bytes obtained from system\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_memory_sys_bytes gauge\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_memory_sys_bytes %d\n", memStats.Sys)
-	fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_gc_pause_total_ns Total GC pause time in nanoseconds\n")
-	fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_gc_pause_total_ns counter\n")
-	fmt.Fprintf(w, "kafscale_lfs_proxy_gc_pause_total_ns %d\n", memStats.PauseTotalNs)
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_goroutines Number of goroutines\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_goroutines gauge\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_goroutines %d\n", runtime.NumGoroutine())
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_memory_alloc_bytes Bytes allocated and in use\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_memory_alloc_bytes gauge\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_memory_alloc_bytes %d\n", memStats.Alloc)
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_memory_sys_bytes Bytes obtained from system\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_memory_sys_bytes gauge\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_memory_sys_bytes %d\n", memStats.Sys)
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_lfs_proxy_gc_pause_total_ns Total GC pause time in nanoseconds\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_lfs_proxy_gc_pause_total_ns counter\n")
+	_, _ = fmt.Fprintf(w, "kafscale_lfs_proxy_gc_pause_total_ns %d\n", memStats.PauseTotalNs)
 }
 
 func (m *lfsMetrics) snapshotTopics() []string {
@@ -203,17 +203,17 @@ func (h *histogram) WritePrometheus(w io.Writer, name, help string) {
 		return
 	}
 	buckets, counts, sum, count := h.Snapshot()
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s histogram\n", name)
+	_, _ = fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	_, _ = fmt.Fprintf(w, "# TYPE %s histogram\n", name)
 	var cumulative int64
 	for i, upper := range buckets {
 		cumulative += counts[i]
-		fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, formatFloat(upper), cumulative)
+		_, _ = fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, formatFloat(upper), cumulative)
 	}
 	cumulative += counts[len(counts)-1]
-	fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, cumulative)
-	fmt.Fprintf(w, "%s_sum %f\n", name, sum)
-	fmt.Fprintf(w, "%s_count %d\n", name, count)
+	_, _ = fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, cumulative)
+	_, _ = fmt.Fprintf(w, "%s_sum %f\n", name, sum)
+	_, _ = fmt.Fprintf(w, "%s_count %d\n", name, count)
 }
 
 func formatFloat(val float64) string {

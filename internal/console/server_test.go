@@ -51,7 +51,7 @@ func TestConsoleStatusEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET status: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -114,7 +114,7 @@ func TestMetricsStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metrics stream: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	buf := make([]byte, 64)
 	if _, err := resp.Body.Read(buf); err != nil {
@@ -153,7 +153,7 @@ func TestConsoleAuthDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth config: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("auth config status: %d", resp.StatusCode)
 	}
@@ -166,7 +166,7 @@ func TestConsoleAuthDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth session: %v", err)
 	}
-	defer sessionResp.Body.Close()
+	defer func() { _ = sessionResp.Body.Close() }()
 	if sessionResp.StatusCode != http.StatusOK {
 		t.Fatalf("auth session status: %d", sessionResp.StatusCode)
 	}
@@ -175,7 +175,7 @@ func TestConsoleAuthDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	defer statusResp.Body.Close()
+	defer func() { _ = statusResp.Body.Close() }()
 	if statusResp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", statusResp.StatusCode)
 	}
@@ -184,7 +184,7 @@ func TestConsoleAuthDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth login: %v", err)
 	}
-	defer loginResp.Body.Close()
+	defer func() { _ = loginResp.Body.Close() }()
 	if loginResp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("expected login status 503, got %d", loginResp.StatusCode)
 	}
@@ -212,7 +212,7 @@ func TestConsoleLoginFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth session: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("auth session status: %d", resp.StatusCode)
 	}
@@ -229,7 +229,7 @@ func loginForTest(t *testing.T, client *http.Client, baseURL, username, password
 	if err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("login status %d: %s", resp.StatusCode, body)

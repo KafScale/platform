@@ -226,7 +226,7 @@ func (m *LeaseManager) getOrCreateSession(ctx context.Context) (*concurrency.Ses
 	m.mu.Lock()
 	if m.closed.Load() {
 		m.mu.Unlock()
-		session.Close()
+		_ = session.Close()
 		return nil, ErrShuttingDown
 	}
 	if m.session != nil {
@@ -235,7 +235,7 @@ func (m *LeaseManager) getOrCreateSession(ctx context.Context) (*concurrency.Ses
 		default:
 			s := m.session
 			m.mu.Unlock()
-			session.Close()
+			_ = session.Close()
 			return s, nil
 		}
 	}
@@ -302,7 +302,7 @@ func (m *LeaseManager) ReleaseAll() {
 	m.mu.Unlock()
 
 	if session != nil {
-		session.Close()
+		_ = session.Close()
 	}
 	m.logger.Info(fmt.Sprintf("released all %s leases", m.resourceKind),
 		"broker", m.brokerID, "count", count)

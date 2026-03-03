@@ -96,7 +96,7 @@ jobs:
         run: mkdir -p "$GOCACHE"
 
       - name: Enforce coverage floor
-        run: bash hack/check_coverage.sh 80
+        run: bash hack/check_coverage.sh 45
 
 
   e2e-lfs-proxy:

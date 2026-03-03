@@ -1,0 +1,19 @@
+[Unit]
+Description=KafScale Console
+After=network.target kafscale-broker.service
+Wants=kafscale-broker.service
+
+[Service]
+Type=simple
+User={{DEPLOY_USER}}
+EnvironmentFile={{REMOTE_DIR}}/etc/kafscale.env
+ExecStart={{REMOTE_DIR}}/bin/console
+Restart=on-failure
+RestartSec=5
+
+WorkingDirectory={{REMOTE_DIR}}
+StandardOutput=append:{{REMOTE_DIR}}/var/log/console.log
+StandardError=append:{{REMOTE_DIR}}/var/log/console.log
+
+[Install]
+WantedBy=multi-user.target

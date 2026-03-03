@@ -247,7 +247,8 @@ func encodeRecord(record kmsg.Record) []byte {
 		body = appendVarintBytes(body, header.Value)
 	}
 
-	out := make([]byte, 0, len(body)+binary.MaxVarintLen32)
+	cap64 := int64(len(body)) + int64(binary.MaxVarintLen32)
+	out := make([]byte, 0, cap64)
 	out = appendVarint(out, int32(len(body)))
 	out = append(out, body...)
 	return out

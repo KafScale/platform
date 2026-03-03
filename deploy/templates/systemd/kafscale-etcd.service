@@ -1,0 +1,26 @@
+[Unit]
+Description=KafScale etcd (metadata store)
+After=network.target
+
+[Service]
+Type=simple
+User={{DEPLOY_USER}}
+ExecStart=/usr/local/bin/etcd \
+    --name=etcd0 \
+    --data-dir={{REMOTE_DIR}}/var/data/etcd \
+    --advertise-client-urls=http://localhost:2379 \
+    --listen-client-urls=http://0.0.0.0:2379 \
+    --initial-advertise-peer-urls=http://localhost:2380 \
+    --listen-peer-urls=http://0.0.0.0:2380 \
+    --initial-cluster=etcd0=http://localhost:2380 \
+    --initial-cluster-state=new \
+    --initial-cluster-token=kafscale
+Restart=on-failure
+RestartSec=5
+
+WorkingDirectory={{REMOTE_DIR}}
+StandardOutput=append:{{REMOTE_DIR}}/var/log/etcd.log
+StandardError=append:{{REMOTE_DIR}}/var/log/etcd.log
+
+[Install]
+WantedBy=multi-user.target

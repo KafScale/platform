@@ -75,7 +75,7 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 		}
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		deploy.Spec.Replicas = &replicas
-		deploy.Spec.Template.ObjectMeta.Labels = labels
+		deploy.Spec.Template.Labels = labels
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{
 			r.lfsProxyContainer(cluster, endpoints),
 		}

@@ -216,7 +216,7 @@ func (p *Producer) doUploadPartitioned(ctx context.Context, topic string, partit
 	url := p.endpoint + "/lfs/produce"
 
 	// Wrap body with progress tracking if configured
-	var trackedBody io.Reader = body
+	trackedBody := body
 	if p.progress != nil {
 		trackedBody = &progressReader{
 			reader:   body,
@@ -247,7 +247,7 @@ func (p *Producer) doUploadPartitioned(ctx context.Context, topic string, partit
 	if err != nil {
 		return nil, &LfsError{Op: "upload", Err: err}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

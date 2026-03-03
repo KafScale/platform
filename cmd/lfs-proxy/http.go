@@ -335,7 +335,7 @@ func (p *lfsProxy) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		p.writeHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
-	defer backendConn.Close()
+	defer func() { _ = backendConn.Close() }()
 
 	_, err = p.forwardToBackend(r.Context(), backendConn, backendAddr, payload)
 	if err != nil {
@@ -452,7 +452,7 @@ func (p *lfsProxy) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 			p.writeHTTPError(w, requestID, "", http.StatusBadGateway, "s3_get_failed", err.Error())
 			return
 		}
-		defer obj.Body.Close()
+		defer func() { _ = obj.Body.Close() }()
 		contentType := "application/octet-stream"
 		if obj.ContentType != nil && *obj.ContentType != "" {
 			contentType = *obj.ContentType
@@ -850,7 +850,7 @@ func (p *lfsProxy) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Reque
 		p.writeHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
-	defer backendConn.Close()
+	defer func() { _ = backendConn.Close() }()
 
 	if _, err := p.forwardToBackend(r.Context(), backendConn, backendAddr, payload); err != nil {
 		p.trackOrphans([]orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID, Reason: "kafka_produce_failed"}})

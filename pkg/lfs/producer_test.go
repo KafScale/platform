@@ -97,7 +97,7 @@ func TestProducerProduce(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(expectedEnvelope)
+		_ = json.NewEncoder(w).Encode(expectedEnvelope)
 	}))
 	defer server.Close()
 
@@ -142,7 +142,7 @@ func TestProducerProduceNilBody(t *testing.T) {
 func TestProducerProduceServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal server error"))
+		_, _ = w.Write([]byte("internal server error"))
 	}))
 	defer server.Close()
 
@@ -164,7 +164,7 @@ func TestProducerProduceWithChecksum(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		env := Envelope{SHA256: expectedSHA}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 
@@ -192,10 +192,10 @@ func TestProducerProduceWithChecksum(t *testing.T) {
 
 func TestProducerProgress(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		env := Envelope{Size: 1000}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 
@@ -227,10 +227,10 @@ func TestProducerProgress(t *testing.T) {
 
 func TestProducerProgressCancel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		env := Envelope{}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 
@@ -256,16 +256,16 @@ func TestProducerProgressCancel(t *testing.T) {
 func TestProducerRetry(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		count := atomic.AddInt32(&attempts, 1)
 		if count < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("status 503: service unavailable"))
+			_, _ = w.Write([]byte("status 503: service unavailable"))
 			return
 		}
 		env := Envelope{Key: "success"}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 
@@ -286,10 +286,10 @@ func TestProducerRetry(t *testing.T) {
 func TestProducerRetryExhausted(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		atomic.AddInt32(&attempts, 1)
 		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("status 503: always fails"))
+		_, _ = w.Write([]byte("status 503: always fails"))
 	}))
 	defer server.Close()
 
@@ -311,10 +311,10 @@ func TestProducerRetryExhausted(t *testing.T) {
 func TestProducerNoRetryOn400(t *testing.T) {
 	var attempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		atomic.AddInt32(&attempts, 1)
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte("bad request"))
+		_, _ = w.Write([]byte("bad request"))
 	}))
 	defer server.Close()
 
@@ -334,7 +334,7 @@ func TestProducerContextCancel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second) // Slow server
 		env := Envelope{}
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 
@@ -354,10 +354,10 @@ func TestProducerAPIKey(t *testing.T) {
 	var receivedKey string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedKey = r.Header.Get("X-API-Key")
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		env := Envelope{}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 
@@ -376,10 +376,10 @@ func TestProducerPartitioned(t *testing.T) {
 	var receivedPartition string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedPartition = r.Header.Get("X-Kafka-Partition")
-		io.ReadAll(r.Body)
+		_, _ = io.ReadAll(r.Body)
 		env := Envelope{}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(env)
+		_ = json.NewEncoder(w).Encode(env)
 	}))
 	defer server.Close()
 

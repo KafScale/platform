@@ -339,9 +339,9 @@ func (h *LFSHandlers) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		data, _ := json.Marshal(event)
-		w.Write([]byte("data: "))
-		w.Write(data)
-		w.Write([]byte("\n\n"))
+		_, _ = w.Write([]byte("data: "))
+		_, _ = w.Write(data)
+		_, _ = w.Write([]byte("\n\n"))
 	}
 	h.mu.RUnlock()
 	flusher.Flush()
@@ -357,7 +357,7 @@ func (h *LFSHandlers) HandleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ticker.C:
 			// Send keepalive
-			w.Write([]byte(": keepalive\n\n"))
+			_, _ = w.Write([]byte(": keepalive\n\n"))
 			flusher.Flush()
 		}
 	}

@@ -70,8 +70,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				log.Printf("accept temporary error: %v", err)
+			if ne, ok := err.(net.Error); ok && !ne.Timeout() {
+				log.Printf("accept error: %v", err)
 				continue
 			}
 			return err
@@ -100,7 +100,7 @@ func (s *Server) ListenAddress() string {
 func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if s.ConnContextFunc != nil {
 		wrapped, info, err := s.ConnContextFunc(conn)
 		if err != nil {

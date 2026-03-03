@@ -248,7 +248,7 @@ func TestRecordValueStreamNonLFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	if length != int64(len(raw)) {
 		t.Errorf("length = %d, want %d", length, len(raw))

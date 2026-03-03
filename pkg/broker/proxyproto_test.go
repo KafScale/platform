@@ -24,8 +24,8 @@ import (
 
 func TestProxyProtocolV1Unknown(t *testing.T) {
 	conn, peer := net.Pipe()
-	defer conn.Close()
-	defer peer.Close()
+	defer func() { _ = conn.Close() }()
+	defer func() { _ = peer.Close() }()
 
 	payload := []byte("PROXY UNKNOWN\r\nping")
 	go func() {
@@ -50,8 +50,8 @@ func TestProxyProtocolV1Unknown(t *testing.T) {
 
 func TestProxyProtocolV2Local(t *testing.T) {
 	conn, peer := net.Pipe()
-	defer conn.Close()
-	defer peer.Close()
+	defer func() { _ = conn.Close() }()
+	defer func() { _ = peer.Close() }()
 
 	header := append([]byte{}, proxyV2Signature...)
 	header = append(header, 0x20)       // v2 + LOCAL
