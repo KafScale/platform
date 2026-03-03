@@ -64,11 +64,13 @@ class AgentKanban {
   }
 
   handleServerMessage(message) {
-    console.log('Received:', message.type, message)
+    const knownTypes = ['connected', 'task-created', 'task-response', 'agent-activity', 'error']
+    const type = knownTypes.includes(message.type) ? message.type : 'unknown'
+    console.log('Received:', type)
 
-    switch (message.type) {
+    switch (type) {
       case 'connected':
-        console.log(message.message)
+        console.log('Server connected')
         break
 
       case 'task-created':
@@ -165,23 +167,50 @@ class AgentKanban {
     card.draggable = true
     card.dataset.id = task.correlationId
 
-    const statusClass = task.status
-    const statusText = task.status.charAt(0).toUpperCase() + task.status.slice(1)
+    const validStatuses = ['pending', 'processing', 'completed', 'backlog']
+    const statusClass = validStatuses.includes(task.status) ? task.status : 'pending'
+    const statusText = statusClass.charAt(0).toUpperCase() + statusClass.slice(1)
 
-    card.innerHTML = `
-      <div class="card-header">
-        <div class="card-title">${this.escapeHtml(task.task)}</div>
-      </div>
-      <div class="card-body">
-        <strong>Spec:</strong> ${this.escapeHtml(task.spec || 'None')}<br>
-        <strong>Context:</strong> ${this.escapeHtml(task.context || 'None')}
-      </div>
-      <div class="card-meta">
-        <span class="card-status ${statusClass}">${statusText}</span>
-        <span class="card-id">${task.correlationId.slice(0, 8)}</span>
-      </div>
-      ${task.result ? `<div class="card-result">${this.escapeHtml(task.result.substring(0, 200))}...</div>` : ''}
-    `
+    const header = document.createElement('div')
+    header.className = 'card-header'
+    const title = document.createElement('div')
+    title.className = 'card-title'
+    title.textContent = task.task
+    header.appendChild(title)
+
+    const body = document.createElement('div')
+    body.className = 'card-body'
+    const specLabel = document.createElement('strong')
+    specLabel.textContent = 'Spec: '
+    body.appendChild(specLabel)
+    body.appendChild(document.createTextNode(task.spec || 'None'))
+    body.appendChild(document.createElement('br'))
+    const ctxLabel = document.createElement('strong')
+    ctxLabel.textContent = 'Context: '
+    body.appendChild(ctxLabel)
+    body.appendChild(document.createTextNode(task.context || 'None'))
+
+    const meta = document.createElement('div')
+    meta.className = 'card-meta'
+    const statusSpan = document.createElement('span')
+    statusSpan.className = `card-status ${statusClass}`
+    statusSpan.textContent = statusText
+    const idSpan = document.createElement('span')
+    idSpan.className = 'card-id'
+    idSpan.textContent = task.correlationId.slice(0, 8)
+    meta.appendChild(statusSpan)
+    meta.appendChild(idSpan)
+
+    card.appendChild(header)
+    card.appendChild(body)
+    card.appendChild(meta)
+
+    if (task.result) {
+      const result = document.createElement('div')
+      result.className = 'card-result'
+      result.textContent = task.result.substring(0, 200) + '...'
+      card.appendChild(result)
+    }
 
     return card
   }
@@ -241,9 +270,9 @@ ${task.spec}</code>`
     `
   }
 
-  updateAgentActivity(activity) {
+  updateAgentActivity(_activity) {
     // Handle real-time agent activity updates
-    console.log('Agent activity:', activity)
+    console.log('Agent activity received')
   }
 
   // UI Updates
@@ -264,8 +293,11 @@ ${task.spec}</code>`
       total: 0
     }
 
+    const validLanes = new Set(['backlog', 'processing', 'completed'])
     this.tasks.forEach(task => {
-      counts[task.lane]++
+      if (validLanes.has(task.lane)) {
+        counts[task.lane]++
+      }
       counts.total++
     })
 
@@ -407,4 +439,4 @@ ${task.spec}</code>`
 }
 
 // Initialize the application
-const app = new AgentKanban()
+new AgentKanban()

@@ -108,7 +108,7 @@ async function runTest() {
     console.log('⏳ Waiting for agent to process...\n')
 
     // Wait for response
-    const response = await responsePromise
+    await responsePromise
 
     // Test passed!
     testPassed = true
