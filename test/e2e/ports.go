@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func brokerAddrs(t *testing.T) (string, string, string) {
@@ -49,4 +50,36 @@ func pickFreePort(t *testing.T) string {
 		t.Fatalf("split free port: %v", err)
 	}
 	return port
+}
+
+// minioEndpoint returns the MinIO endpoint from environment or the default localhost:9000.
+func minioEndpoint() string {
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_S3_ENDPOINT")); val != "" {
+		return val
+	}
+	return "http://127.0.0.1:9000"
+}
+
+// minioAvailable checks if MinIO is reachable at the configured endpoint.
+// Tests that require MinIO should call requireMinIO(t) at the start.
+func minioAvailable() bool {
+	endpoint := minioEndpoint()
+	// Extract host:port from http://host:port
+	addr := strings.TrimPrefix(endpoint, "http://")
+	addr = strings.TrimPrefix(addr, "https://")
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// requireMinIO skips the test if MinIO is not available.
+// Use this at the start of tests that require a real MinIO instance.
+func requireMinIO(t *testing.T) {
+	t.Helper()
+	if !minioAvailable() {
+		t.Skipf("MinIO not available at %s; run 'make ensure-minio' first or use 'make test-produce-consume'", minioEndpoint())
+	}
 }

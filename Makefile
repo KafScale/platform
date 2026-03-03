@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-long demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo demo-guide-pf demo-guide-pf-clean help clean-kind-all
+.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-lfs-proxy docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-lfs-proxy-broker test-full test-operator test-acl demo demo-long demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo lfs-demo lfs-demo-medical lfs-demo-video lfs-demo-industrial platform-demo lfs-demo-idoc act-runnable demo-guide-pf demo-guide-pf-clean help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -21,6 +21,7 @@ BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
 PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
+LFS_PROXY_IMAGE ?= $(REGISTRY)/kafscale-lfs-proxy:dev
 SQL_PROCESSOR_IMAGE ?= $(REGISTRY)/kafscale-sql-processor:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 SPRING_DEMO_IMAGE ?= $(REGISTRY)/kafscale-spring-demo:dev
@@ -34,6 +35,7 @@ SPRING_DEMO_TAG := $(shell echo $(SPRING_DEMO_IMAGE) | sed 's/.*://')
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
 ICEBERG_PROCESSOR_IMAGE ?= iceberg-processor:dev
+E72_BROWSER_DEMO_IMAGE ?= $(REGISTRY)/kafscale-e72-browser-demo:dev
 ICEBERG_REST_IMAGE ?= tabulario/iceberg-rest:1.6.0
 ICEBERG_REST_PORT ?= 8181
 ICEBERG_WAREHOUSE_BUCKET ?= kafscale-snapshots
@@ -54,6 +56,11 @@ KAFSQL_DEMO_TOPIC ?= kafsql-demo-topic
 KAFSQL_DEMO_RECORDS ?= 200
 KAFSQL_DEMO_TIMEOUT_SEC ?= 120
 KAFSQL_PROCESSOR_RELEASE ?= kafsql-processor-dev
+LFS_DEMO_NAMESPACE ?= $(KAFSCALE_DEMO_NAMESPACE)
+LFS_DEMO_TOPIC ?= lfs-demo-topic
+LFS_DEMO_BLOB_SIZE ?= 524288
+LFS_DEMO_BLOB_COUNT ?= 5
+LFS_DEMO_TIMEOUT_SEC ?= 120
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
 MINIO_PORT ?= 9000
@@ -79,6 +86,10 @@ KAFSCALE_DEMO_ETCD_INMEM ?= 1
 KAFSCALE_DEMO_ETCD_REPLICAS ?= 3
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
+SDK_JAVA_BUILD_CMD ?= mvn -DskipTests clean package
+SDK_JS_BUILD_CMD ?= npm install && npm run build
+SDK_PY_BUILD_CMD ?= python -m build
+SKIP_JS_SDK ?= 1
 
 proto: ## Generate protobuf + gRPC stubs
 	buf generate
@@ -87,6 +98,19 @@ generate: proto
 
 build: ## Build all binaries
 	go build ./...
+
+build-sdk: ## Build all LFS client SDKs
+	@echo "Building Java SDK..."
+	@cd lfs-client-sdk/java && $(SDK_JAVA_BUILD_CMD)
+	@test -d lfs-client-sdk/java/target || { echo "Java SDK target/ missing"; exit 1; }
+	@if [ "$(SKIP_JS_SDK)" = "1" ]; then \
+		echo "Skipping JS SDK build (SKIP_JS_SDK=1)"; \
+	else \
+		echo "Building JS SDK..."; \
+		cd lfs-client-sdk/js && $(SDK_JS_BUILD_CMD); \
+	fi
+	@echo "Building Python SDK..."
+	@cd lfs-client-sdk/python && $(SDK_PY_BUILD_CMD)
 
 test: ## Run unit tests + vet + race
 	go vet ./...
@@ -139,6 +163,13 @@ $(STAMP_DIR)/proxy.image: $(PROXY_SRCS)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(PROXY_IMAGE) -f deploy/docker/proxy.Dockerfile .
 	@touch $(STAMP_DIR)/proxy.image
 
+LFS_PROXY_SRCS := $(shell find cmd/lfs-proxy pkg go.mod go.sum)
+docker-build-lfs-proxy: $(STAMP_DIR)/lfs-proxy.image ## Build LFS proxy container image
+$(STAMP_DIR)/lfs-proxy.image: $(LFS_PROXY_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(LFS_PROXY_IMAGE) -f deploy/docker/lfs-proxy.Dockerfile .
+	@touch $(STAMP_DIR)/lfs-proxy.image
+
 MCP_SRCS := $(shell find cmd/mcp internal/mcpserver go.mod go.sum)
 docker-build-mcp: $(STAMP_DIR)/mcp.image ## Build MCP container image
 $(STAMP_DIR)/mcp.image: $(MCP_SRCS)
@@ -173,6 +204,12 @@ $(STAMP_DIR)/spring-demo.image: $(SPRING_DEMO_SRCS)
 	@mkdir -p $(STAMP_DIR)
 	$(DOCKER_BUILD_CMD) -t $(SPRING_DEMO_IMAGE) examples/E20_spring-boot-kafscale-demo
 	@touch $(STAMP_DIR)/spring-demo.image
+
+docker-build-e72-browser-demo: ## Build E72 browser demo container image
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(E72_BROWSER_DEMO_IMAGE) -f examples/E72_browser-lfs-sdk-demo/Dockerfile examples/E72_browser-lfs-sdk-demo
+
+docker-build-iceberg-processor: ## Build Iceberg processor container image
+	$(MAKE) -C addons/processors/iceberg-processor docker-build IMAGE=$(ICEBERG_PROCESSOR_IMAGE) DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg GO_BUILD_FLAGS='$(ICEBERG_PROCESSOR_BUILD_FLAGS)'"
 
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
@@ -284,6 +321,11 @@ test-mcp: ## Run MCP e2e tests (in-memory metadata store + streamable HTTP).
 test-multi-segment-durability: release-broker-ports ensure-minio ## Run multi-segment restart durability e2e (embedded etcd + MinIO).
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestMultiSegmentRestartDurability -v
+
+
+test-lfs-proxy-broker: ## Run LFS proxy e2e with real broker (embedded etcd + in-memory S3).
+	KAFSCALE_E2E=1 \
+	go test -tags=e2e ./test/e2e -run TestLfsProxyBrokerE2E -v
 
 test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test
@@ -551,6 +593,100 @@ kafsql-demo: demo-platform-bootstrap ## Run the KAFSQL processor e2e demo on kin
 	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
 	bash scripts/kafsql-demo.sh
 
+lfs-demo: KAFSCALE_DEMO_PROXY=0
+lfs-demo: KAFSCALE_DEMO_CONSOLE=1
+lfs-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
+lfs-demo: demo-platform-bootstrap ## Run the LFS proxy demo on kind.
+	$(MAKE) docker-build-lfs-proxy
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	LFS_DEMO_NAMESPACE=$(LFS_DEMO_NAMESPACE) \
+	LFS_DEMO_TOPIC=$(LFS_DEMO_TOPIC) \
+	LFS_DEMO_BLOB_SIZE=$(LFS_DEMO_BLOB_SIZE) \
+	LFS_DEMO_BLOB_COUNT=$(LFS_DEMO_BLOB_COUNT) \
+	LFS_DEMO_TIMEOUT_SEC=$(LFS_DEMO_TIMEOUT_SEC) \
+	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_REGION=$(MINIO_REGION) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	bash scripts/lfs-demo.sh
+
+lfs-demo-medical: KAFSCALE_DEMO_PROXY=0
+lfs-demo-medical: KAFSCALE_DEMO_CONSOLE=0
+lfs-demo-medical: KAFSCALE_DEMO_BROKER_REPLICAS=1
+lfs-demo-medical: demo-platform-bootstrap ## Run the Medical LFS demo (E60) - healthcare imaging with content explosion.
+	$(MAKE) docker-build-lfs-proxy
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	bash scripts/lfs-demo-medical.sh
+
+lfs-demo-video: KAFSCALE_DEMO_PROXY=0
+lfs-demo-video: KAFSCALE_DEMO_CONSOLE=0
+lfs-demo-video: KAFSCALE_DEMO_BROKER_REPLICAS=1
+lfs-demo-video: demo-platform-bootstrap ## Run the Video LFS demo (E61) - media streaming with content explosion.
+	$(MAKE) docker-build-lfs-proxy
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	bash scripts/lfs-demo-video.sh
+
+lfs-demo-industrial: KAFSCALE_DEMO_PROXY=0
+lfs-demo-industrial: KAFSCALE_DEMO_CONSOLE=0
+lfs-demo-industrial: KAFSCALE_DEMO_BROKER_REPLICAS=1
+lfs-demo-industrial: demo-platform-bootstrap ## Run the Industrial LFS demo (E62) - mixed telemetry + images.
+	$(MAKE) docker-build-lfs-proxy
+	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
+	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
+	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
+	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
+	bash scripts/lfs-demo-industrial.sh
+
+e72-browser-demo: ## Run the E72 Browser LFS SDK demo (local, requires port-forward).
+	@echo "=== E72 Browser LFS SDK Demo (Local) ==="
+	@echo "Prerequisites: LFS proxy must be port-forwarded to localhost:8080"
+	@echo "  kubectl -n kafscale-demo port-forward svc/lfs-proxy 8080:8080"
+	@echo ""
+	cd examples/E72_browser-lfs-sdk-demo && $(MAKE) test
+
+E72_PROXY_LOCAL_PORT ?= 8080
+E72_MINIO_LOCAL_PORT ?= 9000
+E72_S3_PUBLIC_ENDPOINT ?= http://localhost:$(E72_MINIO_LOCAL_PORT)
+
+e72-browser-demo-test: ## Rebuild/redeploy LFS proxy, refresh demo, port-forward, and open the SPA.
+	@echo "=== E72 Browser LFS SDK Demo (Rebuild + Test) ==="
+	$(MAKE) docker-build-lfs-proxy
+	kind load docker-image $(LFS_PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/lfs-proxy KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT=$(E72_S3_PUBLIC_ENDPOINT)
+	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout restart deployment/lfs-proxy
+	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/lfs-proxy --timeout=60s
+	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) apply -f examples/E72_browser-lfs-sdk-demo/k8s-deploy.yaml
+	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout restart deployment/e72-browser-demo
+	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/e72-browser-demo --timeout=60s
+	@pkill -f "port-forward.*$(E72_PROXY_LOCAL_PORT)" 2>/dev/null || true
+	@pkill -f "port-forward.*$(E72_MINIO_LOCAL_PORT)" 2>/dev/null || true
+	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/lfs-proxy $(E72_PROXY_LOCAL_PORT):8080 >/dev/null 2>&1 &
+	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/minio $(E72_MINIO_LOCAL_PORT):9000 >/dev/null 2>&1 &
+	@sleep 2
+	cd examples/E72_browser-lfs-sdk-demo && $(MAKE) test PORT=3000
+
+e72-browser-demo-k8s: ## Run the E72 Browser LFS SDK demo inside the kind cluster.
+	bash scripts/e72-browser-demo.sh
+
 platform-demo: demo-platform ## Alias for demo-platform.
 
 demo: release-broker-ports ensure-minio ## Launch the broker + console demo stack and open the UI (Ctrl-C to stop).
@@ -709,6 +845,88 @@ tidy:
 
 lint:
 	golangci-lint run
+
+ACT ?= act
+ACT_PLATFORM ?= linux/amd64
+ACT_FLAGS ?= --container-architecture $(ACT_PLATFORM)
+ACT_IMAGE ?= local/act-runner:latest
+STAGE_REGISTRY ?= 192.168.0.131:5100
+STAGE_TAG ?= stage
+STAGE_PLATFORMS ?= linux/amd64,linux/arm64
+STAGE_NO_CACHE ?= 1
+STAGE_SOURCE_REGISTRY ?= ghcr.io/kafscale
+STAGE_SOURCE_TAG ?= dev
+STAGE_IMAGES ?= kafscale-broker kafscale-lfs-proxy kafscale-operator kafscale-console \
+	kafscale-etcd-tools kafscale-iceberg-processor kafscale-sql-processor \
+	kafscale-e72-browser-demo
+
+act-runnable: ## Run runnable GitHub Actions locally (ci.yml, docker.yml)
+	$(ACT) -W .github/workflows/ci.yml $(ACT_FLAGS)
+	$(ACT) -W .github/workflows/docker.yml $(ACT_FLAGS)
+
+act-image: ## Build local act runner image.
+	docker build -t $(ACT_IMAGE) .devcontainer/act-runner
+
+stage-release: ## Push stage images to local registry (local buildx).
+	STAGE_REGISTRY=$(STAGE_REGISTRY) STAGE_TAG=$(STAGE_TAG) STAGE_PLATFORMS=$(STAGE_PLATFORMS) STAGE_NO_CACHE=$(STAGE_NO_CACHE) \
+		bash scripts/stage-release-local.sh
+
+stage-release-push: docker-build docker-build-lfs-proxy docker-build-iceberg-processor docker-build-e72-browser-demo ## Retag and push locally built images to STAGE_REGISTRY.
+	@set -e; \
+	for img in $(STAGE_IMAGES); do \
+		dst="$(STAGE_REGISTRY)/kafscale/$${img}:$(STAGE_TAG)"; \
+		found=0; \
+		for src in \
+			"$(STAGE_SOURCE_REGISTRY)/$${img}:$(STAGE_SOURCE_TAG)" \
+			"$${img}:$(STAGE_SOURCE_TAG)" \
+			"$$(case $$img in \
+				kafscale-broker) echo $(BROKER_IMAGE) ;; \
+				kafscale-operator) echo $(OPERATOR_IMAGE) ;; \
+				kafscale-console) echo $(CONSOLE_IMAGE) ;; \
+				kafscale-lfs-proxy) echo $(LFS_PROXY_IMAGE) ;; \
+				kafscale-etcd-tools) echo $(ETCD_TOOLS_IMAGE) ;; \
+				kafscale-sql-processor) echo $(SQL_PROCESSOR_IMAGE) ;; \
+				kafscale-iceberg-processor) echo $(ICEBERG_PROCESSOR_IMAGE) ;; \
+				kafscale-e72-browser-demo) echo $(E72_BROWSER_DEMO_IMAGE) ;; \
+				*) echo "" ;; \
+			esac)"; do \
+			[ -z "$$src" ] && continue; \
+			if docker image inspect "$$src" >/dev/null 2>&1; then \
+				echo "Pushing $$src -> $$dst"; \
+				docker tag "$$src" "$$dst"; \
+				docker push "$$dst"; \
+				found=1; \
+				break; \
+			fi; \
+		done; \
+		if [ "$$found" -ne 1 ]; then \
+			echo "Skipping $$img (source image not found)"; \
+		fi; \
+	done
+
+stage-release-clean: ## Remove stage release builder and prune local stage images.
+	@docker buildx rm stage-release-builder >/dev/null 2>&1 || true
+	@docker image rm -f $(E72_BROWSER_DEMO_IMAGE) $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) \
+		$(LFS_PROXY_IMAGE) $(ETCD_TOOLS_IMAGE) $(SQL_PROCESSOR_IMAGE) $(ICEBERG_PROCESSOR_IMAGE) >/dev/null 2>&1 || true
+
+stage-release-act: act-image ## Push stage images to local registry via workflow (containerized act).
+	docker run --rm \
+		--privileged \
+		--network host \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-v $(PWD):/workspace \
+		-w /workspace \
+		$(ACT_IMAGE) \
+		-W .github/workflows/stage-release.yml $(ACT_FLAGS) \
+		-P ubuntu-latest=catthehacker/ubuntu:act-latest \
+		--input registry=$(STAGE_REGISTRY) --input tag=$(STAGE_TAG)
+
+IDOC_EXPLODE_BIN ?= bin/idoc-explode
+
+lfs-demo-idoc: ## Run IDoc explode demo (writes topic JSONL files)
+	@mkdir -p bin
+	go build -o $(IDOC_EXPLODE_BIN) ./cmd/idoc-explode
+	./scripts/idoc-explode-demo.sh
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "%-20s %s\n", $$1, $$2}'

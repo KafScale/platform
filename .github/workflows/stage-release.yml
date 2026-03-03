@@ -1,0 +1,83 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Stage Release (Local Registry)
+
+on:
+  workflow_dispatch:
+    inputs:
+      registry:
+        description: "Target registry host:port (e.g., 192.168.0.131:5000)"
+        required: true
+        default: "192.168.0.131:5000"
+      tag:
+        description: "Image tag to publish (e.g., stage-2026-02-04)"
+        required: true
+        default: "stage"
+
+permissions: read-all
+
+jobs:
+  stage-release:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: broker
+            image: kafscale-broker
+            context: .
+            file: deploy/docker/broker.Dockerfile
+          - name: lfs-proxy
+            image: kafscale-lfs-proxy
+            context: .
+            file: deploy/docker/lfs-proxy.Dockerfile
+          - name: operator
+            image: kafscale-operator
+            context: .
+            file: deploy/docker/operator.Dockerfile
+          - name: console
+            image: kafscale-console
+            context: .
+            file: deploy/docker/console.Dockerfile
+          - name: etcd-tools
+            image: kafscale-etcd-tools
+            context: .
+            file: deploy/docker/etcd-tools.Dockerfile
+          - name: iceberg-processor
+            image: kafscale-iceberg-processor
+            context: addons/processors/iceberg-processor
+            file: addons/processors/iceberg-processor/Dockerfile
+          - name: sql-processor
+            image: kafscale-sql-processor
+            context: addons/processors/sql-processor
+            file: addons/processors/sql-processor/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push (local registry)
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ inputs.registry }}/kafscale/${{ matrix.image }}:${{ inputs.tag }}

@@ -57,6 +57,28 @@ jobs:
       - name: Run go test -race ./...
         run: go test -race ./...
 
+  build-lfs-proxy:
+    name: Build LFS Proxy
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Prepare Go build cache
+        run: mkdir -p "$GOCACHE"
+
+      - name: Build lfs-proxy
+        run: go build -o lfs-proxy ./cmd/lfs-proxy
+
+      - name: Run lfs-proxy tests
+        run: go test ./cmd/lfs-proxy/...
+
   go-coverage:
     name: Go Coverage Gate
     runs-on: ubuntu-latest
@@ -74,7 +96,28 @@ jobs:
         run: mkdir -p "$GOCACHE"
 
       - name: Enforce coverage floor
-        run: bash hack/check_coverage.sh 45
+        run: bash hack/check_coverage.sh 80
+
+
+  e2e-lfs-proxy:
+    name: LFS Proxy E2E
+    runs-on: ubuntu-latest
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+      KAFSCALE_E2E: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Prepare Go build cache
+        run: mkdir -p "$GOCACHE"
+
+      - name: Run LFS proxy E2E tests
+        run: go test -tags=e2e ./test/e2e -run LfsProxy
 
   helm-lint:
     name: Helm Lint

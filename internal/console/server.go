@@ -58,10 +58,11 @@ type MetricsProvider interface {
 }
 
 type ServerOptions struct {
-	Store   metadata.Store
-	Metrics MetricsProvider
-	Logger  *log.Logger
-	Auth    AuthConfig
+	Store       metadata.Store
+	Metrics     MetricsProvider
+	Logger      *log.Logger
+	Auth        AuthConfig
+	LFSHandlers *LFSHandlers
 }
 
 // StartServer launches the HTTP console on the provided address. When store is
@@ -113,6 +114,20 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 	mux.HandleFunc("/ui/api/status/topics", auth.requireAuth(handlers.handleCreateTopic))
 	mux.HandleFunc("/ui/api/status/topics/", auth.requireAuth(handlers.handleDeleteTopic))
 	mux.HandleFunc("/ui/api/metrics", auth.requireAuth(handlers.handleMetrics))
+
+	// LFS Admin API routes
+	if opts.LFSHandlers != nil {
+		lfs := opts.LFSHandlers
+		mux.HandleFunc("/ui/api/lfs/status", auth.requireAuth(lfs.HandleStatus))
+		mux.HandleFunc("/ui/api/lfs/objects", auth.requireAuth(lfs.HandleObjects))
+		mux.HandleFunc("/ui/api/lfs/topics", auth.requireAuth(lfs.HandleTopics))
+		mux.HandleFunc("/ui/api/lfs/topics/", auth.requireAuth(lfs.HandleTopicDetail))
+		mux.HandleFunc("/ui/api/lfs/events", auth.requireAuth(lfs.HandleEvents))
+		mux.HandleFunc("/ui/api/lfs/orphans", auth.requireAuth(lfs.HandleOrphans))
+		mux.HandleFunc("/ui/api/lfs/s3/browse", auth.requireAuth(lfs.HandleS3Browse))
+		mux.HandleFunc("/ui/api/lfs/s3/presign", auth.requireAuth(lfs.HandleS3Presign))
+	}
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

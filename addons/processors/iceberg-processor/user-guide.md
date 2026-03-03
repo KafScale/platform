@@ -168,6 +168,40 @@ Supported column types:
 `boolean`, `int`, `long`, `float`, `double`, `string`, `binary`, `timestamp`,
 `date`.
 
+## LFS Resolution (Optional)
+
+You can resolve LFS pointer envelopes into full payloads per mapping.
+
+Example:
+```yaml
+mappings:
+  - topic: media-uploads
+    table: analytics.media_events
+    schema:
+      columns:
+        - name: user_id
+          type: long
+    lfs:
+      mode: resolve         # off | resolve | reference | skip | hybrid
+      max_inline_size: 1048576
+      store_metadata: true
+      validate_checksum: true
+      resolve_concurrency: 4
+```
+
+Modes:
+- `off`: ignore LFS envelopes.
+- `resolve`: fetch blob and write to `value`.
+- `reference`: keep envelope, optionally add `lfs_*` metadata columns.
+- `skip`: drop LFS records entirely.
+- `hybrid`: resolve only if `size <= max_inline_size`.
+
+When `store_metadata` is enabled, these columns are added to the schema:
+`lfs_content_type`, `lfs_blob_size`, `lfs_checksum`, `lfs_checksum_alg`,
+`lfs_bucket`, `lfs_key`.
+
+When LFS resolution is enabled (`resolve` or `hybrid`), the processor uses the S3 settings from `config.s3.*` to fetch blobs. Ensure the bucket, region, endpoint, and credentials are valid for the LFS storage backend.
+
 ## Schema Validation (Optional)
 
 `schema.mode` controls JSON validation against the registry:
@@ -212,6 +246,7 @@ Key Helm values:
 - `config.iceberg.*`
 - `config.etcd.*`
 - `config.mappings`
+- `config.mappings[].lfs`
 - `s3.credentialsSecretRef` with `AWS_ACCESS_KEY_ID` and
   `AWS_SECRET_ACCESS_KEY`
 
@@ -229,6 +264,10 @@ Key metrics:
 - `kafscale_processor_last_offset{topic,partition}`
 - `kafscale_processor_watermark_offset{topic,partition}`
 - `kafscale_processor_watermark_timestamp_ms{topic,partition}`
+- `kafscale_processor_lfs_resolved_total{topic}`
+- `kafscale_processor_lfs_resolved_bytes_total{topic}`
+- `kafscale_processor_lfs_resolution_errors_total{topic,reason}`
+- `kafscale_processor_lfs_resolution_duration_seconds{topic}`
 
 ## Scaling (Operational Behavior)
 

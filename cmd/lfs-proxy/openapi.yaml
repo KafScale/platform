@@ -1,0 +1,418 @@
+openapi: 3.0.3
+info:
+  title: KafScale LFS Proxy HTTP API
+  version: 1.0.0
+  description: |
+    The KafScale LFS (Large File Support) Proxy provides HTTP endpoints for producing
+    large binary objects to Kafka via S3-backed storage. Instead of sending large payloads
+    directly through Kafka, clients upload blobs to S3 and receive an envelope (pointer)
+    that is stored in Kafka.
+
+    ## Authentication
+
+    When API key authentication is enabled (via `KAFSCALE_LFS_PROXY_HTTP_API_KEY`),
+    requests must include one of:
+    - `X-API-Key` header with the API key
+    - `Authorization: Bearer <api-key>` header
+
+    ## CORS
+
+    The API supports CORS for browser-based clients. Preflight OPTIONS requests are handled automatically.
+
+    ## Request Tracing
+
+    All requests can include an optional `X-Request-ID` header for tracing. If not provided,
+    the proxy generates one and returns it in the response.
+  contact:
+    name: KafScale
+    url: https://github.com/KafScale/platform
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: http://lfs-proxy:8080
+    description: Kubernetes in-cluster
+tags:
+  - name: LFS
+    description: Large File Support operations
+paths:
+  /lfs/produce:
+    post:
+      tags:
+        - LFS
+      summary: Upload and produce an LFS record
+      description: |
+        Streams a binary payload to the LFS proxy, which:
+        1. Uploads the blob to S3 storage
+        2. Computes checksums (SHA256 by default)
+        3. Creates an LFS envelope with blob metadata
+        4. Produces the envelope to the specified Kafka topic
+
+        The response contains the full LFS envelope that was stored in Kafka.
+      operationId: lfsProduce
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - {}
+      parameters:
+        - in: header
+          name: X-Kafka-Topic
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-zA-Z0-9._-]+$'
+            maxLength: 249
+          description: Target Kafka topic name (alphanumeric, dots, underscores, hyphens only)
+          example: video-uploads
+        - in: header
+          name: X-Kafka-Key
+          required: false
+          schema:
+            type: string
+          description: Base64-encoded Kafka record key for partitioning
+          example: dXNlci0xMjM=
+        - in: header
+          name: X-Kafka-Partition
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+          description: Explicit partition number (overrides key-based partitioning)
+          example: 0
+        - in: header
+          name: X-LFS-Checksum
+          required: false
+          schema:
+            type: string
+          description: Expected checksum of the payload for verification
+          example: abc123def456...
+        - in: header
+          name: X-LFS-Checksum-Alg
+          required: false
+          schema:
+            type: string
+            enum: [sha256, md5, crc32, none]
+            default: sha256
+          description: Checksum algorithm for verification
+        - in: header
+          name: X-Request-ID
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Request correlation ID for tracing
+        - in: header
+          name: Content-Type
+          required: false
+          schema:
+            type: string
+          description: MIME type of the payload (stored in envelope)
+          example: video/mp4
+      requestBody:
+        required: true
+        description: Binary payload to upload
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          '*/*':
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: LFS envelope successfully produced to Kafka
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+              description: Request correlation ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LfsEnvelope"
+              example:
+                kfs_lfs: 1
+                bucket: kafscale-lfs
+                key: default/video-uploads/lfs/2026/02/05/abc123
+                size: 10485760
+                sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                checksum_alg: sha256
+                content_type: video/mp4
+                created_at: "2026-02-05T10:30:00Z"
+                proxy_id: lfs-proxy-0
+        "400":
+          description: Invalid request (missing topic, invalid checksum, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                missing_topic:
+                  value:
+                    code: missing_topic
+                    message: missing topic
+                    request_id: abc-123
+                checksum_mismatch:
+                  value:
+                    code: checksum_mismatch
+                    message: "expected abc123, got def456"
+                    request_id: abc-123
+        "401":
+          description: Unauthorized - API key required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Upstream storage or Kafka failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Proxy not ready (backends unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    options:
+      tags:
+        - LFS
+      summary: CORS preflight for produce endpoint
+      description: Handles CORS preflight requests for browser clients
+      responses:
+        "204":
+          description: CORS headers returned
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+
+  /lfs/download:
+    post:
+      tags:
+        - LFS
+      summary: Download an LFS object
+      description: |
+        Retrieves an LFS object from S3 storage. Supports two modes:
+
+        - **presign**: Returns a presigned S3 URL for direct download (default)
+        - **stream**: Streams the object content through the proxy
+
+        For presign mode, the URL TTL is capped by server configuration.
+      operationId: lfsDownload
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - {}
+      parameters:
+        - in: header
+          name: X-Request-ID
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Request correlation ID for tracing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DownloadRequest"
+            examples:
+              presign:
+                summary: Get presigned URL
+                value:
+                  bucket: kafscale-lfs
+                  key: default/video-uploads/lfs/2026/02/05/abc123
+                  mode: presign
+                  expires_seconds: 300
+              stream:
+                summary: Stream content
+                value:
+                  bucket: kafscale-lfs
+                  key: default/video-uploads/lfs/2026/02/05/abc123
+                  mode: stream
+      responses:
+        "200":
+          description: Presigned URL or streamed object content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadResponse"
+              example:
+                mode: presign
+                url: https://s3.amazonaws.com/kafscale-lfs/...
+                expires_at: "2026-02-05T10:35:00Z"
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+              description: Streamed object content (when mode=stream)
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "502":
+          description: Upstream storage failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Proxy not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    options:
+      tags:
+        - LFS
+      summary: CORS preflight for download endpoint
+      responses:
+        "204":
+          description: CORS headers returned
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token authentication (same API key)
+
+  schemas:
+    LfsEnvelope:
+      type: object
+      description: LFS envelope containing blob metadata and S3 location
+      properties:
+        kfs_lfs:
+          type: integer
+          format: int32
+          description: LFS envelope version
+          example: 1
+        bucket:
+          type: string
+          description: S3 bucket name
+          example: kafscale-lfs
+        key:
+          type: string
+          description: S3 object key
+          example: default/video-uploads/lfs/2026/02/05/abc123
+        size:
+          type: integer
+          format: int64
+          description: Blob size in bytes
+          example: 10485760
+        sha256:
+          type: string
+          description: SHA256 hash of the blob
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        checksum:
+          type: string
+          description: Checksum value (algorithm depends on checksum_alg)
+        checksum_alg:
+          type: string
+          description: Checksum algorithm used
+          enum: [sha256, md5, crc32, none]
+          example: sha256
+        content_type:
+          type: string
+          description: MIME type of the blob
+          example: video/mp4
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the blob was created
+          example: "2026-02-05T10:30:00Z"
+        proxy_id:
+          type: string
+          description: ID of the proxy instance that handled the upload
+          example: lfs-proxy-0
+
+    DownloadRequest:
+      type: object
+      required: [bucket, key]
+      description: Request to download an LFS object
+      properties:
+        bucket:
+          type: string
+          description: S3 bucket name (must match proxy's configured bucket)
+          example: kafscale-lfs
+        key:
+          type: string
+          description: S3 object key from the LFS envelope
+          example: default/video-uploads/lfs/2026/02/05/abc123
+        mode:
+          type: string
+          enum: [presign, stream]
+          default: presign
+          description: |
+            Download mode:
+            - presign: Return a presigned URL for direct S3 download
+            - stream: Stream content through the proxy
+        expires_seconds:
+          type: integer
+          format: int32
+          default: 120
+          minimum: 1
+          maximum: 3600
+          description: Requested presign URL TTL in seconds (capped by server)
+
+    DownloadResponse:
+      type: object
+      description: Response for presign download mode
+      properties:
+        mode:
+          type: string
+          enum: [presign]
+          description: Download mode used
+        url:
+          type: string
+          format: uri
+          description: Presigned S3 URL for direct download
+        expires_at:
+          type: string
+          format: date-time
+          description: URL expiration timestamp
+
+    ErrorResponse:
+      type: object
+      description: Error response returned for all error conditions
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code
+          example: missing_topic
+        message:
+          type: string
+          description: Human-readable error message
+          example: missing topic
+        request_id:
+          type: string
+          description: Request correlation ID for support/debugging
+          example: abc-123-def-456
