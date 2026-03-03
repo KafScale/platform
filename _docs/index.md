@@ -43,6 +43,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [LFS Proxy](/lfs-proxy/) — Claim-check proxy for large binary payloads via S3 + Kafka
 - [LFS Helm Deployment](/lfs-helm/) — Kubernetes deployment and configuration
 - [LFS Client SDKs](/lfs-sdks/) — Java, Python, JS, and browser SDKs
+- [LFS Demos](/lfs-demos/) — Runnable demos from local IDoc processing to full Kubernetes pipelines
 
 ## Processors
 

@@ -116,6 +116,7 @@ kafka-console-consumer --topic demo-topic --from-beginning
 
 ## Related docs
 
+- [LFS Demos](/lfs-demos/) — Runnable demos from local IDoc to full Kubernetes pipelines
 - [LFS Helm deployment](/lfs-helm/) — Full Helm chart configuration reference
 - [LFS Client SDKs](/lfs-sdks/) — Java, Python, JS, and browser SDKs
 - [Iceberg Processor](/processors/iceberg/) — LFS-aware Iceberg sink

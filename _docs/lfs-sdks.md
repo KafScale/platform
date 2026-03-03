@@ -161,5 +161,6 @@ make lfs-demo-video    # E61 video demo
 
 ## Related docs
 
+- [LFS Demos](/lfs-demos/) — Runnable demos for each SDK and industry scenario
 - [LFS Proxy](/lfs-proxy/) — Proxy architecture and configuration
 - [LFS Helm deployment](/lfs-helm/) — Kubernetes deployment guide
