@@ -626,7 +626,7 @@ lfs-demo-medical: demo-platform-bootstrap ## Run the Medical LFS demo (E60) - he
 	MINIO_BUCKET=$(MINIO_BUCKET) \
 	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
 	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/lfs-demo-medical.sh
+	bash scripts/medical-lfs-demo.sh
 
 lfs-demo-video: KAFSCALE_DEMO_PROXY=0
 lfs-demo-video: KAFSCALE_DEMO_CONSOLE=0
@@ -640,7 +640,7 @@ lfs-demo-video: demo-platform-bootstrap ## Run the Video LFS demo (E61) - media 
 	MINIO_BUCKET=$(MINIO_BUCKET) \
 	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
 	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/lfs-demo-video.sh
+	bash scripts/video-lfs-demo.sh
 
 lfs-demo-industrial: KAFSCALE_DEMO_PROXY=0
 lfs-demo-industrial: KAFSCALE_DEMO_CONSOLE=0
@@ -654,7 +654,7 @@ lfs-demo-industrial: demo-platform-bootstrap ## Run the Industrial LFS demo (E62
 	MINIO_BUCKET=$(MINIO_BUCKET) \
 	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
 	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/lfs-demo-industrial.sh
+	bash scripts/industrial-lfs-demo.sh
 
 e72-browser-demo: ## Run the E72 Browser LFS SDK demo (local, requires port-forward).
 	@echo "=== E72 Browser LFS SDK Demo (Local) ==="
