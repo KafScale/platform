@@ -23,21 +23,23 @@ import (
 	"net"
 	"sync"
 
+	"github.com/twmb/franz-go/pkg/kmsg"
+
 	"github.com/KafScale/platform/pkg/protocol"
 )
 
 // Handler processes parsed Kafka protocol requests and returns the response payload.
 type Handler interface {
-	Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error)
+	Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error)
 }
 
 // Server implements minimal Kafka TCP handling for milestone 1.
 type Server struct {
-	Addr             string
-	Handler          Handler
-	ConnContextFunc  ConnContextFunc
-	listener         net.Listener
-	wg               sync.WaitGroup
+	Addr            string
+	Handler         Handler
+	ConnContextFunc ConnContextFunc
+	listener        net.Listener
+	wg              sync.WaitGroup
 }
 
 // ConnContextFunc can wrap a connection and attach connection-scoped context data.

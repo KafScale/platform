@@ -26,6 +26,7 @@ import (
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // Store exposes read-only access to cluster metadata used by Kafka protocol handlers.
@@ -153,7 +154,7 @@ func filterTopics(all []protocol.MetadataTopic, requested []string) []protocol.M
 	}
 	index := make(map[string]protocol.MetadataTopic, len(all))
 	for _, topic := range all {
-		index[topic.Name] = topic
+		index[*topic.Topic] = topic
 	}
 	result := make([]protocol.MetadataTopic, 0, len(requested))
 	for _, name := range requested {
@@ -162,7 +163,7 @@ func filterTopics(all []protocol.MetadataTopic, requested []string) []protocol.M
 		} else {
 			result = append(result, protocol.MetadataTopic{
 				ErrorCode: 3, // UNKNOWN_TOPIC_OR_PARTITION
-				Name:      name,
+				Topic:     kmsg.StringPtr(name),
 			})
 		}
 	}
@@ -195,16 +196,17 @@ func cloneTopics(topics []protocol.MetadataTopic) []protocol.MetadataTopic {
 	out := make([]protocol.MetadataTopic, len(topics))
 	for i, topic := range topics {
 		topicID := topic.TopicID
+		name := *topic.Topic
 		if topicID == ([16]byte{}) {
-			topicID = TopicIDForName(topic.Name)
+			topicID = TopicIDForName(name)
 		}
 		out[i] = protocol.MetadataTopic{
-			ErrorCode:                 topic.ErrorCode,
-			Name:                      topic.Name,
-			TopicID:                   topicID,
-			IsInternal:                topic.IsInternal,
-			Partitions:                clonePartitions(topic.Partitions),
-			TopicAuthorizedOperations: topic.TopicAuthorizedOperations,
+			ErrorCode:            topic.ErrorCode,
+			Topic:                kmsg.StringPtr(name),
+			TopicID:              topicID,
+			IsInternal:           topic.IsInternal,
+			Partitions:           clonePartitions(topic.Partitions),
+			AuthorizedOperations: topic.AuthorizedOperations,
 		}
 	}
 	return out
@@ -218,11 +220,11 @@ func clonePartitions(parts []protocol.MetadataPartition) []protocol.MetadataPart
 	for i, part := range parts {
 		out[i] = protocol.MetadataPartition{
 			ErrorCode:       part.ErrorCode,
-			PartitionIndex:  part.PartitionIndex,
-			LeaderID:        part.LeaderID,
+			Partition:       part.Partition,
+			Leader:          part.Leader,
 			LeaderEpoch:     part.LeaderEpoch,
-			ReplicaNodes:    cloneInt32Slice(part.ReplicaNodes),
-			ISRNodes:        cloneInt32Slice(part.ISRNodes),
+			Replicas:        cloneInt32Slice(part.Replicas),
+			ISR:             cloneInt32Slice(part.ISR),
 			OfflineReplicas: cloneInt32Slice(part.OfflineReplicas),
 		}
 	}
@@ -298,7 +300,7 @@ func (s *InMemoryStore) CreateTopic(ctx context.Context, spec TopicSpec) (*proto
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, topic := range s.state.Topics {
-		if topic.Name == spec.Name {
+		if *topic.Topic == spec.Name {
 			return nil, ErrTopicExists
 		}
 	}
@@ -309,14 +311,14 @@ func (s *InMemoryStore) CreateTopic(ctx context.Context, spec TopicSpec) (*proto
 	partitions := make([]protocol.MetadataPartition, spec.NumPartitions)
 	for i := range partitions {
 		partitions[i] = protocol.MetadataPartition{
-			PartitionIndex: int32(i),
-			LeaderID:       leaderID,
-			ReplicaNodes:   []int32{leaderID},
-			ISRNodes:       []int32{leaderID},
+			Partition: int32(i),
+			Leader:    leaderID,
+			Replicas:  []int32{leaderID},
+			ISR:       []int32{leaderID},
 		}
 	}
 	newTopic := protocol.MetadataTopic{
-		Name:       spec.Name,
+		Topic:      kmsg.StringPtr(spec.Name),
 		TopicID:    TopicIDForName(spec.Name),
 		IsInternal: false,
 		Partitions: partitions,
@@ -328,11 +330,11 @@ func (s *InMemoryStore) CreateTopic(ctx context.Context, spec TopicSpec) (*proto
 
 func topicHasPartition(topics []protocol.MetadataTopic, name string, partition int32) bool {
 	for _, topic := range topics {
-		if topic.Name != name {
+		if *topic.Topic != name {
 			continue
 		}
 		for _, part := range topic.Partitions {
-			if part.PartitionIndex == partition {
+			if part.Partition == partition {
 				return true
 			}
 		}
@@ -358,7 +360,7 @@ func (s *InMemoryStore) FetchTopicConfig(ctx context.Context, topic string) (*me
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, entry := range s.state.Topics {
-		if entry.Name != topic {
+		if *entry.Topic != topic {
 			continue
 		}
 		if cfg, ok := s.topicConfigs[topic]; ok {
@@ -383,7 +385,7 @@ func (s *InMemoryStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.T
 	defer s.mu.Unlock()
 	var topic *protocol.MetadataTopic
 	for i := range s.state.Topics {
-		if s.state.Topics[i].Name == cfg.Name {
+		if *s.state.Topics[i].Topic == cfg.Name {
 			topic = &s.state.Topics[i]
 			break
 		}
@@ -412,7 +414,7 @@ func (s *InMemoryStore) CreatePartitions(ctx context.Context, topic string, part
 	defer s.mu.Unlock()
 	var target *protocol.MetadataTopic
 	for i := range s.state.Topics {
-		if s.state.Topics[i].Name == topic {
+		if *s.state.Topics[i].Topic == topic {
 			target = &s.state.Topics[i]
 			break
 		}
@@ -427,10 +429,10 @@ func (s *InMemoryStore) CreatePartitions(ctx context.Context, topic string, part
 	leaderID := s.defaultLeaderID()
 	for i := current; i < partitionCount; i++ {
 		target.Partitions = append(target.Partitions, protocol.MetadataPartition{
-			PartitionIndex: i,
-			LeaderID:       leaderID,
-			ReplicaNodes:   []int32{leaderID},
-			ISRNodes:       []int32{leaderID},
+			Partition: i,
+			Leader:    leaderID,
+			Replicas:  []int32{leaderID},
+			ISR:       []int32{leaderID},
 		})
 	}
 	cfg, ok := s.topicConfigs[topic]
@@ -453,7 +455,7 @@ func (s *InMemoryStore) DeleteTopic(ctx context.Context, name string) error {
 	defer s.mu.Unlock()
 	index := -1
 	for i, topic := range s.state.Topics {
-		if topic.Name == name {
+		if *topic.Topic == name {
 			index = i
 			break
 		}
@@ -634,10 +636,10 @@ func defaultTopicConfigFromTopic(topic *protocol.MetadataTopic, replicationFacto
 		return &metadatapb.TopicConfig{}
 	}
 	if replicationFactor <= 0 && len(topic.Partitions) > 0 {
-		replicationFactor = int16(len(topic.Partitions[0].ReplicaNodes))
+		replicationFactor = int16(len(topic.Partitions[0].Replicas))
 	}
 	return &metadatapb.TopicConfig{
-		Name:              topic.Name,
+		Name:              *topic.Topic,
 		Partitions:        int32(len(topic.Partitions)),
 		ReplicationFactor: int32(replicationFactor),
 		RetentionMs:       -1,

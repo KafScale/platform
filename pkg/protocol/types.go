@@ -15,31 +15,10 @@
 
 package protocol
 
-// Config resource types.
-const (
-	ConfigResourceTopic  int8 = 2
-	ConfigResourceBroker int8 = 4
-)
+import "github.com/twmb/franz-go/pkg/kmsg"
 
-// Config sources.
-const (
-	ConfigSourceUnknown       int8 = -1
-	ConfigSourceDynamicTopic  int8 = 1
-	ConfigSourceDynamicBroker int8 = 2
-	ConfigSourceStaticBroker  int8 = 4
-	ConfigSourceDefaultConfig int8 = 5
-	ConfigSourceGroupConfig   int8 = 8
-)
-
-// Config types.
-const (
-	ConfigTypeBoolean  int8 = 1
-	ConfigTypeString   int8 = 2
-	ConfigTypeInt      int8 = 3
-	ConfigTypeShort    int8 = 4
-	ConfigTypeLong     int8 = 5
-	ConfigTypeDouble   int8 = 6
-	ConfigTypeList     int8 = 7
-	ConfigTypeClass    int8 = 8
-	ConfigTypePassword int8 = 9
+type (
+	MetadataBroker    = kmsg.MetadataResponseBroker
+	MetadataTopic     = kmsg.MetadataResponseTopic
+	MetadataPartition = kmsg.MetadataResponseTopicPartition
 )

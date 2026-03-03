@@ -39,13 +39,17 @@ type EtcdStoreConfig struct {
 	DialTimeout time.Duration
 }
 
+// etcdError wraps an error for storage in an atomic.Value, which requires a
+// consistent concrete type across all Store calls.
+type etcdError struct{ err error }
+
 // EtcdStore uses etcd for offset persistence while delegating metadata to an in-memory snapshot.
 type EtcdStore struct {
 	client    *clientv3.Client
 	metadata  *InMemoryStore
 	cancel    context.CancelFunc
 	available int32
-	lastError atomic.Value
+	lastError atomic.Value // stores etcdError
 }
 
 func (s *EtcdStore) EtcdClient() *clientv3.Client {
@@ -103,7 +107,7 @@ func (s *EtcdStore) recordEtcdResult(err error) {
 		return
 	}
 	atomic.StoreInt32(&s.available, 0)
-	s.lastError.Store(err)
+	s.lastError.Store(etcdError{err})
 }
 
 // NextOffset reads the last committed offset from etcd and returns the next offset to assign.
@@ -374,8 +378,8 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 		part := updated.Topics[0].Partitions[i]
 		state := &metadatapb.PartitionState{
 			Topic:          topic,
-			Partition:      part.PartitionIndex,
-			LeaderBroker:   fmt.Sprintf("%d", part.LeaderID),
+			Partition:      part.Partition,
+			LeaderBroker:   fmt.Sprintf("%d", part.Leader),
 			LeaderEpoch:    part.LeaderEpoch,
 			LogStartOffset: 0,
 			LogEndOffset:   0,
@@ -387,7 +391,7 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 			return err
 		}
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_, err = s.client.Put(ctx, PartitionStateKey(topic, part.PartitionIndex), string(payload))
+		_, err = s.client.Put(ctx, PartitionStateKey(topic, part.Partition), string(payload))
 		cancel()
 		if err != nil {
 			s.recordEtcdResult(err)
@@ -424,7 +428,7 @@ func (s *EtcdStore) partitionExists(ctx context.Context, topic string, partition
 		return false, nil
 	}
 	for _, part := range t.Partitions {
-		if part.PartitionIndex == partition {
+		if part.Partition == partition {
 			return true, nil
 		}
 	}
@@ -441,7 +445,7 @@ func (s *EtcdStore) DeleteTopic(ctx context.Context, name string) error {
 	}
 	var found bool
 	for _, topic := range state.Topics {
-		if topic.Name == name {
+		if *topic.Topic == name {
 			found = true
 			break
 		}

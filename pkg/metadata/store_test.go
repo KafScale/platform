@@ -22,6 +22,7 @@ import (
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestInMemoryStoreMetadata_AllTopics(t *testing.T) {
@@ -32,8 +33,8 @@ func TestInMemoryStoreMetadata_AllTopics(t *testing.T) {
 		},
 		ControllerID: 1,
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders"},
-			{Name: "payments"},
+			{Topic: kmsg.StringPtr("orders")},
+			{Topic: kmsg.StringPtr("payments")},
 		},
 		ClusterID: &clusterID,
 	})
@@ -57,7 +58,7 @@ func TestInMemoryStoreMetadata_AllTopics(t *testing.T) {
 func TestInMemoryStoreMetadata_FilterTopics(t *testing.T) {
 	store := NewInMemoryStore(ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders"},
+			{Topic: kmsg.StringPtr("orders")},
 		},
 	})
 
@@ -225,7 +226,7 @@ func TestInMemoryStoreCreateDeleteTopic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTopic: %v", err)
 	}
-	if topic == nil || topic.Name != "orders" {
+	if topic == nil || *topic.Topic != "orders" {
 		t.Fatalf("unexpected topic: %#v", topic)
 	}
 	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1}); err == nil {

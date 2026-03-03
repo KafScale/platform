@@ -30,6 +30,7 @@ import (
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 const (
@@ -79,16 +80,18 @@ func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadat
 	}
 	seen := make(map[string]struct{}, len(next.Topics))
 	for _, topic := range next.Topics {
-		if topic.Name == "" {
+		name := *topic.Topic
+		if name == "" {
 			continue
 		}
-		seen[topic.Name] = struct{}{}
+		seen[name] = struct{}{}
 	}
 	for _, topic := range existing.Topics {
-		if topic.Name == "" || topic.ErrorCode != 0 {
+		name := *topic.Topic
+		if name == "" || topic.ErrorCode != 0 {
 			continue
 		}
-		if _, ok := seen[topic.Name]; ok {
+		if _, ok := seen[name]; ok {
 			continue
 		}
 		next.Topics = append(next.Topics, topic)
@@ -169,14 +172,14 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 				leader = replicaIDs[i%int32(len(replicaIDs))]
 			}
 			partitions[i] = protocol.MetadataPartition{
-				PartitionIndex: i,
-				LeaderID:       leader,
-				ReplicaNodes:   replicaIDs,
-				ISRNodes:       replicaIDs,
+				Partition: i,
+				Leader:    leader,
+				Replicas:  replicaIDs,
+				ISR:       replicaIDs,
 			}
 		}
 		metaTopics = append(metaTopics, protocol.MetadataTopic{
-			Name:       topic.Name,
+			Topic:      kmsg.StringPtr(topic.Name),
 			TopicID:    metadata.TopicIDForName(topic.Name),
 			IsInternal: false,
 			Partitions: partitions,
@@ -289,16 +292,18 @@ func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMet
 	}
 	seen := make(map[string]struct{}, len(next.Topics))
 	for _, topic := range next.Topics {
-		if topic.Name == "" {
+		name := *topic.Topic
+		if name == "" {
 			continue
 		}
-		seen[topic.Name] = struct{}{}
+		seen[name] = struct{}{}
 	}
 	for _, topic := range existing.Topics {
-		if topic.Name == "" || topic.ErrorCode != 0 {
+		name := *topic.Topic
+		if name == "" || topic.ErrorCode != 0 {
 			continue
 		}
-		if _, ok := seen[topic.Name]; ok {
+		if _, ok := seen[name]; ok {
 			continue
 		}
 		next.Topics = append(next.Topics, topic)

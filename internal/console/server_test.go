@@ -27,6 +27,7 @@ import (
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestConsoleStatusEndpoint(t *testing.T) {
@@ -66,7 +67,7 @@ func TestStatusFromMetadataInjectsBrokerRuntime(t *testing.T) {
 			{NodeID: 1, Host: "broker-1"},
 		},
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders"},
+			{Topic: kmsg.StringPtr("orders")},
 		},
 	}
 	snap := &MetricsSnapshot{

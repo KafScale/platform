@@ -394,13 +394,13 @@ func fetchOffsetsHandler(opts Options) mcp.ToolHandlerFor[FetchOffsetsInput, Fet
 		out := FetchOffsetsOutput{GroupID: input.GroupID}
 		for _, topic := range meta.Topics {
 			for _, partition := range topic.Partitions {
-				offset, metaText, err := store.FetchConsumerOffset(ctx, input.GroupID, topic.Name, partition.PartitionIndex)
+				offset, metaText, err := store.FetchConsumerOffset(ctx, input.GroupID, *topic.Topic, partition.Partition)
 				if err != nil {
 					return nil, FetchOffsetsOutput{}, err
 				}
 				out.Offsets = append(out.Offsets, OffsetDetails{
-					Topic:     topic.Name,
-					Partition: partition.PartitionIndex,
+					Topic:     *topic.Topic,
+					Partition: partition.Partition,
 					Offset:    offset,
 					Metadata:  metaText,
 				})
@@ -430,7 +430,7 @@ func describeConfigsHandler(opts Options) mcp.ToolHandlerFor[TopicConfigInput, T
 			}
 			topics = make([]string, 0, len(meta.Topics))
 			for _, topic := range meta.Topics {
-				topics = append(topics, topic.Name)
+				topics = append(topics, *topic.Topic)
 			}
 		}
 		out := make([]TopicConfigOutput, 0, len(topics))
@@ -457,7 +457,7 @@ func summarizeTopics(topics []protocol.MetadataTopic) []TopicSummary {
 	out := make([]TopicSummary, 0, len(topics))
 	for _, topic := range topics {
 		out = append(out, TopicSummary{
-			Name:           topic.Name,
+			Name:           *topic.Topic,
 			PartitionCount: len(topic.Partitions),
 			ErrorCode:      topic.ErrorCode,
 		})
@@ -470,17 +470,17 @@ func toTopicDetail(topic protocol.MetadataTopic) TopicDetail {
 	partitions := make([]PartitionDetails, 0, len(topic.Partitions))
 	for _, partition := range topic.Partitions {
 		partitions = append(partitions, PartitionDetails{
-			Partition:       partition.PartitionIndex,
-			LeaderID:        partition.LeaderID,
+			Partition:       partition.Partition,
+			LeaderID:        partition.Leader,
 			LeaderEpoch:     partition.LeaderEpoch,
-			ReplicaNodes:    copyInt32Slice(partition.ReplicaNodes),
-			ISRNodes:        copyInt32Slice(partition.ISRNodes),
+			ReplicaNodes:    copyInt32Slice(partition.Replicas),
+			ISRNodes:        copyInt32Slice(partition.ISR),
 			OfflineReplicas: copyInt32Slice(partition.OfflineReplicas),
 			ErrorCode:       partition.ErrorCode,
 		})
 	}
 	return TopicDetail{
-		Name:       topic.Name,
+		Name:       *topic.Topic,
 		ErrorCode:  topic.ErrorCode,
 		Partitions: partitions,
 	}
