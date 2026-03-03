@@ -1,23 +1,113 @@
 <?xml version="1.0"?>
-<IDOC>
+<!-- Sample SAP ORDERS05 IDoc for KafScale LFS demo.
+     Represents a multi-line purchase order with partners, dates, and conditions. -->
+<IDOC BEGIN="1">
   <EDI_DC40>
     <DOCNUM>0000000001234567</DOCNUM>
     <MESTYP>ORDERS</MESTYP>
     <IDOCTYP>ORDERS05</IDOCTYP>
+    <SNDPOR>SAPDEV</SNDPOR>
+    <SNDPRT>LS</SNDPRT>
+    <SNDPRN>DEV800</SNDPRN>
+    <RCVPOR>KAFSCALE</RCVPOR>
+    <RCVPRT>LS</RCVPRT>
+    <RCVPRN>KAFSCALE_PROD</RCVPRN>
   </EDI_DC40>
+
+  <!-- Order header -->
   <E1EDK01>
     <CURCY>EUR</CURCY>
+    <BSART>NB</BSART>
+    <BELNR>4500012345</BELNR>
   </E1EDK01>
+
+  <!-- Dates: order date, delivery date, pricing date -->
   <E1EDK03>
     <IDDAT>012</IDDAT>
     <DATUM>20260202</DATUM>
   </E1EDK03>
+  <E1EDK03>
+    <IDDAT>002</IDDAT>
+    <DATUM>20260215</DATUM>
+  </E1EDK03>
+  <E1EDK03>
+    <IDDAT>026</IDDAT>
+    <DATUM>20260201</DATUM>
+  </E1EDK03>
+
+  <!-- Partners: sold-to, ship-to, bill-to -->
   <E1EDKA1>
     <PARVW>AG</PARVW>
+    <PARTN>0000001000</PARTN>
     <NAME1>GlobalParts AG</NAME1>
+    <STRAS>Industriestr. 42</STRAS>
+    <ORT01>Stuttgart</ORT01>
+    <PSTLZ>70173</PSTLZ>
+    <LAND1>DE</LAND1>
   </E1EDKA1>
+  <E1EDKA1>
+    <PARVW>WE</PARVW>
+    <PARTN>0000001001</PARTN>
+    <NAME1>GlobalParts Logistics</NAME1>
+    <STRAS>Hafenweg 7</STRAS>
+    <ORT01>Hamburg</ORT01>
+    <PSTLZ>20457</PSTLZ>
+    <LAND1>DE</LAND1>
+  </E1EDKA1>
+  <E1EDKA1>
+    <PARVW>RE</PARVW>
+    <PARTN>0000001002</PARTN>
+    <NAME1>GlobalParts Finance</NAME1>
+    <STRAS>Bankenallee 1</STRAS>
+    <ORT01>Frankfurt</ORT01>
+    <PSTLZ>60311</PSTLZ>
+    <LAND1>DE</LAND1>
+  </E1EDKA1>
+
+  <!-- Line item 1: Hydraulic pump -->
   <E1EDP01>
     <POSEX>000010</POSEX>
     <MENGE>5</MENGE>
+    <MENEE>ST</MENEE>
+    <MATNR>MAT-HYD-4200</MATNR>
+    <ARKTX>Hydraulic Pump HP-4200</ARKTX>
+    <NETWR>12500.00</NETWR>
+    <WAERS>EUR</WAERS>
   </E1EDP01>
+
+  <!-- Line item 2: Pressure sensor -->
+  <E1EDP01>
+    <POSEX>000020</POSEX>
+    <MENGE>50</MENGE>
+    <MENEE>ST</MENEE>
+    <MATNR>MAT-SNS-0800</MATNR>
+    <ARKTX>Pressure Sensor PS-800</ARKTX>
+    <NETWR>7500.00</NETWR>
+    <WAERS>EUR</WAERS>
+  </E1EDP01>
+
+  <!-- Line item 3: Control unit -->
+  <E1EDP01>
+    <POSEX>000030</POSEX>
+    <MENGE>2</MENGE>
+    <MENEE>ST</MENEE>
+    <MATNR>MAT-CTL-1600</MATNR>
+    <ARKTX>PLC Control Unit CU-1600</ARKTX>
+    <NETWR>18400.00</NETWR>
+    <WAERS>EUR</WAERS>
+  </E1EDP01>
+
+  <!-- Status segments -->
+  <E1STATS>
+    <STATUS>01</STATUS>
+    <LOGDAT>20260201</LOGDAT>
+    <LOGTIM>143022</LOGTIM>
+    <STAPA1>IDoc created</STAPA1>
+  </E1STATS>
+  <E1STATS>
+    <STATUS>03</STATUS>
+    <LOGDAT>20260201</LOGDAT>
+    <LOGTIM>143025</LOGTIM>
+    <STAPA1>IDoc sent to partner</STAPA1>
+  </E1STATS>
 </IDOC>
