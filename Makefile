@@ -923,9 +923,14 @@ stage-release-act: act-image ## Push stage images to local registry via workflow
 
 IDOC_EXPLODE_BIN ?= bin/idoc-explode
 
-lfs-demo-idoc: ## Run IDoc explode demo (writes topic JSONL files)
+lfs-demo-idoc: ensure-minio ## Run IDoc explode demo — uploads IDoc XML to S3 via LFS, then explodes into topic streams.
 	@mkdir -p bin
 	go build -o $(IDOC_EXPLODE_BIN) ./cmd/idoc-explode
+	MINIO_PORT=$(MINIO_PORT) \
+	MINIO_BUCKET=$(MINIO_BUCKET) \
+	MINIO_REGION=$(MINIO_REGION) \
+	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
+	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
 	./scripts/idoc-explode-demo.sh
 
 help: ## Show targets

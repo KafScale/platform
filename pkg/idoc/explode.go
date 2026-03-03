@@ -44,6 +44,7 @@ type Segment struct {
 	Path       string            `json:"path"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 	Value      string            `json:"value,omitempty"`
+	Fields     map[string]string `json:"fields,omitempty"`
 }
 
 // Result holds exploded IDoc data.
@@ -69,12 +70,14 @@ func ExplodeXML(raw []byte, cfg ExplodeConfig) (Result, error) {
 	result := Result{}
 	segmentSets := buildSegmentSets(cfg)
 
+	isRouted := func(name string) bool {
+		return segmentSets.items[name] || segmentSets.partners[name] ||
+			segmentSets.statuses[name] || segmentSets.dates[name]
+	}
+
 	for {
 		tok, err := decoder.Token()
 		if err != nil {
-			if err == io.EOF {
-				break
-			}
 			if err == io.EOF {
 				break
 			}
@@ -87,6 +90,9 @@ func ExplodeXML(raw []byte, cfg ExplodeConfig) (Result, error) {
 				Name:       t.Name.Local,
 				Path:       buildPath(segmentStack, t.Name.Local),
 				Attributes: attrsToMap(t.Attr),
+			}
+			if isRouted(t.Name.Local) {
+				frame.Fields = make(map[string]string)
 			}
 			segmentStack = append(segmentStack, frame)
 			if result.Header.Root == "" {
@@ -103,11 +109,23 @@ func ExplodeXML(raw []byte, cfg ExplodeConfig) (Result, error) {
 			}
 			frame := segmentStack[len(segmentStack)-1]
 			segmentStack = segmentStack[:len(segmentStack)-1]
+
+			// If this leaf element has a value and its parent is a routed segment,
+			// add it to the parent's Fields map.
+			val := strings.TrimSpace(frame.Value)
+			if val != "" && len(segmentStack) > 0 {
+				parent := &segmentStack[len(segmentStack)-1]
+				if parent.Fields != nil {
+					parent.Fields[frame.Name] = val
+				}
+			}
+
 			seg := Segment{
 				Name:       frame.Name,
 				Path:       frame.Path,
 				Attributes: frame.Attributes,
-				Value:      strings.TrimSpace(frame.Value),
+				Value:      val,
+				Fields:     frame.Fields,
 			}
 			result.Segments = append(result.Segments, seg)
 			switch {
@@ -182,6 +200,7 @@ type segmentFrame struct {
 	Path       string
 	Attributes map[string]string
 	Value      string
+	Fields     map[string]string
 }
 
 type segmentSets struct {
