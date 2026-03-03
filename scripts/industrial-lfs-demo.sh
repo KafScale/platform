@@ -278,7 +278,7 @@ print(border())
 # [7/8] Verify blobs in MinIO
 echo "[7/8] Verifying blobs in MinIO..."
 blob_count="$(kubectl -n "${INDUSTRIAL_DEMO_NAMESPACE}" exec pod/minio -- sh -c "
-  find /data/${MINIO_BUCKET} -type f -name '*.meta' 2>/dev/null | wc -l
+  find /data/${MINIO_BUCKET}/${KAFSCALE_S3_NAMESPACE} -type f -name 'obj-*' 2>/dev/null | wc -l
 " 2>/dev/null || echo "0")"
 blob_count="$(echo "${blob_count}" | tr -d '[:space:]')"
 echo "      S3 blobs found: ${blob_count}"
