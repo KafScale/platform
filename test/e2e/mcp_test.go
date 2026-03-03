@@ -28,11 +28,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/KafScale/platform/internal/mcpserver"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestMCPServer(t *testing.T) {
@@ -51,16 +52,16 @@ func TestMCPServer(t *testing.T) {
 		ControllerID: 1,
 		Topics: []protocol.MetadataTopic{
 			{
-				Name: "orders",
+				Topic: kmsg.StringPtr("orders"),
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0, LeaderID: 1},
-					{PartitionIndex: 1, LeaderID: 1},
+					{Partition: 0, Leader: 1},
+					{Partition: 1, Leader: 1},
 				},
 			},
 			{
-				Name: "payments",
+				Topic: kmsg.StringPtr("payments"),
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0, LeaderID: 1},
+					{Partition: 0, Leader: 1},
 				},
 			},
 		},

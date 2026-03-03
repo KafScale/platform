@@ -16,10 +16,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"io"
 	"net"
 	"testing"
 
@@ -37,13 +34,13 @@ func TestACLProduceDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{Partition: 0, Records: testBatchBytes(0, 0, 1)},
 				},
 			},
@@ -53,7 +50,7 @@ func TestACLProduceDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleProduce: %v", err)
 	}
-	resp := decodeProduceResponse(t, payload, 0)
+	resp := decodeKmsgResponse(t, 0, payload, kmsg.NewPtrProduceResponse)
 	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 		t.Fatalf("expected single topic/partition response")
 	}
@@ -77,12 +74,12 @@ func TestACLJoinGroupDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	joinReq := &protocol.JoinGroupRequest{GroupID: "group-a"}
+	joinReq := &kmsg.JoinGroupRequest{Group: "group-a"}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 5, APIVersion: 4, ClientID: &clientID}, joinReq)
 	if err != nil {
 		t.Fatalf("Handle JoinGroup: %v", err)
 	}
-	resp := decodeJoinGroupResponse(t, payload, 4)
+	resp := decodeKmsgResponse(t, 4, payload, kmsg.NewPtrJoinGroupResponse)
 	if resp.ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatalf("expected group auth failed, got %d", resp.ErrorCode)
 	}
@@ -96,11 +93,11 @@ func TestACLListOffsetsDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.ListOffsetsRequest{
-		Topics: []protocol.ListOffsetsTopic{
+	req := &kmsg.ListOffsetsRequest{
+		Topics: []kmsg.ListOffsetsRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ListOffsetsPartition{
+				Topic: "orders",
+				Partitions: []kmsg.ListOffsetsRequestTopicPartition{
 					{Partition: 0, Timestamp: -1, MaxNumOffsets: 1},
 				},
 			},
@@ -110,7 +107,7 @@ func TestACLListOffsetsDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle ListOffsets: %v", err)
 	}
-	resp := decodeListOffsetsResponse(t, 4, payload)
+	resp := decodeKmsgResponse(t, 4, payload, kmsg.NewPtrListOffsetsResponse)
 	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 		t.Fatalf("expected single topic/partition response")
 	}
@@ -127,14 +124,12 @@ func TestACLOffsetFetchDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.OffsetFetchRequest{
-		GroupID: "group-a",
-		Topics: []protocol.OffsetFetchTopic{
+	req := &kmsg.OffsetFetchRequest{
+		Group: "group-a",
+		Topics: []kmsg.OffsetFetchRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.OffsetFetchPartition{
-					{Partition: 0},
-				},
+				Topic:      "orders",
+				Partitions: []int32{0},
 			},
 		},
 	}
@@ -142,7 +137,7 @@ func TestACLOffsetFetchDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle OffsetFetch: %v", err)
 	}
-	resp := decodeOffsetFetchResponse(t, payload, 5)
+	resp := decodeKmsgResponse(t, 5, payload, kmsg.NewPtrOffsetFetchResponse)
 	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 		t.Fatalf("expected single topic/partition response")
 	}
@@ -162,12 +157,12 @@ func TestACLDescribeGroupsMixed(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.DescribeGroupsRequest{Groups: []string{"group-allowed", "group-denied"}}
+	req := &kmsg.DescribeGroupsRequest{Groups: []string{"group-allowed", "group-denied"}}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 20, APIVersion: 5, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle DescribeGroups: %v", err)
 	}
-	resp := decodeDescribeGroupsResponse(t, payload, 5)
+	resp := decodeKmsgResponse(t, 5, payload, kmsg.NewPtrDescribeGroupsResponse)
 	if len(resp.Groups) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(resp.Groups))
 	}
@@ -190,12 +185,12 @@ func TestACLDeleteGroupsMixed(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.DeleteGroupsRequest{Groups: []string{"group-allowed", "group-denied"}}
+	req := &kmsg.DeleteGroupsRequest{Groups: []string{"group-allowed", "group-denied"}}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 21, APIVersion: 2, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle DeleteGroups: %v", err)
 	}
-	resp := decodeDeleteGroupsResponse(t, payload, 2)
+	resp := decodeKmsgResponse(t, 2, payload, kmsg.NewPtrDeleteGroupsResponse)
 	if len(resp.Groups) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(resp.Groups))
 	}
@@ -234,13 +229,13 @@ func TestACLProxyAddrProduceAllowed(t *testing.T) {
 	ctx := broker.ContextWithConnInfo(context.Background(), info)
 
 	clientID := "spoofed-client"
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{Partition: 0, Records: testBatchBytes(0, 0, 1)},
 				},
 			},
@@ -250,7 +245,7 @@ func TestACLProxyAddrProduceAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleProduce: %v", err)
 	}
-	resp := decodeProduceResponse(t, payload, 0)
+	resp := decodeKmsgResponse(t, 0, payload, kmsg.NewPtrProduceResponse)
 	if resp.Topics[0].Partitions[0].ErrorCode != protocol.NONE {
 		t.Fatalf("expected produce allowed, got %d", resp.Topics[0].Partitions[0].ErrorCode)
 	}
@@ -264,12 +259,12 @@ func TestACLSyncGroupDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.SyncGroupRequest{GroupID: "group-a", GenerationID: 1, MemberID: "member-a"}
+	req := &kmsg.SyncGroupRequest{Group: "group-a", Generation: 1, MemberID: "member-a"}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 9, APIVersion: 4, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle SyncGroup: %v", err)
 	}
-	resp := decodeSyncGroupResponse(t, payload, 4)
+	resp := decodeKmsgResponse(t, 4, payload, kmsg.NewPtrSyncGroupResponse)
 	if resp.ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatalf("expected group auth failed, got %d", resp.ErrorCode)
 	}
@@ -283,12 +278,12 @@ func TestACLHeartbeatDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.HeartbeatRequest{GroupID: "group-a", GenerationID: 1, MemberID: "member-a"}
+	req := &kmsg.HeartbeatRequest{Group: "group-a", Generation: 1, MemberID: "member-a"}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 10, APIVersion: 4, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle Heartbeat: %v", err)
 	}
-	resp := decodeHeartbeatResponse(t, payload, 4)
+	resp := decodeKmsgResponse(t, 4, payload, kmsg.NewPtrHeartbeatResponse)
 	if resp.ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatalf("expected group auth failed, got %d", resp.ErrorCode)
 	}
@@ -302,12 +297,12 @@ func TestACLLeaveGroupDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.LeaveGroupRequest{GroupID: "group-a", MemberID: "member-a"}
+	req := &kmsg.LeaveGroupRequest{Group: "group-a", MemberID: "member-a"}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 11, APIVersion: 0, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle LeaveGroup: %v", err)
 	}
-	resp := decodeLeaveGroupResponse(t, payload)
+	resp := decodeKmsgResponse(t, 0, payload, kmsg.NewPtrLeaveGroupResponse)
 	if resp.ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatalf("expected group auth failed, got %d", resp.ErrorCode)
 	}
@@ -321,13 +316,13 @@ func TestACLOffsetCommitDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.OffsetCommitRequest{
-		GroupID: "group-a",
-		Topics: []protocol.OffsetCommitTopic{
+	req := &kmsg.OffsetCommitRequest{
+		Group: "group-a",
+		Topics: []kmsg.OffsetCommitRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.OffsetCommitPartition{
-					{Partition: 0, Offset: 1, Metadata: ""},
+				Topic: "orders",
+				Partitions: []kmsg.OffsetCommitRequestTopicPartition{
+					{Partition: 0, Offset: 1, Metadata: kmsg.StringPtr("")},
 				},
 			},
 		},
@@ -336,7 +331,7 @@ func TestACLOffsetCommitDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle OffsetCommit: %v", err)
 	}
-	resp := decodeOffsetCommitResponse(t, payload, 3)
+	resp := decodeKmsgResponse(t, 3, payload, kmsg.NewPtrOffsetCommitResponse)
 	if len(resp.Topics) == 0 || len(resp.Topics[0].Partitions) == 0 {
 		t.Fatalf("expected offset commit response")
 	}
@@ -353,14 +348,14 @@ func TestACLCreateTopicsDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.CreateTopicsRequest{
-		Topics: []protocol.CreateTopicConfig{{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}},
+	req := &kmsg.CreateTopicsRequest{
+		Topics: []kmsg.CreateTopicsRequestTopic{{Topic: "orders", NumPartitions: 1, ReplicationFactor: 1}},
 	}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 13, APIVersion: 0, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle CreateTopics: %v", err)
 	}
-	resp := decodeCreateTopicsResponse(t, payload, 0)
+	resp := decodeKmsgResponse(t, 0, payload, kmsg.NewPtrCreateTopicsResponse)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.TOPIC_AUTHORIZATION_FAILED {
 		t.Fatalf("expected topic auth failed, got %+v", resp.Topics)
 	}
@@ -374,12 +369,12 @@ func TestACLDeleteTopicsDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.DeleteTopicsRequest{TopicNames: []string{"orders"}}
+	req := &kmsg.DeleteTopicsRequest{TopicNames: []string{"orders"}}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 14, APIVersion: 0, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle DeleteTopics: %v", err)
 	}
-	resp := decodeDeleteTopicsResponse(t, payload, 0)
+	resp := decodeKmsgResponse(t, 0, payload, kmsg.NewPtrDeleteTopicsResponse)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.TOPIC_AUTHORIZATION_FAILED {
 		t.Fatalf("expected topic auth failed, got %+v", resp.Topics)
 	}
@@ -393,10 +388,10 @@ func TestACLAlterConfigsDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.AlterConfigsRequest{
-		Resources: []protocol.AlterConfigsResource{
+	req := &kmsg.AlterConfigsRequest{
+		Resources: []kmsg.AlterConfigsRequestResource{
 			{
-				ResourceType: protocol.ConfigResourceTopic,
+				ResourceType: kmsg.ConfigResourceTypeTopic,
 				ResourceName: "orders",
 			},
 		},
@@ -405,7 +400,7 @@ func TestACLAlterConfigsDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle AlterConfigs: %v", err)
 	}
-	resp := decodeAlterConfigsResponse(t, payload, 1)
+	resp := decodeKmsgResponse(t, 1, payload, kmsg.NewPtrAlterConfigsResponse)
 	if len(resp.Resources) != 1 || resp.Resources[0].ErrorCode != protocol.TOPIC_AUTHORIZATION_FAILED {
 		t.Fatalf("expected topic auth failed, got %+v", resp.Resources)
 	}
@@ -419,14 +414,14 @@ func TestACLCreatePartitionsDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.CreatePartitionsRequest{
-		Topics: []protocol.CreatePartitionsTopic{{Name: "orders", Count: 2}},
+	req := &kmsg.CreatePartitionsRequest{
+		Topics: []kmsg.CreatePartitionsRequestTopic{{Topic: "orders", Count: 2}},
 	}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 16, APIVersion: 3, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle CreatePartitions: %v", err)
 	}
-	resp := decodeCreatePartitionsResponse(t, payload, 3)
+	resp := decodeKmsgResponse(t, 3, payload, kmsg.NewPtrCreatePartitionsResponse)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.TOPIC_AUTHORIZATION_FAILED {
 		t.Fatalf("expected topic auth failed, got %+v", resp.Topics)
 	}
@@ -440,202 +435,13 @@ func TestACLDeleteGroupsDenied(t *testing.T) {
 	handler := newTestHandler(store)
 
 	clientID := "client-a"
-	req := &protocol.DeleteGroupsRequest{Groups: []string{"group-a"}}
+	req := &kmsg.DeleteGroupsRequest{Groups: []string{"group-a"}}
 	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{CorrelationID: 17, APIVersion: 2, ClientID: &clientID}, req)
 	if err != nil {
 		t.Fatalf("Handle DeleteGroups: %v", err)
 	}
-	resp := decodeDeleteGroupsResponse(t, payload, 2)
+	resp := decodeKmsgResponse(t, 2, payload, kmsg.NewPtrDeleteGroupsResponse)
 	if len(resp.Groups) != 1 || resp.Groups[0].ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatalf("expected group auth failed, got %+v", resp.Groups)
 	}
-}
-
-func decodeOffsetFetchResponse(t *testing.T, payload []byte, version int16) *protocol.OffsetFetchResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.OffsetFetchResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 3 {
-		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-			t.Fatalf("read throttle: %v", err)
-		}
-	}
-	var topicCount int32
-	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
-		t.Fatalf("read topic count: %v", err)
-	}
-	resp.Topics = make([]protocol.OffsetFetchTopicResponse, 0, topicCount)
-	for i := 0; i < int(topicCount); i++ {
-		name := readKafkaString(t, reader)
-		var partCount int32
-		if err := binary.Read(reader, binary.BigEndian, &partCount); err != nil {
-			t.Fatalf("read partition count: %v", err)
-		}
-		topic := protocol.OffsetFetchTopicResponse{Name: name}
-		topic.Partitions = make([]protocol.OffsetFetchPartitionResponse, 0, partCount)
-		for j := 0; j < int(partCount); j++ {
-			var part protocol.OffsetFetchPartitionResponse
-			if err := binary.Read(reader, binary.BigEndian, &part.Partition); err != nil {
-				t.Fatalf("read partition id: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.Offset); err != nil {
-				t.Fatalf("read offset: %v", err)
-			}
-			if version >= 5 {
-				if err := binary.Read(reader, binary.BigEndian, &part.LeaderEpoch); err != nil {
-					t.Fatalf("read leader epoch: %v", err)
-				}
-			}
-			part.Metadata = readKafkaNullableString(t, reader)
-			if err := binary.Read(reader, binary.BigEndian, &part.ErrorCode); err != nil {
-				t.Fatalf("read error code: %v", err)
-			}
-			topic.Partitions = append(topic.Partitions, part)
-		}
-		resp.Topics = append(resp.Topics, topic)
-	}
-	if version >= 2 {
-		if err := binary.Read(reader, binary.BigEndian, &resp.ErrorCode); err != nil {
-			t.Fatalf("read error code: %v", err)
-		}
-	}
-	return resp
-}
-
-func decodeDescribeGroupsResponse(t *testing.T, payload []byte, version int16) *kmsg.DescribeGroupsResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 5 {
-		skipTaggedFields(t, reader)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrDescribeGroupsResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode describe groups response: %v", err)
-	}
-	return resp
-}
-
-func decodeSyncGroupResponse(t *testing.T, payload []byte, version int16) *kmsg.SyncGroupResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 4 {
-		skipTaggedFields(t, reader)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrSyncGroupResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode sync group response: %v", err)
-	}
-	return resp
-}
-
-func decodeHeartbeatResponse(t *testing.T, payload []byte, version int16) *kmsg.HeartbeatResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 4 {
-		skipTaggedFields(t, reader)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrHeartbeatResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode heartbeat response: %v", err)
-	}
-	return resp
-}
-
-func decodeLeaveGroupResponse(t *testing.T, payload []byte) *protocol.LeaveGroupResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.LeaveGroupResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if err := binary.Read(reader, binary.BigEndian, &resp.ErrorCode); err != nil {
-		t.Fatalf("read error code: %v", err)
-	}
-	return resp
-}
-
-func decodeAlterConfigsResponse(t *testing.T, payload []byte, version int16) *protocol.AlterConfigsResponse {
-	t.Helper()
-	if version != 1 {
-		t.Fatalf("alter configs decode only supports version 1")
-	}
-	reader := bytes.NewReader(payload)
-	resp := &protocol.AlterConfigsResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-		t.Fatalf("read throttle ms: %v", err)
-	}
-	var count int32
-	if err := binary.Read(reader, binary.BigEndian, &count); err != nil {
-		t.Fatalf("read resource count: %v", err)
-	}
-	resp.Resources = make([]protocol.AlterConfigsResponseResource, 0, count)
-	for i := 0; i < int(count); i++ {
-		var code int16
-		if err := binary.Read(reader, binary.BigEndian, &code); err != nil {
-			t.Fatalf("read error code: %v", err)
-		}
-		msg := readKafkaNullableString(t, reader)
-		var rtype int8
-		if err := binary.Read(reader, binary.BigEndian, &rtype); err != nil {
-			t.Fatalf("read resource type: %v", err)
-		}
-		name := readKafkaString(t, reader)
-		resp.Resources = append(resp.Resources, protocol.AlterConfigsResponseResource{
-			ErrorCode:    code,
-			ErrorMessage: msg,
-			ResourceType: rtype,
-			ResourceName: name,
-		})
-	}
-	return resp
-}
-
-func readKafkaNullableString(t *testing.T, reader *bytes.Reader) *string {
-	t.Helper()
-	var length int16
-	if err := binary.Read(reader, binary.BigEndian, &length); err != nil {
-		t.Fatalf("read nullable string length: %v", err)
-	}
-	if length < 0 {
-		return nil
-	}
-	buf := make([]byte, length)
-	if _, err := reader.Read(buf); err != nil {
-		t.Fatalf("read nullable string: %v", err)
-	}
-	value := string(buf)
-	return &value
 }

@@ -25,6 +25,7 @@ import (
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
@@ -34,14 +35,14 @@ func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
 		},
 		Topics: []protocol.MetadataTopic{
 			{
-				Name:    "orders",
+				Topic:   kmsg.StringPtr("orders"),
 				TopicID: metadata.TopicIDForName("orders"),
 				Partitions: []protocol.MetadataPartition{
 					{
-						PartitionIndex: 0,
-						LeaderID:       1,
-						ReplicaNodes:   []int32{1, 2},
-						ISRNodes:       []int32{1},
+						Partition: 0,
+						Leader:    1,
+						Replicas:  []int32{1, 2},
+						ISR:       []int32{1},
 					},
 				},
 			},
@@ -59,14 +60,14 @@ func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
 		t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
 	}
 	part := resp.Topics[0].Partitions[0]
-	if part.LeaderID != 0 {
-		t.Fatalf("expected leader 0, got %d", part.LeaderID)
+	if part.Leader != 0 {
+		t.Fatalf("expected leader 0, got %d", part.Leader)
 	}
-	if len(part.ReplicaNodes) != 1 || part.ReplicaNodes[0] != 0 {
-		t.Fatalf("expected replica nodes [0], got %+v", part.ReplicaNodes)
+	if len(part.Replicas) != 1 || part.Replicas[0] != 0 {
+		t.Fatalf("expected replica nodes [0], got %+v", part.Replicas)
 	}
-	if len(part.ISRNodes) != 1 || part.ISRNodes[0] != 0 {
-		t.Fatalf("expected ISR nodes [0], got %+v", part.ISRNodes)
+	if len(part.ISR) != 1 || part.ISR[0] != 0 {
+		t.Fatalf("expected ISR nodes [0], got %+v", part.ISR)
 	}
 }
 
@@ -74,7 +75,7 @@ func TestBuildProxyMetadataResponsePreservesTopicErrors(t *testing.T) {
 	meta := &metadata.ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
 			{
-				Name:      "missing",
+				Topic:     kmsg.StringPtr("missing"),
 				ErrorCode: protocol.UNKNOWN_TOPIC_OR_PARTITION,
 			},
 		},
@@ -90,12 +91,12 @@ func TestBuildProxyMetadataResponsePreservesTopicErrors(t *testing.T) {
 
 func TestBuildNotReadyResponseProduce(t *testing.T) {
 	payload := encodeProduceRequestV3("orders", 0)
-	header, _, err := protocol.ParseRequestHeader(payload)
+	header, body, err := protocol.ParseRequestHeader(payload)
 	if err != nil {
 		t.Fatalf("parse header: %v", err)
 	}
 	p := &proxy{}
-	respBytes, ok, err := p.buildNotReadyResponse(header, payload)
+	respBytes, ok, err := p.buildNotReadyResponse(header, body)
 	if err != nil {
 		t.Fatalf("build not-ready response: %v", err)
 	}
@@ -113,12 +114,12 @@ func TestBuildNotReadyResponseProduce(t *testing.T) {
 
 func TestBuildNotReadyResponseFetch(t *testing.T) {
 	payload := encodeFetchRequestV7("orders", 0)
-	header, _, err := protocol.ParseRequestHeader(payload)
+	header, body, err := protocol.ParseRequestHeader(payload)
 	if err != nil {
 		t.Fatalf("parse header: %v", err)
 	}
 	p := &proxy{}
-	respBytes, ok, err := p.buildNotReadyResponse(header, payload)
+	respBytes, ok, err := p.buildNotReadyResponse(header, body)
 	if err != nil {
 		t.Fatalf("build not-ready response: %v", err)
 	}
@@ -370,12 +371,12 @@ func readString(r *bytes.Reader) (string, error) {
 	return string(buf), nil
 }
 
-func makeProduceRequest(topics map[string][]int32) *protocol.ProduceRequest {
-	req := &protocol.ProduceRequest{Acks: -1, TimeoutMs: 5000}
+func makeProduceRequest(topics map[string][]int32) *kmsg.ProduceRequest {
+	req := &kmsg.ProduceRequest{Acks: -1, TimeoutMillis: 5000}
 	for name, parts := range topics {
-		topic := protocol.ProduceTopic{Name: name}
+		topic := kmsg.ProduceRequestTopic{Topic: name}
 		for _, p := range parts {
-			topic.Partitions = append(topic.Partitions, protocol.ProducePartition{
+			topic.Partitions = append(topic.Partitions, kmsg.ProduceRequestTopicPartition{
 				Partition: p,
 				Records:   []byte{1, 2, 3},
 			})
@@ -406,8 +407,8 @@ func TestGroupPartitionsByBrokerNoRouter(t *testing.T) {
 	if totalParts != 4 {
 		t.Fatalf("expected 4 total partitions, got %d", totalParts)
 	}
-	if rr.Acks != -1 || rr.TimeoutMs != 5000 {
-		t.Fatalf("sub-request should preserve acks/timeout: got acks=%d timeout=%d", rr.Acks, rr.TimeoutMs)
+	if rr.Acks != -1 || rr.TimeoutMillis != 5000 {
+		t.Fatalf("sub-request should preserve acks/timeout: got acks=%d timeout=%d", rr.Acks, rr.TimeoutMillis)
 	}
 }
 
@@ -430,7 +431,7 @@ func TestGroupPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
 	}
 	topicNames := make(map[string]int)
 	for _, topic := range rr.Topics {
-		topicNames[topic.Name] = len(topic.Partitions)
+		topicNames[topic.Topic] = len(topic.Partitions)
 	}
 	if topicNames["orders"] != 2 || topicNames["events"] != 3 {
 		t.Fatalf("unexpected topic grouping: %v", topicNames)
@@ -461,10 +462,10 @@ func TestGroupPartitionsByBrokerFiltersCorrectly(t *testing.T) {
 }
 
 func TestFindOrAddTopicResponse(t *testing.T) {
-	resp := &protocol.ProduceResponse{}
+	resp := &kmsg.ProduceResponse{}
 
 	tr := findOrAddTopicResponse(resp, "orders")
-	tr.Partitions = append(tr.Partitions, protocol.ProducePartitionResponse{Partition: 0})
+	tr.Partitions = append(tr.Partitions, kmsg.ProduceResponseTopicPartition{Partition: 0})
 
 	// Second call should return the same topic, not create a new one.
 	tr2 := findOrAddTopicResponse(resp, "orders")
@@ -483,7 +484,7 @@ func TestFindOrAddTopicResponse(t *testing.T) {
 }
 
 func TestAddErrorForAllPartitions(t *testing.T) {
-	resp := &protocol.ProduceResponse{}
+	resp := &kmsg.ProduceResponse{}
 	req := makeProduceRequest(map[string][]int32{
 		"orders": {0, 1},
 		"events": {0},
@@ -563,7 +564,7 @@ func TestConnPoolBorrowReturn(t *testing.T) {
 
 // --- Test helpers ---
 
-func countPartitions(req *protocol.ProduceRequest) int {
+func countPartitions(req *kmsg.ProduceRequest) int {
 	n := 0
 	for _, t := range req.Topics {
 		n += len(t.Partitions)
@@ -571,7 +572,7 @@ func countPartitions(req *protocol.ProduceRequest) int {
 	return n
 }
 
-func mapKeys(m map[string]*protocol.ProduceRequest) []string {
+func mapKeys(m map[string]*kmsg.ProduceRequest) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -584,14 +585,14 @@ type fakeNetConn struct {
 	closed bool
 }
 
-func (c *fakeNetConn) Read(b []byte) (int, error)         { return 0, nil }
-func (c *fakeNetConn) Write(b []byte) (int, error)        { return len(b), nil }
-func (c *fakeNetConn) Close() error                       { c.closed = true; return nil }
-func (c *fakeNetConn) LocalAddr() net.Addr                { return nil }
-func (c *fakeNetConn) RemoteAddr() net.Addr               { return nil }
-func (c *fakeNetConn) SetDeadline(time.Time) error        { return nil }
-func (c *fakeNetConn) SetReadDeadline(time.Time) error    { return nil }
-func (c *fakeNetConn) SetWriteDeadline(time.Time) error   { return nil }
+func (c *fakeNetConn) Read(b []byte) (int, error)       { return 0, nil }
+func (c *fakeNetConn) Write(b []byte) (int, error)      { return len(b), nil }
+func (c *fakeNetConn) Close() error                     { c.closed = true; return nil }
+func (c *fakeNetConn) LocalAddr() net.Addr              { return nil }
+func (c *fakeNetConn) RemoteAddr() net.Addr             { return nil }
+func (c *fakeNetConn) SetDeadline(time.Time) error      { return nil }
+func (c *fakeNetConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *fakeNetConn) SetWriteDeadline(time.Time) error { return nil }
 
 func TestExtractGroupID(t *testing.T) {
 	p := &proxy{}
@@ -617,14 +618,14 @@ func TestExtractGroupID(t *testing.T) {
 			payload: func() []byte {
 				w := &testWriter{}
 				writeHeader(w, protocol.APIKeyJoinGroup, 2)
-				w.String("my-join-group")       // group_id
-				w.Int32(30000)                   // session_timeout
-				w.Int32(10000)                   // rebalance_timeout
-				w.String("")                     // member_id
-				w.String("consumer")             // protocol_type
-				w.Int32(1)                       // protocol count
-				w.String("range")                // protocol name
-				w.Bytes([]byte{0x00, 0x01})      // protocol metadata
+				w.String("my-join-group")   // group_id
+				w.Int32(30000)              // session_timeout
+				w.Int32(10000)              // rebalance_timeout
+				w.String("")                // member_id
+				w.String("consumer")        // protocol_type
+				w.Int32(1)                  // protocol count
+				w.String("range")           // protocol name
+				w.Bytes([]byte{0x00, 0x01}) // protocol metadata
 				return w.buf.Bytes()
 			},
 			want: "my-join-group",
@@ -753,22 +754,22 @@ func TestExtractGroupID(t *testing.T) {
 
 // --- Fetch routing tests ---
 
-func makeFetchRequest(topics map[string][]int32) *protocol.FetchRequest {
-	req := &protocol.FetchRequest{
-		ReplicaID:    -1,
-		MaxWaitMs:    500,
-		MinBytes:     1,
-		MaxBytes:     1048576,
-		SessionID:    0,
-		SessionEpoch: -1,
+func makeFetchRequest(topics map[string][]int32) *kmsg.FetchRequest {
+	req := &kmsg.FetchRequest{
+		ReplicaID:     -1,
+		MaxWaitMillis: 500,
+		MinBytes:      1,
+		MaxBytes:      1048576,
+		SessionID:     0,
+		SessionEpoch:  -1,
 	}
 	for name, parts := range topics {
-		topic := protocol.FetchTopicRequest{Name: name}
+		topic := kmsg.FetchRequestTopic{Topic: name}
 		for _, p := range parts {
-			topic.Partitions = append(topic.Partitions, protocol.FetchPartitionRequest{
-				Partition:   p,
-				FetchOffset: 0,
-				MaxBytes:    1048576,
+			topic.Partitions = append(topic.Partitions, kmsg.FetchRequestTopicPartition{
+				Partition:         p,
+				FetchOffset:       0,
+				PartitionMaxBytes: 1048576,
 			})
 		}
 		req.Topics = append(req.Topics, topic)
@@ -776,7 +777,7 @@ func makeFetchRequest(topics map[string][]int32) *protocol.FetchRequest {
 	return req
 }
 
-func countFetchPartitions(req *protocol.FetchRequest) int {
+func countFetchPartitions(req *kmsg.FetchRequest) int {
 	n := 0
 	for _, t := range req.Topics {
 		n += len(t.Partitions)
@@ -784,7 +785,7 @@ func countFetchPartitions(req *protocol.FetchRequest) int {
 	return n
 }
 
-func fetchMapKeys(m map[string]*protocol.FetchRequest) []string {
+func fetchMapKeys(m map[string]*kmsg.FetchRequest) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -809,8 +810,8 @@ func TestGroupFetchPartitionsByBrokerNoRouter(t *testing.T) {
 	if countFetchPartitions(rr) != 4 {
 		t.Fatalf("expected 4 total partitions, got %d", countFetchPartitions(rr))
 	}
-	if rr.MaxWaitMs != 500 || rr.MaxBytes != 1048576 {
-		t.Fatalf("sub-request should preserve settings: got maxWait=%d maxBytes=%d", rr.MaxWaitMs, rr.MaxBytes)
+	if rr.MaxWaitMillis != 500 || rr.MaxBytes != 1048576 {
+		t.Fatalf("sub-request should preserve settings: got maxWait=%d maxBytes=%d", rr.MaxWaitMillis, rr.MaxBytes)
 	}
 }
 
@@ -833,7 +834,7 @@ func TestGroupFetchPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
 	}
 	topicNames := make(map[string]int)
 	for _, topic := range rr.Topics {
-		topicNames[topic.Name] = len(topic.Partitions)
+		topicNames[topic.Topic] = len(topic.Partitions)
 	}
 	if topicNames["orders"] != 2 || topicNames["events"] != 3 {
 		t.Fatalf("unexpected topic grouping: %v", topicNames)
@@ -864,11 +865,11 @@ func TestGroupFetchPartitionsByBrokerFiltersCorrectly(t *testing.T) {
 }
 
 func TestFindOrAddFetchTopicResponse(t *testing.T) {
-	resp := &protocol.FetchResponse{}
+	resp := &kmsg.FetchResponse{}
 	topicID := [16]byte{1, 2, 3}
 
 	tr := findOrAddFetchTopicResponse(resp, "orders", topicID)
-	tr.Partitions = append(tr.Partitions, protocol.FetchPartitionResponse{Partition: 0})
+	tr.Partitions = append(tr.Partitions, kmsg.FetchResponseTopicPartition{Partition: 0})
 
 	// Same topic should return the existing entry.
 	tr2 := findOrAddFetchTopicResponse(resp, "orders", topicID)
@@ -887,7 +888,7 @@ func TestFindOrAddFetchTopicResponse(t *testing.T) {
 
 	// v12+: same topicID but different name should match on topicID alone.
 	tr4 := findOrAddFetchTopicResponse(resp, "", topicID)
-	tr4.Partitions = append(tr4.Partitions, protocol.FetchPartitionResponse{Partition: 1})
+	tr4.Partitions = append(tr4.Partitions, kmsg.FetchResponseTopicPartition{Partition: 1})
 	if len(resp.Topics) != 2 {
 		t.Fatalf("expected 2 topics after topicID-only match, got %d", len(resp.Topics))
 	}
@@ -899,7 +900,7 @@ func TestFindOrAddFetchTopicResponse(t *testing.T) {
 
 	// Name-only match (zero topicID) should work for pre-v12 topics.
 	tr6 := findOrAddFetchTopicResponse(resp, "logs", [16]byte{})
-	tr6.Partitions = append(tr6.Partitions, protocol.FetchPartitionResponse{Partition: 0})
+	tr6.Partitions = append(tr6.Partitions, kmsg.FetchResponseTopicPartition{Partition: 0})
 	tr7 := findOrAddFetchTopicResponse(resp, "logs", [16]byte{})
 	if len(tr7.Partitions) != 1 {
 		t.Fatalf("expected 1 partition for name-only topic, got %d", len(tr7.Partitions))
@@ -910,7 +911,7 @@ func TestFindOrAddFetchTopicResponse(t *testing.T) {
 }
 
 func TestAddFetchErrorForAllPartitions(t *testing.T) {
-	resp := &protocol.FetchResponse{}
+	resp := &kmsg.FetchResponse{}
 	req := makeFetchRequest(map[string][]int32{
 		"orders": {0, 1},
 		"events": {0},
@@ -939,9 +940,9 @@ func TestUpdateTopicNames(t *testing.T) {
 	topicID1 := [16]byte{1, 2, 3}
 	topicID2 := [16]byte{4, 5, 6}
 	topics := []protocol.MetadataTopic{
-		{Name: "orders", TopicID: topicID1},
-		{Name: "events", TopicID: topicID2},
-		{Name: "", TopicID: [16]byte{}}, // should be skipped
+		{Topic: kmsg.StringPtr("orders"), TopicID: topicID1},
+		{Topic: kmsg.StringPtr("events"), TopicID: topicID2},
+		{Topic: kmsg.StringPtr(""), TopicID: [16]byte{}}, // should be skipped
 	}
 	p.updateTopicNames(topics)
 
@@ -963,15 +964,15 @@ func TestGroupFetchPartitionsByBrokerUnresolvedTopicIDs(t *testing.T) {
 	idA := [16]byte{1, 2, 3}
 	idB := [16]byte{4, 5, 6}
 	p := &proxy{}
-	req := &protocol.FetchRequest{
-		ReplicaID:    -1,
-		MaxWaitMs:    500,
-		MinBytes:     1,
-		MaxBytes:     1048576,
-		SessionEpoch: -1,
-		Topics: []protocol.FetchTopicRequest{
-			{TopicID: idA, Partitions: []protocol.FetchPartitionRequest{{Partition: 0, MaxBytes: 1048576}}},
-			{TopicID: idB, Partitions: []protocol.FetchPartitionRequest{{Partition: 0, MaxBytes: 1048576}}},
+	req := &kmsg.FetchRequest{
+		ReplicaID:     -1,
+		MaxWaitMillis: 500,
+		MinBytes:      1,
+		MaxBytes:      1048576,
+		SessionEpoch:  -1,
+		Topics: []kmsg.FetchRequestTopic{
+			{TopicID: idA, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1048576}}},
+			{TopicID: idB, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1048576}}},
 		},
 	}
 	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
@@ -993,19 +994,19 @@ func TestGroupFetchPartitionsByBrokerUnresolvedFilter(t *testing.T) {
 	idA := [16]byte{1, 2, 3}
 	idB := [16]byte{4, 5, 6}
 	p := &proxy{}
-	req := &protocol.FetchRequest{
-		ReplicaID:    -1,
-		MaxWaitMs:    500,
-		MinBytes:     1,
-		MaxBytes:     1048576,
-		SessionEpoch: -1,
-		Topics: []protocol.FetchTopicRequest{
-			{TopicID: idA, Partitions: []protocol.FetchPartitionRequest{
-				{Partition: 0, MaxBytes: 1048576},
-				{Partition: 1, MaxBytes: 1048576},
+	req := &kmsg.FetchRequest{
+		ReplicaID:     -1,
+		MaxWaitMillis: 500,
+		MinBytes:      1,
+		MaxBytes:      1048576,
+		SessionEpoch:  -1,
+		Topics: []kmsg.FetchRequestTopic{
+			{TopicID: idA, Partitions: []kmsg.FetchRequestTopicPartition{
+				{Partition: 0, PartitionMaxBytes: 1048576},
+				{Partition: 1, PartitionMaxBytes: 1048576},
 			}},
-			{TopicID: idB, Partitions: []protocol.FetchPartitionRequest{
-				{Partition: 0, MaxBytes: 1048576},
+			{TopicID: idB, Partitions: []kmsg.FetchRequestTopicPartition{
+				{Partition: 0, PartitionMaxBytes: 1048576},
 			}},
 		},
 	}
@@ -1034,18 +1035,18 @@ func TestResolveFetchTopicNames(t *testing.T) {
 	p := &proxy{
 		topicNames: map[[16]byte]string{topicID: "orders"},
 	}
-	req := &protocol.FetchRequest{
-		Topics: []protocol.FetchTopicRequest{
+	req := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{
 			{TopicID: topicID}, // name not set, should be resolved
-			{Name: "events"},  // already has name, should be left alone
+			{Topic: "events"},  // already has name, should be left alone
 		},
 	}
 	p.resolveFetchTopicNames(context.Background(), req)
 
-	if req.Topics[0].Name != "orders" {
-		t.Fatalf("topic[0] name: got %q, want %q", req.Topics[0].Name, "orders")
+	if req.Topics[0].Topic != "orders" {
+		t.Fatalf("topic[0] name: got %q, want %q", req.Topics[0].Topic, "orders")
 	}
-	if req.Topics[1].Name != "events" {
-		t.Fatalf("topic[1] name: got %q, want %q", req.Topics[1].Name, "events")
+	if req.Topics[1].Topic != "events" {
+		t.Fatalf("topic[1] name: got %q, want %q", req.Topics[1].Topic, "events")
 	}
 }

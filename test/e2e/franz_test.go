@@ -53,6 +53,13 @@ func TestFranzGoProduceConsume(t *testing.T) {
 		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
 		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
+		"KAFSCALE_S3_BUCKET="+envOrDefault("KAFSCALE_S3_BUCKET", "kafscale"),
+		"KAFSCALE_S3_REGION="+envOrDefault("KAFSCALE_S3_REGION", "us-east-1"),
+		"KAFSCALE_S3_NAMESPACE="+envOrDefault("KAFSCALE_S3_NAMESPACE", "default"),
+		"KAFSCALE_S3_ENDPOINT="+envOrDefault("KAFSCALE_S3_ENDPOINT", "http://127.0.0.1:9000"),
+		"KAFSCALE_S3_PATH_STYLE="+envOrDefault("KAFSCALE_S3_PATH_STYLE", "true"),
+		"KAFSCALE_S3_ACCESS_KEY="+envOrDefault("KAFSCALE_S3_ACCESS_KEY", "minioadmin"),
+		"KAFSCALE_S3_SECRET_KEY="+envOrDefault("KAFSCALE_S3_SECRET_KEY", "minioadmin"),
 	)
 	var brokerLogs bytes.Buffer
 	var franzLogs bytes.Buffer

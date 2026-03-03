@@ -33,6 +33,7 @@ import (
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -54,7 +55,7 @@ type proxy struct {
 	cacheTTL       time.Duration
 	cacheMu        sync.RWMutex
 	cachedBackends []string
-	apiVersions    []protocol.ApiVersion
+	apiVersions    []kmsg.ApiVersionsResponseApiKey
 	router         *metadata.PartitionRouter
 	groupRouter    *metadata.GroupRouter
 	brokerAddrMu   sync.RWMutex
@@ -315,6 +316,7 @@ func (p *proxy) cacheFresh() bool {
 
 // checkReady uses cached state when fresh, falling back to a live metadata
 // fetch only when the cache TTL has expired (e.g. no traffic for >60s).
+// The fallback uses a short timeout to prevent health probes from blocking.
 func (p *proxy) checkReady(ctx context.Context) bool {
 	if len(p.backends) > 0 {
 		return true
@@ -325,7 +327,9 @@ func (p *proxy) checkReady(ctx context.Context) bool {
 	if p.store == nil {
 		return false
 	}
-	backends, err := p.currentBackends(ctx)
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	backends, err := p.currentBackends(checkCtx)
 	return err == nil && len(backends) > 0
 }
 
@@ -334,6 +338,19 @@ func (p *proxy) initMetadataCache(ctx context.Context) {
 		return
 	}
 	p.refreshMetadataCache(ctx)
+	// Periodic refresh so topology changes are picked up without a cache miss.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				p.refreshMetadataCache(ctx)
+			}
+		}
+	}()
 }
 
 func (p *proxy) startHealthServer(ctx context.Context, addr string) {
@@ -380,7 +397,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		if err != nil {
 			return
 		}
-		header, _, err := protocol.ParseRequestHeader(frame.Payload)
+		header, body, err := protocol.ParseRequestHeader(frame.Payload)
 		if err != nil {
 			p.logger.Warn("parse request header failed", "error", err)
 			return
@@ -400,7 +417,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 
 		if !p.isReady() {
-			resp, ok, err := p.buildNotReadyResponse(header, frame.Payload)
+			resp, ok, err := p.buildNotReadyResponse(header, body)
 			if err != nil {
 				p.logger.Warn("not-ready response build failed", "error", err)
 				return
@@ -440,7 +457,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			resp, err := p.handleProduceRouting(ctx, header, frame.Payload, pool)
 			if err != nil {
 				p.logger.Warn("produce routing failed", "error", err)
-				p.respondBackendError(conn, header, frame.Payload)
+				p.respondBackendError(conn, header, body)
 				return
 			}
 			if resp == nil {
@@ -456,7 +473,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			resp, err := p.handleFetchRouting(ctx, header, frame.Payload, pool)
 			if err != nil {
 				p.logger.Warn("fetch routing failed", "error", err)
-				p.respondBackendError(conn, header, frame.Payload)
+				p.respondBackendError(conn, header, body)
 				return
 			}
 			if err := protocol.WriteFrame(conn, resp); err != nil {
@@ -571,7 +588,7 @@ func (p *proxy) handleProduceRouting(ctx context.Context, header *protocol.Reque
 	if err != nil {
 		return p.forwardProduceRaw(ctx, payload, pool)
 	}
-	produceReq, ok := req.(*protocol.ProduceRequest)
+	produceReq, ok := req.(*kmsg.ProduceRequest)
 	if !ok || len(produceReq.Topics) == 0 {
 		return p.forwardProduceRaw(ctx, payload, pool)
 	}
@@ -604,7 +621,7 @@ func (p *proxy) forwardProduceRaw(ctx context.Context, payload []byte, pool *con
 // fireAndForgetProduce writes a produce request to backends without reading a
 // response. Used for acks=0 produces where the Kafka protocol specifies no
 // server response.
-func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.RequestHeader, req *protocol.ProduceRequest, originalPayload []byte, pool *connPool) {
+func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.RequestHeader, req *kmsg.ProduceRequest, originalPayload []byte, pool *connPool) {
 	groups := p.groupPartitionsByBroker(ctx, req, nil)
 
 	for addr, subReq := range groups {
@@ -612,12 +629,7 @@ func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.Reque
 		if len(groups) == 1 {
 			payload = originalPayload
 		} else {
-			encoded, err := protocol.EncodeProduceRequest(header, subReq, header.APIVersion)
-			if err != nil {
-				p.logger.Warn("fire-and-forget encode failed", "error", err)
-				continue
-			}
-			payload = encoded
+			payload = encodeProduceRequest(header, subReq)
 		}
 
 		conn, targetAddr, err := p.connectForAddr(ctx, addr, nil, pool)
@@ -637,14 +649,14 @@ func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.Reque
 // groupPartitionsByBroker groups topic-partitions by the owning broker's address.
 // If include is non-nil, only partitions present in the include map are grouped.
 // Partitions with no known owner are grouped under "" for round-robin fallback.
-func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *protocol.ProduceRequest, include map[string]map[int32]bool) map[string]*protocol.ProduceRequest {
-	groups := make(map[string]*protocol.ProduceRequest)
+func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *kmsg.ProduceRequest, include map[string]map[int32]bool) map[string]*kmsg.ProduceRequest {
+	groups := make(map[string]*kmsg.ProduceRequest)
 	topicIndices := make(map[string]map[string]int) // addr -> topic name -> index in subReq.Topics
 
 	for _, topic := range req.Topics {
 		var includeParts map[int32]bool
 		if include != nil {
-			includeParts = include[topic.Name]
+			includeParts = include[topic.Topic]
 			if len(includeParts) == 0 {
 				continue
 			}
@@ -655,25 +667,26 @@ func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *protocol.Produ
 			}
 			addr := ""
 			if p.router != nil {
-				if ownerID := p.router.LookupOwner(topic.Name, part.Partition); ownerID != "" {
+				if ownerID := p.router.LookupOwner(topic.Topic, part.Partition); ownerID != "" {
 					addr = p.brokerIDToAddr(ctx, ownerID)
 				}
 			}
 			subReq, ok := groups[addr]
 			if !ok {
-				subReq = &protocol.ProduceRequest{
-					Acks:            req.Acks,
-					TimeoutMs:       req.TimeoutMs,
-					TransactionalID: req.TransactionalID,
+				subReq = &kmsg.ProduceRequest{
+					Version:       req.Version,
+					Acks:          req.Acks,
+					TimeoutMillis: req.TimeoutMillis,
+					TransactionID: req.TransactionID,
 				}
 				groups[addr] = subReq
 				topicIndices[addr] = make(map[string]int)
 			}
-			idx, ok := topicIndices[addr][topic.Name]
+			idx, ok := topicIndices[addr][topic.Topic]
 			if !ok {
 				idx = len(subReq.Topics)
-				subReq.Topics = append(subReq.Topics, protocol.ProduceTopic{Name: topic.Name})
-				topicIndices[addr][topic.Name] = idx
+				subReq.Topics = append(subReq.Topics, kmsg.ProduceRequestTopic{Topic: topic.Topic})
+				topicIndices[addr][topic.Topic] = idx
 			}
 			subReq.Topics[idx].Partitions = append(subReq.Topics[idx].Partitions, part)
 		}
@@ -685,19 +698,14 @@ func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *protocol.Produ
 // concurrently, and merges the responses. If any partitions are rejected with
 // NOT_LEADER_OR_FOLLOWER, those partitions are retried on a different broker
 // (up to maxRetries total attempts).
-func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHeader, fullReq *protocol.ProduceRequest, originalPayload []byte, groups map[string]*protocol.ProduceRequest, pool *connPool) ([]byte, error) {
+func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHeader, fullReq *kmsg.ProduceRequest, originalPayload []byte, groups map[string]*kmsg.ProduceRequest, pool *connPool) ([]byte, error) {
 	const maxRetries = 3
 
-	merged := &protocol.ProduceResponse{
-		CorrelationID: header.CorrelationID,
-	}
+	merged := &kmsg.ProduceResponse{Version: header.APIVersion}
 
 	var failedPartitions map[string]map[int32]bool
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		failedPartitions = nil
-		// Scope triedBackends per attempt so that retries can revisit brokers
-		// from earlier attempts. Without this, with N brokers all N get excluded
-		// after the first attempt and subsequent retries always fail to connect.
 		triedBackends := make(map[string]bool)
 		subResults := p.fanOutProduce(ctx, header, groups, originalPayload, triedBackends, pool)
 
@@ -716,30 +724,30 @@ func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHead
 						if failedPartitions == nil {
 							failedPartitions = make(map[string]map[int32]bool)
 						}
-						if failedPartitions[topic.Name] == nil {
-							failedPartitions[topic.Name] = make(map[int32]bool)
+						if failedPartitions[topic.Topic] == nil {
+							failedPartitions[topic.Topic] = make(map[int32]bool)
 						}
-						failedPartitions[topic.Name][part.Partition] = true
+						failedPartitions[topic.Topic][part.Partition] = true
 						if p.router != nil {
-							p.router.Invalidate(topic.Name, part.Partition)
+							p.router.Invalidate(topic.Topic, part.Partition)
 						}
 					} else {
-						tr := findOrAddTopicResponse(merged, topic.Name)
+						tr := findOrAddTopicResponse(merged, topic.Topic)
 						tr.Partitions = append(tr.Partitions, part)
 					}
 				}
 			}
-			if r.subResp.ThrottleMs > merged.ThrottleMs {
-				merged.ThrottleMs = r.subResp.ThrottleMs
+			if r.subResp.ThrottleMillis > merged.ThrottleMillis {
+				merged.ThrottleMillis = r.subResp.ThrottleMillis
 			}
 		}
 
 		if len(failedPartitions) == 0 {
-			return protocol.EncodeProduceResponse(merged, header.APIVersion)
+			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
 		}
 
 		groups = p.groupPartitionsByBroker(ctx, fullReq, failedPartitions)
-		originalPayload = nil // force re-encoding on retry
+		originalPayload = nil
 		if len(groups) == 0 {
 			break
 		}
@@ -747,14 +755,14 @@ func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHead
 	}
 
 	for _, topic := range fullReq.Topics {
-		failedParts, ok := failedPartitions[topic.Name]
+		failedParts, ok := failedPartitions[topic.Topic]
 		if !ok {
 			continue
 		}
-		tr := findOrAddTopicResponse(merged, topic.Name)
+		tr := findOrAddTopicResponse(merged, topic.Topic)
 		for _, part := range topic.Partitions {
 			if failedParts[part.Partition] {
-				tr.Partitions = append(tr.Partitions, protocol.ProducePartitionResponse{
+				tr.Partitions = append(tr.Partitions, kmsg.ProduceResponseTopicPartition{
 					Partition:  part.Partition,
 					ErrorCode:  protocol.NOT_LEADER_OR_FOLLOWER,
 					BaseOffset: -1,
@@ -762,12 +770,12 @@ func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHead
 			}
 		}
 	}
-	return protocol.EncodeProduceResponse(merged, header.APIVersion)
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
 }
 
 type fanOutResult struct {
-	subReq  *protocol.ProduceRequest
-	subResp *protocol.ProduceResponse
+	subReq  *kmsg.ProduceRequest
+	subResp *kmsg.ProduceResponse
 	conn    net.Conn // non-nil on success; caller must Return or Close
 	target  string
 	err     error
@@ -776,9 +784,9 @@ type fanOutResult struct {
 // fanOutProduce borrows connections and forwards sub-requests concurrently.
 // When there's only one group and originalPayload is non-nil, the original
 // payload is forwarded as-is (avoiding re-encoding).
-func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeader, groups map[string]*protocol.ProduceRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fanOutResult {
+func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.ProduceRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fanOutResult {
 	type workItem struct {
-		subReq  *protocol.ProduceRequest
+		subReq  *kmsg.ProduceRequest
 		conn    net.Conn
 		target  string
 		payload []byte
@@ -799,13 +807,7 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 		if canUseOriginal {
 			payload = originalPayload
 		} else {
-			encoded, encErr := protocol.EncodeProduceRequest(header, subReq, header.APIVersion)
-			if encErr != nil {
-				conn.Close()
-				connectErrors = append(connectErrors, fanOutResult{subReq: subReq, target: targetAddr, err: encErr})
-				continue
-			}
-			payload = encoded
+			payload = encodeProduceRequest(header, subReq)
 		}
 		work = append(work, workItem{subReq: subReq, conn: conn, target: targetAddr, payload: payload})
 	}
@@ -824,7 +826,7 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: err}
 				return
 			}
-			subResp, parseErr := protocol.ParseProduceResponse(respBytes, header.APIVersion)
+			subResp, parseErr := parseProduceResponse(respBytes, header.APIVersion)
 			if parseErr != nil {
 				w.conn.Close()
 				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: parseErr}
@@ -850,23 +852,23 @@ func (p *proxy) connectForAddr(ctx context.Context, addr string, exclude map[str
 	return p.connectBackendExcluding(ctx, exclude)
 }
 
-func findOrAddTopicResponse(resp *protocol.ProduceResponse, name string) *protocol.ProduceTopicResponse {
+func findOrAddTopicResponse(resp *kmsg.ProduceResponse, name string) *kmsg.ProduceResponseTopic {
 	for i := range resp.Topics {
-		if resp.Topics[i].Name == name {
+		if resp.Topics[i].Topic == name {
 			return &resp.Topics[i]
 		}
 	}
-	resp.Topics = append(resp.Topics, protocol.ProduceTopicResponse{Name: name})
+	resp.Topics = append(resp.Topics, kmsg.ProduceResponseTopic{Topic: name})
 	return &resp.Topics[len(resp.Topics)-1]
 }
 
 // addErrorForAllPartitions fills the response with errorCode for every partition
 // in the sub-request (used when a broker is unreachable).
-func addErrorForAllPartitions(resp *protocol.ProduceResponse, req *protocol.ProduceRequest, errorCode int16) {
+func addErrorForAllPartitions(resp *kmsg.ProduceResponse, req *kmsg.ProduceRequest, errorCode int16) {
 	for _, topic := range req.Topics {
-		topicResp := findOrAddTopicResponse(resp, topic.Name)
+		topicResp := findOrAddTopicResponse(resp, topic.Topic)
 		for _, part := range topic.Partitions {
-			topicResp.Partitions = append(topicResp.Partitions, protocol.ProducePartitionResponse{
+			topicResp.Partitions = append(topicResp.Partitions, kmsg.ProduceResponseTopicPartition{
 				Partition:  part.Partition,
 				ErrorCode:  errorCode,
 				BaseOffset: -1,
@@ -929,17 +931,14 @@ func (p *proxy) connectBackendExcluding(ctx context.Context, exclude map[string]
 }
 
 func (p *proxy) handleApiVersions(header *protocol.RequestHeader) ([]byte, error) {
-	resp := &protocol.ApiVersionsResponse{
-		CorrelationID: header.CorrelationID,
-		ErrorCode:     protocol.NONE,
-		ThrottleMs:    0,
-		Versions:      p.apiVersions,
-	}
-	return protocol.EncodeApiVersionsResponse(resp, header.APIVersion)
+	resp := kmsg.NewPtrApiVersionsResponse()
+	resp.ErrorCode = protocol.NONE
+	resp.ApiKeys = p.apiVersions
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
-func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeader, payload []byte) {
-	resp, ok, err := p.buildNotReadyResponse(header, payload)
+func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeader, body []byte) {
+	resp, ok, err := p.buildNotReadyResponse(header, body)
 	if err != nil || !ok {
 		return
 	}
@@ -951,7 +950,7 @@ func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHead
 	if err != nil {
 		return nil, err
 	}
-	metaReq, ok := req.(*protocol.MetadataRequest)
+	metaReq, ok := req.(*kmsg.MetadataRequest)
 	if !ok {
 		return nil, fmt.Errorf("unexpected metadata request type %T", req)
 	}
@@ -961,33 +960,35 @@ func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHead
 		return nil, err
 	}
 	resp := buildProxyMetadataResponse(meta, header.CorrelationID, header.APIVersion, p.advertisedHost, p.advertisedPort)
-	return protocol.EncodeMetadataResponse(resp, header.APIVersion)
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
 func (p *proxy) handleFindCoordinator(header *protocol.RequestHeader) ([]byte, error) {
-	resp := &protocol.FindCoordinatorResponse{
-		CorrelationID: header.CorrelationID,
-		ThrottleMs:    0,
-		ErrorCode:     protocol.NONE,
-		NodeID:        0,
-		Host:          p.advertisedHost,
-		Port:          p.advertisedPort,
-		ErrorMessage:  nil,
-	}
-	return protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion)
+	resp := kmsg.NewPtrFindCoordinatorResponse()
+	resp.ErrorCode = protocol.NONE
+	resp.NodeID = 0
+	resp.Host = p.advertisedHost
+	resp.Port = p.advertisedPort
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
-func (p *proxy) loadMetadata(ctx context.Context, req *protocol.MetadataRequest) (*metadata.ClusterMetadata, error) {
+func (p *proxy) loadMetadata(ctx context.Context, req *kmsg.MetadataRequest) (*metadata.ClusterMetadata, error) {
+	var zeroID [16]byte
 	useIDs := false
-	zeroID := [16]byte{}
-	for _, id := range req.TopicIDs {
-		if id != zeroID {
-			useIDs = true
-			break
+	var topicNames []string
+	if req.Topics != nil {
+		for _, t := range req.Topics {
+			if t.TopicID != zeroID {
+				useIDs = true
+				break
+			}
+			if t.Topic != nil {
+				topicNames = append(topicNames, *t.Topic)
+			}
 		}
 	}
 	if !useIDs {
-		return p.store.Metadata(ctx, req.Topics)
+		return p.store.Metadata(ctx, topicNames)
 	}
 	all, err := p.store.Metadata(ctx, nil)
 	if err != nil {
@@ -997,17 +998,17 @@ func (p *proxy) loadMetadata(ctx context.Context, req *protocol.MetadataRequest)
 	for _, topic := range all.Topics {
 		index[topic.TopicID] = topic
 	}
-	filtered := make([]protocol.MetadataTopic, 0, len(req.TopicIDs))
-	for _, id := range req.TopicIDs {
-		if id == zeroID {
+	filtered := make([]protocol.MetadataTopic, 0, len(req.Topics))
+	for _, t := range req.Topics {
+		if t.TopicID == zeroID {
 			continue
 		}
-		if topic, ok := index[id]; ok {
+		if topic, ok := index[t.TopicID]; ok {
 			filtered = append(filtered, topic)
 		} else {
 			filtered = append(filtered, protocol.MetadataTopic{
 				ErrorCode: protocol.UNKNOWN_TOPIC_ID,
-				TopicID:   id,
+				TopicID:   t.TopicID,
 			})
 		}
 	}
@@ -1019,366 +1020,236 @@ func (p *proxy) loadMetadata(ctx context.Context, req *protocol.MetadataRequest)
 	}, nil
 }
 
-func (p *proxy) buildNotReadyResponse(header *protocol.RequestHeader, payload []byte) ([]byte, bool, error) {
-	_, req, err := protocol.ParseRequest(payload)
+func (p *proxy) buildNotReadyResponse(header *protocol.RequestHeader, body []byte) ([]byte, bool, error) {
+	_, req, err := protocol.ParseRequestBody(header, body)
 	if err != nil {
 		return nil, false, err
 	}
-	wrapEncode := func(payload []byte, err error) ([]byte, bool, error) {
-		return payload, true, err
+	encode := func(resp kmsg.Response) ([]byte, bool, error) {
+		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), true, nil
 	}
 	switch header.APIKey {
 	case protocol.APIKeyMetadata:
-		metaReq := req.(*protocol.MetadataRequest)
-		topics := make([]protocol.MetadataTopic, 0, len(metaReq.Topics)+len(metaReq.TopicIDs))
-		for _, name := range metaReq.Topics {
-			topics = append(topics, protocol.MetadataTopic{
-				ErrorCode: protocol.REQUEST_TIMED_OUT,
-				Name:      name,
-			})
+		metaReq := req.(*kmsg.MetadataRequest)
+		resp := kmsg.NewPtrMetadataResponse()
+		resp.ControllerID = -1
+		for _, t := range metaReq.Topics {
+			mt := kmsg.NewMetadataResponseTopic()
+			mt.ErrorCode = protocol.REQUEST_TIMED_OUT
+			mt.Topic = t.Topic
+			mt.TopicID = t.TopicID
+			resp.Topics = append(resp.Topics, mt)
 		}
-		for _, id := range metaReq.TopicIDs {
-			topics = append(topics, protocol.MetadataTopic{
-				ErrorCode: protocol.REQUEST_TIMED_OUT,
-				TopicID:   id,
-			})
-		}
-		resp := &protocol.MetadataResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Brokers:       nil,
-			ClusterID:     nil,
-			ControllerID:  -1,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeMetadataResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyFindCoordinator:
-		resp := &protocol.FindCoordinatorResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-			ErrorMessage:  nil,
-			NodeID:        -1,
-			Host:          "",
-			Port:          0,
-		}
-		return wrapEncode(protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion))
+		resp := kmsg.NewPtrFindCoordinatorResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		resp.NodeID = -1
+		return encode(resp)
 	case protocol.APIKeyProduce:
-		prodReq := req.(*protocol.ProduceRequest)
-		topics := make([]protocol.ProduceTopicResponse, 0, len(prodReq.Topics))
+		prodReq := req.(*kmsg.ProduceRequest)
+		resp := kmsg.NewPtrProduceResponse()
 		for _, topic := range prodReq.Topics {
-			partitions := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
+			rt := kmsg.NewProduceResponseTopic()
+			rt.Topic = topic.Topic
 			for _, part := range topic.Partitions {
-				partitions = append(partitions, protocol.ProducePartitionResponse{
-					Partition:       part.Partition,
-					ErrorCode:       protocol.REQUEST_TIMED_OUT,
-					BaseOffset:      -1,
-					LogAppendTimeMs: -1,
-					LogStartOffset:  -1,
-				})
+				rp := kmsg.NewProduceResponseTopicPartition()
+				rp.Partition = part.Partition
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rp.BaseOffset = -1
+				rp.LogAppendTime = -1
+				rp.LogStartOffset = -1
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			topics = append(topics, protocol.ProduceTopicResponse{
-				Name:       topic.Name,
-				Partitions: partitions,
-			})
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.ProduceResponse{
-			CorrelationID: header.CorrelationID,
-			Topics:        topics,
-			ThrottleMs:    0,
-		}
-		return wrapEncode(protocol.EncodeProduceResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyFetch:
-		fetchReq := req.(*protocol.FetchRequest)
-		topics := make([]protocol.FetchTopicResponse, 0, len(fetchReq.Topics))
+		fetchReq := req.(*kmsg.FetchRequest)
+		resp := kmsg.NewPtrFetchResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		resp.SessionID = fetchReq.SessionID
 		for _, topic := range fetchReq.Topics {
-			partitions := make([]protocol.FetchPartitionResponse, 0, len(topic.Partitions))
+			rt := kmsg.NewFetchResponseTopic()
+			rt.Topic = topic.Topic
+			rt.TopicID = topic.TopicID
 			for _, part := range topic.Partitions {
-				partitions = append(partitions, protocol.FetchPartitionResponse{
-					Partition:     part.Partition,
-					ErrorCode:     protocol.REQUEST_TIMED_OUT,
-					HighWatermark: 0,
-				})
+				rp := kmsg.NewFetchResponseTopicPartition()
+				rp.Partition = part.Partition
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			topics = append(topics, protocol.FetchTopicResponse{
-				Name:       topic.Name,
-				TopicID:    topic.TopicID,
-				Partitions: partitions,
-			})
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.FetchResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-			SessionID:     fetchReq.SessionID,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeFetchResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyListOffsets:
-		offsetReq := req.(*protocol.ListOffsetsRequest)
-		topics := make([]protocol.ListOffsetsTopicResponse, 0, len(offsetReq.Topics))
+		offsetReq := req.(*kmsg.ListOffsetsRequest)
+		resp := kmsg.NewPtrListOffsetsResponse()
 		for _, topic := range offsetReq.Topics {
-			partitions := make([]protocol.ListOffsetsPartitionResponse, 0, len(topic.Partitions))
+			rt := kmsg.NewListOffsetsResponseTopic()
+			rt.Topic = topic.Topic
 			for _, part := range topic.Partitions {
-				partitions = append(partitions, protocol.ListOffsetsPartitionResponse{
-					Partition:       part.Partition,
-					ErrorCode:       protocol.REQUEST_TIMED_OUT,
-					Timestamp:       -1,
-					Offset:          -1,
-					LeaderEpoch:     -1,
-					OldStyleOffsets: nil,
-				})
+				rp := kmsg.NewListOffsetsResponseTopicPartition()
+				rp.Partition = part.Partition
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rp.Timestamp = -1
+				rp.Offset = -1
+				rp.LeaderEpoch = -1
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			topics = append(topics, protocol.ListOffsetsTopicResponse{
-				Name:       topic.Name,
-				Partitions: partitions,
-			})
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.ListOffsetsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeListOffsetsResponse(header.APIVersion, resp))
+		return encode(resp)
 	case protocol.APIKeyJoinGroup:
-		resp := &protocol.JoinGroupResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-			GenerationID:  -1,
-			ProtocolName:  "",
-			LeaderID:      "",
-			MemberID:      "",
-			Members:       nil,
-		}
-		return wrapEncode(protocol.EncodeJoinGroupResponse(resp, header.APIVersion))
+		resp := kmsg.NewPtrJoinGroupResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		resp.Generation = -1
+		return encode(resp)
 	case protocol.APIKeySyncGroup:
-		resp := &protocol.SyncGroupResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-			ProtocolType:  nil,
-			ProtocolName:  nil,
-			Assignment:    nil,
-		}
-		return wrapEncode(protocol.EncodeSyncGroupResponse(resp, header.APIVersion))
+		resp := kmsg.NewPtrSyncGroupResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		return encode(resp)
 	case protocol.APIKeyHeartbeat:
-		resp := &protocol.HeartbeatResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-		}
-		return wrapEncode(protocol.EncodeHeartbeatResponse(resp, header.APIVersion))
+		resp := kmsg.NewPtrHeartbeatResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		return encode(resp)
 	case protocol.APIKeyLeaveGroup:
-		resp := &protocol.LeaveGroupResponse{
-			CorrelationID: header.CorrelationID,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-		}
-		return wrapEncode(protocol.EncodeLeaveGroupResponse(resp))
+		resp := kmsg.NewPtrLeaveGroupResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		return encode(resp)
 	case protocol.APIKeyOffsetCommit:
-		commitReq := req.(*protocol.OffsetCommitRequest)
-		topics := make([]protocol.OffsetCommitTopicResponse, 0, len(commitReq.Topics))
+		commitReq := req.(*kmsg.OffsetCommitRequest)
+		resp := kmsg.NewPtrOffsetCommitResponse()
 		for _, topic := range commitReq.Topics {
-			partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
+			rt := kmsg.NewOffsetCommitResponseTopic()
+			rt.Topic = topic.Topic
 			for _, part := range topic.Partitions {
-				partitions = append(partitions, protocol.OffsetCommitPartitionResponse{
-					Partition: part.Partition,
-					ErrorCode: protocol.REQUEST_TIMED_OUT,
-				})
+				rp := kmsg.NewOffsetCommitResponseTopicPartition()
+				rp.Partition = part.Partition
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			topics = append(topics, protocol.OffsetCommitTopicResponse{
-				Name:       topic.Name,
-				Partitions: partitions,
-			})
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.OffsetCommitResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeOffsetCommitResponse(resp))
+		return encode(resp)
 	case protocol.APIKeyOffsetFetch:
-		fetchReq := req.(*protocol.OffsetFetchRequest)
-		topics := make([]protocol.OffsetFetchTopicResponse, 0, len(fetchReq.Topics))
-		for _, topic := range fetchReq.Topics {
-			partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
+		ofReq := req.(*kmsg.OffsetFetchRequest)
+		resp := kmsg.NewPtrOffsetFetchResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		for _, topic := range ofReq.Topics {
+			rt := kmsg.NewOffsetFetchResponseTopic()
+			rt.Topic = topic.Topic
 			for _, part := range topic.Partitions {
-				partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
-					Partition:   part.Partition,
-					Offset:      -1,
-					LeaderEpoch: -1,
-					Metadata:    nil,
-					ErrorCode:   protocol.REQUEST_TIMED_OUT,
-				})
+				rp := kmsg.NewOffsetFetchResponseTopicPartition()
+				rp.Partition = part
+				rp.Offset = -1
+				rp.LeaderEpoch = -1
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			topics = append(topics, protocol.OffsetFetchTopicResponse{
-				Name:       topic.Name,
-				Partitions: partitions,
-			})
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.OffsetFetchResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-		}
-		return wrapEncode(protocol.EncodeOffsetFetchResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyOffsetForLeaderEpoch:
-		epochReq := req.(*protocol.OffsetForLeaderEpochRequest)
-		topics := make([]protocol.OffsetForLeaderEpochTopicResponse, 0, len(epochReq.Topics))
+		epochReq := req.(*kmsg.OffsetForLeaderEpochRequest)
+		resp := kmsg.NewPtrOffsetForLeaderEpochResponse()
 		for _, topic := range epochReq.Topics {
-			partitions := make([]protocol.OffsetForLeaderEpochPartitionResponse, 0, len(topic.Partitions))
+			rt := kmsg.NewOffsetForLeaderEpochResponseTopic()
+			rt.Topic = topic.Topic
 			for _, part := range topic.Partitions {
-				partitions = append(partitions, protocol.OffsetForLeaderEpochPartitionResponse{
-					Partition:   part.Partition,
-					ErrorCode:   protocol.REQUEST_TIMED_OUT,
-					LeaderEpoch: -1,
-					EndOffset:   -1,
-				})
+				rp := kmsg.NewOffsetForLeaderEpochResponseTopicPartition()
+				rp.Partition = part.Partition
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rp.LeaderEpoch = -1
+				rp.EndOffset = -1
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			topics = append(topics, protocol.OffsetForLeaderEpochTopicResponse{
-				Name:       topic.Name,
-				Partitions: partitions,
-			})
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.OffsetForLeaderEpochResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeOffsetForLeaderEpochResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyDescribeGroups:
-		descReq := req.(*protocol.DescribeGroupsRequest)
-		groups := make([]protocol.DescribeGroupsResponseGroup, 0, len(descReq.Groups))
+		descReq := req.(*kmsg.DescribeGroupsRequest)
+		resp := kmsg.NewPtrDescribeGroupsResponse()
 		for _, group := range descReq.Groups {
-			groups = append(groups, protocol.DescribeGroupsResponseGroup{
-				ErrorCode:            protocol.REQUEST_TIMED_OUT,
-				GroupID:              group,
-				State:                "",
-				ProtocolType:         "",
-				Protocol:             "",
-				Members:              nil,
-				AuthorizedOperations: 0,
-			})
+			rg := kmsg.NewDescribeGroupsResponseGroup()
+			rg.ErrorCode = protocol.REQUEST_TIMED_OUT
+			rg.Group = group
+			resp.Groups = append(resp.Groups, rg)
 		}
-		resp := &protocol.DescribeGroupsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Groups:        groups,
-		}
-		return wrapEncode(protocol.EncodeDescribeGroupsResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyListGroups:
-		resp := &protocol.ListGroupsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-			Groups:        nil,
-		}
-		return wrapEncode(protocol.EncodeListGroupsResponse(resp, header.APIVersion))
+		resp := kmsg.NewPtrListGroupsResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		return encode(resp)
 	case protocol.APIKeyDescribeConfigs:
-		descReq := req.(*protocol.DescribeConfigsRequest)
-		resources := make([]protocol.DescribeConfigsResponseResource, 0, len(descReq.Resources))
+		descReq := req.(*kmsg.DescribeConfigsRequest)
+		resp := kmsg.NewPtrDescribeConfigsResponse()
 		for _, res := range descReq.Resources {
-			resources = append(resources, protocol.DescribeConfigsResponseResource{
-				ErrorCode:    protocol.REQUEST_TIMED_OUT,
-				ErrorMessage: nil,
-				ResourceType: res.ResourceType,
-				ResourceName: res.ResourceName,
-				Configs:      nil,
-			})
+			rr := kmsg.NewDescribeConfigsResponseResource()
+			rr.ErrorCode = protocol.REQUEST_TIMED_OUT
+			rr.ResourceType = res.ResourceType
+			rr.ResourceName = res.ResourceName
+			resp.Resources = append(resp.Resources, rr)
 		}
-		resp := &protocol.DescribeConfigsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Resources:     resources,
-		}
-		return wrapEncode(protocol.EncodeDescribeConfigsResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyAlterConfigs:
-		alterReq := req.(*protocol.AlterConfigsRequest)
-		resources := make([]protocol.AlterConfigsResponseResource, 0, len(alterReq.Resources))
+		alterReq := req.(*kmsg.AlterConfigsRequest)
+		resp := kmsg.NewPtrAlterConfigsResponse()
 		for _, res := range alterReq.Resources {
-			resources = append(resources, protocol.AlterConfigsResponseResource{
-				ErrorCode:    protocol.REQUEST_TIMED_OUT,
-				ErrorMessage: nil,
-				ResourceType: res.ResourceType,
-				ResourceName: res.ResourceName,
-			})
+			rr := kmsg.NewAlterConfigsResponseResource()
+			rr.ErrorCode = protocol.REQUEST_TIMED_OUT
+			rr.ResourceType = res.ResourceType
+			rr.ResourceName = res.ResourceName
+			resp.Resources = append(resp.Resources, rr)
 		}
-		resp := &protocol.AlterConfigsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Resources:     resources,
-		}
-		return wrapEncode(protocol.EncodeAlterConfigsResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyCreatePartitions:
-		createReq := req.(*protocol.CreatePartitionsRequest)
-		topics := make([]protocol.CreatePartitionsResponseTopic, 0, len(createReq.Topics))
+		createReq := req.(*kmsg.CreatePartitionsRequest)
+		resp := kmsg.NewPtrCreatePartitionsResponse()
 		for _, topic := range createReq.Topics {
-			topics = append(topics, protocol.CreatePartitionsResponseTopic{
-				Name:         topic.Name,
-				ErrorCode:    protocol.REQUEST_TIMED_OUT,
-				ErrorMessage: nil,
-			})
+			rt := kmsg.NewCreatePartitionsResponseTopic()
+			rt.Topic = topic.Topic
+			rt.ErrorCode = protocol.REQUEST_TIMED_OUT
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.CreatePartitionsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeCreatePartitionsResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyCreateTopics:
-		createReq := req.(*protocol.CreateTopicsRequest)
-		topics := make([]protocol.CreateTopicResult, 0, len(createReq.Topics))
+		createReq := req.(*kmsg.CreateTopicsRequest)
+		resp := kmsg.NewPtrCreateTopicsResponse()
 		for _, topic := range createReq.Topics {
-			topics = append(topics, protocol.CreateTopicResult{
-				Name:         topic.Name,
-				ErrorCode:    protocol.REQUEST_TIMED_OUT,
-				ErrorMessage: "",
-			})
+			rt := kmsg.NewCreateTopicsResponseTopic()
+			rt.Topic = topic.Topic
+			rt.ErrorCode = protocol.REQUEST_TIMED_OUT
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.CreateTopicsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeCreateTopicsResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyDeleteTopics:
-		delReq := req.(*protocol.DeleteTopicsRequest)
-		topics := make([]protocol.DeleteTopicResult, 0, len(delReq.TopicNames))
-		for _, name := range delReq.TopicNames {
-			topics = append(topics, protocol.DeleteTopicResult{
-				Name:         name,
-				ErrorCode:    protocol.REQUEST_TIMED_OUT,
-				ErrorMessage: "",
-			})
+		delReq := req.(*kmsg.DeleteTopicsRequest)
+		resp := kmsg.NewPtrDeleteTopicsResponse()
+		for _, t := range delReq.Topics {
+			rt := kmsg.NewDeleteTopicsResponseTopic()
+			rt.Topic = t.Topic
+			rt.TopicID = t.TopicID
+			rt.ErrorCode = protocol.REQUEST_TIMED_OUT
+			resp.Topics = append(resp.Topics, rt)
 		}
-		resp := &protocol.DeleteTopicsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeDeleteTopicsResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyDeleteGroups:
-		delReq := req.(*protocol.DeleteGroupsRequest)
-		groups := make([]protocol.DeleteGroupsResponseGroup, 0, len(delReq.Groups))
+		delReq := req.(*kmsg.DeleteGroupsRequest)
+		resp := kmsg.NewPtrDeleteGroupsResponse()
 		for _, group := range delReq.Groups {
-			groups = append(groups, protocol.DeleteGroupsResponseGroup{
-				Group:     group,
-				ErrorCode: protocol.REQUEST_TIMED_OUT,
-			})
+			rg := kmsg.NewDeleteGroupsResponseGroup()
+			rg.Group = group
+			rg.ErrorCode = protocol.REQUEST_TIMED_OUT
+			resp.Groups = append(resp.Groups, rg)
 		}
-		resp := &protocol.DeleteGroupsResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Groups:        groups,
-		}
-		return wrapEncode(protocol.EncodeDeleteGroupsResponse(resp, header.APIVersion))
+		return encode(resp)
 	default:
 		return nil, false, nil
 	}
 }
 
-func generateProxyApiVersions() []protocol.ApiVersion {
+func generateProxyApiVersions() []kmsg.ApiVersionsResponseApiKey {
 	supported := []struct {
 		key      int16
 		min, max int16
@@ -1406,17 +1277,17 @@ func generateProxyApiVersions() []protocol.ApiVersion {
 		{key: protocol.APIKeyDeleteGroups, min: 0, max: 2},
 	}
 	unsupported := []int16{4, 5, 6, 7, 21, 22, 24, 25, 26}
-	entries := make([]protocol.ApiVersion, 0, len(supported)+len(unsupported))
+	entries := make([]kmsg.ApiVersionsResponseApiKey, 0, len(supported)+len(unsupported))
 	for _, entry := range supported {
-		entries = append(entries, protocol.ApiVersion{
-			APIKey:     entry.key,
+		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
+			ApiKey:     entry.key,
 			MinVersion: entry.min,
 			MaxVersion: entry.max,
 		})
 	}
 	for _, key := range unsupported {
-		entries = append(entries, protocol.ApiVersion{
-			APIKey:     key,
+		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
+			ApiKey:     key,
 			MinVersion: -1,
 			MaxVersion: -1,
 		})
@@ -1424,7 +1295,7 @@ func generateProxyApiVersions() []protocol.ApiVersion {
 	return entries
 }
 
-func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID int32, version int16, host string, port int32) *protocol.MetadataResponse {
+func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID int32, version int16, host string, port int32) *kmsg.MetadataResponse {
 	brokers := []protocol.MetadataBroker{{
 		NodeID: 0,
 		Host:   host,
@@ -1439,30 +1310,28 @@ func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID in
 		partitions := make([]protocol.MetadataPartition, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
 			partitions = append(partitions, protocol.MetadataPartition{
-				ErrorCode:      part.ErrorCode,
-				PartitionIndex: part.PartitionIndex,
-				LeaderID:       0,
-				LeaderEpoch:    part.LeaderEpoch,
-				ReplicaNodes:   []int32{0},
-				ISRNodes:       []int32{0},
+				ErrorCode:   part.ErrorCode,
+				Partition:   part.Partition,
+				Leader:      0,
+				LeaderEpoch: part.LeaderEpoch,
+				Replicas:    []int32{0},
+				ISR:         []int32{0},
 			})
 		}
 		topics = append(topics, protocol.MetadataTopic{
 			ErrorCode:  topic.ErrorCode,
-			Name:       topic.Name,
+			Topic:      topic.Topic,
 			TopicID:    topic.TopicID,
 			IsInternal: topic.IsInternal,
 			Partitions: partitions,
 		})
 	}
-	return &protocol.MetadataResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		Brokers:       brokers,
-		ClusterID:     meta.ClusterID,
-		ControllerID:  0,
-		Topics:        topics,
-	}
+	resp := kmsg.NewPtrMetadataResponse()
+	resp.Brokers = brokers
+	resp.ClusterID = meta.ClusterID
+	resp.ControllerID = 0
+	resp.Topics = topics
+	return resp
 }
 
 func (p *proxy) connectBackend(ctx context.Context) (net.Conn, string, error) {
@@ -1509,13 +1378,16 @@ func (p *proxy) updateBrokerAddrs(brokers []protocol.MetadataBroker) {
 }
 
 // refreshMetadataCache updates broker address and topic name caches from
-// metadata. Concurrent calls are coalesced via singleflight.
+// metadata. Concurrent calls are coalesced via singleflight. Uses a detached
+// context so that a single caller's cancellation does not abort the shared fetch.
 func (p *proxy) refreshMetadataCache(ctx context.Context) {
 	if p.store == nil {
 		return
 	}
-	p.metaFlight.Do("refresh", func() (interface{}, error) {
-		meta, err := p.store.Metadata(ctx, nil)
+	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, err, _ := p.metaFlight.Do("refresh", func() (interface{}, error) {
+		meta, err := p.store.Metadata(fetchCtx, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1524,14 +1396,18 @@ func (p *proxy) refreshMetadataCache(ctx context.Context) {
 		p.touchHealthy()
 		return nil, nil
 	})
+	if err != nil {
+		p.logger.Warn("metadata cache refresh failed", "error", err)
+	}
 }
 
 func (p *proxy) updateTopicNames(topics []protocol.MetadataTopic) {
 	names := make(map[[16]byte]string, len(topics))
 	var zeroID [16]byte
 	for _, topic := range topics {
-		if topic.TopicID != zeroID && topic.Name != "" {
-			names[topic.TopicID] = topic.Name
+		name := *topic.Topic
+		if topic.TopicID != zeroID && name != "" {
+			names[topic.TopicID] = name
 		}
 	}
 	p.topicNamesMu.Lock()
@@ -1621,19 +1497,19 @@ func (p *proxy) extractGroupID(apiKey int16, payload []byte) string {
 		return ""
 	}
 	switch r := req.(type) {
-	case *protocol.JoinGroupRequest:
-		return r.GroupID
-	case *protocol.SyncGroupRequest:
-		return r.GroupID
-	case *protocol.HeartbeatRequest:
-		return r.GroupID
-	case *protocol.LeaveGroupRequest:
-		return r.GroupID
-	case *protocol.OffsetCommitRequest:
-		return r.GroupID
-	case *protocol.OffsetFetchRequest:
-		return r.GroupID
-	case *protocol.DescribeGroupsRequest:
+	case *kmsg.JoinGroupRequest:
+		return r.Group
+	case *kmsg.SyncGroupRequest:
+		return r.Group
+	case *kmsg.HeartbeatRequest:
+		return r.Group
+	case *kmsg.LeaveGroupRequest:
+		return r.Group
+	case *kmsg.OffsetCommitRequest:
+		return r.Group
+	case *kmsg.OffsetFetchRequest:
+		return r.Group
+	case *kmsg.DescribeGroupsRequest:
 		if len(r.Groups) > 0 {
 			return r.Groups[0]
 		}
@@ -1650,7 +1526,7 @@ func (p *proxy) handleFetchRouting(ctx context.Context, header *protocol.Request
 	if err != nil {
 		return p.forwardFetchRaw(ctx, payload, pool)
 	}
-	fetchReq, ok := req.(*protocol.FetchRequest)
+	fetchReq, ok := req.(*kmsg.FetchRequest)
 	if !ok || len(fetchReq.Topics) == 0 {
 		return p.forwardFetchRaw(ctx, payload, pool)
 	}
@@ -1678,11 +1554,11 @@ func (p *proxy) forwardFetchRaw(ctx context.Context, payload []byte, pool *connP
 
 // resolveFetchTopicNames resolves topic IDs to names so the partition router
 // (which is keyed by name) can look up owners for v12+ requests.
-func (p *proxy) resolveFetchTopicNames(ctx context.Context, req *protocol.FetchRequest) {
+func (p *proxy) resolveFetchTopicNames(ctx context.Context, req *kmsg.FetchRequest) {
 	var zeroID [16]byte
 	for i := range req.Topics {
-		if req.Topics[i].Name == "" && req.Topics[i].TopicID != zeroID {
-			req.Topics[i].Name = p.resolveTopicID(ctx, req.Topics[i].TopicID)
+		if req.Topics[i].Topic == "" && req.Topics[i].TopicID != zeroID {
+			req.Topics[i].Topic = p.resolveTopicID(ctx, req.Topics[i].TopicID)
 		}
 	}
 }
@@ -1699,12 +1575,12 @@ func fetchTopicKey(name string, id [16]byte) string {
 // groupFetchPartitionsByBroker groups partitions by owning broker. If include
 // is non-nil, only listed partitions are grouped. Unknown owners go under ""
 // for round-robin.
-func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *protocol.FetchRequest, include map[string]map[int32]bool) map[string]*protocol.FetchRequest {
-	groups := make(map[string]*protocol.FetchRequest)
+func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.FetchRequest, include map[string]map[int32]bool) map[string]*kmsg.FetchRequest {
+	groups := make(map[string]*kmsg.FetchRequest)
 	topicIndices := make(map[string]map[string]int) // addr -> topicKey -> index in subReq.Topics
 
 	for _, topic := range req.Topics {
-		topicName := topic.Name
+		topicName := topic.Topic
 		key := fetchTopicKey(topicName, topic.TopicID)
 		var includeParts map[int32]bool
 		if include != nil {
@@ -1725,9 +1601,10 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *protocol.
 			}
 			subReq, ok := groups[addr]
 			if !ok {
-				subReq = &protocol.FetchRequest{
+				subReq = &kmsg.FetchRequest{
+					Version:        req.Version,
 					ReplicaID:      req.ReplicaID,
-					MaxWaitMs:      req.MaxWaitMs,
+					MaxWaitMillis:  req.MaxWaitMillis,
 					MinBytes:       req.MinBytes,
 					MaxBytes:       req.MaxBytes,
 					IsolationLevel: req.IsolationLevel,
@@ -1740,8 +1617,8 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *protocol.
 			idx, ok := topicIndices[addr][key]
 			if !ok {
 				idx = len(subReq.Topics)
-				subReq.Topics = append(subReq.Topics, protocol.FetchTopicRequest{
-					Name:    topic.Name,
+				subReq.Topics = append(subReq.Topics, kmsg.FetchRequestTopic{
+					Topic:   topic.Topic,
 					TopicID: topic.TopicID,
 				})
 				topicIndices[addr][key] = idx
@@ -1753,8 +1630,8 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *protocol.
 }
 
 type fetchFanOutResult struct {
-	subReq  *protocol.FetchRequest
-	subResp *protocol.FetchResponse
+	subReq  *kmsg.FetchRequest
+	subResp *kmsg.FetchResponse
 	conn    net.Conn
 	target  string
 	err     error
@@ -1762,19 +1639,17 @@ type fetchFanOutResult struct {
 
 // forwardFetch fans out sub-requests, merges responses, and retries
 // NOT_LEADER_OR_FOLLOWER partitions on a different broker.
-func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader, fullReq *protocol.FetchRequest, originalPayload []byte, groups map[string]*protocol.FetchRequest, pool *connPool) ([]byte, error) {
+func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader, fullReq *kmsg.FetchRequest, originalPayload []byte, groups map[string]*kmsg.FetchRequest, pool *connPool) ([]byte, error) {
 	const maxRetries = 3
 
-	merged := &protocol.FetchResponse{
-		CorrelationID: header.CorrelationID,
-		SessionID:     fullReq.SessionID,
+	merged := &kmsg.FetchResponse{
+		Version:   header.APIVersion,
+		SessionID: fullReq.SessionID,
 	}
 
-	// Keyed by fetchTopicKey to avoid collisions among unresolved v12+ topics.
 	var failedPartitions map[string]map[int32]bool
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		failedPartitions = nil
-		// Reset per attempt so retries can revisit brokers from earlier attempts.
 		triedBackends := make(map[string]bool)
 		subResults := p.fanOutFetch(ctx, header, groups, originalPayload, triedBackends, pool)
 
@@ -1793,7 +1668,7 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 			for _, topic := range r.subResp.Topics {
 				for _, part := range topic.Partitions {
 					if part.ErrorCode == protocol.NOT_LEADER_OR_FOLLOWER {
-						topicName := topic.Name
+						topicName := topic.Topic
 						if topicName == "" {
 							topicName = p.resolveTopicID(ctx, topic.TopicID)
 						}
@@ -1809,18 +1684,18 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 							p.router.Invalidate(topicName, part.Partition)
 						}
 					} else {
-						tr := findOrAddFetchTopicResponse(merged, topic.Name, topic.TopicID)
+						tr := findOrAddFetchTopicResponse(merged, topic.Topic, topic.TopicID)
 						tr.Partitions = append(tr.Partitions, part)
 					}
 				}
 			}
-			if r.subResp.ThrottleMs > merged.ThrottleMs {
-				merged.ThrottleMs = r.subResp.ThrottleMs
+			if r.subResp.ThrottleMillis > merged.ThrottleMillis {
+				merged.ThrottleMillis = r.subResp.ThrottleMillis
 			}
 		}
 
 		if len(failedPartitions) == 0 {
-			return protocol.EncodeFetchResponse(merged, header.APIVersion)
+			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
 		}
 
 		groups = p.groupFetchPartitionsByBroker(ctx, fullReq, failedPartitions)
@@ -1832,28 +1707,28 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 	}
 
 	for _, topic := range fullReq.Topics {
-		key := fetchTopicKey(topic.Name, topic.TopicID)
+		key := fetchTopicKey(topic.Topic, topic.TopicID)
 		failedParts, ok := failedPartitions[key]
 		if !ok {
 			continue
 		}
-		tr := findOrAddFetchTopicResponse(merged, topic.Name, topic.TopicID)
+		tr := findOrAddFetchTopicResponse(merged, topic.Topic, topic.TopicID)
 		for _, part := range topic.Partitions {
 			if failedParts[part.Partition] {
-				tr.Partitions = append(tr.Partitions, protocol.FetchPartitionResponse{
+				tr.Partitions = append(tr.Partitions, kmsg.FetchResponseTopicPartition{
 					Partition: part.Partition,
 					ErrorCode: protocol.NOT_LEADER_OR_FOLLOWER,
 				})
 			}
 		}
 	}
-	return protocol.EncodeFetchResponse(merged, header.APIVersion)
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
 }
 
 // fanOutFetch borrows connections and forwards fetch sub-requests concurrently.
-func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader, groups map[string]*protocol.FetchRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fetchFanOutResult {
+func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.FetchRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fetchFanOutResult {
 	type workItem struct {
-		subReq  *protocol.FetchRequest
+		subReq  *kmsg.FetchRequest
 		conn    net.Conn
 		target  string
 		payload []byte
@@ -1874,13 +1749,7 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 		if canUseOriginal {
 			payload = originalPayload
 		} else {
-			encoded, encErr := protocol.EncodeFetchRequest(header, subReq, header.APIVersion)
-			if encErr != nil {
-				conn.Close()
-				connectErrors = append(connectErrors, fetchFanOutResult{subReq: subReq, target: targetAddr, err: encErr})
-				continue
-			}
-			payload = encoded
+			payload = encodeFetchRequest(header, subReq)
 		}
 		work = append(work, workItem{subReq: subReq, conn: conn, target: targetAddr, payload: payload})
 	}
@@ -1899,7 +1768,7 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 				results[i] = fetchFanOutResult{subReq: w.subReq, target: w.target, err: err}
 				return
 			}
-			subResp, parseErr := protocol.ParseFetchResponse(respBytes, header.APIVersion)
+			subResp, parseErr := parseFetchResponse(respBytes, header.APIVersion)
 			if parseErr != nil {
 				w.conn.Close()
 				results[i] = fetchFanOutResult{subReq: w.subReq, target: w.target, err: parseErr}
@@ -1913,7 +1782,7 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 	return append(connectErrors, results...)
 }
 
-func findOrAddFetchTopicResponse(resp *protocol.FetchResponse, name string, topicID [16]byte) *protocol.FetchTopicResponse {
+func findOrAddFetchTopicResponse(resp *kmsg.FetchResponse, name string, topicID [16]byte) *kmsg.FetchResponseTopic {
 	var zeroID [16]byte
 	for i := range resp.Topics {
 		if topicID != zeroID {
@@ -1921,23 +1790,70 @@ func findOrAddFetchTopicResponse(resp *protocol.FetchResponse, name string, topi
 				return &resp.Topics[i]
 			}
 		} else {
-			if resp.Topics[i].Name == name {
+			if resp.Topics[i].Topic == name {
 				return &resp.Topics[i]
 			}
 		}
 	}
-	resp.Topics = append(resp.Topics, protocol.FetchTopicResponse{Name: name, TopicID: topicID})
+	resp.Topics = append(resp.Topics, kmsg.FetchResponseTopic{Topic: name, TopicID: topicID})
 	return &resp.Topics[len(resp.Topics)-1]
 }
 
-func addFetchErrorForAllPartitions(resp *protocol.FetchResponse, req *protocol.FetchRequest, errorCode int16) {
+func addFetchErrorForAllPartitions(resp *kmsg.FetchResponse, req *kmsg.FetchRequest, errorCode int16) {
 	for _, topic := range req.Topics {
-		tr := findOrAddFetchTopicResponse(resp, topic.Name, topic.TopicID)
+		tr := findOrAddFetchTopicResponse(resp, topic.Topic, topic.TopicID)
 		for _, part := range topic.Partitions {
-			tr.Partitions = append(tr.Partitions, protocol.FetchPartitionResponse{
+			tr.Partitions = append(tr.Partitions, kmsg.FetchResponseTopicPartition{
 				Partition: part.Partition,
 				ErrorCode: errorCode,
 			})
 		}
 	}
+}
+
+// encodeProduceRequest serializes a produce request with header into a wire frame.
+func encodeProduceRequest(header *protocol.RequestHeader, req *kmsg.ProduceRequest) []byte {
+	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientIDStr(header.ClientID)))
+	return formatter.AppendRequest(nil, req, header.CorrelationID)
+}
+
+// parseProduceResponse deserializes a produce response from wire bytes.
+func parseProduceResponse(data []byte, version int16) (*kmsg.ProduceResponse, error) {
+	body, ok := protocol.SkipResponseHeader(protocol.APIKeyProduce, version, data)
+	if !ok {
+		return nil, fmt.Errorf("produce response too short or malformed header")
+	}
+	resp := kmsg.NewPtrProduceResponse()
+	resp.SetVersion(version)
+	if err := resp.ReadFrom(body); err != nil {
+		return nil, fmt.Errorf("decode produce response v%d: %w", version, err)
+	}
+	return resp, nil
+}
+
+// encodeFetchRequest serializes a fetch request with header into a wire frame.
+func encodeFetchRequest(header *protocol.RequestHeader, req *kmsg.FetchRequest) []byte {
+	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientIDStr(header.ClientID)))
+	return formatter.AppendRequest(nil, req, header.CorrelationID)
+}
+
+// parseFetchResponse deserializes a fetch response from wire bytes.
+func parseFetchResponse(data []byte, version int16) (*kmsg.FetchResponse, error) {
+	body, ok := protocol.SkipResponseHeader(protocol.APIKeyFetch, version, data)
+	if !ok {
+		return nil, fmt.Errorf("fetch response too short or malformed header")
+	}
+	resp := kmsg.NewPtrFetchResponse()
+	resp.SetVersion(version)
+	if err := resp.ReadFrom(body); err != nil {
+		return nil, fmt.Errorf("decode fetch response v%d: %w", version, err)
+	}
+	return resp, nil
+}
+
+func clientIDStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

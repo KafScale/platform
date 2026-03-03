@@ -50,13 +50,13 @@ func TestHandleProduceAckAll(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{
 						Partition: 0,
 						Records:   testBatchBytes(0, 0, 1),
@@ -87,13 +87,13 @@ func TestHandleProduceEtcdUnavailable(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(unavailableMetadataStore{Store: store})
 
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{
 						Partition: 0,
 						Records:   testBatchBytes(0, 0, 1),
@@ -124,13 +124,13 @@ func TestHandleProduceAckZero(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	req := &protocol.ProduceRequest{
-		Acks:      0,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          0,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{
 						Partition: 0,
 						Records:   testBatchBytes(0, 0, 1),
@@ -158,7 +158,7 @@ func TestHandlerApiVersionsUnsupported(t *testing.T) {
 		APIVersion:    5,
 		CorrelationID: 42,
 	}
-	payload, err := handler.Handle(context.Background(), header, &protocol.ApiVersionsRequest{})
+	payload, err := handler.Handle(context.Background(), header, kmsg.NewPtrApiVersionsRequest())
 	if err != nil {
 		t.Fatalf("handler returned error: %v", err)
 	}
@@ -186,13 +186,13 @@ func TestHandleFetch(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	produceReq := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	produceReq := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{
 						Partition: 0,
 						Records:   testBatchBytes(0, 0, 1),
@@ -205,15 +205,15 @@ func TestHandleFetch(t *testing.T) {
 		t.Fatalf("handleProduce: %v", err)
 	}
 
-	fetchReq := &protocol.FetchRequest{
-		Topics: []protocol.FetchTopicRequest{
+	fetchReq := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.FetchPartitionRequest{
+				Topic: "orders",
+				Partitions: []kmsg.FetchRequestTopicPartition{
 					{
-						Partition:   0,
-						FetchOffset: 0,
-						MaxBytes:    1024,
+						Partition:         0,
+						FetchOffset:       0,
+						PartitionMaxBytes: 1024,
 					},
 				},
 			},
@@ -233,13 +233,13 @@ func TestHandleFetchByTopicID(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	produceReq := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	produceReq := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{
 						Partition: 0,
 						Records:   testBatchBytes(0, 0, 1),
@@ -252,15 +252,15 @@ func TestHandleFetchByTopicID(t *testing.T) {
 		t.Fatalf("handleProduce: %v", err)
 	}
 
-	fetchReq := &protocol.FetchRequest{
-		Topics: []protocol.FetchTopicRequest{
+	fetchReq := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{
 			{
 				TopicID: metadata.TopicIDForName("orders"),
-				Partitions: []protocol.FetchPartitionRequest{
+				Partitions: []kmsg.FetchRequestTopicPartition{
 					{
-						Partition:   0,
-						FetchOffset: 0,
-						MaxBytes:    1024,
+						Partition:         0,
+						FetchOffset:       0,
+						PartitionMaxBytes: 1024,
 					},
 				},
 			},
@@ -271,8 +271,11 @@ func TestHandleFetchByTopicID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleFetch: %v", err)
 	}
-	recordSet := decodeFetchResponseV13RecordSet(t, resp)
-	if len(recordSet) == 0 {
+	fetchResp := decodeKmsgResponse(t, 13, resp, kmsg.NewPtrFetchResponse)
+	if len(fetchResp.Topics) == 0 || len(fetchResp.Topics[0].Partitions) == 0 {
+		t.Fatalf("expected topic partition in fetch response")
+	}
+	if len(fetchResp.Topics[0].Partitions[0].RecordBatches) == 0 {
 		t.Fatalf("expected records for topic id fetch")
 	}
 }
@@ -286,13 +289,13 @@ func TestAutoCreateTopicOnProduce(t *testing.T) {
 	})
 	handler := newTestHandler(store)
 
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "auto-created",
-				Partitions: []protocol.ProducePartition{
+				Topic: "auto-created",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{
 						Partition: 0,
 						Records:   testBatchBytes(0, 0, 1),
@@ -323,30 +326,30 @@ func TestAutoCreateTopicOnProduce(t *testing.T) {
 func TestHandleCreateDeleteTopics(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
-	createReq := &protocol.CreateTopicsRequest{
-		Topics: []protocol.CreateTopicConfig{
-			{Name: "payments", NumPartitions: 1, ReplicationFactor: 1},
+	createReq := &kmsg.CreateTopicsRequest{
+		Topics: []kmsg.CreateTopicsRequestTopic{
+			{Topic: "payments", NumPartitions: 1, ReplicationFactor: 1},
 		},
 	}
 	respBytes, err := handler.handleCreateTopics(context.Background(), &protocol.RequestHeader{CorrelationID: 42}, createReq)
 	if err != nil {
 		t.Fatalf("handleCreateTopics: %v", err)
 	}
-	resp := decodeCreateTopicsResponse(t, respBytes, 0)
+	resp := decodeKmsgResponse(t, 0, respBytes, kmsg.NewPtrCreateTopicsResponse)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.NONE {
 		t.Fatalf("expected topic creation success: %#v", resp)
 	}
 	dupRespBytes, _ := handler.handleCreateTopics(context.Background(), &protocol.RequestHeader{CorrelationID: 43}, createReq)
-	dupResp := decodeCreateTopicsResponse(t, dupRespBytes, 0)
+	dupResp := decodeKmsgResponse(t, 0, dupRespBytes, kmsg.NewPtrCreateTopicsResponse)
 	if dupResp.Topics[0].ErrorCode != protocol.TOPIC_ALREADY_EXISTS {
 		t.Fatalf("expected duplicate error got %d", dupResp.Topics[0].ErrorCode)
 	}
-	deleteReq := &protocol.DeleteTopicsRequest{TopicNames: []string{"payments", "missing"}}
+	deleteReq := &kmsg.DeleteTopicsRequest{TopicNames: []string{"payments", "missing"}}
 	delBytes, err := handler.handleDeleteTopics(context.Background(), &protocol.RequestHeader{CorrelationID: 44}, deleteReq)
 	if err != nil {
 		t.Fatalf("handleDeleteTopics: %v", err)
 	}
-	delResp := decodeDeleteTopicsResponse(t, delBytes, 0)
+	delResp := decodeKmsgResponse(t, 0, delBytes, kmsg.NewPtrDeleteTopicsResponse)
 	if len(delResp.Topics) != 2 || delResp.Topics[0].ErrorCode != protocol.NONE {
 		t.Fatalf("expected delete success, got %#v", delResp)
 	}
@@ -358,16 +361,16 @@ func TestHandleCreateDeleteTopics(t *testing.T) {
 func TestHandleCreateTopicsEtcdUnavailable(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(unavailableMetadataStore{Store: store})
-	createReq := &protocol.CreateTopicsRequest{
-		Topics: []protocol.CreateTopicConfig{
-			{Name: "payments", NumPartitions: 1, ReplicationFactor: 1},
+	createReq := &kmsg.CreateTopicsRequest{
+		Topics: []kmsg.CreateTopicsRequestTopic{
+			{Topic: "payments", NumPartitions: 1, ReplicationFactor: 1},
 		},
 	}
 	respBytes, err := handler.handleCreateTopics(context.Background(), &protocol.RequestHeader{CorrelationID: 45}, createReq)
 	if err != nil {
 		t.Fatalf("handleCreateTopics: %v", err)
 	}
-	resp := decodeCreateTopicsResponse(t, respBytes, 0)
+	resp := decodeKmsgResponse(t, 0, respBytes, kmsg.NewPtrCreateTopicsResponse)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != protocol.REQUEST_TIMED_OUT {
 		t.Fatalf("expected etcd unavailable error, got %#v", resp)
 	}
@@ -384,12 +387,12 @@ func TestHandleCreatePartitions(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	req := &protocol.CreatePartitionsRequest{
-		Topics: []protocol.CreatePartitionsTopic{
-			{Name: "orders", Count: 2},
+	req := &kmsg.CreatePartitionsRequest{
+		Topics: []kmsg.CreatePartitionsRequestTopic{
+			{Topic: "orders", Count: 2},
 		},
-		TimeoutMs:    1000,
-		ValidateOnly: false,
+		TimeoutMillis: 1000,
+		ValidateOnly:  false,
 	}
 	payload, err := handler.handleCreatePartitions(context.Background(), &protocol.RequestHeader{
 		CorrelationID: 51,
@@ -398,7 +401,7 @@ func TestHandleCreatePartitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleCreatePartitions: %v", err)
 	}
-	resp := decodeCreatePartitionsResponse(t, payload, 3)
+	resp := decodeKmsgResponse(t, 3, payload, kmsg.NewPtrCreatePartitionsResponse)
 	if len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != 0 {
 		t.Fatalf("unexpected create partitions response: %+v", resp.Topics)
 	}
@@ -415,7 +418,7 @@ func TestHandleCreatePartitionsErrors(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	run := func(req *protocol.CreatePartitionsRequest) *kmsg.CreatePartitionsResponse {
+	run := func(req *kmsg.CreatePartitionsRequest) *kmsg.CreatePartitionsResponse {
 		t.Helper()
 		payload, err := handler.handleCreatePartitions(context.Background(), &protocol.RequestHeader{
 			CorrelationID: 52,
@@ -424,21 +427,21 @@ func TestHandleCreatePartitionsErrors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("handleCreatePartitions: %v", err)
 		}
-		return decodeCreatePartitionsResponse(t, payload, 3)
+		return decodeKmsgResponse(t, 3, payload, kmsg.NewPtrCreatePartitionsResponse)
 	}
 
-	resp := run(&protocol.CreatePartitionsRequest{
-		Topics:       []protocol.CreatePartitionsTopic{{Name: "", Count: 2}},
+	resp := run(&kmsg.CreatePartitionsRequest{
+		Topics:       []kmsg.CreatePartitionsRequestTopic{{Topic: "", Count: 2}},
 		ValidateOnly: true,
 	})
 	if resp.Topics[0].ErrorCode != protocol.INVALID_TOPIC_EXCEPTION {
 		t.Fatalf("expected invalid topic error, got %d", resp.Topics[0].ErrorCode)
 	}
 
-	resp = run(&protocol.CreatePartitionsRequest{
-		Topics: []protocol.CreatePartitionsTopic{
-			{Name: "orders", Count: 2},
-			{Name: "orders", Count: 3},
+	resp = run(&kmsg.CreatePartitionsRequest{
+		Topics: []kmsg.CreatePartitionsRequestTopic{
+			{Topic: "orders", Count: 2},
+			{Topic: "orders", Count: 3},
 		},
 		ValidateOnly: true,
 	})
@@ -449,9 +452,9 @@ func TestHandleCreatePartitionsErrors(t *testing.T) {
 		t.Fatalf("expected duplicate topic error, got %d", resp.Topics[1].ErrorCode)
 	}
 
-	resp = run(&protocol.CreatePartitionsRequest{
-		Topics: []protocol.CreatePartitionsTopic{
-			{Name: "assignments", Count: 2, Assignments: []protocol.CreatePartitionsAssignment{{Replicas: []int32{1}}}},
+	resp = run(&kmsg.CreatePartitionsRequest{
+		Topics: []kmsg.CreatePartitionsRequestTopic{
+			{Topic: "assignments", Count: 2, Assignment: []kmsg.CreatePartitionsRequestTopicAssignment{{Replicas: []int32{1}}}},
 		},
 		ValidateOnly: true,
 	})
@@ -459,16 +462,16 @@ func TestHandleCreatePartitionsErrors(t *testing.T) {
 		t.Fatalf("expected assignment error, got %d", resp.Topics[0].ErrorCode)
 	}
 
-	resp = run(&protocol.CreatePartitionsRequest{
-		Topics:       []protocol.CreatePartitionsTopic{{Name: "orders", Count: 1}},
+	resp = run(&kmsg.CreatePartitionsRequest{
+		Topics:       []kmsg.CreatePartitionsRequestTopic{{Topic: "orders", Count: 1}},
 		ValidateOnly: true,
 	})
 	if resp.Topics[0].ErrorCode != protocol.INVALID_PARTITIONS {
 		t.Fatalf("expected invalid partitions error, got %d", resp.Topics[0].ErrorCode)
 	}
 
-	resp = run(&protocol.CreatePartitionsRequest{
-		Topics:       []protocol.CreatePartitionsTopic{{Name: "missing", Count: 2}},
+	resp = run(&kmsg.CreatePartitionsRequest{
+		Topics:       []kmsg.CreatePartitionsRequestTopic{{Topic: "missing", Count: 2}},
 		ValidateOnly: true,
 	})
 	if resp.Topics[0].ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
@@ -484,7 +487,7 @@ func TestHandleDeleteGroups(t *testing.T) {
 	}
 	handler := newTestHandler(store)
 
-	req := &protocol.DeleteGroupsRequest{Groups: []string{"group-1", "missing", ""}}
+	req := &kmsg.DeleteGroupsRequest{Groups: []string{"group-1", "missing", ""}}
 	header := &protocol.RequestHeader{
 		APIKey:        protocol.APIKeyDeleteGroups,
 		APIVersion:    2,
@@ -494,7 +497,7 @@ func TestHandleDeleteGroups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle DeleteGroups: %v", err)
 	}
-	resp := decodeDeleteGroupsResponse(t, payload, 2)
+	resp := decodeKmsgResponse(t, 2, payload, kmsg.NewPtrDeleteGroupsResponse)
 	if len(resp.Groups) != 3 {
 		t.Fatalf("expected 3 delete group results, got %d", len(resp.Groups))
 	}
@@ -513,13 +516,13 @@ func TestHandleJoinGroupEtcdUnavailable(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(unavailableMetadataStore{Store: store})
 
-	req := &protocol.JoinGroupRequest{
-		GroupID:            "group-1",
-		MemberID:           "member-1",
-		ProtocolType:       "consumer",
-		SessionTimeoutMs:   1000,
-		RebalanceTimeoutMs: 1000,
-		Protocols: []protocol.JoinGroupProtocol{
+	req := &kmsg.JoinGroupRequest{
+		Group:                  "group-1",
+		MemberID:               "member-1",
+		ProtocolType:           "consumer",
+		SessionTimeoutMillis:   1000,
+		RebalanceTimeoutMillis: 1000,
+		Protocols: []kmsg.JoinGroupRequestProtocol{
 			{Name: "range", Metadata: []byte("meta")},
 		},
 	}
@@ -532,7 +535,7 @@ func TestHandleJoinGroupEtcdUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle JoinGroup: %v", err)
 	}
-	resp := decodeJoinGroupResponse(t, payload, 4)
+	resp := decodeKmsgResponse(t, 4, payload, kmsg.NewPtrJoinGroupResponse)
 	if resp.ErrorCode != protocol.REQUEST_TIMED_OUT {
 		t.Fatalf("expected etcd unavailable error, got %d", resp.ErrorCode)
 	}
@@ -542,13 +545,13 @@ func TestHandleOffsetCommitEtcdUnavailable(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(unavailableMetadataStore{Store: store})
 
-	req := &protocol.OffsetCommitRequest{
-		GroupID:  "group-1",
+	req := &kmsg.OffsetCommitRequest{
+		Group:    "group-1",
 		MemberID: "member-1",
-		Topics: []protocol.OffsetCommitTopic{
+		Topics: []kmsg.OffsetCommitRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.OffsetCommitPartition{
+				Topic: "orders",
+				Partitions: []kmsg.OffsetCommitRequestTopicPartition{
 					{Partition: 0, Offset: 5},
 				},
 			},
@@ -563,7 +566,7 @@ func TestHandleOffsetCommitEtcdUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle OffsetCommit: %v", err)
 	}
-	resp := decodeOffsetCommitResponse(t, payload, 3)
+	resp := decodeKmsgResponse(t, 3, payload, kmsg.NewPtrOffsetCommitResponse)
 	if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 		t.Fatalf("expected commit response entries, got %+v", resp.Topics)
 	}
@@ -598,11 +601,11 @@ func TestHandleListOffsets(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			req := &protocol.ListOffsetsRequest{
-				Topics: []protocol.ListOffsetsTopic{
+			req := &kmsg.ListOffsetsRequest{
+				Topics: []kmsg.ListOffsetsRequestTopic{
 					{
-						Name:       "orders",
-						Partitions: []protocol.ListOffsetsPartition{{Partition: 0, Timestamp: tc.timestamp}},
+						Topic:      "orders",
+						Partitions: []kmsg.ListOffsetsRequestTopicPartition{{Partition: 0, Timestamp: tc.timestamp}},
 					},
 				},
 			}
@@ -614,7 +617,7 @@ func TestHandleListOffsets(t *testing.T) {
 			if err != nil {
 				t.Fatalf("handleListOffsets: %v", err)
 			}
-			resp := decodeListOffsetsResponse(t, tc.version, respBytes)
+			resp := decodeKmsgResponse(t, tc.version, respBytes, kmsg.NewPtrListOffsetsResponse)
 			if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
 				t.Fatalf("unexpected list offsets response: %#v", resp)
 			}
@@ -638,11 +641,11 @@ func TestHandleListOffsets(t *testing.T) {
 func TestHandleListOffsetsRejectsUnsupportedVersion(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
-	req := &protocol.ListOffsetsRequest{
-		Topics: []protocol.ListOffsetsTopic{
+	req := &kmsg.ListOffsetsRequest{
+		Topics: []kmsg.ListOffsetsRequestTopic{
 			{
-				Name:       "orders",
-				Partitions: []protocol.ListOffsetsPartition{{Partition: 0, Timestamp: -1}},
+				Topic:      "orders",
+				Partitions: []kmsg.ListOffsetsRequestTopicPartition{{Partition: 0, Timestamp: -1}},
 			},
 		},
 	}
@@ -656,17 +659,17 @@ func TestConsumerGroupLifecycle(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
 
-	joinReq := &protocol.JoinGroupRequest{
-		GroupID:            "group-1",
-		SessionTimeoutMs:   10000,
-		RebalanceTimeoutMs: 10000,
-		MemberID:           "",
-		ProtocolType:       "consumer",
-		Protocols: []protocol.JoinGroupProtocol{
+	joinReq := &kmsg.JoinGroupRequest{
+		Group:                  "group-1",
+		SessionTimeoutMillis:   10000,
+		RebalanceTimeoutMillis: 10000,
+		MemberID:               "",
+		ProtocolType:           "consumer",
+		Protocols: []kmsg.JoinGroupRequestProtocol{
 			{Name: "range", Metadata: encodeJoinMetadata([]string{"orders"})},
 		},
 	}
-	joinResp, err := handler.coordinator.JoinGroup(context.Background(), joinReq, 1)
+	joinResp, err := handler.coordinator.JoinGroup(context.Background(), joinReq)
 	if err != nil {
 		t.Fatalf("JoinGroup: %v", err)
 	}
@@ -674,56 +677,54 @@ func TestConsumerGroupLifecycle(t *testing.T) {
 		t.Fatalf("expected member id")
 	}
 
-	syncReq := &protocol.SyncGroupRequest{
-		GroupID:      "group-1",
-		GenerationID: joinResp.GenerationID,
-		MemberID:     joinResp.MemberID,
+	syncReq := &kmsg.SyncGroupRequest{
+		Group:      "group-1",
+		Generation: joinResp.Generation,
+		MemberID:   joinResp.MemberID,
 	}
-	syncResp, err := handler.coordinator.SyncGroup(context.Background(), syncReq, 2)
+	syncResp, err := handler.coordinator.SyncGroup(context.Background(), syncReq)
 	if err != nil {
 		t.Fatalf("SyncGroup: %v", err)
 	}
-	if len(syncResp.Assignment) == 0 {
+	if len(syncResp.MemberAssignment) == 0 {
 		t.Fatalf("expected assignment bytes")
 	}
 
-	hbResp := handler.coordinator.Heartbeat(context.Background(), &protocol.HeartbeatRequest{
-		GroupID:      "group-1",
-		GenerationID: joinResp.GenerationID,
-		MemberID:     joinResp.MemberID,
-	}, 3)
+	hbResp := handler.coordinator.Heartbeat(context.Background(), &kmsg.HeartbeatRequest{
+		Group:      "group-1",
+		Generation: joinResp.Generation,
+		MemberID:   joinResp.MemberID,
+	})
 	if hbResp.ErrorCode != protocol.NONE {
 		t.Fatalf("heartbeat error: %d", hbResp.ErrorCode)
 	}
 
-	commitResp, err := handler.coordinator.OffsetCommit(context.Background(), &protocol.OffsetCommitRequest{
-		GroupID:      "group-1",
-		GenerationID: joinResp.GenerationID,
-		MemberID:     joinResp.MemberID,
-		Topics: []protocol.OffsetCommitTopic{
+	commitResp, err := handler.coordinator.OffsetCommit(context.Background(), &kmsg.OffsetCommitRequest{
+		Group:      "group-1",
+		Generation: joinResp.Generation,
+		MemberID:   joinResp.MemberID,
+		Topics: []kmsg.OffsetCommitRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.OffsetCommitPartition{
-					{Partition: 0, Offset: 5, Metadata: ""},
+				Topic: "orders",
+				Partitions: []kmsg.OffsetCommitRequestTopicPartition{
+					{Partition: 0, Offset: 5, Metadata: kmsg.StringPtr("")},
 				},
 			},
 		},
-	}, 4)
+	})
 	if err != nil || len(commitResp.Topics) == 0 {
 		t.Fatalf("offset commit failed: %v", err)
 	}
 
-	fetchResp, err := handler.coordinator.OffsetFetch(context.Background(), &protocol.OffsetFetchRequest{
-		GroupID: "group-1",
-		Topics: []protocol.OffsetFetchTopic{
+	fetchResp, err := handler.coordinator.OffsetFetch(context.Background(), &kmsg.OffsetFetchRequest{
+		Group: "group-1",
+		Topics: []kmsg.OffsetFetchRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.OffsetFetchPartition{
-					{Partition: 0},
-				},
+				Topic:      "orders",
+				Partitions: []int32{0},
 			},
 		},
-	}, 5)
+	})
 	if err != nil {
 		t.Fatalf("OffsetFetch: %v", err)
 	}
@@ -744,13 +745,13 @@ func TestProduceBackpressureDegraded(t *testing.T) {
 	handler := newHandler(store, &failingS3Client{}, brokerInfo, testLogger())
 	handler.s3Health.RecordUpload(2*time.Millisecond, nil)
 
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 100,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 100,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{Partition: 0, Records: testBatchBytes(0, 0, 1)},
 				},
 			},
@@ -760,7 +761,7 @@ func TestProduceBackpressureDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleProduce: %v", err)
 	}
-	produceResp := decodeProduceResponse(t, resp, 0)
+	produceResp := decodeKmsgResponse(t, 0, resp, kmsg.NewPtrProduceResponse)
 	code := produceResp.Topics[0].Partitions[0].ErrorCode
 	if code != protocol.REQUEST_TIMED_OUT {
 		t.Fatalf("expected request timed out error, got %d", code)
@@ -773,13 +774,13 @@ func TestProduceBackpressureUnavailable(t *testing.T) {
 	brokerInfo := protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}
 	handler := newHandler(store, &failingS3Client{}, brokerInfo, testLogger())
 
-	req := &protocol.ProduceRequest{
-		Acks:      -1,
-		TimeoutMs: 100,
-		Topics: []protocol.ProduceTopic{
+	req := &kmsg.ProduceRequest{
+		Acks:          -1,
+		TimeoutMillis: 100,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "orders",
-				Partitions: []protocol.ProducePartition{
+				Topic: "orders",
+				Partitions: []kmsg.ProduceRequestTopicPartition{
 					{Partition: 0, Records: testBatchBytes(0, 0, 1)},
 				},
 			},
@@ -789,7 +790,7 @@ func TestProduceBackpressureUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleProduce: %v", err)
 	}
-	produceResp := decodeProduceResponse(t, resp, 0)
+	produceResp := decodeKmsgResponse(t, 0, resp, kmsg.NewPtrProduceResponse)
 	code := produceResp.Topics[0].Partitions[0].ErrorCode
 	if code != protocol.UNKNOWN_SERVER_ERROR {
 		t.Fatalf("expected unknown server error, got %d", code)
@@ -803,11 +804,11 @@ func TestFetchBackpressureDegraded(t *testing.T) {
 	handler := newTestHandler(store)
 	handler.s3Health.RecordOperation("download", 2*time.Millisecond, nil)
 
-	req := &protocol.FetchRequest{
-		Topics: []protocol.FetchTopicRequest{
+	req := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{
 			{
-				Name:       "orders",
-				Partitions: []protocol.FetchPartitionRequest{{Partition: 0, FetchOffset: 0, MaxBytes: 1024}},
+				Topic:      "orders",
+				Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 0, PartitionMaxBytes: 1024}},
 			},
 		},
 	}
@@ -815,7 +816,7 @@ func TestFetchBackpressureDegraded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleFetch: %v", err)
 	}
-	fetchResp := decodeFetchResponse(t, resp)
+	fetchResp := decodeKmsgResponse(t, 11, resp, kmsg.NewPtrFetchResponse)
 	code := fetchResp.Topics[0].Partitions[0].ErrorCode
 	if code != protocol.REQUEST_TIMED_OUT {
 		t.Fatalf("expected request timed out error, got %d", code)
@@ -830,11 +831,11 @@ func TestFetchBackpressureUnavailable(t *testing.T) {
 		handler.s3Health.RecordOperation("download", time.Millisecond, errors.New("boom"))
 	}
 
-	req := &protocol.FetchRequest{
-		Topics: []protocol.FetchTopicRequest{
+	req := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{
 			{
-				Name:       "orders",
-				Partitions: []protocol.FetchPartitionRequest{{Partition: 0, FetchOffset: 0, MaxBytes: 1024}},
+				Topic:      "orders",
+				Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 0, PartitionMaxBytes: 1024}},
 			},
 		},
 	}
@@ -842,7 +843,7 @@ func TestFetchBackpressureUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleFetch: %v", err)
 	}
-	fetchResp := decodeFetchResponse(t, resp)
+	fetchResp := decodeKmsgResponse(t, 11, resp, kmsg.NewPtrFetchResponse)
 	code := fetchResp.Topics[0].Partitions[0].ErrorCode
 	if code != protocol.UNKNOWN_SERVER_ERROR {
 		t.Fatalf("expected unknown server error, got %d", code)
@@ -977,14 +978,14 @@ func TestFranzGoProduceConsumeLocal(t *testing.T) {
 		Topics: []protocol.MetadataTopic{
 			{
 				ErrorCode: 0,
-				Name:      "orders",
+				Topic:     kmsg.StringPtr("orders"),
 				Partitions: []protocol.MetadataPartition{
 					{
-						ErrorCode:      0,
-						PartitionIndex: 0,
-						LeaderID:       1,
-						ReplicaNodes:   []int32{1},
-						ISRNodes:       []int32{1},
+						ErrorCode: 0,
+						Partition: 0,
+						Leader:    1,
+						Replicas:  []int32{1},
+						ISR:       []int32{1},
 					},
 				},
 			},
@@ -1053,491 +1054,20 @@ func TestFranzGoProduceConsumeLocal(t *testing.T) {
 	}
 }
 
-func decodeProduceResponse(t *testing.T, payload []byte, version int16) *protocol.ProduceResponse {
+// decodeKmsgResponse is a generic test helper that decodes any kmsg.Response
+// from a wire-encoded response payload (correlation ID + optional tagged fields + body).
+func decodeKmsgResponse[T kmsg.Response](t *testing.T, version int16, payload []byte, newFn func() T) T {
 	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.ProduceResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	var topicCount int32
-	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
-		t.Fatalf("read topic count: %v", err)
-	}
-	resp.Topics = make([]protocol.ProduceTopicResponse, 0, topicCount)
-	for i := 0; i < int(topicCount); i++ {
-		name := readKafkaString(t, reader)
-		var partCount int32
-		if err := binary.Read(reader, binary.BigEndian, &partCount); err != nil {
-			t.Fatalf("read partition count: %v", err)
-		}
-		topicResp := protocol.ProduceTopicResponse{
-			Name:       name,
-			Partitions: make([]protocol.ProducePartitionResponse, 0, partCount),
-		}
-		for j := 0; j < int(partCount); j++ {
-			var part protocol.ProducePartitionResponse
-			if err := binary.Read(reader, binary.BigEndian, &part.Partition); err != nil {
-				t.Fatalf("read partition id: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.ErrorCode); err != nil {
-				t.Fatalf("read error code: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.BaseOffset); err != nil {
-				t.Fatalf("read base offset: %v", err)
-			}
-			if version >= 3 {
-				if err := binary.Read(reader, binary.BigEndian, &part.LogAppendTimeMs); err != nil {
-					t.Fatalf("read append time: %v", err)
-				}
-			}
-			if version >= 5 {
-				if err := binary.Read(reader, binary.BigEndian, &part.LogStartOffset); err != nil {
-					t.Fatalf("read start offset: %v", err)
-				}
-			}
-			if version >= 8 {
-				var skip int32
-				if err := binary.Read(reader, binary.BigEndian, &skip); err != nil {
-					t.Fatalf("read delta: %v", err)
-				}
-			}
-			topicResp.Partitions = append(topicResp.Partitions, part)
-		}
-		resp.Topics = append(resp.Topics, topicResp)
-	}
-	if version >= 1 {
-		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-			t.Fatalf("read throttle: %v", err)
-		}
-	}
-	return resp
-}
-
-func readKafkaString(t *testing.T, reader *bytes.Reader) string {
-	t.Helper()
-	var length int16
-	if err := binary.Read(reader, binary.BigEndian, &length); err != nil {
-		t.Fatalf("read string length: %v", err)
-	}
-	if length < 0 {
-		return ""
-	}
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(reader, buf); err != nil {
-		t.Fatalf("read string bytes: %v", err)
-	}
-	return string(buf)
-}
-
-func decodeCreateTopicsResponse(t *testing.T, payload []byte, version int16) *protocol.CreateTopicsResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.CreateTopicsResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 2 {
-		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-			t.Fatalf("read throttle ms: %v", err)
-		}
-	}
-	var topicCount int32
-	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
-		t.Fatalf("read topic count: %v", err)
-	}
-	resp.Topics = make([]protocol.CreateTopicResult, 0, topicCount)
-	for i := 0; i < int(topicCount); i++ {
-		name := readKafkaString(t, reader)
-		var code int16
-		if err := binary.Read(reader, binary.BigEndian, &code); err != nil {
-			t.Fatalf("read error code: %v", err)
-		}
-		msg := ""
-		if version >= 1 {
-			msg = readKafkaString(t, reader)
-		}
-		resp.Topics = append(resp.Topics, protocol.CreateTopicResult{Name: name, ErrorCode: code, ErrorMessage: msg})
-	}
-	return resp
-}
-
-func decodeDeleteTopicsResponse(t *testing.T, payload []byte, version int16) *protocol.DeleteTopicsResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.DeleteTopicsResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 1 {
-		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-			t.Fatalf("read throttle ms: %v", err)
-		}
-	}
-	var topicCount int32
-	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
-		t.Fatalf("read topic count: %v", err)
-	}
-	resp.Topics = make([]protocol.DeleteTopicResult, 0, topicCount)
-	for i := 0; i < int(topicCount); i++ {
-		name := readKafkaString(t, reader)
-		var code int16
-		if err := binary.Read(reader, binary.BigEndian, &code); err != nil {
-			t.Fatalf("read error code: %v", err)
-		}
-		resp.Topics = append(resp.Topics, protocol.DeleteTopicResult{Name: name, ErrorCode: code})
-	}
-	return resp
-}
-
-func decodeCreatePartitionsResponse(t *testing.T, payload []byte, version int16) *kmsg.CreatePartitionsResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 2 {
-		skipTaggedFields(t, reader)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrCreatePartitionsResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode create partitions response: %v", err)
-	}
-	return resp
-}
-
-func decodeDeleteGroupsResponse(t *testing.T, payload []byte, version int16) *kmsg.DeleteGroupsResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 2 {
-		skipTaggedFields(t, reader)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrDeleteGroupsResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode delete groups response: %v", err)
-	}
-	return resp
-}
-
-func decodeJoinGroupResponse(t *testing.T, payload []byte, version int16) *kmsg.JoinGroupResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrJoinGroupResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode join group response: %v", err)
-	}
-	return resp
-}
-
-func decodeOffsetCommitResponse(t *testing.T, payload []byte, version int16) *kmsg.OffsetCommitResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var corr int32
-	if err := binary.Read(reader, binary.BigEndian, &corr); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-	resp := kmsg.NewPtrOffsetCommitResponse()
-	resp.Version = version
-	if err := resp.ReadFrom(body); err != nil {
-		t.Fatalf("decode offset commit response: %v", err)
-	}
-	return resp
-}
-
-func decodeListOffsetsResponse(t *testing.T, version int16, payload []byte) *protocol.ListOffsetsResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.ListOffsetsResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if version >= 2 {
-		if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-			t.Fatalf("read throttle: %v", err)
-		}
-	}
-	var topicCount int32
-	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
-		t.Fatalf("read topic count: %v", err)
-	}
-	resp.Topics = make([]protocol.ListOffsetsTopicResponse, 0, topicCount)
-	for i := 0; i < int(topicCount); i++ {
-		topic := protocol.ListOffsetsTopicResponse{}
-		topic.Name = readKafkaString(t, reader)
-		var partCount int32
-		if err := binary.Read(reader, binary.BigEndian, &partCount); err != nil {
-			t.Fatalf("read partition count: %v", err)
-		}
-		topic.Partitions = make([]protocol.ListOffsetsPartitionResponse, 0, partCount)
-		for j := 0; j < int(partCount); j++ {
-			var part protocol.ListOffsetsPartitionResponse
-			if err := binary.Read(reader, binary.BigEndian, &part.Partition); err != nil {
-				t.Fatalf("read partition: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.ErrorCode); err != nil {
-				t.Fatalf("read error code: %v", err)
-			}
-			if version == 0 {
-				var count int32
-				if err := binary.Read(reader, binary.BigEndian, &count); err != nil {
-					t.Fatalf("read offset count: %v", err)
-				}
-				part.OldStyleOffsets = make([]int64, count)
-				for k := 0; k < int(count); k++ {
-					if err := binary.Read(reader, binary.BigEndian, &part.OldStyleOffsets[k]); err != nil {
-						t.Fatalf("read offset[%d]: %v", k, err)
-					}
-				}
-			} else {
-				if err := binary.Read(reader, binary.BigEndian, &part.Timestamp); err != nil {
-					t.Fatalf("read timestamp: %v", err)
-				}
-				if err := binary.Read(reader, binary.BigEndian, &part.Offset); err != nil {
-					t.Fatalf("read offset: %v", err)
-				}
-				if version >= 4 {
-					if err := binary.Read(reader, binary.BigEndian, &part.LeaderEpoch); err != nil {
-						t.Fatalf("read leader epoch: %v", err)
-					}
-				}
-			}
-			topic.Partitions = append(topic.Partitions, part)
-		}
-		resp.Topics = append(resp.Topics, topic)
-	}
-	return resp
-}
-
-func decodeFetchResponse(t *testing.T, payload []byte) *protocol.FetchResponse {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	resp := &protocol.FetchResponse{}
-	if err := binary.Read(reader, binary.BigEndian, &resp.CorrelationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	if err := binary.Read(reader, binary.BigEndian, &resp.ThrottleMs); err != nil {
-		t.Fatalf("read throttle: %v", err)
-	}
-	if err := binary.Read(reader, binary.BigEndian, &resp.ErrorCode); err != nil {
-		t.Fatalf("read fetch error: %v", err)
-	}
-	if err := binary.Read(reader, binary.BigEndian, &resp.SessionID); err != nil {
-		t.Fatalf("read fetch session id: %v", err)
-	}
-	var topicCount int32
-	if err := binary.Read(reader, binary.BigEndian, &topicCount); err != nil {
-		t.Fatalf("read topic count: %v", err)
-	}
-	resp.Topics = make([]protocol.FetchTopicResponse, 0, topicCount)
-	for i := 0; i < int(topicCount); i++ {
-		topic := protocol.FetchTopicResponse{}
-		topic.Name = readKafkaString(t, reader)
-		var partitionCount int32
-		if err := binary.Read(reader, binary.BigEndian, &partitionCount); err != nil {
-			t.Fatalf("read partition count: %v", err)
-		}
-		topic.Partitions = make([]protocol.FetchPartitionResponse, 0, partitionCount)
-		for j := 0; j < int(partitionCount); j++ {
-			part := protocol.FetchPartitionResponse{}
-			if err := binary.Read(reader, binary.BigEndian, &part.Partition); err != nil {
-				t.Fatalf("read partition: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.ErrorCode); err != nil {
-				t.Fatalf("read error code: %v", err)
-			}
-			if err := binary.Read(reader, binary.BigEndian, &part.HighWatermark); err != nil {
-				t.Fatalf("read watermark: %v", err)
-			}
-			var lastStable int64
-			if err := binary.Read(reader, binary.BigEndian, &lastStable); err != nil {
-				t.Fatalf("read last stable offset: %v", err)
-			}
-			var logStart int32
-			if err := binary.Read(reader, binary.BigEndian, &logStart); err != nil {
-				t.Fatalf("read log start offset: %v", err)
-			}
-			var recordLen int32
-			if err := binary.Read(reader, binary.BigEndian, &recordLen); err != nil {
-				t.Fatalf("read record length: %v", err)
-			}
-			if recordLen > 0 {
-				buf := make([]byte, recordLen)
-				if _, err := io.ReadFull(reader, buf); err != nil {
-					t.Fatalf("read record bytes: %v", err)
-				}
-				part.RecordSet = buf
-			}
-			topic.Partitions = append(topic.Partitions, part)
-		}
-		resp.Topics = append(resp.Topics, topic)
-	}
-	return resp
-}
-
-func decodeFetchResponseV13RecordSet(t *testing.T, payload []byte) []byte {
-	t.Helper()
-	reader := bytes.NewReader(payload)
-	var correlationID int32
-	if err := binary.Read(reader, binary.BigEndian, &correlationID); err != nil {
-		t.Fatalf("read correlation id: %v", err)
-	}
-	skipTaggedFields(t, reader)
-	var throttleMs int32
-	if err := binary.Read(reader, binary.BigEndian, &throttleMs); err != nil {
-		t.Fatalf("read throttle: %v", err)
-	}
-	var errorCode int16
-	if err := binary.Read(reader, binary.BigEndian, &errorCode); err != nil {
-		t.Fatalf("read error code: %v", err)
-	}
-	var sessionID int32
-	if err := binary.Read(reader, binary.BigEndian, &sessionID); err != nil {
-		t.Fatalf("read session id: %v", err)
-	}
-	topicCount := readCompactArrayLen(t, reader)
-	if topicCount <= 0 {
-		t.Fatalf("expected topic count, got %d", topicCount)
-	}
-	if _, err := readUUID(reader); err != nil {
-		t.Fatalf("read topic id: %v", err)
-	}
-	partitionCount := readCompactArrayLen(t, reader)
-	if partitionCount <= 0 {
-		t.Fatalf("expected partition count, got %d", partitionCount)
-	}
-	var partitionID int32
-	if err := binary.Read(reader, binary.BigEndian, &partitionID); err != nil {
-		t.Fatalf("read partition id: %v", err)
-	}
-	var partError int16
-	if err := binary.Read(reader, binary.BigEndian, &partError); err != nil {
-		t.Fatalf("read partition error: %v", err)
-	}
-	if partError != 0 {
-		t.Fatalf("expected partition error 0 got %d", partError)
-	}
-	var watermark int64
-	if err := binary.Read(reader, binary.BigEndian, &watermark); err != nil {
-		t.Fatalf("read high watermark: %v", err)
-	}
-	var lastStable int64
-	if err := binary.Read(reader, binary.BigEndian, &lastStable); err != nil {
-		t.Fatalf("read last stable: %v", err)
-	}
-	var logStart int64
-	if err := binary.Read(reader, binary.BigEndian, &logStart); err != nil {
-		t.Fatalf("read log start: %v", err)
-	}
-	abortedCount := readCompactArrayLen(t, reader)
-	for i := int32(0); i < abortedCount; i++ {
-		var producerID int64
-		if err := binary.Read(reader, binary.BigEndian, &producerID); err != nil {
-			t.Fatalf("read aborted producer id: %v", err)
-		}
-		var firstOffset int64
-		if err := binary.Read(reader, binary.BigEndian, &firstOffset); err != nil {
-			t.Fatalf("read aborted first offset: %v", err)
-		}
-	}
-	var preferredReadReplica int32
-	if err := binary.Read(reader, binary.BigEndian, &preferredReadReplica); err != nil {
-		t.Fatalf("read preferred replica: %v", err)
-	}
-	recordSet := readCompactBytes(t, reader)
-	skipTaggedFields(t, reader)
-	skipTaggedFields(t, reader)
-	skipTaggedFields(t, reader)
-	return recordSet
-}
-
-func readCompactArrayLen(t *testing.T, reader io.ByteReader) int32 {
-	t.Helper()
-	val, err := binary.ReadUvarint(reader)
-	if err != nil {
-		t.Fatalf("read uvarint: %v", err)
-	}
-	if val == 0 {
-		return -1
-	}
-	return int32(val - 1)
-}
-
-func readCompactBytes(t *testing.T, reader io.Reader) []byte {
-	t.Helper()
-	br, ok := reader.(io.ByteReader)
+	resp := newFn()
+	body, ok := protocol.SkipResponseHeader(resp.Key(), version, payload)
 	if !ok {
-		t.Fatalf("reader does not support ReadByte")
+		t.Fatalf("failed to skip response header for api key %d", resp.Key())
 	}
-	val, err := binary.ReadUvarint(br)
-	if err != nil {
-		t.Fatalf("read compact bytes length: %v", err)
+	resp.SetVersion(version)
+	if err := resp.ReadFrom(body); err != nil {
+		t.Fatalf("decode response for api key %d v%d: %v", resp.Key(), version, err)
 	}
-	if val == 0 {
-		return nil
-	}
-	length := int(val - 1)
-	buf := make([]byte, length)
-	if _, err := io.ReadFull(reader, buf); err != nil {
-		t.Fatalf("read compact bytes: %v", err)
-	}
-	return buf
-}
-
-func skipTaggedFields(t *testing.T, reader io.ByteReader) {
-	t.Helper()
-	count, err := binary.ReadUvarint(reader)
-	if err != nil {
-		t.Fatalf("read tagged field count: %v", err)
-	}
-	for i := uint64(0); i < count; i++ {
-		if _, err := binary.ReadUvarint(reader); err != nil {
-			t.Fatalf("read tag: %v", err)
-		}
-		size, err := binary.ReadUvarint(reader)
-		if err != nil {
-			t.Fatalf("read tag size: %v", err)
-		}
-		if size == 0 {
-			continue
-		}
-		if _, err := io.CopyN(io.Discard, reader.(io.Reader), int64(size)); err != nil {
-			t.Fatalf("skip tag bytes: %v", err)
-		}
-	}
-}
-
-func readUUID(reader io.Reader) ([16]byte, error) {
-	var id [16]byte
-	_, err := io.ReadFull(reader, id[:])
-	return id, err
+	return resp
 }
 
 func TestMetricsHandlerExposesS3Health(t *testing.T) {
@@ -1557,9 +1087,9 @@ func TestMetricsHandlerExposesS3Health(t *testing.T) {
 func TestMetricsHandlerExposesAdminMetrics(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)
-	req := &protocol.DescribeConfigsRequest{
-		Resources: []protocol.DescribeConfigsResource{
-			{ResourceType: protocol.ConfigResourceTopic, ResourceName: "orders"},
+	req := &kmsg.DescribeConfigsRequest{
+		Resources: []kmsg.DescribeConfigsRequestResource{
+			{ResourceType: kmsg.ConfigResourceTypeTopic, ResourceName: "orders"},
 		},
 	}
 	header := &protocol.RequestHeader{
@@ -1774,7 +1304,7 @@ func TestCoordinatorBrokerPrefersMetadata(t *testing.T) {
 		err:   errors.New("metadata down"),
 	}, storage.NewMemoryS3Client(), brokerInfo, testLogger())
 	got = handler.coordinatorBroker(context.Background())
-	if got != brokerInfo {
+	if got.NodeID != brokerInfo.NodeID || got.Host != brokerInfo.Host || got.Port != brokerInfo.Port {
 		t.Fatalf("expected broker info fallback, got %+v", got)
 	}
 }

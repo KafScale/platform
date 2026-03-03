@@ -15,10 +15,11 @@
 
 package protocol
 
-// API keys supported by Kafscale in milestone 1.
+// API keys supported by KafScale.
 const (
 	APIKeyProduce              int16 = 0
 	APIKeyFetch                int16 = 1
+	APIKeyListOffsets          int16 = 2
 	APIKeyMetadata             int16 = 3
 	APIKeyOffsetCommit         int16 = 8
 	APIKeyOffsetFetch          int16 = 9
@@ -33,16 +34,8 @@ const (
 	APIKeyCreateTopics         int16 = 19
 	APIKeyDeleteTopics         int16 = 20
 	APIKeyOffsetForLeaderEpoch int16 = 23
-	APIKeyListOffsets          int16 = 2
 	APIKeyDescribeConfigs      int16 = 32
 	APIKeyAlterConfigs         int16 = 33
 	APIKeyCreatePartitions     int16 = 37
 	APIKeyDeleteGroups         int16 = 42
 )
-
-// ApiVersion describes the supported version range for an API.
-type ApiVersion struct {
-	APIKey     int16
-	MinVersion int16
-	MaxVersion int16
-}

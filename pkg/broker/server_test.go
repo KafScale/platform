@@ -27,30 +27,29 @@ import (
 	"syscall"
 
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type testHandler struct{}
 
-func (h *testHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
+func (h *testHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error) {
 	switch req.(type) {
-	case *protocol.ApiVersionsRequest:
-		return protocol.EncodeApiVersionsResponse(&protocol.ApiVersionsResponse{
-			CorrelationID: header.CorrelationID,
-			Versions: []protocol.ApiVersion{
-				{APIKey: protocol.APIKeyApiVersion, MinVersion: 0, MaxVersion: 0},
-			},
-		}, header.APIVersion)
-	case *protocol.MetadataRequest:
-		return protocol.EncodeMetadataResponse(&protocol.MetadataResponse{
-			CorrelationID: header.CorrelationID,
-			Brokers: []protocol.MetadataBroker{
-				{NodeID: 1, Host: "localhost", Port: 9092},
-			},
-			ControllerID: 1,
-			Topics: []protocol.MetadataTopic{
-				{Name: "orders"},
-			},
-		}, header.APIVersion)
+	case *kmsg.ApiVersionsRequest:
+		resp := kmsg.NewPtrApiVersionsResponse()
+		resp.ApiKeys = []kmsg.ApiVersionsResponseApiKey{
+			{ApiKey: protocol.APIKeyApiVersion, MinVersion: 0, MaxVersion: 0},
+		}
+		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+	case *kmsg.MetadataRequest:
+		resp := kmsg.NewPtrMetadataResponse()
+		resp.Brokers = []kmsg.MetadataResponseBroker{
+			{NodeID: 1, Host: "localhost", Port: 9092},
+		}
+		resp.ControllerID = 1
+		topic := kmsg.NewMetadataResponseTopic()
+		topic.Topic = kmsg.StringPtr("orders")
+		resp.Topics = []kmsg.MetadataResponseTopic{topic}
+		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	default:
 		return nil, errors.New("unsupported api")
 	}

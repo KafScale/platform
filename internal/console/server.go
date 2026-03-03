@@ -359,14 +359,14 @@ func statusFromMetadata(meta *metadata.ClusterMetadata, metrics *MetricsSnapshot
 		partitions := make([]partitionDetails, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
 			partitions = append(partitions, partitionDetails{
-				ID:       part.PartitionIndex,
-				Leader:   part.LeaderID,
-				Replicas: len(part.ReplicaNodes),
-				ISR:      len(part.ISRNodes),
+				ID:       part.Partition,
+				Leader:   part.Leader,
+				Replicas: len(part.Replicas),
+				ISR:      len(part.ISR),
 			})
 		}
 		resp.Topics = append(resp.Topics, topicInfo{
-			Name:              topic.Name,
+			Name:              *topic.Topic,
 			Partitions:        len(topic.Partitions),
 			State:             state,
 			PartitionsDetails: partitions,
