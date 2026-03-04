@@ -114,6 +114,8 @@ func main() {
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 
+	logger.Warn("DEPRECATED: standalone lfs-proxy is deprecated; use the unified proxy with KAFSCALE_PROXY_LFS_ENABLED=true instead")
+
 	addr := envOrDefault("KAFSCALE_LFS_PROXY_ADDR", defaultProxyAddr)
 	healthAddr := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_HEALTH_ADDR"))
 	metricsAddr := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_METRICS_ADDR"))
