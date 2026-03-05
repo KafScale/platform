@@ -371,13 +371,10 @@ func (p *lfsProxy) handleConnection(ctx context.Context, conn net.Conn) {
 }
 
 func (p *lfsProxy) handleApiVersions(header *protocol.RequestHeader) ([]byte, error) {
-	resp := &protocol.ApiVersionsResponse{
-		CorrelationID: header.CorrelationID,
-		ErrorCode:     protocol.NONE,
-		ThrottleMs:    0,
-		Versions:      p.apiVersions,
-	}
-	return protocol.EncodeApiVersionsResponse(resp, header.APIVersion)
+	resp := kmsg.NewPtrApiVersionsResponse()
+	resp.ErrorCode = protocol.NONE
+	resp.ApiKeys = p.apiVersions
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
 func (p *lfsProxy) respondBackendError(conn net.Conn, header *protocol.RequestHeader, payload []byte) {
@@ -393,7 +390,7 @@ func (p *lfsProxy) handleMetadata(ctx context.Context, header *protocol.RequestH
 	if err != nil {
 		return nil, err
 	}
-	metaReq, ok := req.(*protocol.MetadataRequest)
+	metaReq, ok := req.(*kmsg.MetadataRequest)
 	if !ok {
 		return nil, fmt.Errorf("unexpected metadata request type %T", req)
 	}
@@ -404,33 +401,35 @@ func (p *lfsProxy) handleMetadata(ctx context.Context, header *protocol.RequestH
 	}
 	p.logger.Debug("metadata response", "advertisedHost", p.advertisedHost, "advertisedPort", p.advertisedPort, "topics", len(meta.Topics))
 	resp := buildProxyMetadataResponse(meta, header.CorrelationID, header.APIVersion, p.advertisedHost, p.advertisedPort)
-	return protocol.EncodeMetadataResponse(resp, header.APIVersion)
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
 func (p *lfsProxy) handleFindCoordinator(header *protocol.RequestHeader) ([]byte, error) {
-	resp := &protocol.FindCoordinatorResponse{
-		CorrelationID: header.CorrelationID,
-		ThrottleMs:    0,
-		ErrorCode:     protocol.NONE,
-		NodeID:        0,
-		Host:          p.advertisedHost,
-		Port:          p.advertisedPort,
-		ErrorMessage:  nil,
-	}
-	return protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion)
+	resp := kmsg.NewPtrFindCoordinatorResponse()
+	resp.ErrorCode = protocol.NONE
+	resp.NodeID = 0
+	resp.Host = p.advertisedHost
+	resp.Port = p.advertisedPort
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
-func (p *lfsProxy) loadMetadata(ctx context.Context, req *protocol.MetadataRequest) (*metadata.ClusterMetadata, error) {
+func (p *lfsProxy) loadMetadata(ctx context.Context, req *kmsg.MetadataRequest) (*metadata.ClusterMetadata, error) {
+	var zeroID [16]byte
 	useIDs := false
-	zeroID := [16]byte{}
-	for _, id := range req.TopicIDs {
-		if id != zeroID {
-			useIDs = true
-			break
+	var topicNames []string
+	if req.Topics != nil {
+		for _, t := range req.Topics {
+			if t.TopicID != zeroID {
+				useIDs = true
+				break
+			}
+			if t.Topic != nil {
+				topicNames = append(topicNames, *t.Topic)
+			}
 		}
 	}
 	if !useIDs {
-		return p.store.Metadata(ctx, req.Topics)
+		return p.store.Metadata(ctx, topicNames)
 	}
 	all, err := p.store.Metadata(ctx, nil)
 	if err != nil {
@@ -440,17 +439,17 @@ func (p *lfsProxy) loadMetadata(ctx context.Context, req *protocol.MetadataReque
 	for _, topic := range all.Topics {
 		index[topic.TopicID] = topic
 	}
-	filtered := make([]protocol.MetadataTopic, 0, len(req.TopicIDs))
-	for _, id := range req.TopicIDs {
-		if id == zeroID {
+	filtered := make([]protocol.MetadataTopic, 0, len(req.Topics))
+	for _, t := range req.Topics {
+		if t.TopicID == zeroID {
 			continue
 		}
-		if topic, ok := index[id]; ok {
+		if topic, ok := index[t.TopicID]; ok {
 			filtered = append(filtered, topic)
 		} else {
 			filtered = append(filtered, protocol.MetadataTopic{
 				ErrorCode: protocol.UNKNOWN_TOPIC_ID,
-				TopicID:   id,
+				TopicID:   t.TopicID,
 			})
 		}
 	}
@@ -468,7 +467,7 @@ func (p *lfsProxy) handleProduce(ctx context.Context, header *protocol.RequestHe
 	if err != nil {
 		return nil, false, err
 	}
-	prodReq, ok := req.(*protocol.ProduceRequest)
+	prodReq, ok := req.(*kmsg.ProduceRequest)
 	if !ok {
 		return nil, false, fmt.Errorf("unexpected produce request type %T", req)
 	}
@@ -511,7 +510,7 @@ func (p *lfsProxy) handleProduce(ctx context.Context, header *protocol.RequestHe
 	return resp, true, err
 }
 
-func (p *lfsProxy) rewriteProduceRecords(ctx context.Context, header *protocol.RequestHeader, req *protocol.ProduceRequest) (rewriteResult, error) {
+func (p *lfsProxy) rewriteProduceRecords(ctx context.Context, header *protocol.RequestHeader, req *kmsg.ProduceRequest) (rewriteResult, error) {
 	if p.logger == nil {
 		p.logger = slog.Default()
 	}
@@ -557,7 +556,7 @@ func (p *lfsProxy) rewriteProduceRecords(ctx context.Context, header *protocol.R
 					}
 					recordChanged = true
 					modified = true
-					topics[topic.Name] = struct{}{}
+					topics[topic.Topic] = struct{}{}
 					checksumHeader := strings.TrimSpace(string(lfsValue))
 					algHeader, _ := findHeaderValue(headers, "LFS_BLOB_ALG")
 					alg, err := p.resolveChecksumAlg(string(algHeader))
@@ -568,12 +567,12 @@ func (p *lfsProxy) rewriteProduceRecords(ctx context.Context, header *protocol.R
 						return rewriteResult{}, errors.New("checksum provided but checksum algorithm is none")
 					}
 					payload := rec.Value
-					p.logger.Info("LFS blob detected", "topic", topic.Name, "size", len(payload))
+					p.logger.Info("LFS blob detected", "topic", topic.Topic, "size", len(payload))
 					if int64(len(payload)) > p.maxBlob {
 						p.logger.Error("blob exceeds max size", "size", len(payload), "max", p.maxBlob)
 						return rewriteResult{}, fmt.Errorf("blob size %d exceeds max %d", len(payload), p.maxBlob)
 					}
-					key := p.buildObjectKey(topic.Name)
+					key := p.buildObjectKey(topic.Topic)
 					sha256Hex, checksum, checksumAlg, err := p.s3Uploader.Upload(ctx, key, payload, alg)
 					if err != nil {
 						p.metrics.IncS3Errors()
@@ -581,7 +580,7 @@ func (p *lfsProxy) rewriteProduceRecords(ctx context.Context, header *protocol.R
 					}
 					if checksumHeader != "" && checksum != "" && !strings.EqualFold(checksumHeader, checksum) {
 						if err := p.s3Uploader.DeleteObject(ctx, key); err != nil {
-							p.trackOrphans([]orphanInfo{{Topic: topic.Name, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
+							p.trackOrphans([]orphanInfo{{Topic: topic.Topic, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
 							return rewriteResult{}, fmt.Errorf("checksum mismatch; delete failed: %w", err)
 						}
 						return rewriteResult{}, &lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}
@@ -606,7 +605,7 @@ func (p *lfsProxy) rewriteProduceRecords(ctx context.Context, header *protocol.R
 					rec.Value = encoded
 					rec.Headers = dropHeader(headers, "LFS_BLOB")
 					uploadBytes += int64(len(payload))
-					orphans = append(orphans, orphanInfo{Topic: topic.Name, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
+					orphans = append(orphans, orphanInfo{Topic: topic.Topic, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
 				}
 				if !recordChanged {
 					continue
@@ -741,7 +740,7 @@ func (p *lfsProxy) forwardToBackend(ctx context.Context, conn net.Conn, backendA
 	return frame.Payload, nil
 }
 
-func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID int32, version int16, host string, port int32) *protocol.MetadataResponse {
+func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID int32, version int16, host string, port int32) *kmsg.MetadataResponse {
 	brokers := []protocol.MetadataBroker{{
 		NodeID: 0,
 		Host:   host,
@@ -756,30 +755,28 @@ func buildProxyMetadataResponse(meta *metadata.ClusterMetadata, correlationID in
 		partitions := make([]protocol.MetadataPartition, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
 			partitions = append(partitions, protocol.MetadataPartition{
-				ErrorCode:      part.ErrorCode,
-				PartitionIndex: part.PartitionIndex,
-				LeaderID:       0,
-				LeaderEpoch:    part.LeaderEpoch,
-				ReplicaNodes:   []int32{0},
-				ISRNodes:       []int32{0},
+				ErrorCode:   part.ErrorCode,
+				Partition:   part.Partition,
+				Leader:      0,
+				LeaderEpoch: part.LeaderEpoch,
+				Replicas:    []int32{0},
+				ISR:         []int32{0},
 			})
 		}
 		topics = append(topics, protocol.MetadataTopic{
 			ErrorCode:  topic.ErrorCode,
-			Name:       topic.Name,
+			Topic:      topic.Topic,
 			TopicID:    topic.TopicID,
 			IsInternal: topic.IsInternal,
 			Partitions: partitions,
 		})
 	}
-	return &protocol.MetadataResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		Brokers:       brokers,
-		ClusterID:     meta.ClusterID,
-		ControllerID:  0,
-		Topics:        topics,
-	}
+	resp := kmsg.NewPtrMetadataResponse()
+	resp.Brokers = brokers
+	resp.ClusterID = meta.ClusterID
+	resp.ControllerID = 0
+	resp.Topics = topics
+	return resp
 }
 
 func (p *lfsProxy) buildNotReadyResponse(header *protocol.RequestHeader, payload []byte) ([]byte, bool, error) {
@@ -787,81 +784,70 @@ func (p *lfsProxy) buildNotReadyResponse(header *protocol.RequestHeader, payload
 	if err != nil {
 		return nil, false, err
 	}
-	wrapEncode := func(payload []byte, err error) ([]byte, bool, error) {
-		return payload, true, err
+	encode := func(resp kmsg.Response) ([]byte, bool, error) {
+		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), true, nil
 	}
 	switch header.APIKey {
 	case protocol.APIKeyMetadata:
-		metaReq := req.(*protocol.MetadataRequest)
-		topics := make([]protocol.MetadataTopic, 0, len(metaReq.Topics)+len(metaReq.TopicIDs))
-		for _, name := range metaReq.Topics {
-			topics = append(topics, protocol.MetadataTopic{
-				ErrorCode: protocol.REQUEST_TIMED_OUT,
-				Name:      name,
-			})
+		metaReq := req.(*kmsg.MetadataRequest)
+		resp := kmsg.NewPtrMetadataResponse()
+		resp.ControllerID = -1
+		for _, t := range metaReq.Topics {
+			mt := kmsg.NewMetadataResponseTopic()
+			mt.ErrorCode = protocol.REQUEST_TIMED_OUT
+			mt.Topic = t.Topic
+			mt.TopicID = t.TopicID
+			resp.Topics = append(resp.Topics, mt)
 		}
-		for _, id := range metaReq.TopicIDs {
-			topics = append(topics, protocol.MetadataTopic{
-				ErrorCode: protocol.REQUEST_TIMED_OUT,
-				TopicID:   id,
-			})
-		}
-		resp := &protocol.MetadataResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			Brokers:       nil,
-			ClusterID:     nil,
-			ControllerID:  -1,
-			Topics:        topics,
-		}
-		return wrapEncode(protocol.EncodeMetadataResponse(resp, header.APIVersion))
+		return encode(resp)
 	case protocol.APIKeyFindCoordinator:
-		resp := &protocol.FindCoordinatorResponse{
-			CorrelationID: header.CorrelationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REQUEST_TIMED_OUT,
-			ErrorMessage:  nil,
-			NodeID:        -1,
-			Host:          "",
-			Port:          0,
-		}
-		return wrapEncode(protocol.EncodeFindCoordinatorResponse(resp, header.APIVersion))
+		resp := kmsg.NewPtrFindCoordinatorResponse()
+		resp.ErrorCode = protocol.REQUEST_TIMED_OUT
+		resp.NodeID = -1
+		return encode(resp)
 	case protocol.APIKeyProduce:
-		prodReq := req.(*protocol.ProduceRequest)
-		resp, err := buildProduceErrorResponse(prodReq, header.CorrelationID, header.APIVersion, protocol.REQUEST_TIMED_OUT)
-		return wrapEncode(resp, err)
+		prodReq := req.(*kmsg.ProduceRequest)
+		resp := kmsg.NewPtrProduceResponse()
+		for _, topic := range prodReq.Topics {
+			rt := kmsg.NewProduceResponseTopic()
+			rt.Topic = topic.Topic
+			for _, part := range topic.Partitions {
+				rp := kmsg.NewProduceResponseTopicPartition()
+				rp.Partition = part.Partition
+				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+				rp.BaseOffset = -1
+				rp.LogAppendTime = -1
+				rp.LogStartOffset = -1
+				rt.Partitions = append(rt.Partitions, rp)
+			}
+			resp.Topics = append(resp.Topics, rt)
+		}
+		return encode(resp)
 	default:
 		return nil, false, nil
 	}
 }
 
-func buildProduceErrorResponse(req *protocol.ProduceRequest, correlationID int32, version int16, code int16) ([]byte, error) {
-	topics := make([]protocol.ProduceTopicResponse, 0, len(req.Topics))
+func buildProduceErrorResponse(req *kmsg.ProduceRequest, correlationID int32, version int16, code int16) ([]byte, error) {
+	resp := kmsg.NewPtrProduceResponse()
 	for _, topic := range req.Topics {
-		partitions := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
+		rt := kmsg.NewProduceResponseTopic()
+		rt.Topic = topic.Topic
 		for _, part := range topic.Partitions {
-			partitions = append(partitions, protocol.ProducePartitionResponse{
-				Partition:       part.Partition,
-				ErrorCode:       code,
-				BaseOffset:      -1,
-				LogAppendTimeMs: -1,
-				LogStartOffset:  -1,
-			})
+			rp := kmsg.NewProduceResponseTopicPartition()
+			rp.Partition = part.Partition
+			rp.ErrorCode = code
+			rp.BaseOffset = -1
+			rp.LogAppendTime = -1
+			rp.LogStartOffset = -1
+			rt.Partitions = append(rt.Partitions, rp)
 		}
-		topics = append(topics, protocol.ProduceTopicResponse{
-			Name:       topic.Name,
-			Partitions: partitions,
-		})
+		resp.Topics = append(resp.Topics, rt)
 	}
-	resp := &protocol.ProduceResponse{
-		CorrelationID: correlationID,
-		Topics:        topics,
-		ThrottleMs:    0,
-	}
-	return protocol.EncodeProduceResponse(resp, version)
+	return protocol.EncodeResponse(correlationID, version, resp), nil
 }
 
-func generateProxyApiVersions() []protocol.ApiVersion {
+func generateProxyApiVersions() []kmsg.ApiVersionsResponseApiKey {
 	supported := []struct {
 		key      int16
 		min, max int16
@@ -889,17 +875,17 @@ func generateProxyApiVersions() []protocol.ApiVersion {
 		{key: protocol.APIKeyDeleteGroups, min: 0, max: 2},
 	}
 	unsupported := []int16{4, 5, 6, 7, 21, 22, 24, 25, 26}
-	entries := make([]protocol.ApiVersion, 0, len(supported)+len(unsupported))
+	entries := make([]kmsg.ApiVersionsResponseApiKey, 0, len(supported)+len(unsupported))
 	for _, entry := range supported {
-		entries = append(entries, protocol.ApiVersion{
-			APIKey:     entry.key,
+		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
+			ApiKey:     entry.key,
 			MinVersion: entry.min,
 			MaxVersion: entry.max,
 		})
 	}
 	for _, key := range unsupported {
-		entries = append(entries, protocol.ApiVersion{
-			APIKey:     key,
+		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
+			ApiKey:     key,
 			MinVersion: -1,
 			MaxVersion: -1,
 		})
@@ -907,18 +893,18 @@ func generateProxyApiVersions() []protocol.ApiVersion {
 	return entries
 }
 
-func topicsFromProduce(req *protocol.ProduceRequest) []string {
+func topicsFromProduce(req *kmsg.ProduceRequest) []string {
 	if req == nil {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(req.Topics))
 	out := make([]string, 0, len(req.Topics))
 	for _, topic := range req.Topics {
-		if _, ok := seen[topic.Name]; ok {
+		if _, ok := seen[topic.Topic]; ok {
 			continue
 		}
-		seen[topic.Name] = struct{}{}
-		out = append(out, topic.Name)
+		seen[topic.Topic] = struct{}{}
+		out = append(out, topic.Topic)
 	}
 	if len(out) == 0 {
 		return []string{"unknown"}

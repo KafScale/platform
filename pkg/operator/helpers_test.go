@@ -38,6 +38,7 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/KafScale/platform/pkg/storage"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -825,15 +826,15 @@ func TestReconcileLfsProxyResourcesEnabled(t *testing.T) {
 func TestMergeSnapshots(t *testing.T) {
 	next := metadata.ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders"},
+			{Topic: kmsg.StringPtr("orders")},
 		},
 	}
 	existing := metadata.ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders"},  // duplicate
-			{Name: "events"},  // new
-			{Name: ""},        // empty name, skip
-			{Name: "bad", ErrorCode: 3}, // error, skip
+			{Topic: kmsg.StringPtr("orders")},  // duplicate
+			{Topic: kmsg.StringPtr("events")},  // new
+			{Topic: kmsg.StringPtr("")},         // empty name, skip
+			{Topic: kmsg.StringPtr("bad"), ErrorCode: 3}, // error, skip
 		},
 	}
 
@@ -843,7 +844,7 @@ func TestMergeSnapshots(t *testing.T) {
 	}
 	names := make(map[string]bool)
 	for _, topic := range merged.Topics {
-		names[topic.Name] = true
+		names[*topic.Topic] = true
 	}
 	if !names["orders"] || !names["events"] {
 		t.Fatalf("unexpected topics: %v", merged.Topics)
@@ -852,7 +853,7 @@ func TestMergeSnapshots(t *testing.T) {
 
 func TestMergeSnapshotsEmptyExisting(t *testing.T) {
 	next := metadata.ClusterMetadata{
-		Topics: []protocol.MetadataTopic{{Name: "orders"}},
+		Topics: []protocol.MetadataTopic{{Topic: kmsg.StringPtr("orders")}},
 	}
 	existing := metadata.ClusterMetadata{}
 
@@ -1285,7 +1286,7 @@ func TestPublishMetadataSnapshotHappyPath(t *testing.T) {
 		Brokers:      []protocol.MetadataBroker{{NodeID: 0, Host: "b0", Port: 9092}},
 		ControllerID: 0,
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders", Partitions: []protocol.MetadataPartition{{PartitionIndex: 0, LeaderID: 0}}},
+			{Topic: kmsg.StringPtr("orders"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 0}}},
 		},
 	}
 
@@ -1312,7 +1313,7 @@ func TestPublishMetadataSnapshotHappyPath(t *testing.T) {
 	if err := json.Unmarshal(resp.Kvs[0].Value, &loaded); err != nil {
 		t.Fatalf("unmarshal snapshot: %v", err)
 	}
-	if len(loaded.Topics) != 1 || loaded.Topics[0].Name != "orders" {
+	if len(loaded.Topics) != 1 || *loaded.Topics[0].Topic != "orders" {
 		t.Fatalf("unexpected snapshot: %+v", loaded)
 	}
 }
@@ -1323,7 +1324,7 @@ func TestPublishMetadataSnapshotMergesExisting(t *testing.T) {
 
 	// Write an initial snapshot with "events" topic
 	initial := metadata.ClusterMetadata{
-		Topics: []protocol.MetadataTopic{{Name: "events"}},
+		Topics: []protocol.MetadataTopic{{Topic: kmsg.StringPtr("events")}},
 	}
 	if err := PublishMetadataSnapshot(context.Background(), endpoints, initial); err != nil {
 		t.Fatalf("initial publish: %v", err)
@@ -1332,7 +1333,7 @@ func TestPublishMetadataSnapshotMergesExisting(t *testing.T) {
 	// Publish new snapshot with "orders" only; should merge "events" from existing
 	next := metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{{NodeID: 0, Host: "b0", Port: 9092}},
-		Topics:  []protocol.MetadataTopic{{Name: "orders"}},
+		Topics:  []protocol.MetadataTopic{{Topic: kmsg.StringPtr("orders")}},
 	}
 	if err := PublishMetadataSnapshot(context.Background(), endpoints, next); err != nil {
 		t.Fatalf("second publish: %v", err)
@@ -1356,7 +1357,7 @@ func TestPublishMetadataSnapshotMergesExisting(t *testing.T) {
 	}
 	names := make(map[string]bool)
 	for _, topic := range loaded.Topics {
-		names[topic.Name] = true
+		names[*topic.Topic] = true
 	}
 	if !names["orders"] || !names["events"] {
 		t.Fatalf("expected orders+events, got %v", loaded.Topics)
@@ -1419,7 +1420,7 @@ func TestSnapshotPublisherPublish(t *testing.T) {
 	if err := json.Unmarshal(resp.Kvs[0].Value, &loaded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(loaded.Topics) != 1 || loaded.Topics[0].Name != "orders" {
+	if len(loaded.Topics) != 1 || *loaded.Topics[0].Topic != "orders" {
 		t.Fatalf("unexpected topics: %+v", loaded.Topics)
 	}
 	if len(loaded.Topics[0].Partitions) != 3 {

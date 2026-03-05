@@ -56,159 +56,6 @@ func TestByteReaderInt32(t *testing.T) {
 	}
 }
 
-func TestByteReaderInt64(t *testing.T) {
-	buf := make([]byte, 8)
-	binary.BigEndian.PutUint64(buf, 567890)
-	r := newByteReader(buf)
-	v, err := r.Int64()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v != 567890 {
-		t.Fatalf("expected 567890, got %d", v)
-	}
-
-	// Error path
-	_, err = newByteReader(nil).Int64()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestByteReaderUUID(t *testing.T) {
-	uuid := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
-	r := newByteReader(uuid[:])
-	got, err := r.UUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != uuid {
-		t.Fatalf("UUID mismatch")
-	}
-
-	// Error path
-	_, err = newByteReader(nil).UUID()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestByteReaderBool(t *testing.T) {
-	r := newByteReader([]byte{1})
-	v, err := r.Bool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !v {
-		t.Fatal("expected true")
-	}
-
-	r2 := newByteReader([]byte{0})
-	v2, err := r2.Bool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v2 {
-		t.Fatal("expected false")
-	}
-
-	// Invalid bool value
-	r3 := newByteReader([]byte{42})
-	_, err = r3.Bool()
-	if err == nil {
-		t.Fatal("expected error for invalid bool byte")
-	}
-
-	// Error path
-	_, err = newByteReader(nil).Bool()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestByteReaderString(t *testing.T) {
-	// Build: length (2 bytes) + string bytes
-	str := "hello"
-	buf := make([]byte, 2+len(str))
-	binary.BigEndian.PutUint16(buf, uint16(len(str)))
-	copy(buf[2:], str)
-
-	r := newByteReader(buf)
-	got, err := r.String()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != str {
-		t.Fatalf("expected %q, got %q", str, got)
-	}
-
-	// Negative length
-	negBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(negBuf, 0xFFFF) // -1 as int16
-	r2 := newByteReader(negBuf)
-	_, err = r2.String()
-	if err == nil {
-		t.Fatal("expected error for negative string length")
-	}
-}
-
-func TestByteReaderCompactString(t *testing.T) {
-	str := "test"
-	// Compact encoding: varint(len+1) + bytes
-	buf := []byte{byte(len(str) + 1)}
-	buf = append(buf, str...)
-
-	r := newByteReader(buf)
-	got, err := r.CompactString()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != str {
-		t.Fatalf("expected %q, got %q", str, got)
-	}
-}
-
-func TestByteReaderInt8(t *testing.T) {
-	r := newByteReader([]byte{0x7F})
-	v, err := r.Int8()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if v != 127 {
-		t.Fatalf("expected 127, got %d", v)
-	}
-
-	_, err = newByteReader(nil).Int8()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-}
-
-func TestByteReaderBytes(t *testing.T) {
-	data := []byte("binary")
-	buf := make([]byte, 4+len(data))
-	binary.BigEndian.PutUint32(buf, uint32(len(data)))
-	copy(buf[4:], data)
-
-	r := newByteReader(buf)
-	got, err := r.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, data) {
-		t.Fatalf("bytes mismatch")
-	}
-
-	// Negative length
-	negBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(negBuf, 0xFFFFFFFF) // -1 as int32
-	r2 := newByteReader(negBuf)
-	_, err = r2.Bytes()
-	if err == nil {
-		t.Fatal("expected error for negative bytes length")
-	}
-}
-
 func TestByteReaderRemaining(t *testing.T) {
 	r := newByteReader([]byte{1, 2, 3, 4, 5})
 	if r.remaining() != 5 {
@@ -224,45 +71,15 @@ func TestByteWriterBasic(t *testing.T) {
 	w := newByteWriter(0)
 	w.Int16(42)
 	w.Int32(1234)
-	w.Int64(567890)
 
 	data := w.Bytes()
 	r := newByteReader(data)
 
 	v16, _ := r.Int16()
 	v32, _ := r.Int32()
-	v64, _ := r.Int64()
 
-	if v16 != 42 || v32 != 1234 || v64 != 567890 {
-		t.Fatalf("round-trip mismatch: %d %d %d", v16, v32, v64)
-	}
-}
-
-func TestByteWriterString(t *testing.T) {
-	w := newByteWriter(0)
-	w.String("hello")
-
-	r := newByteReader(w.Bytes())
-	got, err := r.String()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "hello" {
-		t.Fatalf("expected 'hello', got %q", got)
-	}
-}
-
-func TestByteWriterCompactString(t *testing.T) {
-	w := newByteWriter(0)
-	w.CompactString("test")
-
-	r := newByteReader(w.Bytes())
-	got, err := r.CompactString()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "test" {
-		t.Fatalf("expected 'test', got %q", got)
+	if v16 != 42 || v32 != 1234 {
+		t.Fatalf("round-trip mismatch: %d %d", v16, v32)
 	}
 }
 
@@ -296,34 +113,6 @@ func TestFrameReadEmpty(t *testing.T) {
 	_, err := ReadFrame(bytes.NewReader(nil))
 	if err == nil {
 		t.Fatal("expected error for empty reader")
-	}
-}
-
-func TestEncodeResponse(t *testing.T) {
-	payload := []byte{0x01, 0x02, 0x03}
-	data, err := EncodeResponse(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(data) != 7 { // 4 length + 3 payload
-		t.Fatalf("expected 7 bytes, got %d", len(data))
-	}
-	length := int32(binary.BigEndian.Uint32(data[:4]))
-	if length != 3 {
-		t.Fatalf("expected length 3, got %d", length)
-	}
-	if !bytes.Equal(data[4:], payload) {
-		t.Fatal("payload mismatch")
-	}
-}
-
-func TestEncodeResponseEmpty(t *testing.T) {
-	data, err := EncodeResponse(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(data) != 4 {
-		t.Fatalf("expected 4 bytes, got %d", len(data))
 	}
 }
 
@@ -427,155 +216,6 @@ func TestNullableStringRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCompactNullableStringRoundTrip(t *testing.T) {
-	// Non-nil string
-	w := newByteWriter(16)
-	s := "world"
-	w.CompactNullableString(&s)
-	r := newByteReader(w.Bytes())
-	got, err := r.CompactNullableString()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || *got != "world" {
-		t.Fatalf("expected 'world', got %v", got)
-	}
-
-	// Nil string
-	w2 := newByteWriter(4)
-	w2.CompactNullableString(nil)
-	r2 := newByteReader(w2.Bytes())
-	got2, err := r2.CompactNullableString()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got2 != nil {
-		t.Fatalf("expected nil, got %v", got2)
-	}
-}
-
-func TestCompactStringNull(t *testing.T) {
-	// CompactString with null encoding (varint 0 = length -1)
-	r := newByteReader([]byte{0})
-	_, err := r.CompactString()
-	if err == nil {
-		t.Fatal("expected error for null compact string")
-	}
-	if !strings.Contains(err.Error(), "null") {
-		t.Fatalf("expected null error, got: %v", err)
-	}
-}
-
-func TestCompactBytesRoundTrip(t *testing.T) {
-	// Non-nil bytes
-	w := newByteWriter(16)
-	w.CompactBytes([]byte{1, 2, 3})
-	r := newByteReader(w.Bytes())
-	got, err := r.CompactBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, []byte{1, 2, 3}) {
-		t.Fatalf("bytes mismatch: %v", got)
-	}
-
-	// Nil bytes
-	w2 := newByteWriter(4)
-	w2.CompactBytes(nil)
-	r2 := newByteReader(w2.Bytes())
-	got2, err := r2.CompactBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got2 != nil {
-		t.Fatalf("expected nil, got %v", got2)
-	}
-
-	// Empty bytes
-	w3 := newByteWriter(4)
-	w3.CompactBytes([]byte{})
-	r3 := newByteReader(w3.Bytes())
-	got3, err := r3.CompactBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got3) != 0 {
-		t.Fatalf("expected empty, got %v", got3)
-	}
-}
-
-func TestBytesWithLengthRoundTrip(t *testing.T) {
-	w := newByteWriter(16)
-	w.BytesWithLength([]byte("data"))
-	r := newByteReader(w.Bytes())
-	got, err := r.Bytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "data" {
-		t.Fatalf("expected 'data', got %q", got)
-	}
-}
-
-func TestUVarintRoundTrip(t *testing.T) {
-	for _, val := range []uint64{0, 1, 127, 128, 16383, 16384, 1<<63 - 1} {
-		w := newByteWriter(16)
-		w.UVarint(val)
-		r := newByteReader(w.Bytes())
-		got, err := r.UVarint()
-		if err != nil {
-			t.Fatalf("UVarint(%d): %v", val, err)
-		}
-		if got != val {
-			t.Fatalf("expected %d, got %d", val, got)
-		}
-	}
-
-	// Error path
-	_, err := newByteReader(nil).UVarint()
-	if err == nil {
-		t.Fatal("expected error for empty reader")
-	}
-}
-
-func TestCompactArrayLenRoundTrip(t *testing.T) {
-	// Null array (length -1)
-	w := newByteWriter(4)
-	w.CompactArrayLen(-1)
-	r := newByteReader(w.Bytes())
-	got, err := r.CompactArrayLen()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != -1 {
-		t.Fatalf("expected -1, got %d", got)
-	}
-
-	// Empty array (length 0)
-	w2 := newByteWriter(4)
-	w2.CompactArrayLen(0)
-	r2 := newByteReader(w2.Bytes())
-	got2, err := r2.CompactArrayLen()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got2 != 0 {
-		t.Fatalf("expected 0, got %d", got2)
-	}
-
-	// Normal array
-	w3 := newByteWriter(4)
-	w3.CompactArrayLen(5)
-	r3 := newByteReader(w3.Bytes())
-	got3, err := r3.CompactArrayLen()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got3 != 5 {
-		t.Fatalf("expected 5, got %d", got3)
-	}
-}
-
 func TestWriteFrameRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	payload := []byte{0xDE, 0xAD, 0xBE, 0xEF}
@@ -624,91 +264,24 @@ func (w *failWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestByteWriterBoolUUID(t *testing.T) {
-	w := newByteWriter(32)
-	w.Bool(true)
-	w.Bool(false)
-	uuid := [16]byte{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160}
-	w.UUID(uuid)
-	w.Int8(-42)
+func TestUVarintRoundTrip(t *testing.T) {
+	for _, val := range []uint64{0, 1, 127, 128, 16383, 16384, 1<<63 - 1} {
+		w := newByteWriter(16)
+		w.UVarint(val)
+		r := newByteReader(w.Bytes())
+		got, err := r.UVarint()
+		if err != nil {
+			t.Fatalf("UVarint(%d): %v", val, err)
+		}
+		if got != val {
+			t.Fatalf("expected %d, got %d", val, got)
+		}
+	}
 
-	r := newByteReader(w.Bytes())
-	b1, _ := r.Bool()
-	b2, _ := r.Bool()
-	gotUUID, _ := r.UUID()
-	i8, _ := r.Int8()
-
-	if !b1 || b2 {
-		t.Fatalf("bool mismatch: %v %v", b1, b2)
-	}
-	if gotUUID != uuid {
-		t.Fatal("UUID mismatch")
-	}
-	if i8 != -42 {
-		t.Fatalf("expected -42, got %d", i8)
-	}
-}
-
-func TestByteWriterStringEmpty(t *testing.T) {
-	w := newByteWriter(4)
-	w.String("")
-	r := newByteReader(w.Bytes())
-	got, err := r.String()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "" {
-		t.Fatalf("expected empty string, got %q", got)
-	}
-}
-
-func TestByteWriterCompactStringEmpty(t *testing.T) {
-	w := newByteWriter(4)
-	w.CompactString("")
-	r := newByteReader(w.Bytes())
-	got, err := r.CompactString()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "" {
-		t.Fatalf("expected empty string, got %q", got)
-	}
-}
-
-func TestAPIKeyMethods(t *testing.T) {
-	tests := []struct {
-		name string
-		req  Request
-		key  int16
-	}{
-		{"ApiVersions", ApiVersionsRequest{}, APIKeyApiVersion},
-		{"Produce", ProduceRequest{}, APIKeyProduce},
-		{"Fetch", FetchRequest{}, APIKeyFetch},
-		{"Metadata", MetadataRequest{}, APIKeyMetadata},
-		{"CreateTopics", CreateTopicsRequest{}, APIKeyCreateTopics},
-		{"DeleteTopics", DeleteTopicsRequest{}, APIKeyDeleteTopics},
-		{"ListOffsets", ListOffsetsRequest{}, APIKeyListOffsets},
-		{"FindCoordinator", FindCoordinatorRequest{}, APIKeyFindCoordinator},
-		{"JoinGroup", JoinGroupRequest{}, APIKeyJoinGroup},
-		{"SyncGroup", SyncGroupRequest{}, APIKeySyncGroup},
-		{"Heartbeat", HeartbeatRequest{}, APIKeyHeartbeat},
-		{"LeaveGroup", LeaveGroupRequest{}, APIKeyLeaveGroup},
-		{"OffsetCommit", OffsetCommitRequest{}, APIKeyOffsetCommit},
-		{"OffsetFetch", OffsetFetchRequest{}, APIKeyOffsetFetch},
-		{"OffsetForLeaderEpoch", OffsetForLeaderEpochRequest{}, APIKeyOffsetForLeaderEpoch},
-		{"DescribeConfigs", DescribeConfigsRequest{}, APIKeyDescribeConfigs},
-		{"AlterConfigs", AlterConfigsRequest{}, APIKeyAlterConfigs},
-		{"CreatePartitions", CreatePartitionsRequest{}, APIKeyCreatePartitions},
-		{"DeleteGroups", DeleteGroupsRequest{}, APIKeyDeleteGroups},
-		{"DescribeGroups", DescribeGroupsRequest{}, APIKeyDescribeGroups},
-		{"ListGroups", ListGroupsRequest{}, APIKeyListGroups},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.req.APIKey(); got != tc.key {
-				t.Fatalf("expected APIKey %d, got %d", tc.key, got)
-			}
-		})
+	// Error path
+	_, err := newByteReader(nil).UVarint()
+	if err == nil {
+		t.Fatal("expected error for empty reader")
 	}
 }
 
@@ -742,76 +315,6 @@ func TestParseRequestUnknownAPIKey(t *testing.T) {
 	}
 }
 
-func TestIsFlexibleRequest(t *testing.T) {
-	if !isFlexibleRequest(APIKeyApiVersion, 3) {
-		t.Fatal("ApiVersion v3 should be flexible")
-	}
-	if isFlexibleRequest(APIKeyApiVersion, 2) {
-		t.Fatal("ApiVersion v2 should not be flexible")
-	}
-	if !isFlexibleRequest(APIKeyProduce, 9) {
-		t.Fatal("Produce v9 should be flexible")
-	}
-	if isFlexibleRequest(APIKeyProduce, 8) {
-		t.Fatal("Produce v8 should not be flexible")
-	}
-	if isFlexibleRequest(12345, 0) {
-		t.Fatal("unknown key should not be flexible")
-	}
-}
-
-func TestByteReaderStringTruncated(t *testing.T) {
-	// String with length=10 but only 3 bytes of data
-	buf := make([]byte, 2+3)
-	binary.BigEndian.PutUint16(buf, 10)
-	copy(buf[2:], "abc")
-	r := newByteReader(buf)
-	_, err := r.String()
-	if err == nil {
-		t.Fatal("expected error for truncated string data")
-	}
-}
-
-func TestCompactBytesReadError(t *testing.T) {
-	// Compact bytes with length indicating more data than available
-	w := newByteWriter(4)
-	w.UVarint(100) // length+1 = 100, so length = 99
-	r := newByteReader(w.Bytes())
-	_, err := r.CompactBytes()
-	if err == nil {
-		t.Fatal("expected error for truncated compact bytes")
-	}
-}
-
-func TestCompactNullableStringReadError(t *testing.T) {
-	// Compact nullable string with length indicating more data than available
-	w := newByteWriter(4)
-	w.UVarint(50) // length+1 = 50, so length = 49
-	r := newByteReader(w.Bytes())
-	_, err := r.CompactNullableString()
-	if err == nil {
-		t.Fatal("expected error for truncated compact nullable string")
-	}
-}
-
-func TestByteReaderCompactStringErrors(t *testing.T) {
-	// Empty reader — compactLength fails
-	r := newByteReader(nil)
-	_, err := r.CompactString()
-	if err == nil {
-		t.Fatal("expected error for empty CompactString")
-	}
-
-	// compactLength OK but read fails (length > remaining)
-	w := newByteWriter(4)
-	w.UVarint(100) // length+1 = 100
-	r = newByteReader(w.Bytes())
-	_, err = r.CompactString()
-	if err == nil {
-		t.Fatal("expected error for truncated CompactString data")
-	}
-}
-
 func TestByteReaderNullableStringError(t *testing.T) {
 	// Int16 read fails
 	r := newByteReader(nil)
@@ -827,31 +330,6 @@ func TestByteReaderNullableStringError(t *testing.T) {
 	_, err = r.NullableString()
 	if err == nil {
 		t.Fatal("expected error for truncated NullableString data")
-	}
-}
-
-func TestByteReaderBytesError(t *testing.T) {
-	r := newByteReader(nil)
-	_, err := r.Bytes()
-	if err == nil {
-		t.Fatal("expected error for empty Bytes")
-	}
-
-	// Valid length but truncated data
-	w := newByteWriter(4)
-	w.Int32(100)
-	r = newByteReader(w.Bytes())
-	_, err = r.Bytes()
-	if err == nil {
-		t.Fatal("expected error for truncated Bytes data")
-	}
-}
-
-func TestByteReaderCompactBytesError(t *testing.T) {
-	r := newByteReader(nil)
-	_, err := r.CompactBytes()
-	if err == nil {
-		t.Fatal("expected error for empty CompactBytes")
 	}
 }
 
@@ -877,13 +355,5 @@ func TestByteReaderSkipTaggedFieldsErrors(t *testing.T) {
 	r = newByteReader(w.Bytes())
 	if err := r.SkipTaggedFields(); err == nil {
 		t.Fatal("expected error for missing tagged field size")
-	}
-}
-
-func TestByteReaderCompactLengthError(t *testing.T) {
-	r := newByteReader(nil)
-	_, err := r.CompactArrayLen()
-	if err == nil {
-		t.Fatal("expected error for empty CompactArrayLen")
 	}
 }

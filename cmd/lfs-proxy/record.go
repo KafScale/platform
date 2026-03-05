@@ -132,11 +132,13 @@ func (w *byteWriter) Bytes() []byte {
 	return w.buf
 }
 
-func encodeProduceRequest(header *protocol.RequestHeader, req *protocol.ProduceRequest) ([]byte, error) {
+func encodeProduceRequest(header *protocol.RequestHeader, req *kmsg.ProduceRequest) ([]byte, error) {
 	if header == nil || req == nil {
 		return nil, errors.New("nil header or request")
 	}
-	flexible := isFlexibleRequest(header.APIKey, header.APIVersion)
+	req.SetVersion(header.APIVersion)
+	// Build header manually (kmsg doesn't handle request headers)
+	flexible := req.IsFlexible()
 	w := newByteWriter(0)
 	w.Int16(header.APIKey)
 	w.Int16(header.APIVersion)
@@ -145,46 +147,9 @@ func encodeProduceRequest(header *protocol.RequestHeader, req *protocol.ProduceR
 	if flexible {
 		w.WriteTaggedFields(0)
 	}
-
-	if header.APIVersion >= 3 {
-		if flexible {
-			w.CompactNullableString(req.TransactionalID)
-		} else {
-			w.NullableString(req.TransactionalID)
-		}
-	}
-	w.Int16(req.Acks)
-	w.Int32(req.TimeoutMs)
-	if flexible {
-		w.CompactArrayLen(len(req.Topics))
-	} else {
-		w.Int32(int32(len(req.Topics)))
-	}
-	for _, topic := range req.Topics {
-		if flexible {
-			w.CompactString(topic.Name)
-			w.CompactArrayLen(len(topic.Partitions))
-		} else {
-			w.String(topic.Name)
-			w.Int32(int32(len(topic.Partitions)))
-		}
-		for _, partition := range topic.Partitions {
-			w.Int32(partition.Partition)
-			if flexible {
-				w.CompactBytes(partition.Records)
-				w.WriteTaggedFields(0)
-			} else {
-				w.BytesWithLength(partition.Records)
-			}
-		}
-		if flexible {
-			w.WriteTaggedFields(0)
-		}
-	}
-	if flexible {
-		w.WriteTaggedFields(0)
-	}
-
+	// Append kmsg-encoded body
+	body := req.AppendTo(nil)
+	w.write(body)
 	return w.Bytes(), nil
 }
 

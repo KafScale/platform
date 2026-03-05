@@ -329,7 +329,7 @@ func TestServerHandleConnection_BadFrame(t *testing.T) {
 
 type errorHandler struct{}
 
-func (h *errorHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
+func (h *errorHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error) {
 	return nil, errors.New("handler error")
 }
 
@@ -359,7 +359,7 @@ func TestServerHandleConnection_HandlerError(t *testing.T) {
 
 type nilHandler struct{}
 
-func (h *nilHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error) {
+func (h *nilHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error) {
 	return nil, nil
 }
 

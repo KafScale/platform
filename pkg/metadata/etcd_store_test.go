@@ -305,7 +305,7 @@ func TestEtcdStoreMetadataAndAvailable(t *testing.T) {
 		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "b0", Port: 9092}},
 		ControllerID: 1,
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders", Partitions: []protocol.MetadataPartition{{PartitionIndex: 0, LeaderID: 1}}},
+			{Topic: kmsg.StringPtr("orders"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1}}},
 		},
 	}
 	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})

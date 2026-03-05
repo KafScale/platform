@@ -121,13 +121,13 @@ func TestRewriteProduceRecords(t *testing.T) {
 	}
 	batchBytes := buildRecordBatch([]kmsg.Record{rec})
 
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "topic",
-				Partitions: []protocol.ProducePartition{{
+				Topic: "topic",
+				Partitions: []kmsg.ProduceRequestTopicPartition{{
 					Partition: 0,
 					Records:   batchBytes,
 				}},
@@ -155,7 +155,7 @@ func TestRewriteProduceRecords(t *testing.T) {
 	if parsedHeader.APIKey != protocol.APIKeyProduce {
 		t.Fatalf("unexpected api key %d", parsedHeader.APIKey)
 	}
-	prodReq := parsedReq.(*protocol.ProduceRequest)
+	prodReq := parsedReq.(*kmsg.ProduceRequest)
 	batches, err := decodeRecordBatches(prodReq.Topics[0].Partitions[0].Records)
 	if err != nil {
 		t.Fatalf("decode record batches: %v", err)
@@ -190,13 +190,13 @@ func TestRewriteProduceRecordsPassthrough(t *testing.T) {
 	}
 	batchBytes := buildRecordBatch([]kmsg.Record{rec})
 
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{
 			{
-				Name: "topic",
-				Partitions: []protocol.ProducePartition{{
+				Topic: "topic",
+				Partitions: []kmsg.ProduceRequestTopicPartition{{
 					Partition: 0,
 					Records:   batchBytes,
 				}},
@@ -231,12 +231,12 @@ func TestRewriteProduceRecordsS3Failure(t *testing.T) {
 	}
 	batchBytes := buildRecordBatch([]kmsg.Record{rec})
 
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -267,12 +267,12 @@ func TestRewriteProduceRecordsChecksumMismatch(t *testing.T) {
 	}
 	batchBytes := buildRecordBatch([]kmsg.Record{rec})
 
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -303,12 +303,12 @@ func TestRewriteProduceRecordsMaxBlobSize(t *testing.T) {
 	}
 	batchBytes := buildRecordBatch([]kmsg.Record{rec})
 
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 1000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 1000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},

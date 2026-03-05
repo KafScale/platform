@@ -115,7 +115,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 					}
 					recordChanged = true
 					modified = true
-					topics[topic.Name] = struct{}{}
+					topics[topic.Topic] = struct{}{}
 					checksumHeader := strings.TrimSpace(string(lfsValue))
 					algHeader, _ := lfsFindHeaderValue(headers, "LFS_BLOB_ALG")
 					alg, err := m.resolveChecksumAlg(string(algHeader))
@@ -126,12 +126,12 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 						return lfsRewriteResult{}, errors.New("checksum provided but checksum algorithm is none")
 					}
 					payload := rec.Value
-					m.logger.Info("LFS blob detected", "topic", topic.Name, "size", len(payload))
+					m.logger.Info("LFS blob detected", "topic", topic.Topic, "size", len(payload))
 					if int64(len(payload)) > m.maxBlob {
 						m.logger.Error("blob exceeds max size", "size", len(payload), "max", m.maxBlob)
 						return lfsRewriteResult{}, fmt.Errorf("blob size %d exceeds max %d", len(payload), m.maxBlob)
 					}
-					key := m.buildObjectKey(topic.Name)
+					key := m.buildObjectKey(topic.Topic)
 					sha256Hex, checksum, checksumAlg, err := m.s3Uploader.Upload(ctx, key, payload, alg)
 					if err != nil {
 						m.metrics.IncS3Errors()
@@ -139,7 +139,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 					}
 					if checksumHeader != "" && checksum != "" && !strings.EqualFold(checksumHeader, checksum) {
 						if err := m.s3Uploader.DeleteObject(ctx, key); err != nil {
-							m.trackOrphans([]orphanInfo{{Topic: topic.Name, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
+							m.trackOrphans([]orphanInfo{{Topic: topic.Topic, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
 							return lfsRewriteResult{}, fmt.Errorf("checksum mismatch; delete failed: %w", err)
 						}
 						return lfsRewriteResult{}, &lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}
@@ -164,7 +164,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 					rec.Value = encoded
 					rec.Headers = lfsDropHeader(headers, "LFS_BLOB")
 					uploadBytes += int64(len(payload))
-					orphans = append(orphans, orphanInfo{Topic: topic.Name, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
+					orphans = append(orphans, orphanInfo{Topic: topic.Topic, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
 				}
 				if !recordChanged {
 					continue

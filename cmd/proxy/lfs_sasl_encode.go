@@ -200,13 +200,13 @@ func lfsEncodeProduceRequest(header *protocol.RequestHeader, req *protocol.Produ
 
 	if header.APIVersion >= 3 {
 		if flexible {
-			w.CompactNullableString(req.TransactionalID)
+			w.CompactNullableString(req.TransactionID)
 		} else {
-			w.NullableString(req.TransactionalID)
+			w.NullableString(req.TransactionID)
 		}
 	}
 	w.Int16(req.Acks)
-	w.Int32(req.TimeoutMs)
+	w.Int32(req.TimeoutMillis)
 	if flexible {
 		w.CompactArrayLen(len(req.Topics))
 	} else {
@@ -214,10 +214,10 @@ func lfsEncodeProduceRequest(header *protocol.RequestHeader, req *protocol.Produ
 	}
 	for _, topic := range req.Topics {
 		if flexible {
-			w.CompactString(topic.Name)
+			w.CompactString(topic.Topic)
 			w.CompactArrayLen(len(topic.Partitions))
 		} else {
-			w.String(topic.Name)
+			w.String(topic.Topic)
 			w.Int32(int32(len(topic.Partitions)))
 		}
 		for _, partition := range topic.Partitions {

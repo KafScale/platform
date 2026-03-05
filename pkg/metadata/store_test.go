@@ -344,10 +344,10 @@ func TestFetchTopicConfigDefault(t *testing.T) {
 	store := NewInMemoryStore(ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
 			{
-				Name: "events",
+				Topic: kmsg.StringPtr("events"),
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0, ReplicaNodes: []int32{1, 2}},
-					{PartitionIndex: 1, ReplicaNodes: []int32{1, 2}},
+					{Partition: 0, Replicas: []int32{1, 2}},
+					{Partition: 1, Replicas: []int32{1, 2}},
 				},
 			},
 		},
@@ -615,10 +615,10 @@ func TestDefaultTopicConfigFromTopicNil(t *testing.T) {
 
 func TestDefaultTopicConfigFromTopicWithReplicas(t *testing.T) {
 	topic := &protocol.MetadataTopic{
-		Name: "events",
+		Topic: kmsg.StringPtr("events"),
 		Partitions: []protocol.MetadataPartition{
-			{PartitionIndex: 0, ReplicaNodes: []int32{1, 2, 3}},
-			{PartitionIndex: 1, ReplicaNodes: []int32{1, 2, 3}},
+			{Partition: 0, Replicas: []int32{1, 2, 3}},
+			{Partition: 1, Replicas: []int32{1, 2, 3}},
 		},
 	}
 	cfg := defaultTopicConfigFromTopic(topic, 0) // replicationFactor <= 0 triggers auto-detect

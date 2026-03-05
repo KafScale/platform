@@ -93,7 +93,6 @@ type lfsModule struct {
 	backendRetries int
 	backendBackoff time.Duration
 	backends       []string
-	store          interface{ Metadata(ctx context.Context, topics []string) (*protocol.MetadataResponse, error) }
 	cacheMu        sync.RWMutex
 	cachedBackends []string
 	rr             uint32
@@ -491,11 +490,11 @@ func lfsTopicsFromProduce(req *protocol.ProduceRequest) []string {
 	seen := make(map[string]struct{}, len(req.Topics))
 	out := make([]string, 0, len(req.Topics))
 	for _, topic := range req.Topics {
-		if _, ok := seen[topic.Name]; ok {
+		if _, ok := seen[topic.Topic]; ok {
 			continue
 		}
-		seen[topic.Name] = struct{}{}
-		out = append(out, topic.Name)
+		seen[topic.Topic] = struct{}{}
+		out = append(out, topic.Topic)
 	}
 	if len(out) == 0 {
 		return []string{"unknown"}

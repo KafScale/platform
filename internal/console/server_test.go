@@ -153,10 +153,10 @@ func TestHandleStatusWithStore(t *testing.T) {
 		ClusterID:    &clusterID,
 		Topics: []protocol.MetadataTopic{
 			{
-				Name: "orders",
+				Topic: kmsg.StringPtr("orders"),
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0, LeaderID: 0, ReplicaNodes: []int32{0, 1}, ISRNodes: []int32{0, 1}},
-					{PartitionIndex: 1, LeaderID: 1, ReplicaNodes: []int32{0, 1}, ISRNodes: []int32{0, 1}},
+					{Partition: 0, Leader: 0, Replicas: []int32{0, 1}, ISR: []int32{0, 1}},
+					{Partition: 1, Leader: 1, Replicas: []int32{0, 1}, ISR: []int32{0, 1}},
 				},
 			},
 		},
@@ -247,8 +247,8 @@ func TestStatusFromMetadataWithS3Metrics(t *testing.T) {
 			{NodeID: 0, Host: "broker-0"},
 		},
 		Topics: []protocol.MetadataTopic{
-			{Name: "orders", Partitions: []protocol.MetadataPartition{{PartitionIndex: 0, LeaderID: 0}}},
-			{Name: "errors", ErrorCode: 3},
+			{Topic: kmsg.StringPtr("orders"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 0}}},
+			{Topic: kmsg.StringPtr("errors"), ErrorCode: 3},
 		},
 	}
 	snap := &MetricsSnapshot{

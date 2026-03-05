@@ -332,142 +332,128 @@ func TestProduceMultiPartitionFranzCompat(t *testing.T) {
 }
 
 func TestParseJoinGroupRequest(t *testing.T) {
-	w := newByteWriter(128)
-	w.Int16(APIKeyJoinGroup)
-	w.Int16(1)
-	w.Int32(33)
-	w.NullableString(nil)
-	w.String("group-1")        // group id
-	w.Int32(10000)             // session timeout
-	w.Int32(30000)             // rebalance timeout
-	w.String("")               // member id (empty on first join)
-	w.String("consumer")       // protocol type
-	w.Int32(1)                 // protocol count
-	w.String("range")          // protocol name
-	w.BytesWithLength([]byte{0x00, 0x01}) // protocol metadata
+	req := kmsg.NewPtrJoinGroupRequest()
+	req.Version = 1
+	req.Group = "group-1"
+	req.SessionTimeoutMillis = 10000
+	req.RebalanceTimeoutMillis = 30000
+	req.MemberID = ""
+	req.ProtocolType = "consumer"
+	req.Protocols = []kmsg.JoinGroupRequestProtocol{
+		{Name: "range", Metadata: []byte{0x00, 0x01}},
+	}
 
-	_, req, err := ParseRequest(w.Bytes())
+	frame := buildRequestFrame(APIKeyJoinGroup, 1, 33, nil, req.AppendTo(nil))
+	_, parsed, err := ParseRequest(frame)
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	parsed, ok := req.(*JoinGroupRequest)
+	joinReq, ok := parsed.(*kmsg.JoinGroupRequest)
 	if !ok {
-		t.Fatalf("expected JoinGroupRequest got %T", req)
+		t.Fatalf("expected *kmsg.JoinGroupRequest got %T", parsed)
 	}
-	if parsed.GroupID != "group-1" || parsed.SessionTimeoutMs != 10000 {
-		t.Fatalf("unexpected join group: %#v", parsed)
+	if joinReq.Group != "group-1" || joinReq.SessionTimeoutMillis != 10000 {
+		t.Fatalf("unexpected join group: %#v", joinReq)
 	}
-	if parsed.ProtocolType != "consumer" || len(parsed.Protocols) != 1 {
-		t.Fatalf("unexpected protocols: %#v", parsed)
+	if joinReq.ProtocolType != "consumer" || len(joinReq.Protocols) != 1 {
+		t.Fatalf("unexpected protocols: %#v", joinReq)
 	}
-	if parsed.Protocols[0].Name != "range" {
-		t.Fatalf("unexpected protocol name: %q", parsed.Protocols[0].Name)
+	if joinReq.Protocols[0].Name != "range" {
+		t.Fatalf("unexpected protocol name: %q", joinReq.Protocols[0].Name)
 	}
 }
 
 func TestParseHeartbeatRequest(t *testing.T) {
-	w := newByteWriter(64)
-	w.Int16(APIKeyHeartbeat)
-	w.Int16(1)
-	w.Int32(44)
-	w.NullableString(nil)
-	w.String("group-1")  // group id
-	w.Int32(5)            // generation id
-	w.String("member-1")  // member id
+	req := kmsg.NewPtrHeartbeatRequest()
+	req.Version = 1
+	req.Group = "group-1"
+	req.Generation = 5
+	req.MemberID = "member-1"
 
-	_, req, err := ParseRequest(w.Bytes())
+	frame := buildRequestFrame(APIKeyHeartbeat, 1, 44, nil, req.AppendTo(nil))
+	_, parsed, err := ParseRequest(frame)
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	parsed, ok := req.(*HeartbeatRequest)
+	heartReq, ok := parsed.(*kmsg.HeartbeatRequest)
 	if !ok {
-		t.Fatalf("expected HeartbeatRequest got %T", req)
+		t.Fatalf("expected *kmsg.HeartbeatRequest got %T", parsed)
 	}
-	if parsed.GroupID != "group-1" || parsed.GenerationID != 5 || parsed.MemberID != "member-1" {
-		t.Fatalf("unexpected heartbeat: %#v", parsed)
+	if heartReq.Group != "group-1" || heartReq.Generation != 5 || heartReq.MemberID != "member-1" {
+		t.Fatalf("unexpected heartbeat: %#v", heartReq)
 	}
 }
 
 func TestParseLeaveGroupRequest(t *testing.T) {
-	w := newByteWriter(64)
-	w.Int16(APIKeyLeaveGroup)
-	w.Int16(0)
-	w.Int32(55)
-	w.NullableString(nil)
-	w.String("group-1")  // group id
-	w.String("member-1")  // member id
+	req := kmsg.NewPtrLeaveGroupRequest()
+	req.Version = 0
+	req.Group = "group-1"
+	req.MemberID = "member-1"
 
-	_, req, err := ParseRequest(w.Bytes())
+	frame := buildRequestFrame(APIKeyLeaveGroup, 0, 55, nil, req.AppendTo(nil))
+	_, parsed, err := ParseRequest(frame)
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	parsed, ok := req.(*LeaveGroupRequest)
+	leaveReq, ok := parsed.(*kmsg.LeaveGroupRequest)
 	if !ok {
-		t.Fatalf("expected LeaveGroupRequest got %T", req)
+		t.Fatalf("expected *kmsg.LeaveGroupRequest got %T", parsed)
 	}
-	if parsed.GroupID != "group-1" || parsed.MemberID != "member-1" {
-		t.Fatalf("unexpected leave group: %#v", parsed)
+	if leaveReq.Group != "group-1" || leaveReq.MemberID != "member-1" {
+		t.Fatalf("unexpected leave group: %#v", leaveReq)
 	}
 }
 
 func TestParseOffsetFetchRequest(t *testing.T) {
-	w := newByteWriter(64)
-	w.Int16(APIKeyOffsetFetch)
-	w.Int16(1)
-	w.Int32(66)
-	w.NullableString(nil)
-	w.String("group-1") // group id
-	w.Int32(1)           // topic count
-	w.String("orders")   // topic name
-	w.Int32(2)           // partition count
-	w.Int32(0)           // partition 0
-	w.Int32(1)           // partition 1
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.Version = 1
+	req.Group = "group-1"
+	req.Topics = []kmsg.OffsetFetchRequestTopic{
+		{Topic: "orders", Partitions: []int32{0, 1}},
+	}
 
-	_, req, err := ParseRequest(w.Bytes())
+	frame := buildRequestFrame(APIKeyOffsetFetch, 1, 66, nil, req.AppendTo(nil))
+	_, parsed, err := ParseRequest(frame)
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	parsed, ok := req.(*OffsetFetchRequest)
+	fetchReq, ok := parsed.(*kmsg.OffsetFetchRequest)
 	if !ok {
-		t.Fatalf("expected OffsetFetchRequest got %T", req)
+		t.Fatalf("expected *kmsg.OffsetFetchRequest got %T", parsed)
 	}
-	if parsed.GroupID != "group-1" {
-		t.Fatalf("unexpected group: %s", parsed.GroupID)
+	if fetchReq.Group != "group-1" {
+		t.Fatalf("unexpected group: %s", fetchReq.Group)
 	}
-	if len(parsed.Topics) != 1 || parsed.Topics[0].Name != "orders" {
-		t.Fatalf("unexpected topics: %#v", parsed.Topics)
+	if len(fetchReq.Topics) != 1 || fetchReq.Topics[0].Topic != "orders" {
+		t.Fatalf("unexpected topics: %#v", fetchReq.Topics)
 	}
-	if len(parsed.Topics[0].Partitions) != 2 {
-		t.Fatalf("expected 2 partitions, got %d", len(parsed.Topics[0].Partitions))
+	if len(fetchReq.Topics[0].Partitions) != 2 {
+		t.Fatalf("expected 2 partitions, got %d", len(fetchReq.Topics[0].Partitions))
 	}
 }
 
 func TestParseHeartbeatFlexible(t *testing.T) {
-	w := newByteWriter(64)
-	w.Int16(APIKeyHeartbeat)
-	w.Int16(4) // v4 is flexible
-	w.Int32(77)
-	w.NullableString(nil)
-	w.WriteTaggedFields(0) // header tags
-	w.CompactString("group-2")
-	w.Int32(10)
-	w.CompactString("member-2")
+	req := kmsg.NewPtrHeartbeatRequest()
+	req.Version = 4
+	req.Group = "group-2"
+	req.Generation = 10
+	req.MemberID = "member-2"
 	instanceID := "instance-1"
-	w.CompactNullableString(&instanceID) // instance id (v3+)
-	w.WriteTaggedFields(0)               // request tags
+	req.InstanceID = &instanceID
 
-	_, req, err := ParseRequest(w.Bytes())
+	frame := buildRequestFrame(APIKeyHeartbeat, 4, 77, nil, req.AppendTo(nil))
+	_, parsed, err := ParseRequest(frame)
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	parsed, ok := req.(*HeartbeatRequest)
+	heartReq, ok := parsed.(*kmsg.HeartbeatRequest)
 	if !ok {
-		t.Fatalf("expected HeartbeatRequest got %T", req)
+		t.Fatalf("expected *kmsg.HeartbeatRequest got %T", parsed)
 	}
-	if parsed.GroupID != "group-2" || parsed.GenerationID != 10 {
-		t.Fatalf("unexpected heartbeat: %#v", parsed)
+	if heartReq.Group != "group-2" || heartReq.Generation != 10 {
+		t.Fatalf("unexpected heartbeat: %#v", heartReq)
 	}
-	if parsed.InstanceID == nil || *parsed.InstanceID != "instance-1" {
-		t.Fatalf("unexpected instance id: %v", parsed.InstanceID)
+	if heartReq.InstanceID == nil || *heartReq.InstanceID != "instance-1" {
+		t.Fatalf("unexpected instance id: %v", heartReq.InstanceID)
 	}
 }

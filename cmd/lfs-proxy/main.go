@@ -31,7 +31,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 const (
@@ -83,7 +83,7 @@ type lfsProxy struct {
 	cacheTTL             time.Duration
 	cacheMu              sync.RWMutex
 	cachedBackends       []string
-	apiVersions          []protocol.ApiVersion
+	apiVersions          []kmsg.ApiVersionsResponseApiKey
 	metrics              *lfsMetrics
 
 	s3Uploader  *s3Uploader

@@ -325,12 +325,12 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 	}
 	batchBytes := lfsBuildRecordBatch([]kmsg.Record{record})
 
-	produceReq := &protocol.ProduceRequest{
-		Acks:      1,
-		TimeoutMs: 15000,
-		Topics: []protocol.ProduceTopic{{
-			Name: topic,
-			Partitions: []protocol.ProducePartition{{
+	produceReq := &kmsg.ProduceRequest{
+		Acks:          1,
+		TimeoutMillis: 15000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: topic,
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: partition,
 				Records:   batchBytes,
 			}},
@@ -836,12 +836,12 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	batchBytes := lfsBuildRecordBatch([]kmsg.Record{record})
 
-	produceReq := &protocol.ProduceRequest{
-		Acks:      1,
-		TimeoutMs: 15000,
-		Topics: []protocol.ProduceTopic{{
-			Name: session.Topic,
-			Partitions: []protocol.ProducePartition{{
+	produceReq := &kmsg.ProduceRequest{
+		Acks:          1,
+		TimeoutMillis: 15000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: session.Topic,
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: session.Partition,
 				Records:   batchBytes,
 			}},

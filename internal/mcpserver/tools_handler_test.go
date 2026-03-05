@@ -23,6 +23,7 @@ import (
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // mockMetrics implements console.MetricsProvider for testing.
@@ -48,16 +49,16 @@ func testStore() metadata.Store {
 		ClusterID:    &clusterID,
 		Topics: []protocol.MetadataTopic{
 			{
-				Name: "orders",
+				Topic: kmsg.StringPtr("orders"),
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0, LeaderID: 0, ReplicaNodes: []int32{0, 1}, ISRNodes: []int32{0, 1}},
-					{PartitionIndex: 1, LeaderID: 1, ReplicaNodes: []int32{0, 1}, ISRNodes: []int32{0, 1}},
+					{Partition: 0, Leader: 0, Replicas: []int32{0, 1}, ISR: []int32{0, 1}},
+					{Partition: 1, Leader: 1, Replicas: []int32{0, 1}, ISR: []int32{0, 1}},
 				},
 			},
 			{
-				Name: "events",
+				Topic: kmsg.StringPtr("events"),
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0, LeaderID: 0, ReplicaNodes: []int32{0}, ISRNodes: []int32{0}},
+					{Partition: 0, Leader: 0, Replicas: []int32{0}, ISR: []int32{0}},
 				},
 			},
 		},
@@ -416,15 +417,15 @@ func TestDescribeConfigsHandlerAllTopics(t *testing.T) {
 
 func TestToTopicDetail(t *testing.T) {
 	topic := protocol.MetadataTopic{
-		Name:      "orders",
+		Topic:     kmsg.StringPtr("orders"),
 		ErrorCode: 0,
 		Partitions: []protocol.MetadataPartition{
 			{
-				PartitionIndex:  0,
-				LeaderID:        0,
+				Partition:       0,
+				Leader:          0,
 				LeaderEpoch:     5,
-				ReplicaNodes:    []int32{0, 1},
-				ISRNodes:        []int32{0, 1},
+				Replicas:        []int32{0, 1},
+				ISR:             []int32{0, 1},
 				OfflineReplicas: []int32{},
 			},
 		},

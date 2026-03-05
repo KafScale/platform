@@ -121,12 +121,12 @@ func TestRewriteProduceRecordsDetectsLFSBlob(t *testing.T) {
 		},
 	}}
 	batchBytes := buildTestBatch(records)
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 5000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "test-topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 5000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "test-topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -201,12 +201,12 @@ func TestRewriteProduceRecordsPassthroughWithoutLFSBlob(t *testing.T) {
 		Value: []byte("regular record value"),
 	}}
 	batchBytes := buildTestBatch(records)
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 5000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "test-topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 5000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "test-topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -245,12 +245,12 @@ func TestRewriteProduceRecordsChecksumMismatch(t *testing.T) {
 		},
 	}}
 	batchBytes := buildTestBatch(records)
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 5000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "test-topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 5000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "test-topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -296,12 +296,12 @@ func TestRewriteProduceRecordsMixedRecords(t *testing.T) {
 		},
 	}
 	batchBytes := buildTestBatch(records)
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 5000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "mixed-topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 5000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "mixed-topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -357,12 +357,12 @@ func TestBatchCRCIsValid(t *testing.T) {
 		},
 	}}
 	batchBytes := buildTestBatch(records)
-	req := &protocol.ProduceRequest{
+	req := &kmsg.ProduceRequest{
 		Acks:      1,
-		TimeoutMs: 5000,
-		Topics: []protocol.ProduceTopic{{
-			Name: "crc-topic",
-			Partitions: []protocol.ProducePartition{{
+		TimeoutMillis: 5000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic: "crc-topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 0,
 				Records:   batchBytes,
 			}},
@@ -389,11 +389,11 @@ func TestBatchCRCIsValid(t *testing.T) {
 }
 
 func TestLFSTopicsFromProduce(t *testing.T) {
-	req := &protocol.ProduceRequest{
-		Topics: []protocol.ProduceTopic{
-			{Name: "topic-a"},
-			{Name: "topic-b"},
-			{Name: "topic-a"}, // duplicate
+	req := &kmsg.ProduceRequest{
+		Topics: []kmsg.ProduceRequestTopic{
+			{Topic: "topic-a"},
+			{Topic: "topic-b"},
+			{Topic: "topic-a"}, // duplicate
 		},
 	}
 	topics := lfsTopicsFromProduce(req)
@@ -413,7 +413,7 @@ func TestLFSTopicsFromProduceNil(t *testing.T) {
 }
 
 func TestLFSTopicsFromProduceEmpty(t *testing.T) {
-	req := &protocol.ProduceRequest{}
+	req := &kmsg.ProduceRequest{}
 	topics := lfsTopicsFromProduce(req)
 	if len(topics) != 1 || topics[0] != "unknown" {
 		t.Fatalf("expected [unknown], got %v", topics)
