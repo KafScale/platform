@@ -349,11 +349,14 @@ func TestServerHandleConnection_HandlerError(t *testing.T) {
 		t.Fatalf("WriteFrame: %v", err)
 	}
 
-	select {
-	case <-done:
-		// Handler error causes connection close
-	case <-time.After(time.Second):
-		t.Fatal("handleConnection should exit on handler error")
+	// Handler error should send an error response instead of closing the
+	// connection so the client can recover gracefully.
+	frame, err := protocol.ReadFrame(clientConn)
+	if err != nil {
+		t.Fatalf("expected error response frame, got read error: %v", err)
+	}
+	if len(frame.Payload) == 0 {
+		t.Fatal("expected non-empty error response payload")
 	}
 }
 
