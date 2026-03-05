@@ -1731,7 +1731,7 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 }
 
 func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeader, req *kmsg.FetchRequest) ([]byte, error) {
-	if header.APIVersion < 11 || header.APIVersion > 13 {
+	if header.APIVersion > 13 {
 		return nil, fmt.Errorf("fetch version %d not supported", header.APIVersion)
 	}
 	topicResponses := make([]kmsg.FetchResponseTopic, 0, len(req.Topics))
