@@ -246,15 +246,15 @@ func (t *LfsOpsTracker) eventToRecord(event TrackerEvent) (*kgo.Record, error) {
 
 func ensureTrackerTopic(ctx context.Context, client *kgo.Client, cfg TrackerConfig, logger *slog.Logger) error {
 	admin := kadm.NewClient(client)
-	partitions := cfg.Partitions
-	if partitions <= 0 || partitions > math.MaxInt32 {
-		partitions = defaultTrackerPartitions
+	var partitions int32 = defaultTrackerPartitions
+	if cfg.Partitions > 0 && cfg.Partitions <= math.MaxInt32 {
+		partitions = int32(cfg.Partitions) //nolint:gosec // bounds checked
 	}
-	replication := cfg.ReplicationFactor
-	if replication <= 0 || replication > math.MaxInt16 {
-		replication = defaultTrackerReplication
+	var replication int16 = defaultTrackerReplication
+	if cfg.ReplicationFactor > 0 && cfg.ReplicationFactor <= math.MaxInt16 {
+		replication = int16(cfg.ReplicationFactor) //nolint:gosec // bounds checked
 	}
-	responses, err := admin.CreateTopics(ctx, int32(partitions), int16(replication), nil, cfg.Topic)
+	responses, err := admin.CreateTopics(ctx, partitions, replication, nil, cfg.Topic)
 	if err != nil {
 		return err
 	}
