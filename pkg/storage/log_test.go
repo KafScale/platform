@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/pkg/cache"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -590,6 +592,262 @@ type transientIndexErrorS3 struct {
 
 func (t *transientIndexErrorS3) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
 	return nil, fmt.Errorf("connection reset by peer")
+}
+
+func TestPartitionLogReadNoCacheNoIndex(t *testing.T) {
+	// Read without cache forces the sliceFullSegmentData path
+	s3mem := NewMemoryS3Client()
+	log := NewPartitionLog("default", "orders", 0, 0, s3mem, nil, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1000, // large interval → no index entries for range reads
+		},
+		CacheEnabled: false,
+	}, nil, nil, nil)
+
+	batchData := make([]byte, 70)
+	batch, _ := NewRecordBatchFromBytes(batchData)
+	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	data, err := log.Read(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("expected non-empty data")
+	}
+}
+
+func TestPartitionLogReadMaxBytes(t *testing.T) {
+	s3mem := NewMemoryS3Client()
+	log := NewPartitionLog("default", "orders", 0, 0, s3mem, nil, PartitionLogConfig{
+		Buffer: WriteBufferConfig{
+			MaxBytes:      1,
+			FlushInterval: time.Millisecond,
+		},
+		Segment: SegmentWriterConfig{
+			IndexIntervalMessages: 1,
+		},
+		CacheEnabled: false,
+	}, nil, nil, nil)
+
+	batch1, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0x11))
+	batch2, _ := NewRecordBatchFromBytes(makeBatchBytes(1, 0, 1, 0x22))
+	if _, err := log.AppendBatch(context.Background(), batch1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.AppendBatch(context.Background(), batch2); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read with maxBytes = 10 (should truncate)
+	data, err := log.Read(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(data) > 10 {
+		t.Fatalf("expected max 10 bytes, got %d", len(data))
+	}
+}
+
+func TestPartitionLogReadOffsetOutOfRange(t *testing.T) {
+	s3mem := NewMemoryS3Client()
+	log := NewPartitionLog("default", "orders", 0, 0, s3mem, nil, PartitionLogConfig{
+		Buffer: WriteBufferConfig{MaxBytes: 1},
+		Segment: SegmentWriterConfig{IndexIntervalMessages: 1},
+	}, nil, nil, nil)
+
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 0x11))
+	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read at offset 999 (beyond last segment)
+	_, err := log.Read(context.Background(), 999, 0)
+	if !errors.Is(err, ErrOffsetOutOfRange) {
+		t.Fatalf("expected ErrOffsetOutOfRange, got: %v", err)
+	}
+}
+
+func TestPartitionLogRestoreFromS3Empty(t *testing.T) {
+	s3mem := NewMemoryS3Client()
+	log := NewPartitionLog("default", "empty", 0, 0, s3mem, nil, PartitionLogConfig{
+		Buffer:  WriteBufferConfig{MaxBytes: 1},
+		Segment: SegmentWriterConfig{IndexIntervalMessages: 1},
+	}, nil, nil, nil)
+
+	lastOffset, err := log.RestoreFromS3(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lastOffset != -1 {
+		t.Fatalf("expected -1 for empty S3, got %d", lastOffset)
+	}
+}
+
+func TestPartitionLogEarliestOffsetNoSegments(t *testing.T) {
+	s3mem := NewMemoryS3Client()
+	log := NewPartitionLog("default", "empty", 0, 0, s3mem, nil, PartitionLogConfig{
+		Buffer:  WriteBufferConfig{MaxBytes: 1},
+		Segment: SegmentWriterConfig{IndexIntervalMessages: 1},
+	}, nil, nil, nil)
+	// With no segments, EarliestOffset returns the configured start offset (0)
+	earliest := log.EarliestOffset()
+	if earliest != 0 {
+		t.Fatalf("expected 0 for no segments, got %d", earliest)
+	}
+}
+
+func TestFindIndexEntry(t *testing.T) {
+	// Empty entries
+	e := findIndexEntry(nil, 0)
+	if e.Offset != 0 || e.Position != 0 {
+		t.Fatal("empty entries should return zero entry")
+	}
+
+	entries := []*IndexEntry{
+		{Offset: 0, Position: 32},
+		{Offset: 10, Position: 100},
+		{Offset: 20, Position: 200},
+		{Offset: 30, Position: 300},
+	}
+
+	// Exact match
+	e = findIndexEntry(entries, 10)
+	if e.Offset != 10 {
+		t.Fatalf("expected offset 10, got %d", e.Offset)
+	}
+
+	// Before first
+	e = findIndexEntry(entries, -5)
+	if e.Offset != 0 {
+		t.Fatalf("expected offset 0 for before-first, got %d", e.Offset)
+	}
+
+	// After last
+	e = findIndexEntry(entries, 100)
+	if e.Offset != 30 {
+		t.Fatalf("expected offset 30 for after-last, got %d", e.Offset)
+	}
+
+	// Between entries (should return floor entry)
+	e = findIndexEntry(entries, 15)
+	if e.Offset != 10 {
+		t.Fatalf("expected floor offset 10 for offset 15, got %d", e.Offset)
+	}
+
+	e = findIndexEntry(entries, 25)
+	if e.Offset != 20 {
+		t.Fatalf("expected floor offset 20 for offset 25, got %d", e.Offset)
+	}
+}
+
+func TestSliceFullSegmentData(t *testing.T) {
+	// Build data with header (32 bytes) + body + footer (16 bytes)
+	header := make([]byte, 32)
+	body := []byte("BODY_DATA_HERE!")
+	footer := make([]byte, segmentFooterLen)
+	copy(footer, "END!")
+	data := append(header, body...)
+	data = append(data, footer...)
+
+	result := sliceFullSegmentData(data, 0)
+	if string(result) != "BODY_DATA_HERE!" {
+		t.Fatalf("expected body data, got %q", result)
+	}
+
+	// With maxBytes
+	result = sliceFullSegmentData(data, 4)
+	if string(result) != "BODY" {
+		t.Fatalf("expected 'BODY', got %q", result)
+	}
+
+	// Very short data (< header)
+	short := make([]byte, 10)
+	result = sliceFullSegmentData(short, 0)
+	if len(result) != 0 {
+		t.Fatalf("expected empty for short data, got %d bytes", len(result))
+	}
+}
+
+func TestMemoryS3Client_DownloadSegmentInvalidRange(t *testing.T) {
+	m := NewMemoryS3Client()
+	_ = m.UploadSegment(context.Background(), "key", []byte("data"))
+
+	// Start beyond data length
+	_, err := m.DownloadSegment(context.Background(), "key", &ByteRange{Start: 100, End: 200})
+	if err == nil {
+		t.Fatal("expected error for invalid range")
+	}
+}
+
+func TestAWSS3ListSegments(t *testing.T) {
+	api := &fakeS3WithList{
+		fakeS3: fakeS3{},
+		objects: []s3ListObject{
+			{key: "topic/0/seg-0", size: 100},
+			{key: "topic/0/seg-1", size: 200},
+		},
+	}
+	client := newAWSClientWithAPI("bucket", "us-east-1", "", api)
+
+	objs, err := client.ListSegments(context.Background(), "topic/0/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 2 {
+		t.Fatalf("expected 2 objects, got %d", len(objs))
+	}
+	// Verify size tracking
+	totalSize := int64(0)
+	for _, o := range objs {
+		totalSize += o.Size
+	}
+	if totalSize != 300 {
+		t.Fatalf("expected total size 300, got %d", totalSize)
+	}
+}
+
+type s3ListObject struct {
+	key  string
+	size int64
+}
+
+type fakeS3WithList struct {
+	fakeS3
+	objects []s3ListObject
+}
+
+func (f *fakeS3WithList) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var contents []types.Object
+	for _, o := range f.objects {
+		key := o.key
+		size := o.size
+		contents = append(contents, types.Object{
+			Key:  &key,
+			Size: &size,
+		})
+	}
+	return &s3.ListObjectsV2Output{
+		Contents: contents,
+	}, nil
 }
 
 func makeBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32, marker byte) []byte {

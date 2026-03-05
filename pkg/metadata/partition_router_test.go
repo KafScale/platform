@@ -198,6 +198,37 @@ func TestRouterReflectsRelease(t *testing.T) {
 	t.Fatalf("router did not reflect release of orders/0 (still shows %q)", router.LookupOwner("orders", 0))
 }
 
+// Invalidate removes a specific partition route.
+func TestPartitionRouterInvalidate(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	routerCli := newEtcdClientForTest(t, endpoints)
+	router, err := NewPartitionRouter(ctx, routerCli, slog.Default())
+	if err != nil {
+		t.Fatalf("create router: %v", err)
+	}
+	t.Cleanup(router.Stop)
+
+	brokerA := newLeaseManager(t, endpoints, "broker-a", 30)
+	if err := brokerA.Acquire(ctx, "orders", 0); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if router.LookupOwner("orders", 0) == "broker-a" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	router.Invalidate("orders", 0)
+	if owner := router.LookupOwner("orders", 0); owner != "" {
+		t.Fatalf("expected empty owner after invalidate, got %q", owner)
+	}
+}
+
 // Scenario 7: Multiple partitions route to different brokers.
 func TestRouterMultipleBrokersMultiplePartitions(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)

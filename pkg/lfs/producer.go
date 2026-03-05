@@ -16,6 +16,7 @@
 package lfs
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -130,9 +131,20 @@ func (p *Producer) Produce(ctx context.Context, topic, key string, body io.Reade
 		return nil, errors.New("body is required")
 	}
 
+	// Ensure the body can be replayed on retries. If the reader supports
+	// seeking we rewind it; otherwise we buffer into memory so each
+	// attempt gets the full payload.
+	body, err := replayable(body)
+	if err != nil {
+		return nil, err
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= p.maxRetries; attempt++ {
 		if attempt > 0 {
+			if err := rewind(body); err != nil {
+				return nil, fmt.Errorf("cannot reset body for retry: %w", err)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -184,9 +196,17 @@ func (p *Producer) ProducePartitioned(ctx context.Context, topic string, partiti
 		return nil, errors.New("body is required")
 	}
 
+	body, err := replayable(body)
+	if err != nil {
+		return nil, err
+	}
+
 	var lastErr error
 	for attempt := 0; attempt <= p.maxRetries; attempt++ {
 		if attempt > 0 {
+			if err := rewind(body); err != nil {
+				return nil, fmt.Errorf("cannot reset body for retry: %w", err)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -339,4 +359,30 @@ func containsAt(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// replayable returns a reader that can be rewound for retries.
+// If the reader already supports io.Seeker (e.g. *os.File, *bytes.Reader),
+// it is returned as-is. Otherwise the contents are buffered into memory
+// so that retries read the full payload instead of an exhausted reader.
+func replayable(r io.Reader) (io.Reader, error) {
+	if _, ok := r.(io.Seeker); ok {
+		return r, nil
+	}
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("buffering body for retry: %w", err)
+	}
+	return bytes.NewReader(data), nil
+}
+
+// rewind seeks a reader back to the start. The caller must ensure the reader
+// was returned by replayable, which guarantees it implements io.Seeker.
+func rewind(r io.Reader) error {
+	s, ok := r.(io.Seeker)
+	if !ok {
+		return errors.New("reader is not seekable")
+	}
+	_, err := s.Seek(0, io.SeekStart)
+	return err
 }

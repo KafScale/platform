@@ -91,6 +91,7 @@ examples/E50_JS-kafscale-demo/node_modules/
 # Go compiled binaries (top-level)
 /e2e-client
 /lfs-proxy
+/proxy
 
 # Java build artifacts
 target/

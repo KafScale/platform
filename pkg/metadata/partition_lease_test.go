@@ -194,6 +194,71 @@ func TestReacquireAfterRestart(t *testing.T) {
 	}
 }
 
+func TestPartitionLeaseAccessors(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	cli := newEtcdClientForTest(t, endpoints)
+	mgr := NewPartitionLeaseManager(cli, PartitionLeaseConfig{
+		BrokerID:        "broker-a",
+		LeaseTTLSeconds: 30,
+		Logger:          slog.Default(),
+	})
+
+	// PartitionLeasePrefix
+	prefix := PartitionLeasePrefix()
+	if prefix == "" {
+		t.Fatal("expected non-empty partition lease prefix")
+	}
+
+	// EtcdClient
+	if mgr.EtcdClient() != cli {
+		t.Fatal("expected same etcd client back")
+	}
+
+	ctx := context.Background()
+	mgr.Acquire(ctx, "orders", 0)
+
+	// CurrentOwner
+	owner, err := mgr.CurrentOwner(ctx, "orders", 0)
+	if err != nil {
+		t.Fatalf("CurrentOwner: %v", err)
+	}
+	if owner != "broker-a" {
+		t.Fatalf("expected broker-a as owner, got %q", owner)
+	}
+}
+
+func TestPartitionAcquireAll(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	mgr := newLeaseManager(t, endpoints, "broker-a", 30)
+
+	ctx := context.Background()
+	partitions := []PartitionID{
+		{Topic: "orders", Partition: 0},
+		{Topic: "orders", Partition: 1},
+		{Topic: "orders", Partition: 2},
+	}
+	results := mgr.AcquireAll(ctx, partitions)
+	for i, r := range results {
+		if r.Err != nil {
+			t.Fatalf("AcquireAll partition %d: %v", i, r.Err)
+		}
+	}
+	// All should be owned now
+	for _, p := range partitions {
+		if !mgr.Owns(p.Topic, p.Partition) {
+			t.Fatalf("expected to own %s/%d", p.Topic, p.Partition)
+		}
+	}
+
+	// Calling AcquireAll again should be a no-op (already owned)
+	results = mgr.AcquireAll(ctx, partitions)
+	for i, r := range results {
+		if r.Err != nil {
+			t.Fatalf("re-AcquireAll partition %d: %v", i, r.Err)
+		}
+	}
+}
+
 // Scenario 9: Concurrent acquire race.
 // Two brokers race to acquire the same unowned partition. Exactly one must win.
 func TestConcurrentAcquireRace(t *testing.T) {

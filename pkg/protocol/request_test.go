@@ -330,3 +330,144 @@ func TestProduceMultiPartitionFranzCompat(t *testing.T) {
 	})
 
 }
+
+func TestParseJoinGroupRequest(t *testing.T) {
+	w := newByteWriter(128)
+	w.Int16(APIKeyJoinGroup)
+	w.Int16(1)
+	w.Int32(33)
+	w.NullableString(nil)
+	w.String("group-1")        // group id
+	w.Int32(10000)             // session timeout
+	w.Int32(30000)             // rebalance timeout
+	w.String("")               // member id (empty on first join)
+	w.String("consumer")       // protocol type
+	w.Int32(1)                 // protocol count
+	w.String("range")          // protocol name
+	w.BytesWithLength([]byte{0x00, 0x01}) // protocol metadata
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*JoinGroupRequest)
+	if !ok {
+		t.Fatalf("expected JoinGroupRequest got %T", req)
+	}
+	if parsed.GroupID != "group-1" || parsed.SessionTimeoutMs != 10000 {
+		t.Fatalf("unexpected join group: %#v", parsed)
+	}
+	if parsed.ProtocolType != "consumer" || len(parsed.Protocols) != 1 {
+		t.Fatalf("unexpected protocols: %#v", parsed)
+	}
+	if parsed.Protocols[0].Name != "range" {
+		t.Fatalf("unexpected protocol name: %q", parsed.Protocols[0].Name)
+	}
+}
+
+func TestParseHeartbeatRequest(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyHeartbeat)
+	w.Int16(1)
+	w.Int32(44)
+	w.NullableString(nil)
+	w.String("group-1")  // group id
+	w.Int32(5)            // generation id
+	w.String("member-1")  // member id
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*HeartbeatRequest)
+	if !ok {
+		t.Fatalf("expected HeartbeatRequest got %T", req)
+	}
+	if parsed.GroupID != "group-1" || parsed.GenerationID != 5 || parsed.MemberID != "member-1" {
+		t.Fatalf("unexpected heartbeat: %#v", parsed)
+	}
+}
+
+func TestParseLeaveGroupRequest(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyLeaveGroup)
+	w.Int16(0)
+	w.Int32(55)
+	w.NullableString(nil)
+	w.String("group-1")  // group id
+	w.String("member-1")  // member id
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*LeaveGroupRequest)
+	if !ok {
+		t.Fatalf("expected LeaveGroupRequest got %T", req)
+	}
+	if parsed.GroupID != "group-1" || parsed.MemberID != "member-1" {
+		t.Fatalf("unexpected leave group: %#v", parsed)
+	}
+}
+
+func TestParseOffsetFetchRequest(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyOffsetFetch)
+	w.Int16(1)
+	w.Int32(66)
+	w.NullableString(nil)
+	w.String("group-1") // group id
+	w.Int32(1)           // topic count
+	w.String("orders")   // topic name
+	w.Int32(2)           // partition count
+	w.Int32(0)           // partition 0
+	w.Int32(1)           // partition 1
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*OffsetFetchRequest)
+	if !ok {
+		t.Fatalf("expected OffsetFetchRequest got %T", req)
+	}
+	if parsed.GroupID != "group-1" {
+		t.Fatalf("unexpected group: %s", parsed.GroupID)
+	}
+	if len(parsed.Topics) != 1 || parsed.Topics[0].Name != "orders" {
+		t.Fatalf("unexpected topics: %#v", parsed.Topics)
+	}
+	if len(parsed.Topics[0].Partitions) != 2 {
+		t.Fatalf("expected 2 partitions, got %d", len(parsed.Topics[0].Partitions))
+	}
+}
+
+func TestParseHeartbeatFlexible(t *testing.T) {
+	w := newByteWriter(64)
+	w.Int16(APIKeyHeartbeat)
+	w.Int16(4) // v4 is flexible
+	w.Int32(77)
+	w.NullableString(nil)
+	w.WriteTaggedFields(0) // header tags
+	w.CompactString("group-2")
+	w.Int32(10)
+	w.CompactString("member-2")
+	instanceID := "instance-1"
+	w.CompactNullableString(&instanceID) // instance id (v3+)
+	w.WriteTaggedFields(0)               // request tags
+
+	_, req, err := ParseRequest(w.Bytes())
+	if err != nil {
+		t.Fatalf("ParseRequest: %v", err)
+	}
+	parsed, ok := req.(*HeartbeatRequest)
+	if !ok {
+		t.Fatalf("expected HeartbeatRequest got %T", req)
+	}
+	if parsed.GroupID != "group-2" || parsed.GenerationID != 10 {
+		t.Fatalf("unexpected heartbeat: %#v", parsed)
+	}
+	if parsed.InstanceID == nil || *parsed.InstanceID != "instance-1" {
+		t.Fatalf("unexpected instance id: %v", parsed.InstanceID)
+	}
+}

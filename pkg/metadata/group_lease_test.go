@@ -214,6 +214,38 @@ func TestGroupConcurrentAcquireRace(t *testing.T) {
 	}
 }
 
+func TestGroupLeaseAccessors(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	cli := newEtcdClientForTest(t, endpoints)
+	mgr := NewGroupLeaseManager(cli, GroupLeaseConfig{
+		BrokerID:        "broker-a",
+		LeaseTTLSeconds: 30,
+		Logger:          slog.Default(),
+	})
+
+	// GroupLeasePrefix (package-level function)
+	prefix := GroupLeasePrefix()
+	if prefix == "" {
+		t.Fatal("expected non-empty group lease prefix")
+	}
+
+	// EtcdClient
+	if mgr.EtcdClient() != cli {
+		t.Fatal("expected same etcd client back")
+	}
+
+	// CurrentOwner before any acquire
+	ctx := context.Background()
+	mgr.Acquire(ctx, "test-group")
+	owner, err := mgr.CurrentOwner(ctx, "test-group")
+	if err != nil {
+		t.Fatalf("CurrentOwner: %v", err)
+	}
+	if owner != "broker-a" {
+		t.Fatalf("expected broker-a as owner, got %q", owner)
+	}
+}
+
 // Different groups can be owned by different brokers.
 func TestGroupLeaseMultipleGroups(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
