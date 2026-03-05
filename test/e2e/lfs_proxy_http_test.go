@@ -586,22 +586,19 @@ func handleKafkaConn(t *testing.T, conn net.Conn, received chan<- []byte) {
 }
 
 func buildProduceResponse(req *protocol.ProduceRequest, correlationID int32, version int16) ([]byte, error) {
-	topics := make([]protocol.ProduceTopicResponse, 0, len(req.Topics))
+	resp := &kmsg.ProduceResponse{}
 	for _, topic := range req.Topics {
-		parts := make([]protocol.ProducePartitionResponse, 0, len(topic.Partitions))
+		rt := kmsg.NewProduceResponseTopic()
+		rt.Topic = topic.Topic
 		for _, part := range topic.Partitions {
-			parts = append(parts, protocol.ProducePartitionResponse{
-				Partition:       part.Partition,
-				ErrorCode:       protocol.NONE,
-				BaseOffset:      0,
-				LogAppendTimeMs: 0,
-				LogStartOffset:  0,
-			})
+			rp := kmsg.NewProduceResponseTopicPartition()
+			rp.Partition = part.Partition
+			rp.ErrorCode = protocol.NONE
+			rt.Partitions = append(rt.Partitions, rp)
 		}
-		topics = append(topics, protocol.ProduceTopicResponse{Name: topic.Name, Partitions: parts})
+		resp.Topics = append(resp.Topics, rt)
 	}
-	resp := &protocol.ProduceResponse{CorrelationID: correlationID, Topics: topics, ThrottleMs: 0}
-	return protocol.EncodeProduceResponse(resp, version)
+	return protocol.EncodeResponse(correlationID, version, resp), nil
 }
 
 func extractFirstRecordValue(records []byte) []byte {
