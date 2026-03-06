@@ -50,15 +50,15 @@ func (m *authMetrics) writePrometheus(w io.Writer) {
 		return
 	}
 	total := atomic.LoadUint64(&m.deniedTotal)
-	fmt.Fprintln(w, "# HELP kafscale_authz_denied_total Authorization denials across broker APIs.")
-	fmt.Fprintln(w, "# TYPE kafscale_authz_denied_total counter")
-	fmt.Fprintf(w, "kafscale_authz_denied_total %d\n", total)
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_authz_denied_total Authorization denials across broker APIs.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_authz_denied_total counter")
+	_, _ = fmt.Fprintf(w, "kafscale_authz_denied_total %d\n", total)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, count := range m.byKey {
 		action, resource := splitAuthMetricKey(key)
-		fmt.Fprintf(w, "kafscale_authz_denied_total{action=%q,resource=%q} %d\n", action, resource, count)
+		_, _ = fmt.Fprintf(w, "kafscale_authz_denied_total{action=%q,resource=%q} %d\n", action, resource, count)
 	}
 }
 

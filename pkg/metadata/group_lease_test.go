@@ -85,7 +85,7 @@ func TestGroupLeaseExpiryFailover(t *testing.T) {
 		t.Fatalf("broker-a acquire: %v", err)
 	}
 
-	cliA.Close()
+	_ = cliA.Close()
 
 	if err := brokerB.Acquire(ctx, "my-group"); err == nil {
 		t.Fatalf("broker-b should not acquire before lease expires")
@@ -150,7 +150,7 @@ func TestGroupReacquireAfterRestart(t *testing.T) {
 		t.Fatalf("broker-a (session 1) acquire: %v", err)
 	}
 
-	cliA1.Close()
+	_ = cliA1.Close()
 
 	brokerA2 := newGroupLeaseManager(t, endpoints, "broker-a", ttl)
 
@@ -211,6 +211,38 @@ func TestGroupConcurrentAcquireRace(t *testing.T) {
 	}
 	if losers != brokerCount-1 {
 		t.Fatalf("expected %d losers, got %d", brokerCount-1, losers)
+	}
+}
+
+func TestGroupLeaseAccessors(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	cli := newEtcdClientForTest(t, endpoints)
+	mgr := NewGroupLeaseManager(cli, GroupLeaseConfig{
+		BrokerID:        "broker-a",
+		LeaseTTLSeconds: 30,
+		Logger:          slog.Default(),
+	})
+
+	// GroupLeasePrefix (package-level function)
+	prefix := GroupLeasePrefix()
+	if prefix == "" {
+		t.Fatal("expected non-empty group lease prefix")
+	}
+
+	// EtcdClient
+	if mgr.EtcdClient() != cli {
+		t.Fatal("expected same etcd client back")
+	}
+
+	// CurrentOwner before any acquire
+	ctx := context.Background()
+	mgr.Acquire(ctx, "test-group")
+	owner, err := mgr.CurrentOwner(ctx, "test-group")
+	if err != nil {
+		t.Fatalf("CurrentOwner: %v", err)
+	}
+	if owner != "broker-a" {
+		t.Fatalf("expected broker-a as owner, got %q", owner)
 	}
 }
 

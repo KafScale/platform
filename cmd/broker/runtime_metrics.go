@@ -34,27 +34,27 @@ func (h *handler) writeRuntimeMetrics(w io.Writer) {
 		cpuPercent = h.cpuTracker.Percent()
 	}
 
-	fmt.Fprintln(w, "# HELP kafscale_broker_uptime_seconds Seconds since broker start.")
-	fmt.Fprintln(w, "# TYPE kafscale_broker_uptime_seconds gauge")
-	fmt.Fprintf(w, "kafscale_broker_uptime_seconds %f\n", uptime)
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_broker_uptime_seconds Seconds since broker start.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_broker_uptime_seconds gauge")
+	_, _ = fmt.Fprintf(w, "kafscale_broker_uptime_seconds %f\n", uptime)
 
-	fmt.Fprintln(w, "# HELP kafscale_broker_mem_alloc_bytes Bytes of allocated heap objects.")
-	fmt.Fprintln(w, "# TYPE kafscale_broker_mem_alloc_bytes gauge")
-	fmt.Fprintf(w, "kafscale_broker_mem_alloc_bytes %d\n", stats.Alloc)
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_broker_mem_alloc_bytes Bytes of allocated heap objects.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_broker_mem_alloc_bytes gauge")
+	_, _ = fmt.Fprintf(w, "kafscale_broker_mem_alloc_bytes %d\n", stats.Alloc)
 
-	fmt.Fprintln(w, "# HELP kafscale_broker_mem_sys_bytes Bytes of memory obtained from the OS.")
-	fmt.Fprintln(w, "# TYPE kafscale_broker_mem_sys_bytes gauge")
-	fmt.Fprintf(w, "kafscale_broker_mem_sys_bytes %d\n", stats.Sys)
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_broker_mem_sys_bytes Bytes of memory obtained from the OS.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_broker_mem_sys_bytes gauge")
+	_, _ = fmt.Fprintf(w, "kafscale_broker_mem_sys_bytes %d\n", stats.Sys)
 
-	fmt.Fprintln(w, "# HELP kafscale_broker_heap_inuse_bytes Bytes in in-use spans.")
-	fmt.Fprintln(w, "# TYPE kafscale_broker_heap_inuse_bytes gauge")
-	fmt.Fprintf(w, "kafscale_broker_heap_inuse_bytes %d\n", stats.HeapInuse)
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_broker_heap_inuse_bytes Bytes in in-use spans.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_broker_heap_inuse_bytes gauge")
+	_, _ = fmt.Fprintf(w, "kafscale_broker_heap_inuse_bytes %d\n", stats.HeapInuse)
 
-	fmt.Fprintln(w, "# HELP kafscale_broker_cpu_percent Approximate CPU usage percent since last scrape.")
-	fmt.Fprintln(w, "# TYPE kafscale_broker_cpu_percent gauge")
-	fmt.Fprintf(w, "kafscale_broker_cpu_percent %f\n", cpuPercent)
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_broker_cpu_percent Approximate CPU usage percent since last scrape.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_broker_cpu_percent gauge")
+	_, _ = fmt.Fprintf(w, "kafscale_broker_cpu_percent %f\n", cpuPercent)
 
-	fmt.Fprintln(w, "# HELP kafscale_broker_goroutines Number of goroutines.")
-	fmt.Fprintln(w, "# TYPE kafscale_broker_goroutines gauge")
-	fmt.Fprintf(w, "kafscale_broker_goroutines %d\n", runtime.NumGoroutine())
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_broker_goroutines Number of goroutines.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_broker_goroutines gauge")
+	_, _ = fmt.Fprintf(w, "kafscale_broker_goroutines %d\n", runtime.NumGoroutine())
 }

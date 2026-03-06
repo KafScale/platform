@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
+.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-lfs-proxy docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-lfs-proxy-broker test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -21,6 +21,7 @@ BROKER_IMAGE ?= $(REGISTRY)/kafscale-broker:dev
 OPERATOR_IMAGE ?= $(REGISTRY)/kafscale-operator:dev
 CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
 PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
+LFS_PROXY_IMAGE ?= $(REGISTRY)/kafscale-lfs-proxy:dev
 SQL_PROCESSOR_IMAGE ?= $(REGISTRY)/kafscale-sql-processor:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
@@ -71,6 +72,10 @@ KAFSCALE_DEMO_ETCD_INMEM ?= 1
 KAFSCALE_DEMO_ETCD_REPLICAS ?= 3
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
+SDK_JAVA_BUILD_CMD ?= mvn -DskipTests clean package
+SDK_JS_BUILD_CMD ?= npm install && npm run build
+SDK_PY_BUILD_CMD ?= python -m build
+SKIP_JS_SDK ?= 1
 
 proto: ## Generate protobuf + gRPC stubs
 	buf generate
@@ -79,6 +84,19 @@ generate: proto
 
 build: ## Build all binaries
 	go build ./...
+
+build-sdk: ## Build all LFS client SDKs
+	@echo "Building Java SDK..."
+	@cd lfs-client-sdk/java && $(SDK_JAVA_BUILD_CMD)
+	@test -d lfs-client-sdk/java/target || { echo "Java SDK target/ missing"; exit 1; }
+	@if [ "$(SKIP_JS_SDK)" = "1" ]; then \
+		echo "Skipping JS SDK build (SKIP_JS_SDK=1)"; \
+	else \
+		echo "Building JS SDK..."; \
+		cd lfs-client-sdk/js && $(SDK_JS_BUILD_CMD); \
+	fi
+	@echo "Building Python SDK..."
+	@cd lfs-client-sdk/python && $(SDK_PY_BUILD_CMD)
 
 test: ## Run unit tests + vet + race
 	go vet ./...
@@ -130,6 +148,13 @@ $(STAMP_DIR)/proxy.image: $(PROXY_SRCS)
 	@mkdir -p $(STAMP_DIR)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(PROXY_IMAGE) -f deploy/docker/proxy.Dockerfile .
 	@touch $(STAMP_DIR)/proxy.image
+
+LFS_PROXY_SRCS := $(shell find cmd/lfs-proxy pkg go.mod go.sum)
+docker-build-lfs-proxy: $(STAMP_DIR)/lfs-proxy.image ## Build LFS proxy container image
+$(STAMP_DIR)/lfs-proxy.image: $(LFS_PROXY_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(LFS_PROXY_IMAGE) -f deploy/docker/lfs-proxy.Dockerfile .
+	@touch $(STAMP_DIR)/lfs-proxy.image
 
 MCP_SRCS := $(shell find cmd/mcp internal/mcpserver go.mod go.sum)
 docker-build-mcp: $(STAMP_DIR)/mcp.image ## Build MCP container image
@@ -269,6 +294,10 @@ test-mcp: ## Run MCP e2e tests (in-memory metadata store + streamable HTTP).
 test-multi-segment-durability: release-broker-ports ensure-minio ## Run multi-segment restart durability e2e (embedded etcd + MinIO).
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestMultiSegmentRestartDurability -v
+
+test-lfs-proxy-broker: ## Run LFS proxy e2e with real broker (embedded etcd + in-memory S3).
+	KAFSCALE_E2E=1 \
+	go test -tags=e2e ./test/e2e -run TestLfsProxyBrokerE2E -v
 
 test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test

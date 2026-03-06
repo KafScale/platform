@@ -57,3 +57,9 @@ mappings:
           type: string
           required: false
       allow_type_widening: true
+    lfs:
+      mode: off
+      max_inline_size: 1048576
+      store_metadata: false
+      validate_checksum: true
+      resolve_concurrency: 4

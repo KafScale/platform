@@ -76,3 +76,68 @@ func TestIcebergWriteSmoke(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 }
+
+func TestIcebergWriteWithLfsMetadata(t *testing.T) {
+	catalogURI := os.Getenv("ICEBERG_PROCESSOR_CATALOG_URI")
+	if catalogURI == "" {
+		t.Skip("ICEBERG_PROCESSOR_CATALOG_URI not set")
+	}
+	catalogType := os.Getenv("ICEBERG_PROCESSOR_CATALOG_TYPE")
+	if catalogType == "" {
+		catalogType = "rest"
+	}
+	warehouse := os.Getenv("ICEBERG_PROCESSOR_WAREHOUSE")
+	if warehouse == "" {
+		t.Skip("ICEBERG_PROCESSOR_WAREHOUSE not set")
+	}
+
+	cfg := config.Config{
+		Iceberg: config.IcebergConfig{
+			Catalog: config.CatalogConfig{
+				Type:  catalogType,
+				URI:   catalogURI,
+				Token: os.Getenv("ICEBERG_PROCESSOR_CATALOG_TOKEN"),
+			},
+			Warehouse: warehouse,
+		},
+		Mappings: []config.Mapping{
+			{
+				Topic:               "orders",
+				Table:               "default.orders_lfs",
+				Mode:                "append",
+				CreateTableIfAbsent: true,
+				Lfs: config.LfsConfig{
+					Mode:          "resolve",
+					StoreMetadata: true,
+				},
+			},
+		},
+	}
+
+	writer, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New writer: %v", err)
+	}
+
+	records := []Record{
+		{
+			Topic:     "orders",
+			Partition: 0,
+			Offset:    2,
+			Timestamp: time.Now().UnixMilli(),
+			Key:       []byte("k2"),
+			Value:     []byte(`{"id":2}`),
+			Columns: map[string]interface{}{
+				"lfs_bucket":       "bucket",
+				"lfs_key":          "key",
+				"lfs_blob_size":    int64(5),
+				"lfs_checksum":     "abc",
+				"lfs_checksum_alg": "sha256",
+				"lfs_content_type": "application/octet-stream",
+			},
+		},
+	}
+	if err := writer.Write(context.Background(), records); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+}

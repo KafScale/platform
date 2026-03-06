@@ -1,0 +1,20 @@
+{
+  "name": "@kafscale/lfs-sdk",
+  "version": "0.1.0",
+  "description": "Client-side LFS helpers for Kafka.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/__tests__/envelope.test.js"
+  },
+  "dependencies": {
+    "@confluentinc/kafka-javascript": "^0.4.0",
+    "undici": "^6.21.0",
+    "@aws-sdk/client-s3": "^3.658.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

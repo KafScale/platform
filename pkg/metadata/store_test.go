@@ -18,6 +18,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
@@ -276,5 +277,636 @@ func TestInMemoryStoreTopicConfigAndPartitions(t *testing.T) {
 	}
 	if len(meta.Topics) != 1 || len(meta.Topics[0].Partitions) != 3 {
 		t.Fatalf("unexpected partition count: %#v", meta.Topics)
+	}
+}
+
+// --- Additional store tests for coverage gaps ---
+
+func TestFetchConsumerOffset(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx := context.Background()
+
+	// Commit then fetch
+	if err := store.CommitConsumerOffset(ctx, "g1", "orders", 0, 100, "meta-0"); err != nil {
+		t.Fatalf("CommitConsumerOffset: %v", err)
+	}
+	offset, meta, err := store.FetchConsumerOffset(ctx, "g1", "orders", 0)
+	if err != nil {
+		t.Fatalf("FetchConsumerOffset: %v", err)
+	}
+	if offset != 100 {
+		t.Fatalf("expected offset 100, got %d", offset)
+	}
+	if meta != "meta-0" {
+		t.Fatalf("expected meta-0, got %q", meta)
+	}
+
+	// Fetch non-existent returns zero
+	offset, meta, err = store.FetchConsumerOffset(ctx, "g1", "orders", 99)
+	if err != nil {
+		t.Fatalf("FetchConsumerOffset: %v", err)
+	}
+	if offset != 0 || meta != "" {
+		t.Fatalf("expected 0/empty for missing key, got %d/%q", offset, meta)
+	}
+}
+
+func TestFetchConsumerOffsetContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := store.FetchConsumerOffset(ctx, "g1", "orders", 0)
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestFetchTopicConfigUnknown(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	_, err := store.FetchTopicConfig(context.Background(), "missing")
+	if !errors.Is(err, ErrUnknownTopic) {
+		t.Fatalf("expected ErrUnknownTopic, got %v", err)
+	}
+}
+
+func TestFetchTopicConfigContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.FetchTopicConfig(ctx, "orders")
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestFetchTopicConfigDefault(t *testing.T) {
+	// Topic exists but no explicit config → should return default from topic metadata
+	store := NewInMemoryStore(ClusterMetadata{
+		Topics: []protocol.MetadataTopic{
+			{
+				Topic: kmsg.StringPtr("events"),
+				Partitions: []protocol.MetadataPartition{
+					{Partition: 0, Replicas: []int32{1, 2}},
+					{Partition: 1, Replicas: []int32{1, 2}},
+				},
+			},
+		},
+	})
+	cfg, err := store.FetchTopicConfig(context.Background(), "events")
+	if err != nil {
+		t.Fatalf("FetchTopicConfig: %v", err)
+	}
+	if cfg.Name != "events" {
+		t.Fatalf("expected name events, got %q", cfg.Name)
+	}
+	if cfg.Partitions != 2 {
+		t.Fatalf("expected 2 partitions, got %d", cfg.Partitions)
+	}
+	if cfg.ReplicationFactor != 2 {
+		t.Fatalf("expected replication factor 2, got %d", cfg.ReplicationFactor)
+	}
+}
+
+func TestUpdateTopicConfigInvalid(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx := context.Background()
+	if err := store.UpdateTopicConfig(ctx, nil); !errors.Is(err, ErrInvalidTopic) {
+		t.Fatalf("expected ErrInvalidTopic for nil, got %v", err)
+	}
+	if err := store.UpdateTopicConfig(ctx, &metadatapb.TopicConfig{Name: ""}); !errors.Is(err, ErrInvalidTopic) {
+		t.Fatalf("expected ErrInvalidTopic for empty name, got %v", err)
+	}
+	if err := store.UpdateTopicConfig(ctx, &metadatapb.TopicConfig{Name: "missing"}); !errors.Is(err, ErrUnknownTopic) {
+		t.Fatalf("expected ErrUnknownTopic, got %v", err)
+	}
+}
+
+func TestUpdateTopicConfigContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.UpdateTopicConfig(ctx, &metadatapb.TopicConfig{Name: "orders"})
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestCreatePartitionsInvalid(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx := context.Background()
+	if err := store.CreatePartitions(ctx, "", 3); !errors.Is(err, ErrInvalidTopic) {
+		t.Fatalf("expected ErrInvalidTopic for empty name, got %v", err)
+	}
+	if err := store.CreatePartitions(ctx, "topic", 0); !errors.Is(err, ErrInvalidTopic) {
+		t.Fatalf("expected ErrInvalidTopic for zero count, got %v", err)
+	}
+	if err := store.CreatePartitions(ctx, "missing", 3); !errors.Is(err, ErrUnknownTopic) {
+		t.Fatalf("expected ErrUnknownTopic, got %v", err)
+	}
+}
+
+func TestCreatePartitionsContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.CreatePartitions(ctx, "orders", 3)
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestCreatePartitionsShrink(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
+	})
+	ctx := context.Background()
+	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 3, ReplicationFactor: 1})
+	err := store.CreatePartitions(ctx, "orders", 2) // shrink
+	if err == nil {
+		t.Fatal("expected error for shrinking partitions")
+	}
+}
+
+func TestCommitConsumerOffsetContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.CommitConsumerOffset(ctx, "g1", "orders", 0, 10, "")
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestListConsumerOffsetsContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.ListConsumerOffsets(ctx)
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestPutConsumerGroupContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g1"})
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestFetchConsumerGroupContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.FetchConsumerGroup(ctx, "g1")
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestListConsumerGroupsContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.ListConsumerGroups(ctx)
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestDeleteConsumerGroupContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.DeleteConsumerGroup(ctx, "g1")
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestDeleteTopicContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.DeleteTopic(ctx, "orders")
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestCreateTopicContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1})
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestNextOffsetContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := store.NextOffset(ctx, "orders", 0)
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestUpdateOffsetsContextCancel(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := store.UpdateOffsets(ctx, "orders", 0, 10)
+	if err == nil {
+		t.Fatal("expected context error")
+	}
+}
+
+func TestUpdateOffsetsSucceeds(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
+	})
+	ctx := context.Background()
+	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1})
+	err := store.UpdateOffsets(ctx, "orders", 0, 10)
+	if err != nil {
+		t.Fatalf("UpdateOffsets: %v", err)
+	}
+	offset, err := store.NextOffset(ctx, "orders", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 11 {
+		t.Fatalf("expected 11 (lastOffset+1), got %d", offset)
+	}
+}
+
+func TestNextOffsetPartitionMismatch(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
+	})
+	ctx := context.Background()
+	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1})
+	_, err := store.NextOffset(ctx, "orders", 99)
+	if err == nil {
+		t.Fatal("expected error for non-existent partition")
+	}
+}
+
+func TestDefaultLeaderID(t *testing.T) {
+	// No brokers → uses controller ID
+	store := NewInMemoryStore(ClusterMetadata{ControllerID: 5})
+	if got := store.defaultLeaderID(); got != 5 {
+		t.Fatalf("expected controller ID 5, got %d", got)
+	}
+
+	// With brokers → uses first broker
+	store = NewInMemoryStore(ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 7}},
+		ControllerID: 5,
+	})
+	if got := store.defaultLeaderID(); got != 7 {
+		t.Fatalf("expected broker 7, got %d", got)
+	}
+}
+
+func TestCloneTopicConfigNil(t *testing.T) {
+	if got := cloneTopicConfig(nil); got != nil {
+		t.Fatalf("expected nil, got %+v", got)
+	}
+}
+
+func TestCloneTopicConfigWithData(t *testing.T) {
+	cfg := &metadatapb.TopicConfig{
+		Name:              "orders",
+		Partitions:        3,
+		ReplicationFactor: 2,
+		RetentionMs:       86400000,
+		Config:            map[string]string{"cleanup.policy": "compact"},
+	}
+	cloned := cloneTopicConfig(cfg)
+	if cloned == cfg {
+		t.Fatal("clone should not be same pointer")
+	}
+	if cloned.Name != "orders" || cloned.Partitions != 3 || cloned.ReplicationFactor != 2 {
+		t.Fatalf("unexpected clone: %+v", cloned)
+	}
+	if cloned.Config["cleanup.policy"] != "compact" {
+		t.Fatalf("expected config to be cloned")
+	}
+	// Mutation isolation
+	cloned.Config["new-key"] = "val"
+	if _, ok := cfg.Config["new-key"]; ok {
+		t.Fatal("mutation should not affect original")
+	}
+}
+
+func TestDefaultTopicConfigFromTopicNil(t *testing.T) {
+	cfg := defaultTopicConfigFromTopic(nil, 1)
+	if cfg == nil {
+		t.Fatal("expected non-nil config for nil topic")
+	}
+}
+
+func TestDefaultTopicConfigFromTopicWithReplicas(t *testing.T) {
+	topic := &protocol.MetadataTopic{
+		Topic: kmsg.StringPtr("events"),
+		Partitions: []protocol.MetadataPartition{
+			{Partition: 0, Replicas: []int32{1, 2, 3}},
+			{Partition: 1, Replicas: []int32{1, 2, 3}},
+		},
+	}
+	cfg := defaultTopicConfigFromTopic(topic, 0) // replicationFactor <= 0 triggers auto-detect
+	if cfg.ReplicationFactor != 3 {
+		t.Fatalf("expected replication factor 3 from replicas, got %d", cfg.ReplicationFactor)
+	}
+	if cfg.Partitions != 2 {
+		t.Fatalf("expected 2 partitions, got %d", cfg.Partitions)
+	}
+	if cfg.RetentionMs != -1 {
+		t.Fatalf("expected default retention -1, got %d", cfg.RetentionMs)
+	}
+}
+
+func TestParseConsumerKeyEdgeCases(t *testing.T) {
+	// Valid
+	group, topic, partition, ok := parseConsumerKey("g1:orders:0")
+	if !ok || group != "g1" || topic != "orders" || partition != 0 {
+		t.Fatalf("unexpected parse result: %q %q %d %v", group, topic, partition, ok)
+	}
+
+	// Too few parts
+	_, _, _, ok = parseConsumerKey("g1:orders")
+	if ok {
+		t.Fatal("expected false for 2-part key")
+	}
+
+	// Bad partition
+	_, _, _, ok = parseConsumerKey("g1:orders:abc")
+	if ok {
+		t.Fatal("expected false for non-numeric partition")
+	}
+
+	// Too many parts
+	_, _, _, ok = parseConsumerKey("g1:orders:0:extra")
+	if ok {
+		t.Fatal("expected false for 4-part key")
+	}
+}
+
+func TestDeleteConsumerGroupNotFound(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	// delete of non-existent key is a no-op, should not error
+	err := store.DeleteConsumerGroup(context.Background(), "nonexistent")
+	if err != nil {
+		t.Fatalf("expected no error for deleting non-existent group, got %v", err)
+	}
+}
+
+func TestPutConsumerGroupNilAndEmpty(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{})
+	ctx := context.Background()
+	err := store.PutConsumerGroup(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error for nil group")
+	}
+	err = store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: ""})
+	if err == nil {
+		t.Fatal("expected error for empty group ID")
+	}
+}
+
+func TestCloneConsumerGroupNil(t *testing.T) {
+	if got := cloneConsumerGroup(nil); got != nil {
+		t.Fatalf("expected nil, got %+v", got)
+	}
+}
+
+func TestCloneConsumerGroupWithAssignments(t *testing.T) {
+	group := &metadatapb.ConsumerGroup{
+		GroupId:      "g1",
+		State:        "stable",
+		ProtocolType: "consumer",
+		Members: map[string]*metadatapb.GroupMember{
+			"m1": {
+				ClientId:      "client-1",
+				Subscriptions: []string{"orders"},
+				Assignments: []*metadatapb.Assignment{
+					{Topic: "orders", Partitions: []int32{0, 1}},
+				},
+			},
+		},
+	}
+	cloned := cloneConsumerGroup(group)
+	if cloned == group {
+		t.Fatal("should not be same pointer")
+	}
+	if len(cloned.Members) != 1 || cloned.Members["m1"].ClientId != "client-1" {
+		t.Fatalf("unexpected clone: %+v", cloned)
+	}
+	// Mutation isolation
+	cloned.Members["m1"].Assignments[0].Partitions[0] = 99
+	if group.Members["m1"].Assignments[0].Partitions[0] == 99 {
+		t.Fatal("mutation should not affect original")
+	}
+}
+
+func TestDeleteTopicCleansOffsets(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
+	})
+	ctx := context.Background()
+	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 2, ReplicationFactor: 1})
+	store.UpdateOffsets(ctx, "orders", 0, 10)
+	store.UpdateOffsets(ctx, "orders", 1, 20)
+
+	if err := store.DeleteTopic(ctx, "orders"); err != nil {
+		t.Fatalf("DeleteTopic: %v", err)
+	}
+	// Offsets should be cleaned up
+	_, err := store.NextOffset(ctx, "orders", 0)
+	if !errors.Is(err, ErrUnknownTopic) {
+		t.Fatalf("expected unknown topic after delete, got %v", err)
+	}
+}
+
+func TestCreateTopicWithCustomPartitions(t *testing.T) {
+	store := NewInMemoryStore(ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}, {NodeID: 2}},
+	})
+	ctx := context.Background()
+	topic, err := store.CreateTopic(ctx, TopicSpec{Name: "events", NumPartitions: 5, ReplicationFactor: 2})
+	if err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+	if len(topic.Partitions) != 5 {
+		t.Fatalf("expected 5 partitions, got %d", len(topic.Partitions))
+	}
+}
+
+func TestCodecParseConsumerGroupID(t *testing.T) {
+	// Valid
+	id, ok := ParseConsumerGroupID("/kafscale/consumers/my-group/metadata")
+	if !ok || id != "my-group" {
+		t.Fatalf("expected my-group, got %q ok=%v", id, ok)
+	}
+
+	// Missing suffix
+	_, ok = ParseConsumerGroupID("/kafscale/consumers/my-group/offsets")
+	if ok {
+		t.Fatal("expected false for missing /metadata suffix")
+	}
+
+	// Wrong prefix
+	_, ok = ParseConsumerGroupID("/other/my-group/metadata")
+	if ok {
+		t.Fatal("expected false for wrong prefix")
+	}
+
+	// Empty group ID
+	_, ok = ParseConsumerGroupID("/kafscale/consumers//metadata")
+	if ok {
+		t.Fatal("expected false for empty group ID")
+	}
+
+	// Nested path
+	_, ok = ParseConsumerGroupID("/kafscale/consumers/a/b/metadata")
+	if ok {
+		t.Fatal("expected false for nested path")
+	}
+}
+
+func TestCodecParseConsumerOffsetKey(t *testing.T) {
+	// Valid
+	group, topic, part, ok := ParseConsumerOffsetKey("/kafscale/consumers/g1/offsets/orders/5")
+	if !ok || group != "g1" || topic != "orders" || part != 5 {
+		t.Fatalf("unexpected: %q %q %d %v", group, topic, part, ok)
+	}
+
+	// Wrong prefix
+	_, _, _, ok = ParseConsumerOffsetKey("/other/g1/offsets/orders/5")
+	if ok {
+		t.Fatal("expected false for wrong prefix")
+	}
+
+	// Missing offsets segment
+	_, _, _, ok = ParseConsumerOffsetKey("/kafscale/consumers/g1/data/orders/5")
+	if ok {
+		t.Fatal("expected false for missing offsets segment")
+	}
+
+	// Non-numeric partition
+	_, _, _, ok = ParseConsumerOffsetKey("/kafscale/consumers/g1/offsets/orders/abc")
+	if ok {
+		t.Fatal("expected false for non-numeric partition")
+	}
+}
+
+func TestCodecEncodeDecodeRoundTrip(t *testing.T) {
+	// TopicConfig round-trip
+	cfg := &metadatapb.TopicConfig{
+		Name:              "orders",
+		Partitions:        3,
+		ReplicationFactor: 2,
+	}
+	data, err := EncodeTopicConfig(cfg)
+	if err != nil {
+		t.Fatalf("EncodeTopicConfig: %v", err)
+	}
+	decoded, err := DecodeTopicConfig(data)
+	if err != nil {
+		t.Fatalf("DecodeTopicConfig: %v", err)
+	}
+	if decoded.Name != "orders" || decoded.Partitions != 3 {
+		t.Fatalf("unexpected decoded: %+v", decoded)
+	}
+
+	// PartitionState round-trip
+	state := &metadatapb.PartitionState{
+		Topic:        "orders",
+		Partition:    2,
+		LeaderBroker: "broker-1",
+		LeaderEpoch:  5,
+	}
+	stateData, err := EncodePartitionState(state)
+	if err != nil {
+		t.Fatalf("EncodePartitionState: %v", err)
+	}
+	decodedState, err := DecodePartitionState(stateData)
+	if err != nil {
+		t.Fatalf("DecodePartitionState: %v", err)
+	}
+	if decodedState.Topic != "orders" || decodedState.Partition != 2 || decodedState.LeaderEpoch != 5 {
+		t.Fatalf("unexpected decoded state: %+v", decodedState)
+	}
+}
+
+func TestCodecDecodeErrors(t *testing.T) {
+	// Bad data
+	_, err := DecodeTopicConfig([]byte{0xff, 0xff})
+	if err == nil {
+		t.Fatal("expected error for bad topic config data")
+	}
+	if !strings.Contains(err.Error(), "unmarshal") {
+		t.Fatalf("expected unmarshal error, got: %v", err)
+	}
+
+	_, err = DecodePartitionState([]byte{0xff, 0xff})
+	if err == nil {
+		t.Fatal("expected error for bad partition state data")
+	}
+
+	_, err = DecodeConsumerGroup([]byte{0xff, 0xff})
+	if err == nil {
+		t.Fatal("expected error for bad consumer group data")
+	}
+}
+
+func TestCodecConsumerGroupRoundTrip(t *testing.T) {
+	group := &metadatapb.ConsumerGroup{
+		GroupId:      "g1",
+		State:        "stable",
+		ProtocolType: "consumer",
+		Protocol:     "range",
+	}
+	data, err := EncodeConsumerGroup(group)
+	if err != nil {
+		t.Fatalf("EncodeConsumerGroup: %v", err)
+	}
+	decoded, err := DecodeConsumerGroup(data)
+	if err != nil {
+		t.Fatalf("DecodeConsumerGroup: %v", err)
+	}
+	if decoded.GroupId != "g1" || decoded.State != "stable" {
+		t.Fatalf("unexpected: %+v", decoded)
+	}
+}
+
+func TestCodecKeyFunctions(t *testing.T) {
+	if got := TopicConfigKey("orders"); got != "/kafscale/topics/orders/config" {
+		t.Fatalf("TopicConfigKey: %q", got)
+	}
+	if got := PartitionStateKey("orders", 3); got != "/kafscale/topics/orders/partitions/3" {
+		t.Fatalf("PartitionStateKey: %q", got)
+	}
+	if got := ConsumerGroupKey("g1"); got != "/kafscale/consumers/g1/metadata" {
+		t.Fatalf("ConsumerGroupKey: %q", got)
+	}
+	if got := ConsumerGroupPrefix(); got != "/kafscale/consumers" {
+		t.Fatalf("ConsumerGroupPrefix: %q", got)
+	}
+	if got := ConsumerOffsetKey("g1", "orders", 5); got != "/kafscale/consumers/g1/offsets/orders/5" {
+		t.Fatalf("ConsumerOffsetKey: %q", got)
+	}
+	if got := BrokerRegistrationKey("broker-1"); got != "/kafscale/brokers/broker-1" {
+		t.Fatalf("BrokerRegistrationKey: %q", got)
+	}
+	if got := PartitionAssignmentKey("orders", 2); got != "/kafscale/assignments/orders/2" {
+		t.Fatalf("PartitionAssignmentKey: %q", got)
 	}
 }

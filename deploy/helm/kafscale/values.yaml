@@ -23,7 +23,7 @@ rbac:
   create: true
 
 operator:
-  replicaCount: 2
+  replicaCount: 1
   image:
     repository: ghcr.io/kafscale/kafscale-operator
     tag: ""
@@ -81,14 +81,27 @@ console:
     pullPolicy: IfNotPresent
   auth:
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   etcdEndpoints: []
   etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   metrics:
     brokerMetricsURL: ""
     operatorMetricsURL: ""
+  # LFS Dashboard configuration
+  lfs:
+    enabled: false
+    kafkaBrokers: []  # Kafka brokers for consuming tracker events
+    trackerTopic: "__lfs_ops_state"
+    s3:
+      bucket: ""
+      region: "us-east-1"
+      endpoint: ""
+      accessKey: ""
+      secretKey: ""
+      presignTTL: 300
   podAnnotations: {}
   resources: {}
   nodeSelector: {}
@@ -124,8 +137,9 @@ proxy:
   advertisedPort: 9092
   etcdEndpoints: []
   etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   backends: []
   podAnnotations: {}
   resources: {}
@@ -137,6 +151,117 @@ proxy:
     port: 9092
     annotations: {}
     loadBalancerSourceRanges: []
+
+lfsProxy:
+  enabled: false
+  replicaCount: 2
+  image:
+    repository: ghcr.io/kafscale/kafscale-lfs-proxy
+    tag: ""
+    useLatest: false
+    pullPolicy: IfNotPresent
+  health:
+    enabled: true
+    port: 9094
+  metrics:
+    enabled: true
+    port: 9095
+    service:
+      annotations: {}
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
+    prometheusRule:
+      enabled: false
+      labels: {}
+  http:
+    enabled: false  # Disabled by default for security; enable with apiKey set
+    port: 8080
+    apiKey: ""  # Required when http.enabled=true
+    cors:
+      enabled: false  # Enable for browser access
+      allowOrigins: ["*"]  # Restrict in production
+      allowMethods: ["POST", "OPTIONS"]
+      allowHeaders: ["Content-Type", "X-Kafka-Topic", "X-Kafka-Key", "X-Kafka-Partition", "X-LFS-Checksum", "X-LFS-Checksum-Alg", "X-LFS-Size", "X-LFS-Mode", "X-Request-ID", "X-API-Key", "Authorization"]
+      exposeHeaders: ["X-Request-ID"]
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: lfs.local
+        paths:
+          - path: /lfs
+            pathType: Prefix
+    tls: []
+  backendCacheTTLSeconds: 60
+  advertisedHost: ""
+  advertisedPort: 9092
+  etcdEndpoints: []
+  etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
+    username: ""
+    password: null  # Set via --set or use existingSecret
+  backends: []
+  s3:
+    bucket: ""
+    region: ""
+    endpoint: ""
+    # Credentials: use existingSecret (preferred) or inline values (not recommended)
+    existingSecret: ""  # Name of existing Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys
+    accessKey: ""       # Deprecated: use existingSecret instead
+    secretKey: ""       # Deprecated: use existingSecret instead
+    sessionToken: ""
+    forcePathStyle: false
+    ensureBucket: false
+    maxBlobSize: 7516192768
+    chunkSize: 16777216
+  tracker:
+    enabled: true
+    topic: "__lfs_ops_state"
+    batchSize: 100
+    flushMs: 100
+    ensureTopic: true
+    partitions: 3
+    replicationFactor: 1
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  service:
+    type: ClusterIP  # Changed from LoadBalancer for security; use Ingress for external access
+    port: 9092
+    annotations: {}
+    loadBalancerSourceRanges: []
+
+lfsDemos:
+  enabled: false
+  e72Browser:
+    enabled: true  # Browser LFS SDK demo
+    lfsProxyEndpoint: ""  # Auto-detected from cluster if empty
+    defaultTopic: browser-uploads
+    image:
+      repository: ghcr.io/kafscale/kafscale-e72-browser-demo
+      tag: ""
+      useLatest: false
+      pullPolicy: IfNotPresent
+    service:
+      type: NodePort
+      port: 80
+      nodePort: 30072
+    ingress:
+      enabled: false
+      className: ""
+      annotations: {}
+      hosts:
+        - host: lfs-demo.local
+          paths:
+            - path: /
+              pathType: Prefix
+      tls: []
 
 mcp:
   enabled: false
@@ -156,8 +281,9 @@ mcp:
     token: ""
   etcdEndpoints: []
   etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   metrics:
     brokerMetricsURL: ""
   sessionTimeout: ""

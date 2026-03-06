@@ -70,8 +70,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				log.Printf("accept temporary error: %v", err)
+			if ne, ok := err.(net.Error); ok && !ne.Timeout() {
+				log.Printf("accept error: %v", err)
 				continue
 			}
 			return err
@@ -100,7 +100,7 @@ func (s *Server) ListenAddress() string {
 func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if s.ConnContextFunc != nil {
 		wrapped, info, err := s.ConnContextFunc(conn)
 		if err != nil {
@@ -130,8 +130,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 		respPayload, err := s.Handler.Handle(ctx, header, req)
 		if err != nil {
-			log.Printf("handle request: %v", err)
-			return
+			log.Printf("handle request api=%d v=%d: %v", header.APIKey, header.APIVersion, err)
+			// Send an UNKNOWN_SERVER_ERROR response instead of dropping the
+			// connection so the client can recover gracefully.
+			if errResp := buildErrorResponse(header); errResp != nil {
+				_ = protocol.WriteFrame(conn, errResp)
+			}
+			continue
 		}
 		if respPayload == nil {
 			continue
@@ -141,4 +146,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 	}
+}
+
+// buildErrorResponse creates a minimal Kafka error response for the given
+// request header so the client receives a proper error instead of a closed
+// connection. Returns nil if no suitable response can be constructed.
+func buildErrorResponse(header *protocol.RequestHeader) []byte {
+	resp := kmsg.ResponseForKey(header.APIKey)
+	if resp == nil {
+		return nil
+	}
+	resp.SetVersion(header.APIVersion)
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp)
 }

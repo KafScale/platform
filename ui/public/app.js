@@ -7,6 +7,11 @@ let metricsSource = null;
 let statusInterval = null;
 let brokersExpanded = false;
 
+// LFS state
+let lfsEventsSource = null;
+let lfsCurrentPath = '';
+let lfsTopicsCache = [];
+
 const loginScreen = document.getElementById('login-screen');
 const appScreen = document.getElementById('app');
 const loginForm = document.getElementById('login-form');
@@ -522,7 +527,499 @@ if (logoutButton) {
   });
 }
 
+// LFS Dashboard Functions
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return '-';
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diff = now - date;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return date.toLocaleDateString();
+}
+
+async function fetchLfsStatus() {
+  try {
+    const resp = await fetch('/ui/api/lfs/status');
+    if (resp.status === 401) {
+      return;
+    }
+    if (!resp.ok) {
+      updateLfsStatusIndicator(false, 'LFS unavailable');
+      return;
+    }
+    const data = await resp.json();
+    renderLfsStatus(data);
+  } catch (err) {
+    updateLfsStatusIndicator(false, `Error: ${err.message}`);
+  }
+}
+
+function updateLfsStatusIndicator(enabled, message) {
+  const indicator = document.getElementById('lfs-status-indicator');
+  const text = document.getElementById('lfs-status-text');
+  const dot = indicator ? indicator.querySelector('.status-dot') : null;
+  if (dot) {
+    dot.classList.remove('healthy', 'degraded', 'unavailable');
+    dot.classList.add(enabled ? 'healthy' : 'unavailable');
+  }
+  if (text) {
+    text.textContent = message || (enabled ? 'LFS Enabled' : 'LFS Disabled');
+  }
+}
+
+function updateLfsConsumerIndicator(connected, message) {
+  const indicator = document.getElementById('lfs-consumer-indicator');
+  const text = document.getElementById('lfs-consumer-text');
+  const dot = indicator ? indicator.querySelector('.status-dot') : null;
+  if (dot) {
+    dot.classList.remove('healthy', 'degraded', 'unavailable');
+    dot.classList.add(connected ? 'healthy' : 'unavailable');
+  }
+  if (text) {
+    text.textContent = message || (connected ? 'LFS connection: connected' : 'LFS connection: disconnected');
+  }
+}
+
+function renderLfsStatus(data) {
+  updateLfsStatusIndicator(data.enabled, data.enabled ? 'LFS Enabled' : 'LFS Disabled');
+  if (data.consumer_status) {
+    const status = data.consumer_status;
+    const message = status.connected
+      ? `LFS connection: connected (last poll ${formatRelativeTime(status.last_poll_at)})`
+      : `LFS connection: disconnected${status.last_error ? `: ${status.last_error}` : ''}`;
+    updateLfsConsumerIndicator(Boolean(status.connected), message);
+  } else {
+    updateLfsConsumerIndicator(false, 'Tracker consumer unavailable');
+  }
+
+  const stats = data.stats || {};
+  document.getElementById('lfs-total-objects').textContent = metricFormatter.format(stats.total_objects || 0);
+  document.getElementById('lfs-total-storage').textContent = formatBytes(stats.total_bytes || 0);
+  document.getElementById('lfs-uploads-24h').textContent = metricFormatter.format(stats.uploads_24h || 0);
+  document.getElementById('lfs-downloads-24h').textContent = metricFormatter.format(stats.downloads_24h || 0);
+  document.getElementById('lfs-errors-24h').textContent = metricFormatter.format(stats.errors_24h || 0);
+  document.getElementById('lfs-orphans-count').textContent = metricFormatter.format(stats.orphans_pending || 0);
+
+  document.getElementById('lfs-s3-bucket').textContent = data.s3_bucket || '-';
+  document.getElementById('lfs-tracker-topic').textContent = data.tracker_topic || '-';
+
+  // Update topic filter dropdown
+  const topicFilter = document.getElementById('lfs-objects-topic-filter');
+  if (topicFilter && data.topics_with_lfs) {
+    lfsTopicsCache = data.topics_with_lfs;
+    topicFilter.innerHTML = '<option value="">All Topics</option>';
+    data.topics_with_lfs.forEach(topic => {
+      const option = document.createElement('option');
+      option.value = topic;
+      option.textContent = topic;
+      topicFilter.appendChild(option);
+    });
+  }
+}
+
+async function fetchLfsTopics() {
+  try {
+    const resp = await fetch('/ui/api/lfs/topics');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderLfsTopics(data.topics || []);
+  } catch (err) {
+    console.error('Failed to fetch LFS topics:', err);
+  }
+}
+
+function renderLfsTopics(topics) {
+  const grid = document.getElementById('lfs-topics-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+
+  if (!topics.length) {
+    grid.innerHTML = '<p class="muted">No topics with LFS data yet.</p>';
+    return;
+  }
+
+  topics.forEach(topic => {
+    const card = document.createElement('div');
+    card.className = 'lfs-topic-card';
+    const statusDot = topic.has_lfs ? '<span class="lfs-topic-indicator" title="LFS data present"></span>' : '<span class="lfs-topic-indicator muted" title="No LFS data"></span>';
+    card.innerHTML = `
+      <h4>${statusDot}${topic.name}</h4>
+      <div class="lfs-topic-stats">
+        <div><span>Objects</span><strong>${metricFormatter.format(topic.object_count || 0)}</strong></div>
+        <div><span>Size</span><strong>${formatBytes(topic.total_bytes || 0)}</strong></div>
+        <div><span>Uploads (24h)</span><strong>${topic.uploads_24h || 0}</strong></div>
+        <div><span>Downloads (24h)</span><strong>${topic.downloads_24h || 0}</strong></div>
+        <div><span>Errors (24h)</span><strong>${topic.errors_24h || 0}</strong></div>
+        <div><span>Last Event</span><strong>${formatRelativeTime(topic.last_event)}</strong></div>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+async function fetchLfsObjects(topic = '') {
+  const status = document.getElementById('lfs-objects-status');
+  if (status) status.textContent = 'Loading objects...';
+
+  try {
+    const url = topic ? `/ui/api/lfs/objects?topic=${encodeURIComponent(topic)}&limit=50` : '/ui/api/lfs/objects?limit=50';
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      if (status) status.textContent = 'Failed to load objects';
+      return;
+    }
+    const data = await resp.json();
+    renderLfsObjects(data.objects || [], data.total_count || 0);
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err.message}`;
+  }
+}
+
+function renderLfsObjects(objects, totalCount) {
+  const tbody = document.querySelector('#lfs-objects-table tbody');
+  const status = document.getElementById('lfs-objects-status');
+
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!objects.length) {
+    tbody.innerHTML = '<tr><td colspan="5">No objects found</td></tr>';
+    if (status) status.textContent = 'No objects found';
+    return;
+  }
+
+  objects.forEach(obj => {
+    const row = document.createElement('tr');
+    const shortKey = obj.s3_key ? obj.s3_key.split('/').pop() : '-';
+    row.innerHTML = `
+      <td title="${obj.s3_key || ''}">${shortKey}</td>
+      <td>${obj.topic || '-'}</td>
+      <td>${formatBytes(obj.size || 0)}</td>
+      <td>${formatRelativeTime(obj.created_at)}</td>
+      <td>
+        <button class="ghost-button lfs-presign-btn" data-key="${obj.s3_key || ''}">Download</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  if (status) status.textContent = `Showing ${objects.length} of ${totalCount} objects`;
+
+  // Add click handlers for presign buttons
+  tbody.querySelectorAll('.lfs-presign-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+      if (!key) return;
+      try {
+        const resp = await fetch('/ui/api/lfs/s3/presign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ s3_key: key, ttl_seconds: 300 })
+        });
+        if (!resp.ok) {
+          alert('Failed to generate download URL');
+          return;
+        }
+        const data = await resp.json();
+        if (data.url) {
+          window.open(data.url, '_blank');
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    });
+  });
+}
+
+function startLfsEventsStream(filter = '') {
+  const status = document.getElementById('lfs-events-status');
+  const list = document.getElementById('lfs-events-list');
+
+  if (lfsEventsSource) {
+    lfsEventsSource.close();
+  }
+
+  const url = filter ? `/ui/api/lfs/events?types=${encodeURIComponent(filter)}` : '/ui/api/lfs/events';
+  lfsEventsSource = new EventSource(url);
+
+  lfsEventsSource.onopen = () => {
+    if (status) status.textContent = 'Connected to event stream';
+  };
+
+  lfsEventsSource.onmessage = event => {
+    try {
+      const data = JSON.parse(event.data);
+      addLfsEvent(data);
+    } catch (err) {
+      // Ignore parse errors for keepalive messages
+    }
+  };
+
+  lfsEventsSource.onerror = () => {
+    if (status) status.textContent = 'Event stream disconnected';
+    lfsEventsSource.close();
+  };
+}
+
+function addLfsEvent(event) {
+  const list = document.getElementById('lfs-events-list');
+  if (!list) return;
+
+  const item = document.createElement('div');
+  item.className = `lfs-event-item lfs-event-${event.event_type || 'unknown'}`;
+
+  const typeLabels = {
+    'upload_started': 'Upload Started',
+    'upload_completed': 'Upload Complete',
+    'upload_failed': 'Upload Failed',
+    'download_requested': 'Download Requested',
+    'download_completed': 'Download Complete',
+    'orphan_detected': 'Orphan Detected'
+  };
+
+  const label = typeLabels[event.event_type] || event.event_type;
+  const time = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : '';
+
+  item.innerHTML = `
+    <span class="lfs-event-type">${label}</span>
+    <span class="lfs-event-topic">${event.topic || '-'}</span>
+    <span class="lfs-event-detail">${event.s3_key ? event.s3_key.split('/').pop() : '-'}</span>
+    <span class="lfs-event-time">${time}</span>
+  `;
+
+  // Keep only last 100 events
+  if (list.children.length >= 100) {
+    list.removeChild(list.lastChild);
+  }
+
+  list.insertBefore(item, list.firstChild);
+}
+
+function clearLfsEvents() {
+  const list = document.getElementById('lfs-events-list');
+  if (list) list.innerHTML = '';
+}
+
+async function fetchLfsOrphans() {
+  try {
+    const resp = await fetch('/ui/api/lfs/orphans');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderLfsOrphans(data.orphans || [], data.total_size || 0);
+  } catch (err) {
+    console.error('Failed to fetch LFS orphans:', err);
+  }
+}
+
+function renderLfsOrphans(orphans, totalSize) {
+  const summary = document.getElementById('lfs-orphans-summary');
+  const tbody = document.querySelector('#lfs-orphans-table tbody');
+
+  if (summary) {
+    if (orphans.length === 0) {
+      summary.innerHTML = '<p class="lfs-orphans-ok">No orphaned objects detected.</p>';
+    } else {
+      summary.innerHTML = `<p class="lfs-orphans-warning">${orphans.length} orphaned objects (${formatBytes(totalSize)} total)</p>`;
+    }
+  }
+
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  if (!orphans.length) {
+    tbody.innerHTML = '<tr><td colspan="4">No orphans detected</td></tr>';
+    return;
+  }
+
+  orphans.forEach(orphan => {
+    const row = document.createElement('tr');
+    const shortKey = orphan.s3_key ? orphan.s3_key.split('/').pop() : '-';
+    row.innerHTML = `
+      <td title="${orphan.s3_key || ''}">${shortKey}</td>
+      <td>${orphan.topic || '-'}</td>
+      <td>${formatRelativeTime(orphan.detected_at)}</td>
+      <td>${orphan.reason || '-'}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+async function fetchLfsS3Browse(prefix = '') {
+  const status = document.getElementById('lfs-s3-status');
+  const pathEl = document.getElementById('lfs-s3-path');
+
+  lfsCurrentPath = prefix;
+  if (pathEl) pathEl.textContent = '/' + prefix;
+  if (status) status.textContent = 'Loading...';
+
+  try {
+    const url = `/ui/api/lfs/s3/browse?prefix=${encodeURIComponent(prefix)}&delimiter=/&max_keys=100`;
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      if (status) status.textContent = 'Failed to browse S3';
+      return;
+    }
+    const data = await resp.json();
+    renderLfsS3Browser(data.common_prefixes || [], data.objects || [], data.is_truncated);
+  } catch (err) {
+    if (status) status.textContent = `Error: ${err.message}`;
+  }
+}
+
+function renderLfsS3Browser(prefixes, objects, isTruncated) {
+  const tbody = document.querySelector('#lfs-s3-table tbody');
+  const status = document.getElementById('lfs-s3-status');
+
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  // Render directories (prefixes)
+  prefixes.forEach(prefix => {
+    const row = document.createElement('tr');
+    row.className = 'lfs-s3-dir';
+    const name = prefix.replace(lfsCurrentPath, '').replace(/\/$/, '');
+    row.innerHTML = `
+      <td><span class="lfs-s3-icon">📁</span> ${name}</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+    `;
+    row.addEventListener('click', () => fetchLfsS3Browse(prefix));
+    tbody.appendChild(row);
+  });
+
+  // Render files (objects)
+  objects.forEach(obj => {
+    const row = document.createElement('tr');
+    const name = obj.key ? obj.key.replace(lfsCurrentPath, '') : '-';
+    row.innerHTML = `
+      <td><span class="lfs-s3-icon">📄</span> ${name}</td>
+      <td>${formatBytes(obj.size || 0)}</td>
+      <td>${formatRelativeTime(obj.last_modified)}</td>
+      <td>
+        <button class="ghost-button lfs-s3-download-btn" data-key="${obj.key || ''}">Download</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+
+  if (prefixes.length === 0 && objects.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4">No objects at this path</td></tr>';
+  }
+
+  if (status) {
+    const count = prefixes.length + objects.length;
+    status.textContent = `${count} items${isTruncated ? ' (truncated)' : ''}`;
+  }
+
+  // Add click handlers for download buttons
+  tbody.querySelectorAll('.lfs-s3-download-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const key = btn.dataset.key;
+      if (!key) return;
+      try {
+        const resp = await fetch('/ui/api/lfs/s3/presign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ s3_key: key, ttl_seconds: 300 })
+        });
+        if (!resp.ok) {
+          alert('Failed to generate download URL');
+          return;
+        }
+        const data = await resp.json();
+        if (data.url) {
+          window.open(data.url, '_blank');
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    });
+  });
+}
+
+function navigateLfsS3Up() {
+  if (!lfsCurrentPath) return;
+  const parts = lfsCurrentPath.replace(/\/$/, '').split('/');
+  parts.pop();
+  const newPath = parts.length > 0 ? parts.join('/') + '/' : '';
+  fetchLfsS3Browse(newPath);
+}
+
+function initLfsTab() {
+  // Topic filter change
+  const topicFilter = document.getElementById('lfs-objects-topic-filter');
+  if (topicFilter) {
+    topicFilter.addEventListener('change', () => {
+      fetchLfsObjects(topicFilter.value);
+    });
+  }
+
+  // Objects refresh button
+  const objectsRefresh = document.getElementById('lfs-objects-refresh');
+  if (objectsRefresh) {
+    objectsRefresh.addEventListener('click', () => {
+      const filter = document.getElementById('lfs-objects-topic-filter');
+      fetchLfsObjects(filter ? filter.value : '');
+    });
+  }
+
+  // Events filter change
+  const eventsFilter = document.getElementById('lfs-events-filter');
+  if (eventsFilter) {
+    eventsFilter.addEventListener('change', () => {
+      clearLfsEvents();
+      startLfsEventsStream(eventsFilter.value);
+    });
+  }
+
+  // Events clear button
+  const eventsClear = document.getElementById('lfs-events-clear');
+  if (eventsClear) {
+    eventsClear.addEventListener('click', clearLfsEvents);
+  }
+
+  // S3 browser navigation
+  const s3Up = document.getElementById('lfs-s3-up');
+  if (s3Up) {
+    s3Up.addEventListener('click', navigateLfsS3Up);
+  }
+
+  const s3Refresh = document.getElementById('lfs-s3-refresh');
+  if (s3Refresh) {
+    s3Refresh.addEventListener('click', () => fetchLfsS3Browse(lfsCurrentPath));
+  }
+}
+
+function startLfsConsole() {
+  fetchLfsStatus();
+  fetchLfsTopics();
+  fetchLfsObjects();
+  fetchLfsOrphans();
+  fetchLfsS3Browse('');
+  startLfsEventsStream();
+}
+
+function stopLfsConsole() {
+  if (lfsEventsSource) {
+    lfsEventsSource.close();
+    lfsEventsSource = null;
+  }
+}
+
 initAuth();
+initLfsTab();
 
 document.querySelectorAll('.tab-button').forEach(button => {
   button.addEventListener('click', () => {
@@ -533,5 +1030,12 @@ document.querySelectorAll('.tab-button').forEach(button => {
     document.querySelectorAll('.tab-panel').forEach(panel => {
       panel.classList.toggle('active', panel.id === `tab-${target}`);
     });
+
+    // Start/stop LFS streams based on tab visibility
+    if (target === 'lfs') {
+      startLfsConsole();
+    } else {
+      stopLfsConsole();
+    }
   });
 });

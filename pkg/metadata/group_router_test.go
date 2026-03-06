@@ -121,6 +121,40 @@ func TestGroupRouterReflectsRelease(t *testing.T) {
 	t.Fatalf("router did not reflect release of my-group (still shows %q)", router.LookupOwner("my-group"))
 }
 
+// Invalidate clears the router cache and reloads.
+func TestGroupRouterInvalidate(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	routerCli := newEtcdClientForTest(t, endpoints)
+	router, err := NewGroupRouter(ctx, routerCli, slog.Default())
+	if err != nil {
+		t.Fatalf("create router: %v", err)
+	}
+	t.Cleanup(router.Stop)
+
+	brokerA := newGroupLeaseManager(t, endpoints, "broker-a", 30)
+	if err := brokerA.Acquire(ctx, "inv-group"); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if router.LookupOwner("inv-group") == "broker-a" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Invalidate removes the cached route
+	router.Invalidate("inv-group")
+
+	// Immediately after invalidate, the route should be empty
+	if owner := router.LookupOwner("inv-group"); owner != "" {
+		t.Fatalf("expected empty owner after invalidate, got %q", owner)
+	}
+}
+
 // Multiple groups route to different brokers.
 func TestGroupRouterMultipleBrokers(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)

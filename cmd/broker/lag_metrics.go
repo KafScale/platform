@@ -71,7 +71,7 @@ func (m *lagMetrics) WritePrometheus(w io.Writer) {
 	if hist != nil {
 		hist.WritePrometheus(w, "kafscale_consumer_lag", "Consumer lag in records.")
 	}
-	fmt.Fprintf(w, "# HELP kafscale_consumer_lag_max Maximum consumer lag in records.\n")
-	fmt.Fprintf(w, "# TYPE kafscale_consumer_lag_max gauge\n")
-	fmt.Fprintf(w, "kafscale_consumer_lag_max %f\n", max)
+	_, _ = fmt.Fprintf(w, "# HELP kafscale_consumer_lag_max Maximum consumer lag in records.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE kafscale_consumer_lag_max gauge\n")
+	_, _ = fmt.Fprintf(w, "kafscale_consumer_lag_max %f\n", max)
 }

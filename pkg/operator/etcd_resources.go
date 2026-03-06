@@ -182,7 +182,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 		sts.Spec.ServiceName = fmt.Sprintf("%s-etcd", cluster.Name)
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		sts.Spec.Template.ObjectMeta.Labels = labels
+		sts.Spec.Template.Labels = labels
 
 		useMemory := parseBoolEnv(operatorEtcdStorageMemoryEnv)
 		if useMemory {
@@ -470,7 +470,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		cron.Spec.ConcurrencyPolicy = batchv1.ForbidConcurrent
 		cron.Spec.SuccessfulJobsHistoryLimit = int32Ptr(3)
 		cron.Spec.FailedJobsHistoryLimit = int32Ptr(3)
-		cron.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels = labels
+		cron.Spec.JobTemplate.Spec.Template.Labels = labels
 		cron.Spec.JobTemplate.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
 		cron.Spec.JobTemplate.Spec.Template.Spec.Volumes = []corev1.Volume{
 			{

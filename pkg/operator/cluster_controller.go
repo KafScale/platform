@@ -90,6 +90,9 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.reconcileBrokerService(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcileLfsProxyResources(ctx, &cluster, etcdResolution.Endpoints); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.reconcileBrokerHPA(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -123,6 +126,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kafscalev1alpha1.KafscaleCluster{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
@@ -146,7 +150,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.ServiceName = brokerHeadlessServiceName(cluster)
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Replicas = &replicas
-		sts.Spec.Template.ObjectMeta.Labels = labels
+		sts.Spec.Template.Labels = labels
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
 		}
@@ -306,7 +310,7 @@ func parseServiceType(serviceType string) corev1.ServiceType {
 	}
 }
 
-func parseExternalTrafficPolicy(policy string) corev1.ServiceExternalTrafficPolicyType {
+func parseExternalTrafficPolicy(policy string) corev1.ServiceExternalTrafficPolicy {
 	switch strings.TrimSpace(policy) {
 	case string(corev1.ServiceExternalTrafficPolicyTypeLocal):
 		return corev1.ServiceExternalTrafficPolicyTypeLocal

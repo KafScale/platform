@@ -18,11 +18,13 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 type fakeS3 struct {
@@ -100,5 +102,265 @@ func TestAWSS3Client_Download(t *testing.T) {
 	}
 	if *api.getInput.Bucket != "test-bucket" {
 		t.Fatalf("bucket mismatch: %s", aws.ToString(api.getInput.Bucket))
+	}
+}
+
+func TestAWSS3Client_DownloadNoRange(t *testing.T) {
+	api := &fakeS3{getData: []byte("fulldata")}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	data, err := client.DownloadSegment(context.Background(), "key", nil)
+	if err != nil {
+		t.Fatalf("DownloadSegment: %v", err)
+	}
+	if string(data) != "fulldata" {
+		t.Fatalf("unexpected data: %s", data)
+	}
+	if api.getInput.Range != nil {
+		t.Fatal("expected nil range header")
+	}
+}
+
+func TestAWSS3Client_DownloadError(t *testing.T) {
+	api := &fakeS3{getErr: errors.New("access denied")}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	_, err := client.DownloadSegment(context.Background(), "key", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAWSS3Client_DownloadIndex(t *testing.T) {
+	api := &fakeS3{getData: []byte("index-data")}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	data, err := client.DownloadIndex(context.Background(), "topic/index")
+	if err != nil {
+		t.Fatalf("DownloadIndex: %v", err)
+	}
+	if string(data) != "index-data" {
+		t.Fatalf("unexpected data: %s", data)
+	}
+}
+
+func TestAWSS3Client_DownloadIndexNotFound(t *testing.T) {
+	api := &fakeS3{getErr: &fakeAPIError{code: "NoSuchKey"}}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	_, err := client.DownloadIndex(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestAWSS3Client_UploadIndex(t *testing.T) {
+	api := &fakeS3{}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	err := client.UploadIndex(context.Background(), "index/key", []byte("idx"))
+	if err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+	if len(api.putInputs) != 1 {
+		t.Fatalf("expected 1 put, got %d", len(api.putInputs))
+	}
+}
+
+func TestAWSS3Client_UploadNoKMS(t *testing.T) {
+	api := &fakeS3{}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	err := client.UploadSegment(context.Background(), "key", []byte("data"))
+	if err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if api.putInputs[0].SSEKMSKeyId != nil {
+		t.Fatal("expected no KMS key when empty")
+	}
+}
+
+func TestAWSS3Client_EnsureBucket(t *testing.T) {
+	api := &fakeS3{}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	err := client.EnsureBucket(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureBucket: %v", err)
+	}
+}
+
+func TestAWSS3Client_EnsureBucketAlreadyExists(t *testing.T) {
+	api := &fakeS3{
+		headErr:   &fakeAPIError{code: "NotFound"},
+		createErr: &fakeAPIError{code: "BucketAlreadyOwnedByYou"},
+	}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	err := client.EnsureBucket(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureBucket: %v", err)
+	}
+}
+
+func TestBucketLocationConfig(t *testing.T) {
+	c := &awsS3Client{region: "us-east-1"}
+	if c.bucketLocationConfig() != nil {
+		t.Fatal("us-east-1 should return nil config")
+	}
+	c2 := &awsS3Client{region: ""}
+	if c2.bucketLocationConfig() != nil {
+		t.Fatal("empty region should return nil config")
+	}
+	c3 := &awsS3Client{region: "eu-west-1"}
+	cfg := c3.bucketLocationConfig()
+	if cfg == nil {
+		t.Fatal("non-us-east-1 should return config")
+	}
+}
+
+func TestIsNotFoundErr(t *testing.T) {
+	if isNotFoundErr(nil) {
+		t.Fatal("nil should not be not-found")
+	}
+	if !isNotFoundErr(&fakeAPIError{code: "NoSuchKey"}) {
+		t.Fatal("NoSuchKey should be not-found")
+	}
+	if !isNotFoundErr(&fakeAPIError{code: "NotFound"}) {
+		t.Fatal("NotFound should be not-found")
+	}
+	if isNotFoundErr(errors.New("random error")) {
+		t.Fatal("random error should not be not-found")
+	}
+}
+
+func TestIsBucketMissingErr(t *testing.T) {
+	if isBucketMissingErr(nil) {
+		t.Fatal("nil should not be bucket-missing")
+	}
+	if !isBucketMissingErr(&fakeAPIError{code: "NoSuchBucket"}) {
+		t.Fatal("NoSuchBucket should be bucket-missing")
+	}
+	if !isBucketMissingErr(&fakeAPIError{code: "NotFound"}) {
+		t.Fatal("NotFound should be bucket-missing")
+	}
+	if isBucketMissingErr(errors.New("random error")) {
+		t.Fatal("random error should not be bucket-missing")
+	}
+}
+
+func TestByteRangeHeaderValue(t *testing.T) {
+	br := &ByteRange{Start: 10, End: 20}
+	val := br.headerValue()
+	if val == nil || *val != "bytes=10-20" {
+		t.Fatalf("expected bytes=10-20, got %v", val)
+	}
+
+	var nilBR *ByteRange
+	if nilBR.headerValue() != nil {
+		t.Fatal("nil ByteRange should return nil header")
+	}
+}
+
+func TestNewS3ClientValidation(t *testing.T) {
+	_, err := NewS3Client(context.Background(), S3Config{Bucket: "", Region: "us-east-1"})
+	if err == nil {
+		t.Fatal("expected error for empty bucket")
+	}
+	_, err = NewS3Client(context.Background(), S3Config{Bucket: "b", Region: ""})
+	if err == nil {
+		t.Fatal("expected error for empty region")
+	}
+}
+
+// fakeAPIError implements smithy.APIError
+type fakeAPIError struct {
+	code string
+}
+
+func (e *fakeAPIError) Error() string   { return e.code }
+func (e *fakeAPIError) ErrorCode() string   { return e.code }
+func (e *fakeAPIError) ErrorMessage() string { return e.code }
+func (e *fakeAPIError) ErrorFault() smithy.ErrorFault { return smithy.FaultUnknown }
+
+func TestMemoryS3Client_EnsureBucket(t *testing.T) {
+	m := NewMemoryS3Client()
+	err := m.EnsureBucket(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureBucket: %v", err)
+	}
+}
+
+func TestMemoryS3Client_UploadAndDownload(t *testing.T) {
+	m := NewMemoryS3Client()
+	_ = m.UploadIndex(context.Background(), "idx/key", []byte("index"))
+
+	data, err := m.DownloadIndex(context.Background(), "idx/key")
+	if err != nil {
+		t.Fatalf("DownloadIndex: %v", err)
+	}
+	if string(data) != "index" {
+		t.Fatalf("unexpected index data: %s", data)
+	}
+
+	_, err = m.DownloadIndex(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("expected error for missing index")
+	}
+}
+
+func TestMemoryS3Client_DownloadSegmentRange(t *testing.T) {
+	m := NewMemoryS3Client()
+	_ = m.UploadSegment(context.Background(), "seg", []byte("0123456789"))
+
+	// Full download
+	data, err := m.DownloadSegment(context.Background(), "seg", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "0123456789" {
+		t.Fatalf("expected full data, got %s", data)
+	}
+
+	// Range download
+	data, err = m.DownloadSegment(context.Background(), "seg", &ByteRange{Start: 2, End: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "2345" {
+		t.Fatalf("expected '2345', got '%s'", data)
+	}
+
+	// Not found
+	_, err = m.DownloadSegment(context.Background(), "missing", nil)
+	if err == nil {
+		t.Fatal("expected error for missing segment")
+	}
+}
+
+func TestMemoryS3Client_ListSegments(t *testing.T) {
+	m := NewMemoryS3Client()
+	_ = m.UploadSegment(context.Background(), "topic/0/seg-0", []byte("a"))
+	_ = m.UploadSegment(context.Background(), "topic/0/seg-1", []byte("bb"))
+	_ = m.UploadSegment(context.Background(), "topic/1/seg-0", []byte("ccc"))
+
+	objs, err := m.ListSegments(context.Background(), "topic/0/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 2 {
+		t.Fatalf("expected 2 objects, got %d", len(objs))
+	}
+
+	// Non-matching prefix
+	objs, err = m.ListSegments(context.Background(), "other/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 0 {
+		t.Fatalf("expected 0 objects, got %d", len(objs))
 	}
 }

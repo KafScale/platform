@@ -40,6 +40,7 @@ func TestMultiSegmentRestartDurability(t *testing.T) {
 	if os.Getenv(enableEnv) != "1" {
 		t.Skipf("set %s=1 to run integration harness", enableEnv)
 	}
+	requireMinIO(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
