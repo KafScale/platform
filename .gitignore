@@ -58,6 +58,7 @@ spark-warehouse/
 *.swp
 *.swo
 .DS_Store
+.claude/
 
 # Addon processor artifacts
 addons/processors/**/bin/

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-lfs-proxy docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-lfs-proxy-broker test-full test-operator test-acl demo demo-long demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo lfs-demo lfs-demo-medical lfs-demo-video lfs-demo-industrial platform-demo lfs-demo-idoc act-runnable demo-guide-pf demo-guide-pf-clean help clean-kind-all
+.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-lfs-proxy docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-lfs-proxy-broker test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -24,18 +24,9 @@ PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
 LFS_PROXY_IMAGE ?= $(REGISTRY)/kafscale-lfs-proxy:dev
 SQL_PROCESSOR_IMAGE ?= $(REGISTRY)/kafscale-sql-processor:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
-SPRING_DEMO_IMAGE ?= $(REGISTRY)/kafscale-spring-demo:dev
-
-OPERATOR_REPO := $(shell echo $(OPERATOR_IMAGE) | sed 's/:[^:]*$$//')
-OPERATOR_TAG := $(shell echo $(OPERATOR_IMAGE) | sed 's/.*://')
-CONSOLE_REPO := $(shell echo $(CONSOLE_IMAGE) | sed 's/:[^:]*$$//')
-CONSOLE_TAG := $(shell echo $(CONSOLE_IMAGE) | sed 's/.*://')
-SPRING_DEMO_REPO := $(shell echo $(SPRING_DEMO_IMAGE) | sed 's/:[^:]*$$//')
-SPRING_DEMO_TAG := $(shell echo $(SPRING_DEMO_IMAGE) | sed 's/.*://')
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
 ICEBERG_PROCESSOR_IMAGE ?= iceberg-processor:dev
-E72_BROWSER_DEMO_IMAGE ?= $(REGISTRY)/kafscale-e72-browser-demo:dev
 ICEBERG_REST_IMAGE ?= tabulario/iceberg-rest:1.6.0
 ICEBERG_REST_PORT ?= 8181
 ICEBERG_WAREHOUSE_BUCKET ?= kafscale-snapshots
@@ -56,11 +47,6 @@ KAFSQL_DEMO_TOPIC ?= kafsql-demo-topic
 KAFSQL_DEMO_RECORDS ?= 200
 KAFSQL_DEMO_TIMEOUT_SEC ?= 120
 KAFSQL_PROCESSOR_RELEASE ?= kafsql-processor-dev
-LFS_DEMO_NAMESPACE ?= $(KAFSCALE_DEMO_NAMESPACE)
-LFS_DEMO_TOPIC ?= lfs-demo-topic
-LFS_DEMO_BLOB_SIZE ?= 524288
-LFS_DEMO_BLOB_COUNT ?= 5
-LFS_DEMO_TIMEOUT_SEC ?= 120
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
 MINIO_PORT ?= 9000
@@ -119,7 +105,7 @@ test: ## Run unit tests + vet + race
 test-acl: ## Run ACL e2e test (requires KAFSCALE_E2E=1)
 	KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestACLsE2E
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-spring-demo docker-build-e2e-client docker-build-etcd-tools docker-build-sql-processor ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools docker-build-sql-processor ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -198,23 +184,10 @@ $(STAMP_DIR)/sql-processor.image: $(SQL_PROCESSOR_SRCS)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(SQL_PROCESSOR_IMAGE) -f addons/processors/sql-processor/Dockerfile addons/processors/sql-processor
 	@touch $(STAMP_DIR)/sql-processor.image
 
-SPRING_DEMO_SRCS := $(shell find examples/E20_spring-boot-kafscale-demo -type f)
-docker-build-spring-demo: $(STAMP_DIR)/spring-demo.image ## Build Spring Boot demo container image
-$(STAMP_DIR)/spring-demo.image: $(SPRING_DEMO_SRCS)
-	@mkdir -p $(STAMP_DIR)
-	$(DOCKER_BUILD_CMD) -t $(SPRING_DEMO_IMAGE) examples/E20_spring-boot-kafscale-demo
-	@touch $(STAMP_DIR)/spring-demo.image
-
-docker-build-e72-browser-demo: ## Build E72 browser demo container image
-	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(E72_BROWSER_DEMO_IMAGE) -f examples/E72_browser-lfs-sdk-demo/Dockerfile examples/E72_browser-lfs-sdk-demo
-
-docker-build-iceberg-processor: ## Build Iceberg processor container image
-	$(MAKE) -C addons/processors/iceberg-processor docker-build IMAGE=$(ICEBERG_PROCESSOR_IMAGE) DOCKER_BUILD_ARGS="$(DOCKER_BUILD_ARGS) --build-arg GO_BUILD_FLAGS='$(ICEBERG_PROCESSOR_BUILD_FLAGS)'"
-
 docker-clean: ## Remove local dev images and prune dangling Docker data
 	@echo "WARNING: this resets Docker build caches (buildx/builder) and removes local images."
 	@printf "Type YES to continue: "; read ans; [ "$$ans" = "YES" ] || { echo "aborted"; exit 1; }
-	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE) $(SQL_PROCESSOR_IMAGE) $(SPRING_DEMO_IMAGE)
+	-docker image rm -f $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) $(PROXY_IMAGE) $(MCP_IMAGE) $(E2E_CLIENT_IMAGE) $(ETCD_TOOLS_IMAGE) $(SQL_PROCESSOR_IMAGE)
 	-rm -rf $(STAMP_DIR)
 	docker system prune --force --volumes
 	docker buildx prune --force
@@ -321,7 +294,6 @@ test-mcp: ## Run MCP e2e tests (in-memory metadata store + streamable HTTP).
 test-multi-segment-durability: release-broker-ports ensure-minio ## Run multi-segment restart durability e2e (embedded etcd + MinIO).
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestMultiSegmentRestartDurability -v
-
 
 test-lfs-proxy-broker: ## Run LFS proxy e2e with real broker (embedded etcd + in-memory S3).
 	KAFSCALE_E2E=1 \
@@ -593,100 +565,6 @@ kafsql-demo: demo-platform-bootstrap ## Run the KAFSQL processor e2e demo on kin
 	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
 	bash scripts/kafsql-demo.sh
 
-lfs-demo: KAFSCALE_DEMO_PROXY=0
-lfs-demo: KAFSCALE_DEMO_CONSOLE=1
-lfs-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
-lfs-demo: demo-platform-bootstrap ## Run the LFS proxy demo on kind.
-	$(MAKE) docker-build-lfs-proxy
-	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
-	KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
-	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
-	LFS_DEMO_NAMESPACE=$(LFS_DEMO_NAMESPACE) \
-	LFS_DEMO_TOPIC=$(LFS_DEMO_TOPIC) \
-	LFS_DEMO_BLOB_SIZE=$(LFS_DEMO_BLOB_SIZE) \
-	LFS_DEMO_BLOB_COUNT=$(LFS_DEMO_BLOB_COUNT) \
-	LFS_DEMO_TIMEOUT_SEC=$(LFS_DEMO_TIMEOUT_SEC) \
-	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
-	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
-	MINIO_BUCKET=$(MINIO_BUCKET) \
-	MINIO_REGION=$(MINIO_REGION) \
-	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
-	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/lfs-demo.sh
-
-lfs-demo-medical: KAFSCALE_DEMO_PROXY=0
-lfs-demo-medical: KAFSCALE_DEMO_CONSOLE=0
-lfs-demo-medical: KAFSCALE_DEMO_BROKER_REPLICAS=1
-lfs-demo-medical: demo-platform-bootstrap ## Run the Medical LFS demo (E60) - healthcare imaging with content explosion.
-	$(MAKE) docker-build-lfs-proxy
-	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
-	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
-	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
-	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
-	MINIO_BUCKET=$(MINIO_BUCKET) \
-	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
-	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/medical-lfs-demo.sh
-
-lfs-demo-video: KAFSCALE_DEMO_PROXY=0
-lfs-demo-video: KAFSCALE_DEMO_CONSOLE=0
-lfs-demo-video: KAFSCALE_DEMO_BROKER_REPLICAS=1
-lfs-demo-video: demo-platform-bootstrap ## Run the Video LFS demo (E61) - media streaming with content explosion.
-	$(MAKE) docker-build-lfs-proxy
-	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
-	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
-	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
-	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
-	MINIO_BUCKET=$(MINIO_BUCKET) \
-	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
-	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/video-lfs-demo.sh
-
-lfs-demo-industrial: KAFSCALE_DEMO_PROXY=0
-lfs-demo-industrial: KAFSCALE_DEMO_CONSOLE=0
-lfs-demo-industrial: KAFSCALE_DEMO_BROKER_REPLICAS=1
-lfs-demo-industrial: demo-platform-bootstrap ## Run the Industrial LFS demo (E62) - mixed telemetry + images.
-	$(MAKE) docker-build-lfs-proxy
-	KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
-	KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
-	LFS_PROXY_IMAGE=$(LFS_PROXY_IMAGE) \
-	E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
-	MINIO_BUCKET=$(MINIO_BUCKET) \
-	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
-	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	bash scripts/industrial-lfs-demo.sh
-
-e72-browser-demo: ## Run the E72 Browser LFS SDK demo (local, requires port-forward).
-	@echo "=== E72 Browser LFS SDK Demo (Local) ==="
-	@echo "Prerequisites: LFS proxy must be port-forwarded to localhost:8080"
-	@echo "  kubectl -n kafscale-demo port-forward svc/lfs-proxy 8080:8080"
-	@echo ""
-	cd examples/E72_browser-lfs-sdk-demo && $(MAKE) test
-
-E72_PROXY_LOCAL_PORT ?= 8080
-E72_MINIO_LOCAL_PORT ?= 9000
-E72_S3_PUBLIC_ENDPOINT ?= http://localhost:$(E72_MINIO_LOCAL_PORT)
-
-e72-browser-demo-test: ## Rebuild/redeploy LFS proxy, refresh demo, port-forward, and open the SPA.
-	@echo "=== E72 Browser LFS SDK Demo (Rebuild + Test) ==="
-	$(MAKE) docker-build-lfs-proxy
-	kind load docker-image $(LFS_PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) set env deployment/lfs-proxy KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT=$(E72_S3_PUBLIC_ENDPOINT)
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout restart deployment/lfs-proxy
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/lfs-proxy --timeout=60s
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) apply -f examples/E72_browser-lfs-sdk-demo/k8s-deploy.yaml
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout restart deployment/e72-browser-demo
-	kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/e72-browser-demo --timeout=60s
-	@pkill -f "port-forward.*$(E72_PROXY_LOCAL_PORT)" 2>/dev/null || true
-	@pkill -f "port-forward.*$(E72_MINIO_LOCAL_PORT)" 2>/dev/null || true
-	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/lfs-proxy $(E72_PROXY_LOCAL_PORT):8080 >/dev/null 2>&1 &
-	@kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward svc/minio $(E72_MINIO_LOCAL_PORT):9000 >/dev/null 2>&1 &
-	@sleep 2
-	cd examples/E72_browser-lfs-sdk-demo && $(MAKE) test PORT=3000
-
-e72-browser-demo-k8s: ## Run the E72 Browser LFS SDK demo inside the kind cluster.
-	bash scripts/e72-browser-demo.sh
-
 platform-demo: demo-platform ## Alias for demo-platform.
 
 demo: release-broker-ports ensure-minio ## Launch the broker + console demo stack and open the UI (Ctrl-C to stop).
@@ -723,215 +601,11 @@ demo-long: release-broker-ports ensure-minio ## Launch the broker + console demo
 	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
 	go test -count=1 -timeout 0 -tags=e2e ./test/e2e -run TestDemoStack -v
 
-demo-bridge: release-broker-ports ensure-minio ## Launch the broker + console demo stack and open the UI (Ctrl-C to stop) + expose host for docker.
-	KAFSCALE_E2E=1 \
-	KAFSCALE_E2E_DEMO=1 \
-	KAFSCALE_E2E_OPEN_UI=1 \
-	KAFSCALE_UI_USERNAME=kafscaleadmin \
-	KAFSCALE_UI_PASSWORD=kafscale \
-	KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics \
-	KAFSCALE_CONSOLE_OPERATOR_METRICS_URL=http://127.0.0.1:8080/metrics \
-	KAFSCALE_S3_BUCKET=$(MINIO_BUCKET) \
-	KAFSCALE_S3_REGION=$(MINIO_REGION) \
-	KAFSCALE_S3_NAMESPACE=default \
-	KAFSCALE_S3_ENDPOINT=http://127.0.0.1:$(MINIO_PORT) \
-	KAFSCALE_S3_PATH_STYLE=true \
-	KAFSCALE_S3_ACCESS_KEY=$(MINIO_ROOT_USER) \
-	KAFSCALE_S3_SECRET_KEY=$(MINIO_ROOT_PASSWORD) \
-	KAFSCALE_BROKERS_ADVERTISED_HOST=host.docker.internal \
-	KAFSCALE_BROKERS_ADVERTISED_PORT=39092 \
-	go test -count=1 -tags=e2e ./test/e2e -run TestDemoStack -v
-
-demo-guide-pf: docker-build ## Launch a full platform demo on kind.
-	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
-	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
-	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
-	@command -v helm >/dev/null 2>&1 || { echo "helm is required"; exit 1; }
-
-	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
-	@kind create cluster --name $(KAFSCALE_KIND_CLUSTER)
-
-	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-	@kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-	@kind load docker-image $(SPRING_DEMO_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
-
-	kubectl apply -f deploy/demo/namespace.yaml
-	kubectl apply -f deploy/demo/minio.yaml
-
-	kubectl -n kafscale-demo rollout status deployment/minio --timeout=120s
-
-	kubectl apply -f deploy/demo/s3-secret.yaml
-
-	helm upgrade --install kafscale deploy/helm/kafscale \
-	  --namespace $(KAFSCALE_DEMO_NAMESPACE) \
-	  --create-namespace \
-	  --set operator.replicaCount=1 \
-	  --set operator.image.repository=$(OPERATOR_REPO) \
-	  --set operator.image.tag=$(OPERATOR_TAG) \
-	  --set operator.image.pullPolicy=IfNotPresent \
-	  --set console.image.repository=$(CONSOLE_REPO) \
-	  --set console.image.tag=$(CONSOLE_TAG) \
-	  --set console.auth.username=admin \
-	  --set console.auth.password=admin \
-	  --set operator.etcdEndpoints[0]= 
-	  
-	@echo "[CONSOLE_TAG]     CONSOLE_TAG    = $(CONSOLE_TAG)"  
-	@echo "[CONSOLE_REPO ]   CONSOLE_REPO   = $(CONSOLE_REPO)"
-	@echo "[OPERATOR_REPO]   OPERATOR_REPO  = $(OPERATOR_REPO)"
-	@echo "[SPRING_DEMO_REPO] SPRING_DEMO_REPO = $(SPRING_DEMO_REPO)"
-
-	@echo "[CONSOLE_REPO]   CONSOLE_REPO  =$(CONSOLE_REPO)"
-	@echo "[OPERATOR_REPO]  OPERATOR_REPO =$(OPERATOR_REPO)"
-
-	@echo "[IMAGENAME]   BROKER_IMAGE.  =$(BROKER_IMAGE)"
-	@echo "[IMAGENAME]   OPERATOR_IMAGE =$(OPERATOR_IMAGE)"
-	@echo "[IMAGENAME]   CONSOLE_IMAGE  =$(CONSOLE_IMAGE)"
-	@echo "[IMAGENAME]   SPRING_DEMO_IMAGE = $(SPRING_DEMO_IMAGE)"
-
-	@echo "[CONSOLE_TAG] CONSOLE_TAG    =$(CONSOLE_TAG)"
-
-	@bash -c 'set -e; \
-		OPERATOR_DEPLOY=$$(kubectl -n kafscale-demo get deployments \
-		  -l app.kubernetes.io/component=operator \
-		  -o jsonpath="{.items[0].metadata.name}"); \
-		echo "Using operator deployment: $$OPERATOR_DEPLOY"; \
-		kubectl -n kafscale-demo set env deployment/$$OPERATOR_DEPLOY \
-		  BROKER_IMAGE=$(BROKER_IMAGE) \
-		  KAFSCALE_OPERATOR_ETCD_ENDPOINTS= \
-		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET=kafscale-snapshots \
-		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1 \
-		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1 \
-		  KAFSCALE_OPERATOR_LEADER_KEY=kafscale-operator-leader \
-		  KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio.kafscale-demo.svc.cluster.local:9000; \
-		kubectl -n kafscale-demo rollout status deployment/$$OPERATOR_DEPLOY --timeout=120s; \
-		kubectl apply -f deploy/demo/kafscale-cluster.yaml; \
-		kubectl apply -f deploy/demo/kafscale-topics.yaml; \
-		echo "Waiting for broker deployment to be created ..."; \
-		while ! kubectl -n kafscale-demo get deployment kafscale-broker >/dev/null 2>&1; do sleep 1; done; \
-		kubectl -n kafscale-demo wait --for=condition=available deployment/kafscale-broker --timeout=180s; \
-		console_svc=$$(kubectl -n kafscale-demo get svc -l app.kubernetes.io/component=console -o jsonpath="{.items[0].metadata.name}"); \
-		echo "Exposing Console at http://localhost:8080/ui"; \
-		nohup kubectl -n kafscale-demo port-forward svc/$$console_svc 8080:80 >/tmp/kafscale-demo-console.log 2>&1 & \
-		kubectl apply -f deploy/demo/spring-boot-app.yaml; \
-		kubectl apply -f deploy/demo/flink-wordcount-app.yaml; \
-		kubectl -n kafscale-demo wait --for=condition=available deployment/spring-demo-app --timeout=120s; \
-		nohup kubectl -n kafscale-demo port-forward svc/spring-demo-app 8083:8083 >/tmp/kafscale-demo-spring.log 2>&1 & \
-		nohup kubectl -n kafscale-demo port-forward svc/kafscale-broker 9093:9093 >/tmp/kafscale-demo-metrics.log 2>&1 & \
-		nohup kubectl -n kafscale-demo port-forward svc/kafscale-broker 39092:9092 >/tmp/kafscale-demo-broker.log 2>&1 & \
-		echo "Exposing SpringBootApp at http://localhost:8083"; \
-		echo "Exposing Metrics at localhost:9093"; \
-		echo "Services exposed in background. Logs at /tmp/kafscale-demo-*.log"'
-
-demo-guide-pf-app: docker-build
-	kubectl apply -f deploy/demo/spring-boot-app.yaml;
-	kubectl -n kafscale-demo wait --for=condition=available deployment/spring-demo-app --timeout=120s;
-	# Start Nginx Load Balancer
-	kubectl apply -f deploy/demo/nginx-lb.yaml;
-	kubectl -n kafscale-demo wait --for=condition=available deployment/nginx-lb --timeout=120s;
-	echo "Exposing SpringBootApp at http://localhost:8083";
-	nohup kubectl -n kafscale-demo port-forward svc/spring-demo-app 8083:8083 >/tmp/kafscale-demo-spring.log 2>&1 &
-	echo "Exposing Kafka via Nginx LB at localhost:59092";
-	nohup kubectl -n kafscale-demo port-forward svc/nginx-lb 59092:59092 >/tmp/kafscale-demo-nginx.log 2>&1 &
-
-demo-guide-pf-clean: ## Clean up the platform demo environment
-	@echo "Cleaning up demo-platform2..."
-	@pkill -f 'kubectl -n kafscale-demo port-forward' || true
-	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
-	@echo "Cleanup complete. \nKIND CLUSTER: [$(KAFSCALE_KIND_CLUSTER)] removed."
-
 tidy:
 	go mod tidy
 
 lint:
 	golangci-lint run
-
-ACT ?= act
-ACT_PLATFORM ?= linux/amd64
-ACT_FLAGS ?= --container-architecture $(ACT_PLATFORM)
-ACT_IMAGE ?= local/act-runner:latest
-STAGE_REGISTRY ?= 192.168.0.131:5100
-STAGE_TAG ?= stage
-STAGE_PLATFORMS ?= linux/amd64,linux/arm64
-STAGE_NO_CACHE ?= 1
-STAGE_SOURCE_REGISTRY ?= ghcr.io/kafscale
-STAGE_SOURCE_TAG ?= dev
-STAGE_IMAGES ?= kafscale-broker kafscale-lfs-proxy kafscale-operator kafscale-console \
-	kafscale-etcd-tools kafscale-iceberg-processor kafscale-sql-processor \
-	kafscale-e72-browser-demo
-
-act-runnable: ## Run runnable GitHub Actions locally (ci.yml, docker.yml)
-	$(ACT) -W .github/workflows/ci.yml $(ACT_FLAGS)
-	$(ACT) -W .github/workflows/docker.yml $(ACT_FLAGS)
-
-act-image: ## Build local act runner image.
-	docker build -t $(ACT_IMAGE) .devcontainer/act-runner
-
-stage-release: ## Push stage images to local registry (local buildx).
-	STAGE_REGISTRY=$(STAGE_REGISTRY) STAGE_TAG=$(STAGE_TAG) STAGE_PLATFORMS=$(STAGE_PLATFORMS) STAGE_NO_CACHE=$(STAGE_NO_CACHE) \
-		bash scripts/stage-release-local.sh
-
-stage-release-push: docker-build docker-build-lfs-proxy docker-build-iceberg-processor docker-build-e72-browser-demo ## Retag and push locally built images to STAGE_REGISTRY.
-	@set -e; \
-	for img in $(STAGE_IMAGES); do \
-		dst="$(STAGE_REGISTRY)/kafscale/$${img}:$(STAGE_TAG)"; \
-		found=0; \
-		for src in \
-			"$(STAGE_SOURCE_REGISTRY)/$${img}:$(STAGE_SOURCE_TAG)" \
-			"$${img}:$(STAGE_SOURCE_TAG)" \
-			"$$(case $$img in \
-				kafscale-broker) echo $(BROKER_IMAGE) ;; \
-				kafscale-operator) echo $(OPERATOR_IMAGE) ;; \
-				kafscale-console) echo $(CONSOLE_IMAGE) ;; \
-				kafscale-lfs-proxy) echo $(LFS_PROXY_IMAGE) ;; \
-				kafscale-etcd-tools) echo $(ETCD_TOOLS_IMAGE) ;; \
-				kafscale-sql-processor) echo $(SQL_PROCESSOR_IMAGE) ;; \
-				kafscale-iceberg-processor) echo $(ICEBERG_PROCESSOR_IMAGE) ;; \
-				kafscale-e72-browser-demo) echo $(E72_BROWSER_DEMO_IMAGE) ;; \
-				*) echo "" ;; \
-			esac)"; do \
-			[ -z "$$src" ] && continue; \
-			if docker image inspect "$$src" >/dev/null 2>&1; then \
-				echo "Pushing $$src -> $$dst"; \
-				docker tag "$$src" "$$dst"; \
-				docker push "$$dst"; \
-				found=1; \
-				break; \
-			fi; \
-		done; \
-		if [ "$$found" -ne 1 ]; then \
-			echo "Skipping $$img (source image not found)"; \
-		fi; \
-	done
-
-stage-release-clean: ## Remove stage release builder and prune local stage images.
-	@docker buildx rm stage-release-builder >/dev/null 2>&1 || true
-	@docker image rm -f $(E72_BROWSER_DEMO_IMAGE) $(BROKER_IMAGE) $(OPERATOR_IMAGE) $(CONSOLE_IMAGE) \
-		$(LFS_PROXY_IMAGE) $(ETCD_TOOLS_IMAGE) $(SQL_PROCESSOR_IMAGE) $(ICEBERG_PROCESSOR_IMAGE) >/dev/null 2>&1 || true
-
-stage-release-act: act-image ## Push stage images to local registry via workflow (containerized act).
-	docker run --rm \
-		--privileged \
-		--network host \
-		-v /var/run/docker.sock:/var/run/docker.sock \
-		-v $(PWD):/workspace \
-		-w /workspace \
-		$(ACT_IMAGE) \
-		-W .github/workflows/stage-release.yml $(ACT_FLAGS) \
-		-P ubuntu-latest=catthehacker/ubuntu:act-latest \
-		--input registry=$(STAGE_REGISTRY) --input tag=$(STAGE_TAG)
-
-IDOC_EXPLODE_BIN ?= bin/idoc-explode
-
-lfs-demo-idoc: ensure-minio ## Run IDoc explode demo — uploads IDoc XML to S3 via LFS, then explodes into topic streams.
-	@mkdir -p bin
-	go build -o $(IDOC_EXPLODE_BIN) ./cmd/idoc-explode
-	MINIO_PORT=$(MINIO_PORT) \
-	MINIO_BUCKET=$(MINIO_BUCKET) \
-	MINIO_REGION=$(MINIO_REGION) \
-	MINIO_ROOT_USER=$(MINIO_ROOT_USER) \
-	MINIO_ROOT_PASSWORD=$(MINIO_ROOT_PASSWORD) \
-	./scripts/idoc-explode-demo.sh
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "%-20s %s\n", $$1, $$2}'
