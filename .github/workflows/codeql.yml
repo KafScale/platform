@@ -51,6 +51,12 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           queries: security-extended,security-and-quality
+          config: |
+            paths-ignore:
+              - '**/node_modules/**'
+              - '**/target/**'
+              - '**/*.egg-info/**'
+              - 'third_party/**'
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@v4

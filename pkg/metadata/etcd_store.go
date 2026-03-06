@@ -84,9 +84,7 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 		metadata:  NewInMemoryStore(snapshot),
 		available: 1,
 	}
-	if err := store.refreshSnapshot(ctx); err != nil {
-		// ignore if snapshot missing; operator will populate later
-	}
+	_ = store.refreshSnapshot(ctx) // best-effort; snapshot may not exist yet
 	store.startWatchers()
 	return store, nil
 }

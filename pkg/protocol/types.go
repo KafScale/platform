@@ -21,4 +21,5 @@ type (
 	MetadataBroker    = kmsg.MetadataResponseBroker
 	MetadataTopic     = kmsg.MetadataResponseTopic
 	MetadataPartition = kmsg.MetadataResponseTopicPartition
+	ProduceRequest    = kmsg.ProduceRequest
 )

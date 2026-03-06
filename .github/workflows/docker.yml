@@ -36,6 +36,10 @@ jobs:
             image: kafscale-broker
             context: .
             file: deploy/docker/broker.Dockerfile
+          - name: lfs-proxy
+            image: kafscale-lfs-proxy
+            context: .
+            file: deploy/docker/lfs-proxy.Dockerfile
           - name: operator
             image: kafscale-operator
             context: .

@@ -29,18 +29,21 @@ import (
 	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/metrics"
 	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/schema"
 	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/sink"
+	"github.com/KafScale/platform/pkg/lfs"
 )
 
 var leaseRenewInterval = 10 * time.Second
 
 // Processor wires discovery, decoding, checkpointing, and sink writing.
 type Processor struct {
-	cfg       config.Config
-	discover  discovery.Lister
-	decode    decoder.Decoder
-	store     checkpoint.Store
-	sink      sink.Writer
-	validator schema.Validator
+	cfg            config.Config
+	discover       discovery.Lister
+	decode         decoder.Decoder
+	store          checkpoint.Store
+	sink           sink.Writer
+	validator      schema.Validator
+	lfsS3          lfs.S3Reader
+	mappingByTopic map[string]config.Mapping
 }
 
 func New(cfg config.Config) (*Processor, error) {
@@ -65,13 +68,41 @@ func New(cfg config.Config) (*Processor, error) {
 		return nil, err
 	}
 
+	mappingByTopic := make(map[string]config.Mapping, len(cfg.Mappings))
+	lfsEnabled := false
+	for _, mapping := range cfg.Mappings {
+		mappingByTopic[mapping.Topic] = mapping
+		if mapping.Lfs.Mode != "off" {
+			lfsEnabled = true
+		}
+	}
+
+	var lfsS3 lfs.S3Reader
+	if lfsEnabled {
+		if cfg.S3.Region == "" {
+			return nil, fmt.Errorf("s3.region is required when lfs is enabled")
+		}
+		s3Client, err := lfs.NewS3Client(context.Background(), lfs.S3Config{
+			Bucket:         cfg.S3.Bucket,
+			Region:         cfg.S3.Region,
+			Endpoint:       cfg.S3.Endpoint,
+			ForcePathStyle: cfg.S3.PathStyle,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("lfs s3 client: %w", err)
+		}
+		lfsS3 = s3Client
+	}
+
 	return &Processor{
-		cfg:       cfg,
-		discover:  lister,
-		decode:    decoderClient,
-		store:     store,
-		sink:      writer,
-		validator: validator,
+		cfg:            cfg,
+		discover:       lister,
+		decode:         decoderClient,
+		store:          store,
+		sink:           writer,
+		validator:      validator,
+		lfsS3:          lfsS3,
+		mappingByTopic: mappingByTopic,
 	}, nil
 }
 
@@ -167,6 +198,14 @@ func (p *Processor) Run(ctx context.Context) error {
 						metrics.RecordsTotal.WithLabelValues(seg.Topic, "dropped").Add(float64(dropped))
 					}
 				}
+				if mapping, ok := p.mappingByTopic[seg.Topic]; ok {
+					resolved, err := p.resolveLfsRecords(ctx, records, mapping.Lfs, seg.Topic)
+					if err != nil {
+						metrics.ErrorsTotal.WithLabelValues("lfs").Inc()
+						continue
+					}
+					records = resolved
+				}
 				records, invalid, err := validateRecords(ctx, records, p.validator)
 				if err != nil {
 					metrics.ErrorsTotal.WithLabelValues("schema").Inc()
@@ -235,6 +274,7 @@ func mapRecords(records []decoder.Record) []sink.Record {
 			Key:       record.Key,
 			Value:     record.Value,
 			Headers:   record.Headers,
+			Columns:   nil,
 		})
 	}
 	return out

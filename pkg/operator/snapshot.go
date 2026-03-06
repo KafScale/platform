@@ -70,6 +70,7 @@ func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alph
 	return nil
 }
 
+//nolint:unused // kept for snapshot recovery workflows
 func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadata.ClusterMetadata) metadata.ClusterMetadata {
 	if len(endpoints) == 0 {
 		return next
@@ -99,6 +100,7 @@ func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadat
 	return next
 }
 
+//nolint:unused // kept for snapshot recovery workflows
 func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.ClusterMetadata, error) {
 	var snap metadata.ClusterMetadata
 	cfg := clientv3.Config{
@@ -112,7 +114,7 @@ func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.Clu
 	if err != nil {
 		return snap, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	getCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := cli.Get(getCtx, "/kafscale/metadata/snapshot")

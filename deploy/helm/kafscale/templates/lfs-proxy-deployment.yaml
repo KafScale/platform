@@ -1,0 +1,251 @@
+# Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.lfsProxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kafscale.componentName" (dict "root" . "component" "lfs-proxy") }}
+  labels:
+{{ include "kafscale.labels" . | indent 4 }}
+    app.kubernetes.io/component: lfs-proxy
+spec:
+  replicas: {{ .Values.lfsProxy.replicaCount }}
+  selector:
+    matchLabels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "lfs-proxy") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "lfs-proxy") | indent 8 }}
+{{- with .Values.lfsProxy.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+    spec:
+{{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{- range .Values.imagePullSecrets }}
+        - name: {{ . }}
+{{- end }}
+{{- end }}
+      containers:
+        - name: lfs-proxy
+          image: "{{ .Values.lfsProxy.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.lfsProxy.image.tag) .Values.lfsProxy.image.useLatest }}"
+          imagePullPolicy: {{ ternary "Always" .Values.lfsProxy.image.pullPolicy .Values.lfsProxy.image.useLatest }}
+          env:
+            - name: KAFSCALE_LFS_PROXY_ADDR
+              value: ":{{ .Values.lfsProxy.service.port }}"
+            - name: KAFSCALE_LFS_PROXY_ADVERTISED_PORT
+              value: "{{ .Values.lfsProxy.advertisedPort }}"
+{{- if .Values.lfsProxy.http.enabled }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_ADDR
+              value: ":{{ .Values.lfsProxy.http.port }}"
+{{- end }}
+{{- if .Values.lfsProxy.http.apiKey }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_API_KEY
+              value: "{{ .Values.lfsProxy.http.apiKey }}"
+{{- end }}
+{{- if and .Values.lfsProxy.http.cors .Values.lfsProxy.http.cors.enabled }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_CORS_ENABLED
+              value: "true"
+{{- if .Values.lfsProxy.http.cors.allowOrigins }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_CORS_ALLOW_ORIGINS
+              value: "{{ join "," .Values.lfsProxy.http.cors.allowOrigins }}"
+{{- end }}
+{{- if .Values.lfsProxy.http.cors.allowMethods }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_CORS_ALLOW_METHODS
+              value: "{{ join "," .Values.lfsProxy.http.cors.allowMethods }}"
+{{- end }}
+{{- if .Values.lfsProxy.http.cors.allowHeaders }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_CORS_ALLOW_HEADERS
+              value: "{{ join "," .Values.lfsProxy.http.cors.allowHeaders }}"
+{{- end }}
+{{- if .Values.lfsProxy.http.cors.exposeHeaders }}
+            - name: KAFSCALE_LFS_PROXY_HTTP_CORS_EXPOSE_HEADERS
+              value: "{{ join "," .Values.lfsProxy.http.cors.exposeHeaders }}"
+{{- end }}
+{{- end }}
+{{- if .Values.lfsProxy.health.enabled }}
+            - name: KAFSCALE_LFS_PROXY_HEALTH_ADDR
+              value: ":{{ .Values.lfsProxy.health.port }}"
+{{- end }}
+{{- if .Values.lfsProxy.metrics.enabled }}
+            - name: KAFSCALE_LFS_PROXY_METRICS_ADDR
+              value: ":{{ .Values.lfsProxy.metrics.port }}"
+{{- end }}
+{{- if .Values.lfsProxy.backendCacheTTLSeconds }}
+            - name: KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC
+              value: "{{ .Values.lfsProxy.backendCacheTTLSeconds }}"
+{{- end }}
+{{- if .Values.lfsProxy.advertisedHost }}
+            - name: KAFSCALE_LFS_PROXY_ADVERTISED_HOST
+              value: "{{ .Values.lfsProxy.advertisedHost }}"
+{{- end }}
+{{- if .Values.lfsProxy.etcdEndpoints }}
+            - name: KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS
+              value: "{{ join "," .Values.lfsProxy.etcdEndpoints }}"
+{{- end }}
+{{- if .Values.lfsProxy.etcd.existingSecret }}
+            - name: KAFSCALE_LFS_PROXY_ETCD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.lfsProxy.etcd.existingSecret }}
+                  key: ETCD_USERNAME
+            - name: KAFSCALE_LFS_PROXY_ETCD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.lfsProxy.etcd.existingSecret }}
+                  key: ETCD_PASSWORD
+{{- else }}
+{{- if .Values.lfsProxy.etcd.username }}
+            - name: KAFSCALE_LFS_PROXY_ETCD_USERNAME
+              value: "{{ .Values.lfsProxy.etcd.username }}"
+{{- end }}
+{{- if .Values.lfsProxy.etcd.password }}
+            - name: KAFSCALE_LFS_PROXY_ETCD_PASSWORD
+              value: "{{ .Values.lfsProxy.etcd.password }}"
+{{- end }}
+{{- end }}
+{{- if .Values.lfsProxy.backends }}
+            - name: KAFSCALE_LFS_PROXY_BACKENDS
+              value: "{{ join "," .Values.lfsProxy.backends }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.bucket }}
+            - name: KAFSCALE_LFS_PROXY_S3_BUCKET
+              value: "{{ .Values.lfsProxy.s3.bucket }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.region }}
+            - name: KAFSCALE_LFS_PROXY_S3_REGION
+              value: "{{ .Values.lfsProxy.s3.region }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.endpoint }}
+            - name: KAFSCALE_LFS_PROXY_S3_ENDPOINT
+              value: "{{ .Values.lfsProxy.s3.endpoint }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.existingSecret }}
+            - name: KAFSCALE_LFS_PROXY_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.lfsProxy.s3.existingSecret }}
+                  key: AWS_ACCESS_KEY_ID
+            - name: KAFSCALE_LFS_PROXY_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.lfsProxy.s3.existingSecret }}
+                  key: AWS_SECRET_ACCESS_KEY
+{{- else }}
+{{- if .Values.lfsProxy.s3.accessKey }}
+            - name: KAFSCALE_LFS_PROXY_S3_ACCESS_KEY
+              value: "{{ .Values.lfsProxy.s3.accessKey }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.secretKey }}
+            - name: KAFSCALE_LFS_PROXY_S3_SECRET_KEY
+              value: "{{ .Values.lfsProxy.s3.secretKey }}"
+{{- end }}
+{{- end }}
+{{- if .Values.lfsProxy.s3.sessionToken }}
+            - name: KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN
+              value: "{{ .Values.lfsProxy.s3.sessionToken }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.forcePathStyle }}
+            - name: KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE
+              value: "true"
+{{- end }}
+{{- if .Values.lfsProxy.s3.ensureBucket }}
+            - name: KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET
+              value: "true"
+{{- end }}
+{{- if .Values.lfsProxy.s3.maxBlobSize }}
+            - name: KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE
+              value: "{{ .Values.lfsProxy.s3.maxBlobSize }}"
+{{- end }}
+{{- if .Values.lfsProxy.s3.chunkSize }}
+            - name: KAFSCALE_LFS_PROXY_CHUNK_SIZE
+              value: "{{ .Values.lfsProxy.s3.chunkSize }}"
+{{- end }}
+{{- if .Values.lfsProxy.tracker.enabled }}
+            - name: KAFSCALE_LFS_TRACKER_ENABLED
+              value: "true"
+            - name: KAFSCALE_LFS_TRACKER_TOPIC
+              value: "{{ .Values.lfsProxy.tracker.topic }}"
+            - name: KAFSCALE_LFS_TRACKER_BATCH_SIZE
+              value: "{{ .Values.lfsProxy.tracker.batchSize }}"
+            - name: KAFSCALE_LFS_TRACKER_FLUSH_MS
+              value: "{{ .Values.lfsProxy.tracker.flushMs }}"
+            - name: KAFSCALE_LFS_TRACKER_ENSURE_TOPIC
+              value: "{{ .Values.lfsProxy.tracker.ensureTopic }}"
+            - name: KAFSCALE_LFS_TRACKER_PARTITIONS
+              value: "{{ .Values.lfsProxy.tracker.partitions }}"
+            - name: KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR
+              value: "{{ .Values.lfsProxy.tracker.replicationFactor }}"
+{{- else }}
+            - name: KAFSCALE_LFS_TRACKER_ENABLED
+              value: "false"
+{{- end }}
+          ports:
+            - name: kafka
+              containerPort: {{ .Values.lfsProxy.service.port }}
+              protocol: TCP
+{{- if .Values.lfsProxy.http.enabled }}
+            - name: http
+              containerPort: {{ .Values.lfsProxy.http.port }}
+              protocol: TCP
+{{- end }}
+{{- if .Values.lfsProxy.health.enabled }}
+            - name: health
+              containerPort: {{ .Values.lfsProxy.health.port }}
+              protocol: TCP
+{{- end }}
+{{- if .Values.lfsProxy.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.lfsProxy.metrics.port }}
+              protocol: TCP
+{{- end }}
+{{- if .Values.lfsProxy.health.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+{{- end }}
+          resources:
+{{- if .Values.lfsProxy.resources }}
+{{ toYaml .Values.lfsProxy.resources | indent 12 }}
+{{- else }}
+            {}
+{{- end }}
+{{- with .Values.lfsProxy.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.lfsProxy.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.lfsProxy.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- end }}

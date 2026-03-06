@@ -60,6 +60,7 @@
       <div class="tab-bar">
         <div class="tab-buttons">
           <button class="tab-button active" data-tab="ops" type="button">Ops View</button>
+          <button class="tab-button" data-tab="lfs" type="button">LFS Storage</button>
           <button class="tab-button" data-tab="advanced" type="button">Advanced</button>
         </div>
       </div>
@@ -142,6 +143,144 @@
             </div>
           </div>
           <p id="metrics-status" class="muted">Waiting for samples…</p>
+        </section>
+      </div>
+
+      <div id="tab-lfs" class="tab-panel">
+        <section class="lfs-overview-section">
+          <h2>LFS Overview</h2>
+          <div id="lfs-status-indicator" class="lfs-status-indicator">
+            <span class="status-dot"></span>
+            <span id="lfs-status-text">Checking status...</span>
+          </div>
+          <div id="lfs-consumer-indicator" class="lfs-status-indicator">
+            <span class="status-dot"></span>
+            <span id="lfs-consumer-text">LFS connection status…</span>
+          </div>
+          <div id="lfs-stats-cards" class="cards metrics">
+            <div class="card metric">
+              <h3>Total Objects</h3>
+              <strong id="lfs-total-objects">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Total Storage</h3>
+              <strong id="lfs-total-storage">0 B</strong>
+            </div>
+            <div class="card metric">
+              <h3>Uploads (24h)</h3>
+              <strong id="lfs-uploads-24h">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Downloads (24h)</h3>
+              <strong id="lfs-downloads-24h">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Errors (24h)</h3>
+              <strong id="lfs-errors-24h">0</strong>
+            </div>
+            <div class="card metric">
+              <h3>Orphans</h3>
+              <strong id="lfs-orphans-count">0</strong>
+            </div>
+          </div>
+          <div class="lfs-config-info">
+            <p><strong>S3 Bucket:</strong> <span id="lfs-s3-bucket">-</span></p>
+            <p><strong>Tracker Topic:</strong> <span id="lfs-tracker-topic">-</span></p>
+          </div>
+        </section>
+
+        <section class="lfs-topics-section">
+          <h2>Topics with LFS</h2>
+          <div id="lfs-topics-grid" class="lfs-topics-grid"></div>
+        </section>
+
+        <section class="lfs-objects-section">
+          <h2>Recent Objects</h2>
+          <div class="lfs-objects-toolbar">
+            <select id="lfs-objects-topic-filter">
+              <option value="">All Topics</option>
+            </select>
+            <button id="lfs-objects-refresh" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div class="lfs-table-wrap">
+            <table id="lfs-objects-table" class="lfs-table">
+              <thead>
+                <tr>
+                  <th>S3 Key</th>
+                  <th>Topic</th>
+                  <th>Size</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="lfs-objects-status" class="muted">Loading objects...</p>
+        </section>
+
+        <section class="lfs-events-section">
+          <h2>Live Events</h2>
+          <div class="lfs-events-toolbar">
+            <label>
+              <span>Filter</span>
+              <select id="lfs-events-filter">
+                <option value="">All Events</option>
+                <option value="upload_started,upload_completed,upload_failed">Uploads</option>
+                <option value="download_requested,download_completed">Downloads</option>
+                <option value="orphan_detected">Orphans</option>
+              </select>
+            </label>
+            <button id="lfs-events-clear" class="ghost-button" type="button">Clear</button>
+          </div>
+          <div id="lfs-events-list" class="lfs-events-list"></div>
+          <p id="lfs-events-status" class="muted">Connecting to event stream...</p>
+        </section>
+
+        <section class="lfs-s3-browser-section">
+          <h2>S3 Browser</h2>
+          <div class="lfs-s3-toolbar">
+            <div class="lfs-s3-breadcrumb">
+              <span>Path:</span>
+              <span id="lfs-s3-path">/</span>
+            </div>
+            <button id="lfs-s3-up" class="ghost-button" type="button">Up</button>
+            <button id="lfs-s3-refresh" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div class="lfs-table-wrap">
+            <table id="lfs-s3-table" class="lfs-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Size</th>
+                  <th>Modified</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="lfs-s3-status" class="muted">Enter a path to browse S3...</p>
+        </section>
+
+        <section class="lfs-orphans-section">
+          <h2>Orphaned Objects</h2>
+          <div id="lfs-orphans-summary" class="lfs-orphans-summary">
+            <p>No orphaned objects detected.</p>
+          </div>
+          <div class="lfs-table-wrap">
+            <table id="lfs-orphans-table" class="lfs-table">
+              <thead>
+                <tr>
+                  <th>S3 Key</th>
+                  <th>Topic</th>
+                  <th>Detected</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </section>
       </div>
 

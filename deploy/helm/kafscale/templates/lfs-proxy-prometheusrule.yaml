@@ -1,0 +1,46 @@
+# Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if and .Values.lfsProxy.metrics.enabled .Values.lfsProxy.metrics.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kafscale.componentName" (dict "root" . "component" "lfs-proxy") }}
+  labels:
+{{ include "kafscale.labels" . | indent 4 }}
+{{- with .Values.lfsProxy.metrics.prometheusRule.labels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  groups:
+    - name: kafscale-lfs-proxy.rules
+      rules:
+        - alert: KafscaleLfsProxyS3Errors
+          expr: increase(kafscale_lfs_proxy_s3_errors_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: LFS proxy S3 errors detected
+            description: LFS proxy is encountering S3 errors in the last 5 minutes.
+        - alert: KafscaleLfsProxyOrphanedObjects
+          expr: increase(kafscale_lfs_proxy_orphan_objects_total[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: LFS proxy orphaned objects detected
+            description: LFS proxy created orphaned objects in the last 10 minutes.
+{{- end }}

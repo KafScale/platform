@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 )
 
+//nolint:unused // kept for e2e test debugging
 func setupTestLogger() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(false), zap.WriteTo(io.Discard)))
 }

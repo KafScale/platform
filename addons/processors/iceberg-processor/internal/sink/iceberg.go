@@ -31,6 +31,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -39,8 +41,6 @@ import (
 	restcatalog "github.com/apache/iceberg-go/catalog/rest"
 	iceio "github.com/apache/iceberg-go/io"
 	"github.com/apache/iceberg-go/table"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
 )
 
 const defaultTableSchemaID = 1
@@ -103,6 +103,7 @@ func New(cfg config.Config) (Writer, error) {
 			autoCreate: mapping.CreateTableIfAbsent,
 			mode:       mapping.Mode,
 			schema:     mapping.Schema,
+			lfs:        mapping.Lfs,
 		}
 	}
 
@@ -121,6 +122,7 @@ type tableMapping struct {
 	autoCreate bool
 	mode       string
 	schema     config.MappingSchemaConfig
+	lfs        config.LfsConfig
 }
 
 type icebergWriter struct {
@@ -289,7 +291,7 @@ func (w *icebergWriter) topicLock(topic string) *sync.Mutex {
 	return lock
 }
 
-func (w *icebergWriter) createTable(ctx context.Context, ident table.Identifier, schemaCfg config.MappingSchemaConfig, topic string) (*table.Table, error) {
+func (w *icebergWriter) createTable(ctx context.Context, ident table.Identifier, schemaCfg config.MappingSchemaConfig, mappingLfs config.LfsConfig, topic string) (*table.Table, error) {
 	if len(ident) > 1 {
 		namespace := ident[:len(ident)-1]
 		if _, isRest := w.catalog.(*restcatalog.Catalog); isRest {
@@ -327,7 +329,7 @@ func (w *icebergWriter) createTable(ctx context.Context, ident table.Identifier,
 		opts = append(opts, catalog.WithLocation(location))
 	}
 
-	desired, _, err := w.buildDesiredSchema(ctx, schemaCfg, topic, nil)
+	desired, _, err := w.buildDesiredSchema(ctx, schemaCfg, mappingLfs, topic, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +343,7 @@ func (w *icebergWriter) createTableWithRetry(ctx context.Context, mapping tableM
 			return nil, err
 		}
 		log.Printf("iceberg: create table attempt %d/%d for %v", i+1, attempts, mapping.identifier)
-		tbl, err := w.createTable(ctx, mapping.identifier, mapping.schema, topic)
+		tbl, err := w.createTable(ctx, mapping.identifier, mapping.schema, mapping.lfs, topic)
 		if err == nil {
 			log.Printf("iceberg: create table %v succeeded", mapping.identifier)
 			return tbl, nil
@@ -482,7 +484,7 @@ func (w *icebergWriter) ensureSchema(ctx context.Context, tbl *table.Table, mapp
 		tbl = updated
 		current = tbl.Schema()
 	}
-	desired, columns, err := w.buildDesiredSchema(ctx, mapping.schema, topic, current)
+	desired, columns, err := w.buildDesiredSchema(ctx, mapping.schema, mapping.lfs, topic, current)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -510,7 +512,7 @@ func (w *icebergWriter) ensureSchema(ctx context.Context, tbl *table.Table, mapp
 				}
 				tbl = reloaded
 				current = tbl.Schema()
-				desired, columns, err = w.buildDesiredSchema(ctx, mapping.schema, topic, current)
+				desired, columns, err = w.buildDesiredSchema(ctx, mapping.schema, mapping.lfs, topic, current)
 				if err != nil {
 					return nil, nil, err
 				}
@@ -605,10 +607,13 @@ func (w *icebergWriter) ensureTablePaths(ctx context.Context, tbl *table.Table, 
 	return nil, fmt.Errorf("failed to update table paths for %v", ident)
 }
 
-func (w *icebergWriter) buildDesiredSchema(ctx context.Context, schemaCfg config.MappingSchemaConfig, topic string, existing *iceberg.Schema) (*iceberg.Schema, []config.Column, error) {
+func (w *icebergWriter) buildDesiredSchema(ctx context.Context, schemaCfg config.MappingSchemaConfig, lfsCfg config.LfsConfig, topic string, existing *iceberg.Schema) (*iceberg.Schema, []config.Column, error) {
 	columns, err := resolveColumns(ctx, w.registry, schemaCfg, topic)
 	if err != nil {
 		return nil, nil, err
+	}
+	if lfsCfg.StoreMetadata {
+		columns = mergeColumns(columns, lfsMetadataColumns())
 	}
 
 	fieldIDs := map[string]int{}
@@ -661,6 +666,38 @@ func (w *icebergWriter) buildDesiredSchema(ctx context.Context, schemaCfg config
 		schemaID = existing.ID + 1
 	}
 	return iceberg.NewSchema(schemaID, fields...), columns, nil
+}
+
+func lfsMetadataColumns() []config.Column {
+	return []config.Column{
+		{Name: "lfs_content_type", Type: "string"},
+		{Name: "lfs_blob_size", Type: "long"},
+		{Name: "lfs_checksum", Type: "string"},
+		{Name: "lfs_checksum_alg", Type: "string"},
+		{Name: "lfs_bucket", Type: "string"},
+		{Name: "lfs_key", Type: "string"},
+	}
+}
+
+func mergeColumns(existing []config.Column, extra []config.Column) []config.Column {
+	if len(extra) == 0 {
+		return existing
+	}
+	if len(existing) == 0 {
+		return extra
+	}
+	seen := make(map[string]struct{}, len(existing))
+	for _, col := range existing {
+		seen[col.Name] = struct{}{}
+	}
+	merged := append([]config.Column{}, existing...)
+	for _, col := range extra {
+		if _, ok := seen[col.Name]; ok {
+			continue
+		}
+		merged = append(merged, col)
+	}
+	return merged
 }
 
 func resolveColumns(ctx context.Context, registry config.SchemaConfig, schemaCfg config.MappingSchemaConfig, topic string) ([]config.Column, error) {
@@ -885,7 +922,7 @@ func recordsToArrow(schema *arrow.Schema, columns []config.Column, records []Rec
 		headersBuilder.Append(serializeHeaders(record.Headers))
 		if len(columnBuilders) > 0 {
 			values := extractJSONValues(record.Value)
-			appendColumnValues(columnBuilders, values)
+			appendColumnValues(columnBuilders, values, record.Columns)
 		}
 	}
 
@@ -1095,8 +1132,14 @@ func extractJSONValues(payload []byte) map[string]interface{} {
 	return out
 }
 
-func appendColumnValues(builders []columnBuilder, values map[string]interface{}) {
+func appendColumnValues(builders []columnBuilder, values map[string]interface{}, extras map[string]interface{}) {
 	for _, col := range builders {
+		if extras != nil {
+			if val, ok := extras[col.name]; ok {
+				col.append(val)
+				continue
+			}
+		}
 		if values == nil {
 			col.appendNull()
 			continue

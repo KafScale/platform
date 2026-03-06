@@ -94,7 +94,7 @@ func TestEtcdStoreTopicConfigAndPartitions(t *testing.T) {
 	}
 
 	cli := newEtcdClient(t, endpoints)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := cli.Get(ctxTimeout, PartitionStateKey("orders", 1))
@@ -144,7 +144,7 @@ func TestEtcdStoreDeleteTopicRemovesOffsets(t *testing.T) {
 	waitForTopicRemoval(t, endpoints, "orders")
 
 	cli := newEtcdClient(t, endpoints)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -257,7 +257,7 @@ func loadSnapshot(endpoints []string) (*ClusterMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	resp, err := cli.Get(ctx, snapshotKey())
@@ -296,4 +296,122 @@ func newEtcdClient(t *testing.T, endpoints []string) *clientv3.Client {
 		t.Fatalf("new etcd client: %v", err)
 	}
 	return cli
+}
+
+func TestEtcdStoreMetadataAndAvailable(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	initial := ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "b0", Port: 9092}},
+		ControllerID: 1,
+		Topics: []protocol.MetadataTopic{
+			{Topic: kmsg.StringPtr("orders"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1}}},
+		},
+	}
+	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	// Metadata
+	meta, err := store.Metadata(ctx, nil)
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Brokers) != 1 || len(meta.Topics) != 1 {
+		t.Fatalf("unexpected metadata: %+v", meta)
+	}
+
+	// Available
+	if !store.Available() {
+		t.Fatal("expected Available to return true")
+	}
+
+	// EtcdClient
+	cli := store.EtcdClient()
+	if cli == nil {
+		t.Fatal("expected non-nil etcd client")
+	}
+}
+
+func TestEtcdStoreNextOffset(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	initial := ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "b0", Port: 9092}},
+		ControllerID: 1,
+	}
+	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	_, err = store.CreateTopic(ctx, TopicSpec{Name: "events", NumPartitions: 2, ReplicationFactor: 1})
+	if err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	offset, err := store.NextOffset(ctx, "events", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 0 {
+		t.Fatalf("expected 0 initial offset, got %d", offset)
+	}
+
+	if err := store.UpdateOffsets(ctx, "events", 0, 42); err != nil {
+		t.Fatalf("UpdateOffsets: %v", err)
+	}
+
+	offset, err = store.NextOffset(ctx, "events", 0)
+	if err != nil {
+		t.Fatalf("NextOffset: %v", err)
+	}
+	if offset != 43 {
+		t.Fatalf("expected 43, got %d", offset)
+	}
+}
+
+func TestEtcdStoreConsumerOffsets(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	store, err := NewEtcdStore(ctx, ClusterMetadata{}, EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	if err := store.CommitConsumerOffset(ctx, "g1", "orders", 0, 100, "meta-0"); err != nil {
+		t.Fatalf("CommitConsumerOffset: %v", err)
+	}
+	if err := store.CommitConsumerOffset(ctx, "g1", "orders", 1, 200, "meta-1"); err != nil {
+		t.Fatalf("CommitConsumerOffset: %v", err)
+	}
+
+	// Fetch individual offset
+	offset, meta, err := store.FetchConsumerOffset(ctx, "g1", "orders", 0)
+	if err != nil {
+		t.Fatalf("FetchConsumerOffset: %v", err)
+	}
+	if offset != 100 || meta != "meta-0" {
+		t.Fatalf("expected 100/meta-0, got %d/%q", offset, meta)
+	}
+
+	// Fetch non-existent
+	offset, _, err = store.FetchConsumerOffset(ctx, "g1", "orders", 99)
+	if err != nil {
+		t.Fatalf("FetchConsumerOffset missing: %v", err)
+	}
+	// Non-existent key returns 0 (default value)
+	if offset != 0 {
+		t.Fatalf("expected 0 for missing offset, got %d", offset)
+	}
+
+	// List offsets
+	offsets, err := store.ListConsumerOffsets(ctx)
+	if err != nil {
+		t.Fatalf("ListConsumerOffsets: %v", err)
+	}
+	if len(offsets) != 2 {
+		t.Fatalf("expected 2 offsets, got %d", len(offsets))
+	}
 }

@@ -39,6 +39,7 @@ func TestFranzGoProduceConsume(t *testing.T) {
 	if os.Getenv(enableEnv) != "1" {
 		t.Skipf("set %s=1 to run integration harness", enableEnv)
 	}
+	requireMinIO(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

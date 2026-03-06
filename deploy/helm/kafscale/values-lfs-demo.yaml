@@ -1,0 +1,97 @@
+# Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# LFS Demo Stack Values
+# =============================================================================
+# This values file enables the LFS proxy with HTTP endpoint and browser demo.
+#
+# Usage:
+#   helm upgrade --install kafscale ./deploy/helm/kafscale \
+#     -f ./deploy/helm/kafscale/values-lfs-demo.yaml \
+#     --set lfsProxy.s3.bucket=my-bucket \
+#     --set lfsProxy.s3.endpoint=http://minio:9000 \
+#     --set lfsProxy.s3.accessKey=minioadmin \
+#     --set lfsProxy.s3.secretKey=minioadmin
+#
+# For local development with port-forward:
+#   kubectl port-forward svc/kafscale-lfs-proxy 8080:8080 &
+#   kubectl port-forward svc/kafscale-lfs-demo-e72 3000:80 &
+#   open http://localhost:3000
+# =============================================================================
+
+# Enable LFS Proxy with HTTP endpoint
+lfsProxy:
+  enabled: true
+  replicaCount: 1  # Single replica for demo
+
+  # HTTP API for browser uploads
+  http:
+    enabled: true
+    port: 8080
+    apiKey: ""  # No API key for demo (add for production)
+    cors:
+      enabled: true
+      allowOrigins: ["*"]  # Allow all origins for demo
+      allowMethods: ["POST", "OPTIONS"]
+      allowHeaders:
+        - Content-Type
+        - X-Kafka-Topic
+        - X-Kafka-Key
+        - X-Kafka-Partition
+        - X-LFS-Checksum
+        - X-LFS-Checksum-Alg
+        - X-LFS-Size
+        - X-LFS-Mode
+        - X-Request-ID
+        - X-API-Key
+        - Authorization
+      exposeHeaders:
+        - X-Request-ID
+
+  # S3 configuration - override these for your environment
+  s3:
+    bucket: kafscale
+    region: us-east-1
+    endpoint: ""  # Set to MinIO endpoint, e.g., http://minio:9000
+    forcePathStyle: true  # Required for MinIO
+    ensureBucket: true
+    maxBlobSize: 5368709120   # 5GB
+    chunkSize: 5242880        # 5MB
+    # Use existingSecret for credentials in production
+    existingSecret: ""
+    accessKey: ""  # Set via --set or environment
+    secretKey: ""  # Set via --set or environment
+
+# Enable LFS demos
+lfsDemos:
+  enabled: true
+  e72Browser:
+    enabled: true
+    lfsProxyEndpoint: ""  # Auto-detected: http://kafscale-lfs-proxy:8080/lfs/produce
+    defaultTopic: browser-uploads
+    service:
+      type: NodePort
+      port: 80
+      nodePort: 30072
+    ingress:
+      enabled: false
+      # Enable and configure for external access
+      # className: nginx
+      # hosts:
+      #   - host: lfs-demo.example.com
+      #     paths:
+      #       - path: /
+      #         pathType: Prefix
