@@ -37,7 +37,6 @@ health: ## Check service health
 	@echo "=== Health Checks ==="
 	@echo -n "etcd:      "; curl -s http://localhost:2379/health | head -c 50 || echo "FAIL"
 	@echo -n "minio:     "; curl -s http://localhost:9000/minio/health/live || echo "FAIL"
-	@echo -n "lfs-proxy: "; curl -s http://localhost:9094/readyz || echo "FAIL"
 	@echo -n "broker:    "; nc -z localhost 9092 && echo "OK" || echo "FAIL"
 
 test-upload: ## Test LFS upload (creates 1KB test file)

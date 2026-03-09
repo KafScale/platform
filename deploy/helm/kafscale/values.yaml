@@ -152,90 +152,9 @@ proxy:
     annotations: {}
     loadBalancerSourceRanges: []
 
-lfsProxy:
-  enabled: false
-  replicaCount: 2
-  image:
-    repository: ghcr.io/kafscale/kafscale-lfs-proxy
-    tag: ""
-    useLatest: false
-    pullPolicy: IfNotPresent
-  health:
-    enabled: true
-    port: 9094
-  metrics:
-    enabled: true
-    port: 9095
-    service:
-      annotations: {}
-    serviceMonitor:
-      enabled: false
-      interval: 30s
-      scrapeTimeout: 10s
-      labels: {}
-    prometheusRule:
-      enabled: false
-      labels: {}
-  http:
-    enabled: false  # Disabled by default for security; enable with apiKey set
-    port: 8080
-    apiKey: ""  # Required when http.enabled=true
-    cors:
-      enabled: false  # Enable for browser access
-      allowOrigins: ["*"]  # Restrict in production
-      allowMethods: ["POST", "OPTIONS"]
-      allowHeaders: ["Content-Type", "X-Kafka-Topic", "X-Kafka-Key", "X-Kafka-Partition", "X-LFS-Checksum", "X-LFS-Checksum-Alg", "X-LFS-Size", "X-LFS-Mode", "X-Request-ID", "X-API-Key", "Authorization"]
-      exposeHeaders: ["X-Request-ID"]
-  ingress:
-    enabled: false
-    className: ""
-    annotations: {}
-    hosts:
-      - host: lfs.local
-        paths:
-          - path: /lfs
-            pathType: Prefix
-    tls: []
-  backendCacheTTLSeconds: 60
-  advertisedHost: ""
-  advertisedPort: 9092
-  etcdEndpoints: []
-  etcd:
-    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
-    username: ""
-    password: null  # Set via --set or use existingSecret
-  backends: []
-  s3:
-    bucket: ""
-    region: ""
-    endpoint: ""
-    # Credentials: use existingSecret (preferred) or inline values (not recommended)
-    existingSecret: ""  # Name of existing Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys
-    accessKey: ""       # Deprecated: use existingSecret instead
-    secretKey: ""       # Deprecated: use existingSecret instead
-    sessionToken: ""
-    forcePathStyle: false
-    ensureBucket: false
-    maxBlobSize: 7516192768
-    chunkSize: 16777216
-  tracker:
-    enabled: true
-    topic: "__lfs_ops_state"
-    batchSize: 100
-    flushMs: 100
-    ensureTopic: true
-    partitions: 3
-    replicationFactor: 1
-  podAnnotations: {}
-  resources: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  service:
-    type: ClusterIP  # Changed from LoadBalancer for security; use Ingress for external access
-    port: 9092
-    annotations: {}
-    loadBalancerSourceRanges: []
+# NOTE: The standalone lfs-proxy has been removed.
+# LFS is now a feature-flag on the unified proxy: set proxy.lfs.enabled=true.
+# See proxy values above for LFS configuration.
 
 lfsDemos:
   enabled: false

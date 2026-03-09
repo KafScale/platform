@@ -145,65 +145,10 @@ services:
     networks:
       - kafscale
 
-  lfs-proxy:
-    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-lfs-proxy:${TAG:-dev}
-    container_name: kafscale-lfs-proxy-dc
-    depends_on:
-      etcd:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-      broker:
-        condition: service_healthy
-    environment:
-      # Kafka proxy settings
-      KAFSCALE_LFS_PROXY_ADDR: ":9093"
-      KAFSCALE_LFS_PROXY_ADVERTISED_HOST: "lfs-proxy"
-      KAFSCALE_LFS_PROXY_ADVERTISED_PORT: "9093"
-      KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS: "http://etcd:2379"
-      KAFSCALE_LFS_PROXY_BACKENDS: "broker:9092"
-      # HTTP API settings
-      KAFSCALE_LFS_PROXY_HTTP_ADDR: ":8080"
-      # Health & Metrics
-      KAFSCALE_LFS_PROXY_HEALTH_ADDR: ":9094"
-      KAFSCALE_LFS_PROXY_METRICS_ADDR: ":9095"
-      # S3 settings
-      KAFSCALE_LFS_PROXY_S3_BUCKET: "kafscale"
-      KAFSCALE_LFS_PROXY_S3_REGION: "us-east-1"
-      KAFSCALE_LFS_PROXY_S3_ENDPOINT: "http://minio:9000"
-      KAFSCALE_LFS_PROXY_S3_ACCESS_KEY: "minioadmin"
-      KAFSCALE_LFS_PROXY_S3_SECRET_KEY: "minioadmin"
-      KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE: "true"
-      KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET: "true"
-      # Blob settings (Beast mode)
-      KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE: "7516192768"  # 7GB
-      KAFSCALE_LFS_PROXY_CHUNK_SIZE: "16777216"       # 16MB
-      # HTTP timeouts for large uploads
-      KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC: "1800"
-      KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC: "1800"
-      KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC: "120"
-      # Logging
-      KAFSCALE_LFS_PROXY_LOG_LEVEL: "info"
-      # Traceability (LFS Ops Tracker)
-      KAFSCALE_LFS_TRACKER_ENABLED: "true"
-      KAFSCALE_LFS_TRACKER_TOPIC: "__lfs_ops_state"
-      KAFSCALE_LFS_TRACKER_BATCH_SIZE: "100"
-      KAFSCALE_LFS_TRACKER_FLUSH_MS: "100"
-      KAFSCALE_LFS_TRACKER_ENSURE_TOPIC: "true"
-      KAFSCALE_LFS_TRACKER_PARTITIONS: "3"
-      KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR: "1"
-    ports:
-      - "9093:9093"   # Kafka protocol (LFS)
-      - "8080:8080"   # HTTP API
-      - "9094:9094"   # Health
-      - "9095:9095"   # Metrics
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9094/readyz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    networks:
-      - kafscale
+  # NOTE: The standalone lfs-proxy service has been removed.
+  # LFS is now a feature-flag on the unified proxy:
+  #   KAFSCALE_PROXY_LFS_ENABLED=true
+  # See the proxy service above for configuration.
 
   console:
     image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-console:${TAG:-dev}
@@ -248,7 +193,7 @@ services:
     image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-e72-browser-demo:${TAG:-dev}
     container_name: kafscale-e72-demo-dc
     depends_on:
-      lfs-proxy:
+      proxy:
         condition: service_healthy
     ports:
       - "3072:80"
