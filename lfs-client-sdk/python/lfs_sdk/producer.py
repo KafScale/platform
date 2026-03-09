@@ -110,7 +110,7 @@ class LfsProducer:
                     message = err.get("message", body)
                     request_id = err.get("request_id", request_id)
                 except Exception:
-                    pass
+                    pass  # response body is not JSON; use raw text as message
 
                 http_error = LfsHttpException(
                     status_code=resp.status_code,
