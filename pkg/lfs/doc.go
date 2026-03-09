@@ -64,8 +64,9 @@ Basic usage with franz-go:
 
 	// Process Kafka records
 	for _, record := range kafkaRecords {
-	    // Unwrap automatically fetches LFS blobs from S3
-	    data, err := consumer.Unwrap(ctx, record.Value)
+	    // Unwrap automatically fetches LFS blobs from S3.
+	    // First return is the envelope (nil for non-LFS records).
+	    _, data, err := consumer.Unwrap(ctx, record.Value)
 	    if err != nil {
 	        log.Error("failed to unwrap", "error", err)
 	        continue
@@ -137,7 +138,7 @@ stored in the envelope. This can be disabled for performance:
 
 The package defines specific error types for common failures:
 
-	data, err := consumer.Unwrap(ctx, value)
+	_, data, err := consumer.Unwrap(ctx, value)
 	if err != nil {
 	    var checksumErr *lfs.ChecksumError
 	    if errors.As(err, &checksumErr) {

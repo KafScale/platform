@@ -47,7 +47,7 @@ func TestConsumerUnwrapNonLFS(t *testing.T) {
 
 	// Plain text should pass through unchanged
 	plainText := []byte("hello world")
-	result, err := consumer.Unwrap(context.Background(), plainText)
+	_, result, err := consumer.Unwrap(context.Background(), plainText)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestConsumerUnwrapLFS(t *testing.T) {
 		t.Fatalf("failed to encode envelope: %v", err)
 	}
 
-	result, err := consumer.Unwrap(context.Background(), envBytes)
+	_, result, err := consumer.Unwrap(context.Background(), envBytes)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestConsumerUnwrapMD5Checksum(t *testing.T) {
 		t.Fatalf("failed to encode envelope: %v", err)
 	}
 
-	result, err := consumer.Unwrap(context.Background(), envBytes)
+	_, result, err := consumer.Unwrap(context.Background(), envBytes)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestConsumerUnwrapChecksumMismatch(t *testing.T) {
 		t.Fatalf("failed to encode envelope: %v", err)
 	}
 
-	_, err = consumer.Unwrap(context.Background(), envBytes)
+	_, _, err = consumer.Unwrap(context.Background(), envBytes)
 	if err == nil {
 		t.Fatal("expected checksum error, got nil")
 	}
@@ -185,7 +185,7 @@ func TestConsumerUnwrapChecksumDisabled(t *testing.T) {
 	}
 
 	// Should succeed because checksum validation is disabled
-	result, err := consumer.Unwrap(context.Background(), envBytes)
+	_, result, err := consumer.Unwrap(context.Background(), envBytes)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestConsumerUnwrapFetchError(t *testing.T) {
 		t.Fatalf("failed to encode envelope: %v", err)
 	}
 
-	_, err = consumer.Unwrap(context.Background(), envBytes)
+	_, _, err = consumer.Unwrap(context.Background(), envBytes)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -235,7 +235,7 @@ func TestConsumerUnwrapInvalidEnvelope(t *testing.T) {
 	// Must be > 15 bytes to pass IsLfsEnvelope length check
 	invalid := []byte(`{"kfs_lfs": 1, "bucket": "b"}`)
 
-	_, err := consumer.Unwrap(context.Background(), invalid)
+	_, _, err := consumer.Unwrap(context.Background(), invalid)
 	if err == nil {
 		t.Fatal("expected error for invalid envelope, got nil")
 	}
@@ -270,7 +270,7 @@ func TestConsumerUnwrapEnvelope(t *testing.T) {
 	}
 	envBytes, _ := EncodeEnvelope(envelope)
 
-	env, data, err := consumer.UnwrapEnvelope(context.Background(), envBytes)
+	env, data, err := consumer.Unwrap(context.Background(), envBytes)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -288,12 +288,12 @@ func TestConsumerUnwrapEnvelope(t *testing.T) {
 	}
 }
 
-func TestConsumerUnwrapEnvelopeNonLFS(t *testing.T) {
+func TestConsumerUnwrapNonLFSReturnsNilEnvelope(t *testing.T) {
 	fetcher := &mockFetcher{}
 	consumer := NewConsumer(fetcher)
 
 	plain := []byte("not an envelope")
-	env, data, err := consumer.UnwrapEnvelope(context.Background(), plain)
+	env, data, err := consumer.Unwrap(context.Background(), plain)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -99,7 +99,7 @@ func TestLfsSDKKindE2E(t *testing.T) {
 		iter := fetches.RecordIter()
 		for !iter.Done() {
 			record := iter.Next()
-			resolved, err := consumer.Unwrap(ctx, record.Value)
+			_, resolved, err := consumer.Unwrap(ctx, record.Value)
 			if err != nil {
 				t.Fatalf("unwrap lfs record: %v", err)
 			}

@@ -134,7 +134,7 @@ func (r *Record) Value(ctx context.Context) ([]byte, error) {
 		return nil, r.err
 	}
 
-	env, blob, err := r.consumer.UnwrapEnvelope(ctx, r.raw)
+	env, blob, err := r.consumer.Unwrap(ctx, r.raw)
 	r.envelope = env
 	if err != nil {
 		r.err = err

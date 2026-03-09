@@ -52,45 +52,11 @@ func NewConsumer(fetcher BlobFetcher, opts ...ConsumerOption) *Consumer {
 	return c
 }
 
-// Unwrap checks if value is an LFS envelope and fetches the blob.
-// Returns the original value if not an envelope.
-func (c *Consumer) Unwrap(ctx context.Context, value []byte) ([]byte, error) {
-	if !IsLfsEnvelope(value) {
-		return value, nil
-	}
-
-	env, err := DecodeEnvelope(value)
-	if err != nil {
-		return nil, &LfsError{Op: "decode", Err: err}
-	}
-
-	blob, err := c.fetcher.Fetch(ctx, env.Key)
-	if err != nil {
-		return nil, &LfsError{Op: "fetch", Err: err}
-	}
-
-	if c.validateChecksum {
-		alg, expected, ok, err := EnvelopeChecksum(env)
-		if err != nil {
-			return nil, &LfsError{Op: "checksum", Err: err}
-		}
-		if ok {
-			actual, err := ComputeChecksum(alg, blob)
-			if err != nil {
-				return nil, &LfsError{Op: "checksum", Err: err}
-			}
-			if actual != expected {
-				return nil, &ChecksumError{Expected: expected, Actual: actual}
-			}
-		}
-	}
-
-	return blob, nil
-}
-
-// UnwrapEnvelope returns the envelope and fetched blob for records that are envelopes.
-// Returns nil envelope and original value if not an envelope.
-func (c *Consumer) UnwrapEnvelope(ctx context.Context, value []byte) (*Envelope, []byte, error) {
+// Unwrap checks if value is an LFS envelope and fetches the blob from storage.
+// Returns (nil, original value, nil) for non-envelope values.
+// Returns (envelope, blob, nil) for successfully resolved envelopes.
+// Callers that don't need the envelope can ignore the first return value.
+func (c *Consumer) Unwrap(ctx context.Context, value []byte) (*Envelope, []byte, error) {
 	if !IsLfsEnvelope(value) {
 		return nil, value, nil
 	}
