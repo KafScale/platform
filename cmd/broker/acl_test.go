@@ -215,8 +215,8 @@ func TestACLProxyAddrProduceAllowed(t *testing.T) {
 	handler := newTestHandler(store)
 
 	conn, peer := net.Pipe()
-	defer conn.Close()
-	defer peer.Close()
+	defer func() { _ = conn.Close() }()
+	defer func() { _ = peer.Close() }()
 	go func() {
 		_, _ = peer.Write([]byte("PROXY TCP4 10.0.0.1 10.0.0.2 12345 9092\r\n"))
 	}()

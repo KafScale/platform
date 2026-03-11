@@ -260,7 +260,7 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metrics request failed: %s", resp.Status)
 	}
@@ -331,7 +331,7 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metrics request failed: %s", resp.Status)
 	}

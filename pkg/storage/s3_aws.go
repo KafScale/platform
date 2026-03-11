@@ -62,26 +62,15 @@ func NewS3Client(ctx context.Context, cfg S3Config) (S3Client, error) {
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		loadOpts = append(loadOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
 	}
-	if cfg.Endpoint != "" {
-		customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{
-					URL:           cfg.Endpoint,
-					PartitionID:   "aws",
-					SigningRegion: cfg.Region,
-				}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		})
-		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(customResolver))
-	}
-
 	awsCfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
 		o.UsePathStyle = cfg.ForcePathStyle
 		if cfg.MaxConnections > 0 {
 			o.HTTPClient = awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
@@ -228,7 +217,7 @@ func (c *awsS3Client) DownloadSegment(ctx context.Context, key string, rng *Byte
 	if err != nil {
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", key, err)
@@ -248,7 +237,7 @@ func (c *awsS3Client) DownloadIndex(ctx context.Context, key string) ([]byte, er
 		}
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", key, err)

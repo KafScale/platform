@@ -37,7 +37,7 @@ func newEtcdClientForTest(t *testing.T, endpoints []string) *clientv3.Client {
 	if err != nil {
 		t.Fatalf("create etcd client: %v", err)
 	}
-	t.Cleanup(func() { cli.Close() })
+	t.Cleanup(func() { _ = cli.Close() })
 	return cli
 }
 
@@ -105,7 +105,7 @@ func TestLeaseExpiryFailover(t *testing.T) {
 
 	// Simulate broker A crashing by closing its etcd client.
 	// This terminates the session keepalive, so the lease expires after TTL.
-	cliA.Close()
+	_ = cliA.Close()
 
 	if err := brokerB.Acquire(ctx, "orders", 0); err == nil {
 		t.Fatalf("broker-b should not acquire before lease expires")
@@ -177,7 +177,7 @@ func TestReacquireAfterRestart(t *testing.T) {
 
 	// Simulate restart: close the old client but don't wait for expiry.
 	// The lease key still exists in etcd with value "broker-a".
-	cliA1.Close()
+	_ = cliA1.Close()
 
 	brokerA2 := newLeaseManager(t, endpoints, "broker-a", ttl)
 
@@ -191,6 +191,71 @@ func TestReacquireAfterRestart(t *testing.T) {
 	brokerB := newLeaseManager(t, endpoints, "broker-b", ttl)
 	if err := brokerB.Acquire(ctx, "orders", 0); err != ErrNotOwner {
 		t.Fatalf("broker-b should get ErrNotOwner after broker-a reacquire, got: %v", err)
+	}
+}
+
+func TestPartitionLeaseAccessors(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	cli := newEtcdClientForTest(t, endpoints)
+	mgr := NewPartitionLeaseManager(cli, PartitionLeaseConfig{
+		BrokerID:        "broker-a",
+		LeaseTTLSeconds: 30,
+		Logger:          slog.Default(),
+	})
+
+	// PartitionLeasePrefix
+	prefix := PartitionLeasePrefix()
+	if prefix == "" {
+		t.Fatal("expected non-empty partition lease prefix")
+	}
+
+	// EtcdClient
+	if mgr.EtcdClient() != cli {
+		t.Fatal("expected same etcd client back")
+	}
+
+	ctx := context.Background()
+	mgr.Acquire(ctx, "orders", 0)
+
+	// CurrentOwner
+	owner, err := mgr.CurrentOwner(ctx, "orders", 0)
+	if err != nil {
+		t.Fatalf("CurrentOwner: %v", err)
+	}
+	if owner != "broker-a" {
+		t.Fatalf("expected broker-a as owner, got %q", owner)
+	}
+}
+
+func TestPartitionAcquireAll(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	mgr := newLeaseManager(t, endpoints, "broker-a", 30)
+
+	ctx := context.Background()
+	partitions := []PartitionID{
+		{Topic: "orders", Partition: 0},
+		{Topic: "orders", Partition: 1},
+		{Topic: "orders", Partition: 2},
+	}
+	results := mgr.AcquireAll(ctx, partitions)
+	for i, r := range results {
+		if r.Err != nil {
+			t.Fatalf("AcquireAll partition %d: %v", i, r.Err)
+		}
+	}
+	// All should be owned now
+	for _, p := range partitions {
+		if !mgr.Owns(p.Topic, p.Partition) {
+			t.Fatalf("expected to own %s/%d", p.Topic, p.Partition)
+		}
+	}
+
+	// Calling AcquireAll again should be a no-op (already owned)
+	results = mgr.AcquireAll(ctx, partitions)
+	for i, r := range results {
+		if r.Err != nil {
+			t.Fatalf("re-AcquireAll partition %d: %v", i, r.Err)
+		}
 	}
 }
 

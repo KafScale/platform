@@ -65,6 +65,7 @@ type proxy struct {
 	metaFlight     singleflight.Group
 	backendRetries int
 	backendBackoff time.Duration
+	lfs            *lfsModule // nil when LFS disabled
 }
 
 func main() {
@@ -144,6 +145,33 @@ func main() {
 		p.setReady(true)
 	}
 	p.initMetadataCache(ctx)
+
+	if lfsEnvBoolDefault("KAFSCALE_PROXY_LFS_ENABLED", false) {
+		lfsmod, err := initLFSModule(ctx, logger)
+		if err != nil {
+			logger.Error("lfs module init failed", "error", err)
+			os.Exit(1)
+		}
+		p.lfs = lfsmod
+		// Give the LFS HTTP API access to the proxy's backends for its own connections
+		if len(backends) > 0 {
+			lfsmod.backends = backends
+			lfsmod.setCachedBackends(backends)
+		}
+		logger.Info("LFS module enabled")
+
+		// Start LFS HTTP API if configured
+		lfsHTTPAddr := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_HTTP_ADDR"))
+		if lfsHTTPAddr != "" {
+			lfsmod.startHTTPServer(ctx, lfsHTTPAddr)
+		}
+		// Start LFS metrics server if configured
+		lfsMetricsAddr := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_METRICS_ADDR"))
+		if lfsMetricsAddr != "" {
+			lfsmod.startMetricsServer(ctx, lfsMetricsAddr)
+		}
+	}
+
 	if healthAddr != "" {
 		p.startHealthServer(ctx, healthAddr)
 	}
@@ -156,6 +184,9 @@ func main() {
 	}
 	if p.groupRouter != nil {
 		p.groupRouter.Stop()
+	}
+	if p.lfs != nil {
+		p.lfs.Shutdown()
 	}
 }
 
@@ -593,13 +624,30 @@ func (p *proxy) handleProduceRouting(ctx context.Context, header *protocol.Reque
 		return p.forwardProduceRaw(ctx, payload, pool)
 	}
 
+	// LFS rewrite: detect LFS_BLOB headers, upload to S3, replace values
+	var lfsOrphans []orphanInfo
+	if p.lfs != nil {
+		rewritten, orphans, err := p.lfs.rewriteProduceRequest(ctx, header, produceReq)
+		if err != nil {
+			return nil, err
+		}
+		if rewritten {
+			payload = nil // force re-encode in fanOut
+			lfsOrphans = orphans
+		}
+	}
+
 	if produceReq.Acks == 0 {
 		p.fireAndForgetProduce(ctx, header, produceReq, payload, pool)
 		return nil, nil
 	}
 
 	groups := p.groupPartitionsByBroker(ctx, produceReq, nil)
-	return p.forwardProduce(ctx, header, produceReq, payload, groups, pool)
+	resp, err := p.forwardProduce(ctx, header, produceReq, payload, groups, pool)
+	if err != nil && p.lfs != nil && len(lfsOrphans) > 0 {
+		p.lfs.trackOrphans(lfsOrphans)
+	}
+	return resp, err
 }
 
 // forwardProduceRaw forwards an unparseable produce payload to any backend.

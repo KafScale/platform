@@ -597,3 +597,346 @@ button {
     align-items: flex-start;
   }
 }
+
+/* LFS Dashboard Styles */
+#tab-lfs.active {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+}
+
+#tab-lfs .lfs-overview-section {
+  grid-column: 1 / -1;
+}
+
+#tab-lfs .lfs-topics-section {
+  grid-column: 1 / -1;
+}
+
+#tab-lfs .lfs-objects-section {
+  grid-column: 1;
+}
+
+#tab-lfs .lfs-events-section {
+  grid-column: 2;
+}
+
+#tab-lfs .lfs-s3-browser-section {
+  grid-column: 1;
+}
+
+#tab-lfs .lfs-orphans-section {
+  grid-column: 2;
+}
+
+.lfs-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(8, 8, 8, 0.6);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  width: fit-content;
+}
+
+.lfs-config-info {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(8, 8, 8, 0.5);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lfs-config-info p {
+  margin: 0.3rem 0;
+  font-size: 0.85rem;
+}
+
+.lfs-config-info span {
+  color: var(--fog);
+}
+
+/* LFS Topics Grid */
+.lfs-topics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.lfs-topic-card {
+  padding: 1rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 12, 0.9);
+}
+
+.lfs-topic-card h4 {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.95rem;
+  color: var(--mint);
+  word-break: break-word;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lfs-topic-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  flex: 0 0 10px;
+}
+
+.lfs-topic-indicator.muted {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.lfs-topic-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem;
+}
+
+.lfs-topic-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lfs-topic-stats span {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fog);
+}
+
+.lfs-topic-stats strong {
+  font-size: 0.85rem;
+}
+
+/* LFS Tables */
+.lfs-table-wrap {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 0.75rem;
+  max-height: 350px;
+  overflow-y: auto;
+}
+
+.lfs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.lfs-table th,
+.lfs-table td {
+  padding: 0.55rem 0.65rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.lfs-table th {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fog);
+  background: rgba(10, 10, 10, 0.8);
+  position: sticky;
+  top: 0;
+}
+
+.lfs-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.lfs-table td:first-child {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lfs-table .ghost-button {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+}
+
+/* LFS Toolbars */
+.lfs-objects-toolbar,
+.lfs-events-toolbar,
+.lfs-s3-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.lfs-objects-toolbar select,
+.lfs-events-toolbar select {
+  background: rgba(15, 15, 15, 0.9);
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.lfs-events-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: var(--fog);
+}
+
+/* LFS Events List */
+.lfs-events-list {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-top: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 8, 8, 0.6);
+}
+
+.lfs-event-item {
+  display: grid;
+  grid-template-columns: 120px 1fr 1fr auto;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.75rem;
+  align-items: center;
+}
+
+.lfs-event-item:last-child {
+  border-bottom: none;
+}
+
+.lfs-event-type {
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  text-align: center;
+}
+
+.lfs-event-upload_started .lfs-event-type,
+.lfs-event-upload_completed .lfs-event-type {
+  background: rgba(22, 163, 74, 0.2);
+  color: #4ade80;
+}
+
+.lfs-event-upload_failed .lfs-event-type,
+.lfs-event-orphan_detected .lfs-event-type {
+  background: rgba(220, 38, 38, 0.2);
+  color: #f87171;
+}
+
+.lfs-event-download_requested .lfs-event-type,
+.lfs-event-download_completed .lfs-event-type {
+  background: rgba(59, 130, 246, 0.2);
+  color: #93c5fd;
+}
+
+.lfs-event-topic {
+  color: var(--mint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lfs-event-detail {
+  color: var(--fog);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lfs-event-time {
+  color: var(--fog);
+  font-size: 0.7rem;
+}
+
+/* LFS S3 Browser */
+.lfs-s3-breadcrumb {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  overflow: hidden;
+}
+
+.lfs-s3-breadcrumb span:first-child {
+  color: var(--fog);
+}
+
+#lfs-s3-path {
+  color: var(--mint);
+  word-break: break-all;
+}
+
+.lfs-s3-dir {
+  cursor: pointer;
+}
+
+.lfs-s3-dir:hover {
+  background: rgba(24, 198, 172, 0.08) !important;
+}
+
+.lfs-s3-icon {
+  margin-right: 0.4rem;
+}
+
+/* LFS Orphans */
+.lfs-orphans-summary {
+  padding: 0.75rem;
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+
+.lfs-orphans-ok {
+  margin: 0;
+  color: #4ade80;
+}
+
+.lfs-orphans-warning {
+  margin: 0;
+  color: #f87171;
+  background: rgba(220, 38, 38, 0.1);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(220, 38, 38, 0.3);
+}
+
+/* Responsive adjustments for LFS tab */
+@media (max-width: 1200px) {
+  #tab-lfs.active {
+    grid-template-columns: 1fr;
+  }
+
+  #tab-lfs .lfs-objects-section,
+  #tab-lfs .lfs-events-section,
+  #tab-lfs .lfs-s3-browser-section,
+  #tab-lfs .lfs-orphans-section {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 600px) {
+  .lfs-event-item {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
+
+  .lfs-topics-grid {
+    grid-template-columns: 1fr;
+  }
+}

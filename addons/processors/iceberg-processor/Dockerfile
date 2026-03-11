@@ -16,12 +16,21 @@
 
 FROM golang:1.25-alpine AS build
 RUN apk add --no-cache git
+ARG REPO_ROOT=.
+ARG MODULE_DIR=.
 WORKDIR /src
-COPY go.mod go.sum ./
+COPY ${REPO_ROOT} /src
+WORKDIR /src/${MODULE_DIR}
+ARG USE_LOCAL_PLATFORM=0
+RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
+      go mod edit -dropreplace github.com/KafScale/platform || true; \
+    fi
+RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
+      go mod download github.com/KafScale/platform@v1.5.0 || true; \
+    fi
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download
-COPY . ./
 ARG GO_BUILD_FLAGS=
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

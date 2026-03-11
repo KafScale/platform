@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
+.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -71,6 +71,10 @@ KAFSCALE_DEMO_ETCD_INMEM ?= 1
 KAFSCALE_DEMO_ETCD_REPLICAS ?= 3
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
+SDK_JAVA_BUILD_CMD ?= mvn -DskipTests clean package
+SDK_JS_BUILD_CMD ?= npm install && npm run build
+SDK_PY_BUILD_CMD ?= python -m build
+SKIP_JS_SDK ?= 1
 
 proto: ## Generate protobuf + gRPC stubs
 	buf generate
@@ -79,6 +83,19 @@ generate: proto
 
 build: ## Build all binaries
 	go build ./...
+
+build-sdk: ## Build all LFS client SDKs
+	@echo "Building Java SDK..."
+	@cd lfs-client-sdk/java && $(SDK_JAVA_BUILD_CMD)
+	@test -d lfs-client-sdk/java/target || { echo "Java SDK target/ missing"; exit 1; }
+	@if [ "$(SKIP_JS_SDK)" = "1" ]; then \
+		echo "Skipping JS SDK build (SKIP_JS_SDK=1)"; \
+	else \
+		echo "Building JS SDK..."; \
+		cd lfs-client-sdk/js && $(SDK_JS_BUILD_CMD); \
+	fi
+	@echo "Building Python SDK..."
+	@cd lfs-client-sdk/python && $(SDK_PY_BUILD_CMD)
 
 test: ## Run unit tests + vet + race
 	go vet ./...
