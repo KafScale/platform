@@ -20,6 +20,7 @@ Makefile-MK # Ignore build and IDE files
 /dist/
 /out/
 /tmp/
+/.tmp/
 /.gopath/
 
 # Build artifacts
@@ -40,6 +41,7 @@ spark-warehouse/
 # Local Go cache (use GOCACHE=.gocache for hermetic builds/tests)
 .gocache/
 .cache/
+.tools/
 
 # Go modules/vendor
 /vendor/
