@@ -103,6 +103,7 @@ dependency-reduced-pom.xml
 # JavaScript/Node.js
 node_modules/
 package-lock.json
+lfs-client-sdk/**/dist/
 
 # Python
 __pycache__/
