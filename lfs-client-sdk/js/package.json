@@ -10,11 +10,16 @@
     "test": "npm run build && node --test dist/__tests__/envelope.test.js"
   },
   "dependencies": {
-    "@confluentinc/kafka-javascript": "^0.4.0",
-    "undici": "^6.21.0",
-    "@aws-sdk/client-s3": "^3.658.1"
+    "@aws-sdk/client-s3": "^3.1008.0",
+    "@confluentinc/kafka-javascript": "^1.8.2",
+    "undici": "^6.24.0"
+  },
+  "overrides": {
+    "@tootallnate/once": "3.0.1",
+    "tar": "7.5.11"
   },
   "devDependencies": {
+    "@types/node": "^24.5.2",
     "typescript": "^5.6.3"
   }
 }
