@@ -26,11 +26,11 @@ import (
 	"strings"
 	"time"
 
+	processorconfig "github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	processorconfig "github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/pkg/metadata"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

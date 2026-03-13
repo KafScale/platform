@@ -89,7 +89,7 @@ func TestParseIndexBadVersion(t *testing.T) {
 	// Build valid magic + version=99
 	data := make([]byte, 20)
 	copy(data, "IDX\x00")
-	data[4] = 0 // version high byte
+	data[4] = 0  // version high byte
 	data[5] = 99 // version low byte = 99
 	_, err := ParseIndex(data)
 	if err == nil || !strings.Contains(err.Error(), "version") {

@@ -133,9 +133,9 @@ func TestSkipTaggedFields(t *testing.T) {
 
 	// Tagged fields with actual data: 1 tag, tag_id=0, size=3, data=[0x01,0x02,0x03]
 	w := newByteWriter(16)
-	w.UVarint(1)      // count = 1
-	w.UVarint(0)      // tag id
-	w.UVarint(3)      // size = 3
+	w.UVarint(1) // count = 1
+	w.UVarint(0) // tag id
+	w.UVarint(3) // size = 3
 	w.write([]byte{1, 2, 3})
 	r3 := newByteReader(w.Bytes())
 	if err := r3.SkipTaggedFields(); err != nil {

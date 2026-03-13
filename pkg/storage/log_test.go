@@ -664,7 +664,7 @@ func TestPartitionLogReadMaxBytes(t *testing.T) {
 func TestPartitionLogReadOffsetOutOfRange(t *testing.T) {
 	s3mem := NewMemoryS3Client()
 	log := NewPartitionLog("default", "orders", 0, 0, s3mem, nil, PartitionLogConfig{
-		Buffer: WriteBufferConfig{MaxBytes: 1},
+		Buffer:  WriteBufferConfig{MaxBytes: 1},
 		Segment: SegmentWriterConfig{IndexIntervalMessages: 1},
 	}, nil, nil, nil)
 

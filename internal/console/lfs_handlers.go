@@ -107,11 +107,11 @@ func (h *LFSHandlers) ProcessEvent(event LFSEvent) {
 
 		// Add object to map
 		obj := &LFSObject{
-			S3Key:       event.S3Key,
-			Topic:       event.Topic,
-			Size:        event.Size,
-			CreatedAt:   event.Timestamp,
-			ProxyID:     event.ProxyID,
+			S3Key:     event.S3Key,
+			Topic:     event.Topic,
+			Size:      event.Size,
+			CreatedAt: event.Timestamp,
+			ProxyID:   event.ProxyID,
 		}
 		h.objects[event.S3Key] = obj
 

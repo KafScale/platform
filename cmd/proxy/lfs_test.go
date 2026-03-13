@@ -127,7 +127,7 @@ func TestRewriteProduceRecordsDetectsLFSBlob(t *testing.T) {
 	}}
 	batchBytes := buildTestBatch(records)
 	req := &kmsg.ProduceRequest{
-		Acks:      1,
+		Acks:          1,
 		TimeoutMillis: 5000,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: "test-topic",
@@ -207,7 +207,7 @@ func TestRewriteProduceRecordsPassthroughWithoutLFSBlob(t *testing.T) {
 	}}
 	batchBytes := buildTestBatch(records)
 	req := &kmsg.ProduceRequest{
-		Acks:      1,
+		Acks:          1,
 		TimeoutMillis: 5000,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: "test-topic",
@@ -251,7 +251,7 @@ func TestRewriteProduceRecordsChecksumMismatch(t *testing.T) {
 	}}
 	batchBytes := buildTestBatch(records)
 	req := &kmsg.ProduceRequest{
-		Acks:      1,
+		Acks:          1,
 		TimeoutMillis: 5000,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: "test-topic",
@@ -302,7 +302,7 @@ func TestRewriteProduceRecordsMixedRecords(t *testing.T) {
 	}
 	batchBytes := buildTestBatch(records)
 	req := &kmsg.ProduceRequest{
-		Acks:      1,
+		Acks:          1,
 		TimeoutMillis: 5000,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: "mixed-topic",
@@ -363,7 +363,7 @@ func TestBatchCRCIsValid(t *testing.T) {
 	}}
 	batchBytes := buildTestBatch(records)
 	req := &kmsg.ProduceRequest{
-		Acks:      1,
+		Acks:          1,
 		TimeoutMillis: 5000,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: "crc-topic",
@@ -1307,4 +1307,3 @@ func TestHistogramMultipleObservations(t *testing.T) {
 		t.Fatalf("expected sum~%f, got %f", expectedSum, sum)
 	}
 }
-

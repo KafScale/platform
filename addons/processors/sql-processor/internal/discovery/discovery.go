@@ -106,9 +106,9 @@ func newS3Client(cfg config.Config) (*s3.Client, error) {
 }
 
 type s3Lister struct {
-	client *s3.Client
-	bucket string
-	prefix string
+	client    *s3.Client
+	bucket    string
+	prefix    string
 	timeIndex *timeIndexReader
 }
 
