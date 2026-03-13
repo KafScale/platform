@@ -63,5 +63,5 @@ type S3Config struct {
 	SecretAccessKey string
 	SessionToken    string
 	KMSKeyARN       string
-	MaxConnections int
+	MaxConnections  int
 }

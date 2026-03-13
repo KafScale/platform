@@ -14,7 +14,6 @@
 // limitations under the License.
 //go:build !windows
 
-
 // fixes lingering broker processes between test runs
 package e2e
 

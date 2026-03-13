@@ -252,8 +252,8 @@ func TestStatusFromMetadataWithS3Metrics(t *testing.T) {
 		},
 	}
 	snap := &MetricsSnapshot{
-		S3State:     "healthy",
-		S3LatencyMS: 42,
+		S3State:          "healthy",
+		S3LatencyMS:      42,
 		BrokerCPUPercent: 55.3,
 		BrokerMemBytes:   256 * 1024 * 1024,
 	}

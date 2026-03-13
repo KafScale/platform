@@ -22,12 +22,12 @@ import (
 
 // Event types for LFS operations tracking.
 const (
-	EventTypeUploadStarted      = "upload_started"
-	EventTypeUploadCompleted    = "upload_completed"
-	EventTypeUploadFailed       = "upload_failed"
-	EventTypeDownloadRequested  = "download_requested"
-	EventTypeDownloadCompleted  = "download_completed"
-	EventTypeOrphanDetected     = "orphan_detected"
+	EventTypeUploadStarted     = "upload_started"
+	EventTypeUploadCompleted   = "upload_completed"
+	EventTypeUploadFailed      = "upload_failed"
+	EventTypeDownloadRequested = "download_requested"
+	EventTypeDownloadCompleted = "download_completed"
+	EventTypeOrphanDetected    = "orphan_detected"
 )
 
 // TrackerEventVersion is the current schema version for tracker events.
@@ -35,12 +35,12 @@ const TrackerEventVersion = 1
 
 // BaseEvent contains common fields for all tracker events.
 type BaseEvent struct {
-	EventType   string `json:"event_type"`
-	EventID     string `json:"event_id"`
-	Timestamp   string `json:"timestamp"`
-	ProxyID     string `json:"proxy_id"`
-	RequestID   string `json:"request_id"`
-	Version     int    `json:"version"`
+	EventType string `json:"event_type"`
+	EventID   string `json:"event_id"`
+	Timestamp string `json:"timestamp"`
+	ProxyID   string `json:"proxy_id"`
+	RequestID string `json:"request_id"`
+	Version   int    `json:"version"`
 }
 
 // UploadStartedEvent is emitted when an upload operation begins.
@@ -127,20 +127,20 @@ func (e *BaseEvent) GetEventType() string {
 }
 
 // GetTopic returns the topic for partitioning.
-func (e *UploadStartedEvent) GetTopic() string { return e.Topic }
-func (e *UploadCompletedEvent) GetTopic() string { return e.Topic }
-func (e *UploadFailedEvent) GetTopic() string { return e.Topic }
+func (e *UploadStartedEvent) GetTopic() string     { return e.Topic }
+func (e *UploadCompletedEvent) GetTopic() string   { return e.Topic }
+func (e *UploadFailedEvent) GetTopic() string      { return e.Topic }
 func (e *DownloadRequestedEvent) GetTopic() string { return "" }
 func (e *DownloadCompletedEvent) GetTopic() string { return "" }
-func (e *OrphanDetectedEvent) GetTopic() string { return e.Topic }
+func (e *OrphanDetectedEvent) GetTopic() string    { return e.Topic }
 
 // Marshal serializes the event to JSON.
-func (e *UploadStartedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
-func (e *UploadCompletedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
-func (e *UploadFailedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
+func (e *UploadStartedEvent) Marshal() ([]byte, error)     { return json.Marshal(e) }
+func (e *UploadCompletedEvent) Marshal() ([]byte, error)   { return json.Marshal(e) }
+func (e *UploadFailedEvent) Marshal() ([]byte, error)      { return json.Marshal(e) }
 func (e *DownloadRequestedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
 func (e *DownloadCompletedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
-func (e *OrphanDetectedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
+func (e *OrphanDetectedEvent) Marshal() ([]byte, error)    { return json.Marshal(e) }
 
 // newBaseEvent creates a new base event with common fields.
 func newBaseEvent(eventType, proxyID, requestID string) BaseEvent {

@@ -106,7 +106,9 @@ export class LfsResolver {
  * Compute SHA-256 hash using Web Crypto API.
  */
 async function sha256Hex(data: Uint8Array): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const input = new Uint8Array(data.byteLength);
+  input.set(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', input);
   const hashArray = new Uint8Array(hashBuffer);
   return Array.from(hashArray)
     .map((b) => b.toString(16).padStart(2, '0'))

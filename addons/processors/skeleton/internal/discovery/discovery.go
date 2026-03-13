@@ -19,8 +19,8 @@ import "context"
 
 // SegmentRef identifies a completed segment and its index.
 type SegmentRef struct {
-	Topic     string
-	Partition int32
+	Topic      string
+	Partition  int32
 	BaseOffset int64
 	SegmentKey string
 	IndexKey   string

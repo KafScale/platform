@@ -17,14 +17,14 @@ package console
 
 // LFSStatusResponse represents the response for /ui/api/lfs/status
 type LFSStatusResponse struct {
-	Enabled         bool              `json:"enabled"`
-	ProxyCount      int               `json:"proxy_count"`
-	S3Bucket        string            `json:"s3_bucket"`
-	TopicsWithLFS   []string          `json:"topics_with_lfs"`
-	Stats           LFSStats          `json:"stats"`
-	TrackerTopic    string            `json:"tracker_topic"`
-	TrackerEnabled  bool              `json:"tracker_enabled"`
-	ConsumerStatus  LFSConsumerStatus `json:"consumer_status"`
+	Enabled        bool              `json:"enabled"`
+	ProxyCount     int               `json:"proxy_count"`
+	S3Bucket       string            `json:"s3_bucket"`
+	TopicsWithLFS  []string          `json:"topics_with_lfs"`
+	Stats          LFSStats          `json:"stats"`
+	TrackerTopic   string            `json:"tracker_topic"`
+	TrackerEnabled bool              `json:"tracker_enabled"`
+	ConsumerStatus LFSConsumerStatus `json:"consumer_status"`
 }
 
 // LFSConsumerStatus represents the tracker consumer health.
@@ -99,17 +99,17 @@ type LFSTopicDetailResponse struct {
 
 // LFSEvent represents a tracker event
 type LFSEvent struct {
-	EventType   string `json:"event_type"`
-	EventID     string `json:"event_id"`
-	Timestamp   string `json:"timestamp"`
-	ProxyID     string `json:"proxy_id"`
-	RequestID   string `json:"request_id"`
-	Topic       string `json:"topic,omitempty"`
-	S3Key       string `json:"s3_key,omitempty"`
-	Size        int64  `json:"size,omitempty"`
-	DurationMs  int64  `json:"duration_ms,omitempty"`
-	ErrorCode   string `json:"error_code,omitempty"`
-	Mode        string `json:"mode,omitempty"`
+	EventType  string `json:"event_type"`
+	EventID    string `json:"event_id"`
+	Timestamp  string `json:"timestamp"`
+	ProxyID    string `json:"proxy_id"`
+	RequestID  string `json:"request_id"`
+	Topic      string `json:"topic,omitempty"`
+	S3Key      string `json:"s3_key,omitempty"`
+	Size       int64  `json:"size,omitempty"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	Mode       string `json:"mode,omitempty"`
 }
 
 // LFSOrphan represents an orphaned S3 object
@@ -159,13 +159,13 @@ type S3PresignResponse struct {
 
 // LFSConfig holds configuration for LFS console features
 type LFSConfig struct {
-	Enabled       bool
-	TrackerTopic  string
-	KafkaBrokers  []string
-	S3Bucket      string
-	S3Region      string
-	S3Endpoint    string
-	S3AccessKey   string
-	S3SecretKey   string
-	PresignTTL    int // seconds
+	Enabled      bool
+	TrackerTopic string
+	KafkaBrokers []string
+	S3Bucket     string
+	S3Region     string
+	S3Endpoint   string
+	S3AccessKey  string
+	S3SecretKey  string
+	PresignTTL   int // seconds
 }

@@ -243,12 +243,12 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 }
 
 type operatorSnapshot struct {
-	Clusters                     float64
-	EtcdSnapshotAgeSeconds       float64
-	EtcdSnapshotLastSuccessTS    float64
-	EtcdSnapshotLastScheduleTS   float64
-	EtcdSnapshotStale            float64
-	EtcdSnapshotAccessOK         float64
+	Clusters                   float64
+	EtcdSnapshotAgeSeconds     float64
+	EtcdSnapshotLastSuccessTS  float64
+	EtcdSnapshotLastScheduleTS float64
+	EtcdSnapshotStale          float64
+	EtcdSnapshotAccessOK       float64
 }
 
 func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL string) (*operatorSnapshot, error) {
@@ -265,13 +265,13 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 		return nil, fmt.Errorf("metrics request failed: %s", resp.Status)
 	}
 	var (
-		clusters           float64
-		ageMax             float64
-		lastSuccessMax     float64
-		lastScheduleMax    float64
-		staleMax           float64
-		accessMin          = 1.0
-		accessSeen         bool
+		clusters        float64
+		ageMax          float64
+		lastSuccessMax  float64
+		lastScheduleMax float64
+		staleMax        float64
+		accessMin       = 1.0
+		accessSeen      bool
 	)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {

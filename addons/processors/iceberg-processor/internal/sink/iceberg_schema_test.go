@@ -19,8 +19,8 @@ import (
 	"context"
 	"testing"
 
-	iceberg "github.com/apache/iceberg-go"
 	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	iceberg "github.com/apache/iceberg-go"
 )
 
 func TestSchemaNeedsUpdateForNewColumn(t *testing.T) {

@@ -47,6 +47,7 @@ The CI workflow checks for missing headers and fails if new files are added with
 Pull requests must include strict test coverage for the changes they introduce. At a minimum:
 
 - Add or extend unit tests for all non-trivial logic.
+- Run `make commit-check` before opening or updating a PR.
 - Run the relevant e2e suite(s). Broker changes should run:
   - `make test-produce-consume`
   - `make test-consumer-group` (if group behavior is affected)
@@ -66,6 +67,7 @@ Common invocations:
 
 - `make build`
 - `make test`
+- `make commit-check`
 - `make test-full`
 
 The policy above (tests for new functionality) is enforced in code review and CI.
@@ -89,6 +91,7 @@ major changes and explicitly lists any known CVE fixes (or "None").
 ## Development Workflow
 
 See `docs/development.md` for build/test commands, environment variables, and local setup.
+Before submitting a PR, run `make commit-check` and fix any reported issues.
 
 ## Code of Conduct
 

@@ -36,10 +36,10 @@ type LFSConsumer struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	statusMu   sync.RWMutex
-	lastError  string
+	statusMu    sync.RWMutex
+	lastError   string
 	lastErrorAt time.Time
-	lastPollAt time.Time
+	lastPollAt  time.Time
 }
 
 // LFSConsumerConfig holds configuration for the LFS consumer

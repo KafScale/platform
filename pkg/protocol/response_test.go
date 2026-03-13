@@ -21,7 +21,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-
 // TestGroupResponseErrorCode_RoundTrip encodes known responses via EncodeResponse,
 // then verifies GroupResponseErrorCode extracts the correct error code.
 func TestGroupResponseErrorCode_RoundTrip(t *testing.T) {

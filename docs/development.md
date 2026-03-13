@@ -24,6 +24,7 @@ This document tracks the steps needed to work on Kafscale. It complements the ar
 ```bash
 make build
 make test
+make commit-check
 ```
 
 ## Prerequisites
@@ -51,6 +52,7 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 |---------|---------|
 | `make build` | Compile all Go binaries. |
 | `make test` | Run unit tests (includes `go vet` and race detector). |
+| `make commit-check` | Run the standard pre-PR quality gate (`check`, `fmt`, `test`, `test-fuzz`, `code-ql-gate`). |
 | `make test-produce-consume` | MinIO + Franz produce/consume e2e suite plus Kafka CLI producer smoke test (Docker image required). |
 | `make test-consumer-group` | Consumer group persistence e2e (embedded etcd + memory S3). |
 | `make test-ops-api` | Ops/admin API e2e (embedded etcd + memory S3). |
@@ -65,6 +67,18 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 | `make tidy` | Clean go.mod/go.sum. |
 | `make lint` | Run golangci-lint (requires installation). |
 | `make help` | List all Makefile targets. |
+
+## Local CodeQL Tuning
+
+`make code-ql` and `make commit-check` run a local CodeQL pass. On memory-constrained machines, the Go database finalize step can be killed by the OS.
+
+If that happens, rerun with lower Go CodeQL limits:
+
+```bash
+CODEQL_GO_RAM_MB=768 CODEQL_GO_CACHE_MB=256 CODEQL_GO_THREADS=1 make code-ql
+```
+
+The same environment variables also apply to `make commit-check`.
 
 ## Local Limits (kind + e2e)
 
@@ -121,6 +135,7 @@ We publish container images and GitHub releases from tags. This keeps release ar
 Pull requests must include strict test coverage for the changes they introduce. At a minimum:
 
 - Add or extend unit tests for all non-trivial logic.
+- Run `make commit-check` before opening or updating the PR.
 - Run the relevant e2e suite(s); changes to broker behavior should run `make test-produce-consume` and any related e2e tests.
 - Extend e2e coverage when you fix bugs so regressions are caught earlier.
 

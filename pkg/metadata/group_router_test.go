@@ -53,7 +53,6 @@ func TestGroupLeaseKeyToGroupID(t *testing.T) {
 	}
 }
 
-
 // Router reflects group lease acquisition.
 func TestGroupRouterReflectsAcquisition(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
