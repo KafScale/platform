@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright 2026 KafScale team.
+
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
