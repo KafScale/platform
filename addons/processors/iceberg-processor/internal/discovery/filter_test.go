@@ -23,27 +23,31 @@ import (
 )
 
 func TestBuildTopicPartitionFilter(t *testing.T) {
+	ordersTopic := "orders"
+	badTopic := "bad-topic"
+	paymentsTopic := "payments"
+
 	snapshot := metadata.ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
 			{
-				Name: "orders",
+				Topic: &ordersTopic,
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0},
-					{PartitionIndex: 1},
+					{Partition: 0},
+					{Partition: 1},
 				},
 			},
 			{
-				Name:      "bad-topic",
+				Topic:     &badTopic,
 				ErrorCode: 3,
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 0},
+					{Partition: 0},
 				},
 			},
 			{
-				Name: "payments",
+				Topic: &paymentsTopic,
 				Partitions: []protocol.MetadataPartition{
-					{PartitionIndex: 2, ErrorCode: 2},
-					{PartitionIndex: 3},
+					{Partition: 2, ErrorCode: 2},
+					{Partition: 3},
 				},
 			},
 		},
