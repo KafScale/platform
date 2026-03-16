@@ -831,9 +831,9 @@ func TestMergeSnapshots(t *testing.T) {
 	}
 	existing := metadata.ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
-			{Topic: kmsg.StringPtr("orders")},  // duplicate
-			{Topic: kmsg.StringPtr("events")},  // new
-			{Topic: kmsg.StringPtr("")},         // empty name, skip
+			{Topic: kmsg.StringPtr("orders")},            // duplicate
+			{Topic: kmsg.StringPtr("events")},            // new
+			{Topic: kmsg.StringPtr("")},                  // empty name, skip
 			{Topic: kmsg.StringPtr("bad"), ErrorCode: 3}, // error, skip
 		},
 	}
@@ -1718,4 +1718,3 @@ func TestLfsProxyContainerAllOptions(t *testing.T) {
 		t.Fatalf("expected at least 3 ports (kafka, http, health), got %d", len(container.Ports))
 	}
 }
-

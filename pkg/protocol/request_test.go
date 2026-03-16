@@ -21,7 +21,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-
 // buildRequestFrame prepends a Kafka request header to a kmsg-encoded body.
 // This mirrors what a real Kafka client does: header first, then the body
 // serialized by kmsg.

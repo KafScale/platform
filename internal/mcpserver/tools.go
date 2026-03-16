@@ -22,10 +22,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (

@@ -22,10 +22,10 @@ envelope pointers in Kafka topics. This implements the "Claim Check" pattern.
 # Overview
 
 When a Kafka producer sends a message with the LFS_BLOB header, the LFS proxy:
-  1. Uploads the payload to S3
-  2. Computes SHA256 checksum
-  3. Creates a JSON envelope with metadata
-  4. Forwards the envelope (not the payload) to Kafka
+ 1. Uploads the payload to S3
+ 2. Computes SHA256 checksum
+ 3. Creates a JSON envelope with metadata
+ 4. Forwards the envelope (not the payload) to Kafka
 
 Consumers receive the envelope and can use this package to transparently
 fetch the original payload from S3.

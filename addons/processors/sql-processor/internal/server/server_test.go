@@ -1047,20 +1047,20 @@ func TestBuildAggregatePlanErrors(t *testing.T) {
 	}
 
 	parsed = kafsql.Query{
-		Type:   kafsql.QuerySelect,
-		Topic:  "orders",
+		Type:    kafsql.QuerySelect,
+		Topic:   "orders",
 		GroupBy: []string{"_partition"},
-		Select: []kafsql.SelectColumn{{Kind: kafsql.SelectColumnField, Column: "_partition"}},
+		Select:  []kafsql.SelectColumn{{Kind: kafsql.SelectColumnField, Column: "_partition"}},
 	}
 	if _, err := srv.buildAggregatePlan(parsed); err == nil {
 		t.Fatalf("expected missing aggregate error")
 	}
 
 	parsed = kafsql.Query{
-		Type:   kafsql.QuerySelect,
-		Topic:  "orders",
+		Type:    kafsql.QuerySelect,
+		Topic:   "orders",
 		GroupBy: []string{"_partition"},
-		Select: []kafsql.SelectColumn{{Kind: kafsql.SelectColumnJSONValue}},
+		Select:  []kafsql.SelectColumn{{Kind: kafsql.SelectColumnJSONValue}},
 	}
 	if _, err := srv.buildAggregatePlan(parsed); err == nil {
 		t.Fatalf("expected json helper error")

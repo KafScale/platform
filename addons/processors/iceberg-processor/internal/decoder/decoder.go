@@ -23,10 +23,10 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 )
 
 const (

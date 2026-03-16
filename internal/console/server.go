@@ -29,24 +29,24 @@ import (
 )
 
 type MetricsSnapshot struct {
-	S3State                 string
-	S3LatencyMS             int
-	S3ErrorRate             float64
-	ProduceRPS              float64
-	FetchRPS                float64
-	AdminRequestsTotal      float64
-	AdminRequestErrorsTotal float64
-	AdminRequestLatencyMS   float64
-	BrokerCPUPercent        float64
-	BrokerMemBytes          int64
-	BrokerRuntime           map[string]BrokerRuntime
-	OperatorClusters                        float64
-	OperatorEtcdSnapshotAgeSeconds          float64
-	OperatorEtcdSnapshotLastSuccessTS       float64
-	OperatorEtcdSnapshotLastScheduleTS      float64
-	OperatorEtcdSnapshotStale               float64
-	OperatorEtcdSnapshotAccessOK            float64
-	OperatorMetricsAvailable                bool
+	S3State                            string
+	S3LatencyMS                        int
+	S3ErrorRate                        float64
+	ProduceRPS                         float64
+	FetchRPS                           float64
+	AdminRequestsTotal                 float64
+	AdminRequestErrorsTotal            float64
+	AdminRequestLatencyMS              float64
+	BrokerCPUPercent                   float64
+	BrokerMemBytes                     int64
+	BrokerRuntime                      map[string]BrokerRuntime
+	OperatorClusters                   float64
+	OperatorEtcdSnapshotAgeSeconds     float64
+	OperatorEtcdSnapshotLastSuccessTS  float64
+	OperatorEtcdSnapshotLastScheduleTS float64
+	OperatorEtcdSnapshotStale          float64
+	OperatorEtcdSnapshotAccessOK       float64
+	OperatorMetricsAvailable           bool
 }
 
 type MetricsProvider interface {
@@ -136,14 +136,14 @@ type consoleHandlers struct {
 }
 
 type statusResponse struct {
-	Cluster string       `json:"cluster"`
-	ClusterID string     `json:"cluster_id,omitempty"`
-	Version string       `json:"version"`
-	Brokers brokerStatus `json:"brokers"`
-	S3      s3Status     `json:"s3"`
-	Etcd    component    `json:"etcd"`
-	Alerts  []alert      `json:"alerts"`
-	Topics  []topicInfo  `json:"topics"`
+	Cluster   string       `json:"cluster"`
+	ClusterID string       `json:"cluster_id,omitempty"`
+	Version   string       `json:"version"`
+	Brokers   brokerStatus `json:"brokers"`
+	S3        s3Status     `json:"s3"`
+	Etcd      component    `json:"etcd"`
+	Alerts    []alert      `json:"alerts"`
+	Topics    []topicInfo  `json:"topics"`
 }
 
 type brokerStatus struct {
@@ -408,9 +408,9 @@ func mockClusterStatus() statusResponse {
 		})
 	}
 	return statusResponse{
-		Cluster: "kafscale-dev",
+		Cluster:   "kafscale-dev",
 		ClusterID: "cluster-dev-1",
-		Version: "0.2.0",
+		Version:   "0.2.0",
 		Brokers: brokerStatus{
 			Ready:   2 + rand.Intn(2),
 			Desired: 3,

@@ -13,7 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
+SHELL := /bin/bash
+
+GO_MIN_VERSION := 1.25
+NODE_MIN_VERSION := 24
+NPM_MIN_VERSION := 11
+LOCAL_NODE_DIR := $(abspath .tools/node)
+LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
+LOCAL_NODE := $(LOCAL_NODE_BIN)/node
+LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
+
+.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -81,6 +91,54 @@ proto: ## Generate protobuf + gRPC stubs
 
 generate: proto
 
+check: ## Validate local toolchain prerequisites
+	@echo "Checking prerequisites..."
+	@command -v go >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: Go is not installed."; \
+		echo "  Required: Go >= $(GO_MIN_VERSION)"; \
+		echo ""; \
+		exit 1; \
+	}
+	@GO_VER=$$(go version | sed -E 's/.*go([0-9]+\.[0-9]+).*/\1/'); \
+	GO_MAJ=$$(echo "$$GO_VER" | cut -d. -f1); \
+	GO_MIN=$$(echo "$$GO_VER" | cut -d. -f2); \
+	REQ_MAJ=$$(echo "$(GO_MIN_VERSION)" | cut -d. -f1); \
+	REQ_MIN=$$(echo "$(GO_MIN_VERSION)" | cut -d. -f2); \
+	if [ "$$GO_MAJ" -lt "$$REQ_MAJ" ] || { [ "$$GO_MAJ" -eq "$$REQ_MAJ" ] && [ "$$GO_MIN" -lt "$$REQ_MIN" ]; }; then \
+		echo ""; \
+		echo "  ERROR: Go $$GO_VER is too old."; \
+		echo "  Required: Go >= $(GO_MIN_VERSION)"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "  Go $$(go version | sed -E 's/.*go([0-9]+\.[0-9]+\.[0-9]+).*/\1/') -- OK"
+	@if [ -x "$(LOCAL_NODE)" ]; then \
+		NODE_VER=$$($(LOCAL_NODE) --version | sed 's/v//'); \
+		NODE_MAJ=$$(echo "$$NODE_VER" | cut -d. -f1); \
+		if [ "$$NODE_MAJ" -lt "$(NODE_MIN_VERSION)" ]; then \
+			echo "  WARNING: local Node.js $$NODE_VER is too old (need >= $(NODE_MIN_VERSION))"; \
+		else \
+			echo "  Node.js $$NODE_VER (local) -- OK"; \
+		fi; \
+	else \
+		echo "  WARNING: local Node.js not installed"; \
+	fi
+	@if [ -x "$(LOCAL_NPM)" ]; then \
+		NPM_VER=$$(PATH="$(LOCAL_NODE_BIN):$$PATH" $(LOCAL_NPM) --version); \
+		NPM_MAJ=$$(echo "$$NPM_VER" | cut -d. -f1); \
+		if [ "$$NPM_MAJ" -lt "$(NPM_MIN_VERSION)" ]; then \
+			echo "  WARNING: local npm $$NPM_VER is too old (need >= $(NPM_MIN_VERSION))"; \
+		else \
+			echo "  npm $$NPM_VER (local) -- OK"; \
+		fi; \
+	else \
+		echo "  WARNING: local npm not installed"; \
+	fi
+
+ensure-local-node: ## Install repo-local Node.js/npm from .nvmrc
+	bash scripts/ensure_local_node.sh
+
 build: ## Build all binaries
 	go build ./...
 
@@ -98,8 +156,64 @@ build-sdk: ## Build all LFS client SDKs
 	@cd lfs-client-sdk/python && $(SDK_PY_BUILD_CMD)
 
 test: ## Run unit tests + vet + race
-	go vet ./...
-	go test -race ./...
+	@echo "==> go vet"
+	@go vet ./...
+	@echo "vet passed."
+	@echo "==> go test -race ./..."
+	@go test -race ./...
+	@echo "race passed."
+	@echo "test passed."
+
+vet: ## Run go vet
+	@echo "==> go vet"
+	@go vet ./...
+	@echo "vet passed."
+
+race: ## Run race detector tests
+	@echo "==> go test -race ./..."
+	@go test -race ./...
+	@echo "race passed."
+
+fmt: ## Auto-format Go code
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "Formatting Go files:"; \
+		echo "$$unformatted"; \
+		gofmt -w .; \
+		echo "fmt passed."; \
+	else \
+		echo "All Go files are formatted correctly."; \
+		echo "fmt passed."; \
+	fi
+
+fmt-check: ## Check formatting (fails if unformatted)
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "The following files are not gofmt-formatted:"; \
+		echo "$$unformatted"; \
+		echo "Run 'make fmt' to fix them."; \
+		exit 1; \
+	fi
+
+test-fuzz: ## Run Go fuzz test(s)
+	bash scripts/test_fuzz.sh
+
+code-ql: ensure-local-node ## Run local CodeQL and emit SARIF under .tmp/codeql/
+	bash scripts/codeql_local.sh
+
+code-ql-summary: code-ql ## Run CodeQL and print a readable summary from SARIF
+	@jq -r '.runs[]?.results[]? | "\(.level // "warning")\t\(.ruleId // "no-rule")\t\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):\(.locations[0].physicalLocation.region.startLine // 0)\t\(.message.text // "no-message")"' .tmp/codeql/*.sarif | sort || true
+
+code-ql-gate: code-ql ## Fail if CodeQL reports any error findings
+	@errors=$$(jq '[.runs[]?.results[]? | select((.level // "warning") == "error")] | length' .tmp/codeql/*.sarif | awk '{s+=$$1} END{print s+0}'); \
+	if [ "$$errors" -gt 0 ]; then \
+		echo "CodeQL gate failed: $$errors error finding(s) found."; \
+		exit 1; \
+	fi; \
+	echo "CodeQL gate passed: no error findings found."
+
+commit-check: ensure-local-node check fmt test test-fuzz code-ql-gate ## Run pre-commit quality gates
+	@echo "commit-check passed."
 
 test-acl: ## Run ACL e2e test (requires KAFSCALE_E2E=1)
 	KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestACLsE2E

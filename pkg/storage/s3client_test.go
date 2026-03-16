@@ -281,9 +281,9 @@ type fakeAPIError struct {
 	code string
 }
 
-func (e *fakeAPIError) Error() string   { return e.code }
-func (e *fakeAPIError) ErrorCode() string   { return e.code }
-func (e *fakeAPIError) ErrorMessage() string { return e.code }
+func (e *fakeAPIError) Error() string                 { return e.code }
+func (e *fakeAPIError) ErrorCode() string             { return e.code }
+func (e *fakeAPIError) ErrorMessage() string          { return e.code }
 func (e *fakeAPIError) ErrorFault() smithy.ErrorFault { return smithy.FaultUnknown }
 
 func TestMemoryS3Client_EnsureBucket(t *testing.T) {
