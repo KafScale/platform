@@ -743,7 +743,6 @@ function renderLfsObjects(objects, totalCount) {
 
 function startLfsEventsStream(filter = '') {
   const status = document.getElementById('lfs-events-status');
-  const list = document.getElementById('lfs-events-list');
 
   if (lfsEventsSource) {
     lfsEventsSource.close();

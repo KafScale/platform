@@ -311,13 +311,14 @@ func cloneSegments(segments []SegmentRef) []SegmentRef {
 
 func findNextSegment(segments []SegmentRef, index int) *SegmentRef {
 	current := segments[index]
-	for i := index + 1; i < len(segments); i++ {
-		if segments[i].Topic != current.Topic || segments[i].Partition != current.Partition {
-			return nil
-		}
-		return &segments[i]
+	nextIndex := index + 1
+	if nextIndex >= len(segments) {
+		return nil
 	}
-	return nil
+	if segments[nextIndex].Topic != current.Topic || segments[nextIndex].Partition != current.Partition {
+		return nil
+	}
+	return &segments[nextIndex]
 }
 
 func int64Ptr(value int64) *int64 {

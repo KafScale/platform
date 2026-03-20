@@ -13,7 +13,7 @@ export interface LfsEnvelope {
 }
 
 export function isLfsEnvelope(value: Uint8Array | null | undefined): boolean {
-  if (!value || value.length < 15) return false;
+  if (!value || value.length === 0) return false;
   if (value[0] !== 123) return false;
   const prefix = new TextDecoder().decode(value.slice(0, Math.min(50, value.length)));
   return prefix.includes('"kfs_lfs"');
