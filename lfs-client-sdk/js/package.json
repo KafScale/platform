@@ -15,6 +15,10 @@
     "undici": "^6.24.0"
   },
   "overrides": {
+    "@aws-sdk/xml-builder": "3.972.10",
+    "@aws-sdk/xml-builder@3.972.10": {
+      "fast-xml-parser": "5.5.8"
+    },
     "@tootallnate/once": "3.0.1",
     "tar": "7.5.11",
     "fast-xml-parser": "5.5.8"
