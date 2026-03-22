@@ -46,7 +46,11 @@ jobs:
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-dependency-path: |
+            go.sum
+            addons/processors/skeleton/go.sum
+            addons/processors/sql-processor/go.sum
+            addons/processors/iceberg-processor/go.sum
 
       - name: Prepare Go build cache
         run: mkdir -p "$GOCACHE"
@@ -56,6 +60,9 @@ jobs:
 
       - name: Run go test -race ./...
         run: go test -race ./...
+
+      - name: Run nested module tests
+        run: make test-nested-modules
 
   go-coverage:
     name: Go Coverage Gate

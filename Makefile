@@ -23,7 +23,7 @@ LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
 LOCAL_NODE := $(LOCAL_NODE_BIN)/node
 LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
 
-.PHONY: proto build test tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check
+.PHONY: proto build test test-nested-modules tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -164,6 +164,14 @@ test: ## Run unit tests + vet + race
 	@echo "race passed."
 	@echo "test passed."
 
+test-nested-modules: ## Run go test across nested Go modules under addons/processors
+	@set -e; \
+	for dir in addons/processors/skeleton addons/processors/sql-processor addons/processors/iceberg-processor; do \
+		echo "==> $$dir: go test ./..."; \
+		( cd $$dir && go test ./... ); \
+	done; \
+	echo "nested module tests passed."
+
 vet: ## Run go vet
 	@echo "==> go vet"
 	@go vet ./...
@@ -212,7 +220,7 @@ code-ql-gate: code-ql ## Fail if CodeQL reports any error findings
 	fi; \
 	echo "CodeQL gate passed: no error findings found."
 
-commit-check: ensure-local-node check fmt test test-fuzz code-ql-gate ## Run pre-commit quality gates
+commit-check: ensure-local-node check fmt test test-nested-modules test-fuzz code-ql-gate ## Run pre-commit quality gates
 	@echo "commit-check passed."
 
 test-acl: ## Run ACL e2e test (requires KAFSCALE_E2E=1)
