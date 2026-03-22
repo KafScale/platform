@@ -451,14 +451,25 @@ type loggingTransport struct {
 	base http.RoundTripper
 }
 
+func sanitizeLogValue(value string) string {
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	value = strings.ReplaceAll(value, "\r", "\\r")
+	return value
+}
+
 func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := t.base
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	method := sanitizeLogValue(req.Method)
+	urlText := ""
+	if req.URL != nil {
+		urlText = sanitizeLogValue(req.URL.Redacted())
+	}
 	resp, err := base.RoundTrip(req)
 	if err != nil {
-		log.Printf("iceberg-rest http %s %s failed: %v", req.Method, req.URL, err)
+		log.Printf("iceberg-rest http %s %s failed: %v", method, urlText, err)
 		return resp, err
 	}
 	if resp.StatusCode >= 400 {
@@ -466,12 +477,12 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		if readErr != nil {
-			log.Printf("iceberg-rest http %s %s -> %d (read error: %v)", req.Method, req.URL, resp.StatusCode, readErr)
+			log.Printf("iceberg-rest http %s %s -> %d (read error: %v)", method, urlText, resp.StatusCode, readErr)
 		} else {
-			log.Printf("iceberg-rest http %s %s -> %d body=%s", req.Method, req.URL, resp.StatusCode, strings.TrimSpace(string(body)))
+			log.Printf("iceberg-rest http %s %s -> %d body=%s", method, urlText, resp.StatusCode, sanitizeLogValue(strings.TrimSpace(string(body))))
 		}
 	} else {
-		log.Printf("iceberg-rest http %s %s -> %d", req.Method, req.URL, resp.StatusCode)
+		log.Printf("iceberg-rest http %s %s -> %d", method, urlText, resp.StatusCode)
 	}
 	return resp, nil
 }
