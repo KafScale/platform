@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.32.6
 	github.com/aws/aws-sdk-go-v2/config v1.28.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.2
-	github.com/jackc/pgproto3/v2 v2.3.3
+	github.com/jackc/pgproto3/v2 v2.3.4-0.20250125160525-bc041643406d
 	github.com/prometheus/client_golang v1.19.0
 	go.etcd.io/etcd/client/v3 v3.5.13
 	go.etcd.io/etcd/server/v3 v3.5.13
