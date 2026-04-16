@@ -12,7 +12,7 @@
     <maven.compiler.release>11</maven.compiler.release>
     <spark.version>3.5.1</spark.version>
     <scala.binary.version>2.12</scala.binary.version>
-    <kafka.clients.version>3.9.1</kafka.clients.version>
+    <kafka.clients.version>3.9.2</kafka.clients.version>
     <delta.version>3.2.0</delta.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <main.class>com.example.kafscale.spark.WordCountSparkJob</main.class>
