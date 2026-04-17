@@ -152,7 +152,7 @@ paths:
                 $ref: "#/components/schemas/LfsEnvelope"
               example:
                 kfs_lfs: 1
-                bucket: kafscale-lfs
+                bucket: my-bucket
                 key: default/video-uploads/lfs/2026/02/05/abc123
                 size: 10485760
                 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -426,14 +426,14 @@ paths:
               presign:
                 summary: Get presigned URL
                 value:
-                  bucket: kafscale-lfs
+                  bucket: my-bucket
                   key: default/video-uploads/lfs/2026/02/05/abc123
                   mode: presign
                   expires_seconds: 300
               stream:
                 summary: Stream content
                 value:
-                  bucket: kafscale-lfs
+                  bucket: my-bucket
                   key: default/video-uploads/lfs/2026/02/05/abc123
                   mode: stream
       responses:
@@ -445,7 +445,7 @@ paths:
                 $ref: "#/components/schemas/DownloadResponse"
               example:
                 mode: presign
-                url: https://s3.amazonaws.com/kafscale-lfs/...
+                url: https://s3.amazonaws.com/my-bucket/...
                 expires_at: "2026-02-05T10:35:00Z"
             application/octet-stream:
               schema:
@@ -509,7 +509,7 @@ components:
         bucket:
           type: string
           description: S3 bucket name
-          example: kafscale-lfs
+          example: my-bucket
         key:
           type: string
           description: S3 object key
@@ -553,7 +553,7 @@ components:
         bucket:
           type: string
           description: S3 bucket name (must match proxy's configured bucket)
-          example: kafscale-lfs
+          example: my-bucket
         key:
           type: string
           description: S3 object key from the LFS envelope

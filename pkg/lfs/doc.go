@@ -36,7 +36,7 @@ The LFS envelope is a JSON object stored as the Kafka message value:
 
 	{
 	  "kfs_lfs": 1,
-	  "bucket": "kafscale-lfs",
+	  "bucket": "my-bucket",
 	  "key": "default/topic/lfs/2026/02/01/obj-uuid",
 	  "size": 10485760,
 	  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -51,7 +51,7 @@ Basic usage with franz-go:
 
 	// Create S3 client
 	s3Client, err := lfs.NewS3Client(ctx, lfs.S3Config{
-	    Bucket:   "kafscale-lfs",
+	    Bucket:   "my-bucket",
 	    Region:   "us-east-1",
 	    Endpoint: "http://minio:9000",  // optional
 	})

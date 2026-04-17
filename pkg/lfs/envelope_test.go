@@ -156,7 +156,7 @@ func TestIsLfsEnvelope(t *testing.T) {
 func TestEnvelopeRoundTrip(t *testing.T) {
 	env := Envelope{
 		Version:         1,
-		Bucket:          "kafscale-lfs",
+		Bucket:          "test-bucket",
 		Key:             "prod/events/lfs/2026/02/01/obj-550e8400-e29b-41d4-a716-446655440000",
 		Size:            5242880,
 		SHA256:          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
