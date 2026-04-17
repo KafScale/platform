@@ -98,9 +98,27 @@ type lfsModule struct {
 	rr             uint32
 }
 
+var blockedBucketNames = []string{
+	"kafscale-lfs",
+	"kafscale-lfs-dev",
+	"kafscale-lfs-staging",
+	"kafscale-example",
+}
+
 func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error) {
 	s3Bucket := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_BUCKET"))
+	if s3Bucket == "" {
+		return nil, fmt.Errorf("KAFSCALE_LFS_PROXY_S3_BUCKET is required when LFS is enabled")
+	}
+	for _, blocked := range blockedBucketNames {
+		if s3Bucket == blocked {
+			return nil, fmt.Errorf("KAFSCALE_LFS_PROXY_S3_BUCKET=%q is a known unsafe example name and must not be used — configure your own bucket", blocked)
+		}
+	}
 	s3Region := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_REGION"))
+	if s3Region == "" {
+		return nil, fmt.Errorf("KAFSCALE_LFS_PROXY_S3_REGION is required when LFS is enabled")
+	}
 	s3Endpoint := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_ENDPOINT"))
 	s3PublicURL := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT"))
 	s3AccessKey := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_ACCESS_KEY"))
