@@ -152,7 +152,7 @@ paths:
                 $ref: "#/components/schemas/LfsEnvelope"
               example:
                 kfs_lfs: 1
-                bucket: kafscale-lfs
+                bucket: my-bucket
                 key: default/video-uploads/lfs/2026/02/05/abc123
                 size: 10485760
                 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -399,10 +399,22 @@ paths:
       description: |
         Retrieves an LFS object from S3 storage. Supports two modes:
 
-        - **presign**: Returns a presigned S3 URL for direct download (default)
-        - **stream**: Streams the object content through the proxy
+        - **stream** (default): Streams the object content through the proxy.
+          The proxy hashes bytes on the fly and verifies them against the
+          client-supplied envelope checksum. On mismatch the TCP connection
+          is aborted mid-stream — the client sees a truncated response and
+          must retry. An `integrity_failure` event is emitted to the LFS
+          ops tracker topic.
+        - **presign**: Returns a presigned S3 URL for direct client-to-S3
+          download. Disabled by default; enable with
+          `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true`. When enabled, the
+          response body includes an `integrity` block so client SDKs can
+          verify downloaded bytes themselves. Bare consumption of the
+          presigned URL (e.g. `curl`) opts out of integrity verification.
 
-        For presign mode, the URL TTL is capped by server configuration.
+        **Both modes require the client to supply `integrity.sha256` from the
+        Kafka envelope.** The Kafka envelope is authoritative; S3 is treated
+        as untrusted storage.
       operationId: lfsDownload
       security:
         - ApiKeyAuth: []
@@ -423,19 +435,27 @@ paths:
             schema:
               $ref: "#/components/schemas/DownloadRequest"
             examples:
-              presign:
-                summary: Get presigned URL
+              stream:
+                summary: Stream content with integrity check (default)
                 value:
-                  bucket: kafscale-lfs
+                  bucket: my-bucket
+                  key: default/video-uploads/lfs/2026/02/05/abc123
+                  mode: stream
+                  integrity:
+                    sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                    checksum_alg: sha256
+                    size: 10485760
+              presign:
+                summary: Get presigned URL (requires KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true)
+                value:
+                  bucket: my-bucket
                   key: default/video-uploads/lfs/2026/02/05/abc123
                   mode: presign
                   expires_seconds: 300
-              stream:
-                summary: Stream content
-                value:
-                  bucket: kafscale-lfs
-                  key: default/video-uploads/lfs/2026/02/05/abc123
-                  mode: stream
+                  integrity:
+                    sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                    checksum_alg: sha256
+                    size: 10485760
       responses:
         "200":
           description: Presigned URL or streamed object content
@@ -445,13 +465,21 @@ paths:
                 $ref: "#/components/schemas/DownloadResponse"
               example:
                 mode: presign
-                url: https://s3.amazonaws.com/kafscale-lfs/...
+                url: https://s3.amazonaws.com/my-bucket/...
                 expires_at: "2026-02-05T10:35:00Z"
+                integrity:
+                  sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                  checksum_alg: sha256
+                  size: 10485760
             application/octet-stream:
               schema:
                 type: string
                 format: binary
-              description: Streamed object content (when mode=stream)
+              description: |
+                Streamed object content (when mode=stream). Response headers
+                `X-Kafscale-LFS-Checksum` and `X-Kafscale-LFS-Content-Length`
+                allow advanced clients to verify independently. On checksum
+                mismatch the connection is aborted mid-stream.
         "400":
           description: Invalid request
           content:
@@ -509,7 +537,7 @@ components:
         bucket:
           type: string
           description: S3 bucket name
-          example: kafscale-lfs
+          example: my-bucket
         key:
           type: string
           description: S3 object key
@@ -547,25 +575,30 @@ components:
 
     DownloadRequest:
       type: object
-      required: [bucket, key]
+      required: [bucket, key, integrity]
       description: Request to download an LFS object
       properties:
         bucket:
           type: string
           description: S3 bucket name (must match proxy's configured bucket)
-          example: kafscale-lfs
+          example: my-bucket
         key:
           type: string
           description: S3 object key from the LFS envelope
           example: default/video-uploads/lfs/2026/02/05/abc123
         mode:
           type: string
-          enum: [presign, stream]
-          default: presign
+          enum: [stream, presign]
+          default: stream
           description: |
             Download mode:
-            - presign: Return a presigned URL for direct S3 download
-            - stream: Stream content through the proxy
+            - stream (default): Stream content through the proxy with
+              server-side integrity verification against `integrity.sha256`.
+              Connection is aborted on mismatch.
+            - presign: Return a presigned URL for direct S3 download. Requires
+              `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true` on the proxy. Client
+              SDK must verify downloaded bytes against `integrity.sha256` in
+              the response.
         expires_seconds:
           type: integer
           format: int32
@@ -573,23 +606,52 @@ components:
           minimum: 1
           maximum: 3600
           description: Requested presign URL TTL in seconds (capped by server)
+        integrity:
+          $ref: "#/components/schemas/IntegrityClaim"
+
+    IntegrityClaim:
+      type: object
+      required: [sha256]
+      description: |
+        Authoritative integrity metadata carried from the Kafka-stored LFS
+        envelope. The proxy verifies S3 bytes against this claim (stream mode)
+        or echoes it back for client-side verification (presign mode).
+      properties:
+        sha256:
+          type: string
+          pattern: "^[0-9a-fA-F]{64}$"
+          description: SHA-256 hash of the object content, hex-encoded
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        checksum_alg:
+          type: string
+          enum: [sha256]
+          default: sha256
+          description: Checksum algorithm (only sha256 is supported)
+        size:
+          type: integer
+          format: int64
+          description: Expected object size in bytes
+          example: 10485760
 
     DownloadResponse:
       type: object
-      description: Response for presign download mode
+      required: [mode]
+      description: Response for download request
       properties:
         mode:
           type: string
-          enum: [presign]
+          enum: [stream, presign]
           description: Download mode used
         url:
           type: string
           format: uri
-          description: Presigned S3 URL for direct download
+          description: Presigned S3 URL (presign mode only)
         expires_at:
           type: string
           format: date-time
-          description: URL expiration timestamp
+          description: URL expiration timestamp (presign mode only)
+        integrity:
+          $ref: "#/components/schemas/IntegrityClaim"
 
     UploadInitRequest:
       type: object

@@ -17,6 +17,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -572,11 +574,18 @@ func TestHandleHTTPDownload_WrongBucket(t *testing.T) {
 func TestHandleHTTPDownload_PresignMode(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
+	m.presignEnabled = true
 
+	const sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	body, _ := json.Marshal(lfsDownloadRequest{
 		Bucket: "test-bucket",
 		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
 		Mode:   "presign",
+		Integrity: &lfsIntegrityRequest{
+			SHA256:      sha,
+			ChecksumAlg: "sha256",
+			Size:        1024,
+		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -598,16 +607,92 @@ func TestHandleHTTPDownload_PresignMode(t *testing.T) {
 	if resp.ExpiresAt == "" {
 		t.Fatal("expected non-empty expires_at")
 	}
+	if resp.Integrity == nil {
+		t.Fatal("expected integrity block in presign response")
+	}
+	if resp.Integrity.SHA256 != sha {
+		t.Fatalf("expected integrity.sha256=%s, got %s", sha, resp.Integrity.SHA256)
+	}
 }
 
-func TestHandleHTTPDownload_DefaultModeIsPresign(t *testing.T) {
+func TestHandleHTTPDownload_PresignDisabledByDefault(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
+	// presignEnabled defaults to false — do not override
 
 	body, _ := json.Marshal(lfsDownloadRequest{
 		Bucket: "test-bucket",
 		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
-		// Mode intentionally omitted (empty string)
+		Mode:   "presign",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "presign_disabled" {
+		t.Fatalf("expected code=presign_disabled, got %s", errResp.Code)
+	}
+}
+
+func TestHandleHTTPDownload_MissingIntegrity(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.presignEnabled = true
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket",
+		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
+		Mode:   "presign",
+		// Integrity intentionally omitted
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "missing_integrity" {
+		t.Fatalf("expected code=missing_integrity, got %s", errResp.Code)
+	}
+}
+
+func TestHandleHTTPDownload_StreamVerifyMatch(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	// Seed the fake S3 with a known payload and compute its real sha256.
+	payload := []byte("hello integrity world")
+	key := "test-ns/topic/lfs/2025/01/01/obj-verify-ok"
+	fs3 := m.s3Uploader.api.(*fakeS3)
+	fs3.objects[key] = payload
+	h := sha256.New()
+	h.Write(payload)
+	expectedSHA := hex.EncodeToString(h.Sum(nil))
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket",
+		Key:    key,
+		Mode:   "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256:      expectedSHA,
+			ChecksumAlg: "sha256",
+			Size:        int64(len(payload)),
+		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -616,12 +701,107 @@ func TestHandleHTTPDownload_DefaultModeIsPresign(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
-	var resp lfsDownloadResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	if got := rr.Header().Get("X-Kafscale-LFS-Checksum"); got != "sha256="+expectedSHA {
+		t.Errorf("expected X-Kafscale-LFS-Checksum=sha256=%s, got %q", expectedSHA, got)
 	}
-	if resp.Mode != "presign" {
-		t.Fatalf("expected default mode=presign, got %s", resp.Mode)
+	if !bytes.Equal(rr.Body.Bytes(), payload) {
+		t.Errorf("response body mismatch")
+	}
+}
+
+func TestHandleHTTPDownload_StreamVerifyMismatch(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	payload := []byte("legitimate content")
+	key := "test-ns/topic/lfs/2025/01/01/obj-tampered"
+	fs3 := m.s3Uploader.api.(*fakeS3)
+	fs3.objects[key] = payload
+
+	// Client claims a different checksum — simulates tampered object or
+	// stale envelope.
+	wrongSHA := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket",
+		Key:    key,
+		Mode:   "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256:      wrongSHA,
+			ChecksumAlg: "sha256",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	aborted := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if r == http.ErrAbortHandler {
+					aborted = true
+				} else {
+					t.Fatalf("unexpected panic: %v", r)
+				}
+			}
+		}()
+		m.handleHTTPDownload(rr, req)
+	}()
+
+	if !aborted {
+		t.Fatalf("expected handler to panic with http.ErrAbortHandler on integrity mismatch, got code=%d body=%s",
+			rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleHTTPDownload_DefaultModeIsStream(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	// presignEnabled stays false — default mode must be stream, not presign,
+	// otherwise requests without explicit mode would hit presign_disabled.
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket",
+		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
+		// Mode intentionally omitted (empty string → default)
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	// Stream mode panics with http.ErrAbortHandler on integrity mismatch
+	// (which is expected — the fake s3Uploader returns no bytes, so the hash
+	// will not match the provided checksum). Go's net/http server recovers
+	// from this panic automatically in production; here we recover manually
+	// to inspect the response.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				if r != http.ErrAbortHandler {
+					t.Fatalf("unexpected panic: %v", r)
+				}
+			}
+		}()
+		m.handleHTTPDownload(rr, req)
+	}()
+
+	// The key assertion: it did NOT short-circuit to presign_disabled, which
+	// is what would happen if the default mode were still presign.
+	if rr.Code == http.StatusBadRequest {
+		var errResp lfsErrorResponse
+		if err := json.NewDecoder(rr.Body).Decode(&errResp); err == nil {
+			if errResp.Code == "presign_disabled" {
+				t.Fatalf("default mode must not be presign; got presign_disabled")
+			}
+		}
+	}
+
+	// Confirm the stream integrity headers were set before the connection
+	// was torn down.
+	if got := rr.Header().Get("X-Kafscale-LFS-Checksum"); got == "" {
+		t.Errorf("expected X-Kafscale-LFS-Checksum header to be set")
 	}
 }
 
