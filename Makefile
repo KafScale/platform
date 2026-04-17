@@ -171,7 +171,6 @@ test-nested-modules: ## Run go test across nested Go modules under addons/proces
 		( cd $$dir && go test ./... ); \
 	done; \
 	echo "nested module tests passed."
-
 vet: ## Run go vet
 	@echo "==> go vet"
 	@go vet ./...
