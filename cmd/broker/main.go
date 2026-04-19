@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -60,6 +61,11 @@ const (
 
 type handler struct {
 	apiVersions          []kmsg.ApiVersionsResponseApiKey
+	// nextProducerID is a monotonically-increasing allocator for
+	// InitProducerID responses (OPS-005 #1 stub). Accessed via sync/atomic.
+	// Replace with a proper persistent allocator when full idempotent-producer
+	// dedup lands.
+	nextProducerID       int64
 	store                metadata.Store
 	s3                   storage.S3Client
 	cache                *cache.SegmentCache
@@ -206,6 +212,20 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.ProduceRequest:
 		return h.handleProduce(ctx, header, req.(*kmsg.ProduceRequest))
+	case *kmsg.InitProducerIDRequest:
+		// OPS-005 #1: minimum-viable INIT_PRODUCER_ID stub. Allocates a
+		// monotonically-increasing producer ID with epoch 0. Does NOT track
+		// sequence numbers or deduplicate (that work is in scope for a later
+		// broker-engineering sprint). This is sufficient to unblock idempotent
+		// producers for development + bp-002 BDR convergence. For production
+		// correctness, full dedup-on-replay is still required.
+		pid := atomic.AddInt64(&h.nextProducerID, 1)
+		resp := kmsg.NewPtrInitProducerIDResponse()
+		resp.ErrorCode = protocol.NONE
+		resp.ProducerID = pid
+		resp.ProducerEpoch = 0
+		resp.ThrottleMillis = 0
+		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.FetchRequest:
 		return h.handleFetch(ctx, header, req.(*kmsg.FetchRequest))
 	case *kmsg.FindCoordinatorRequest:
@@ -2715,6 +2735,11 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		// Narrow 5-5 range breaks `kafka-consumer-groups --list`. Widen to 0-5
 		// — the underlying coordinator handler is version-agnostic.
 		{key: protocol.APIKeyListGroups, minVersion: 0, maxVersion: 5},
+		// OPS-005 #1: idempotent-producer init. Handler is a stub that
+		// allocates a monotonically-increasing producer ID; sequence-number
+		// dedup is NOT yet implemented. Sufficient to unblock franz-go and
+		// Java default producers; production correctness gap tracked.
+		{key: protocol.APIKeyInitProducerID, minVersion: 0, maxVersion: 4},
 		{key: protocol.APIKeyOffsetForLeaderEpoch, minVersion: 3, maxVersion: 3},
 		{key: protocol.APIKeyDescribeConfigs, minVersion: 4, maxVersion: 4},
 		{key: protocol.APIKeyAlterConfigs, minVersion: 1, maxVersion: 1},
@@ -2725,7 +2750,7 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 	}
 	unsupported := []int16{
 		4, 5, 6, 7,
-		21, 22,
+		21, // 22 (InitProducerID) moved to supported — OPS-005 #1 stub handler
 		24, 25, 26,
 	}
 
