@@ -245,6 +245,8 @@ KAFSCALE_ETCD_KEY_FILE=/etc/kafscale/etcd/tls.key
 KAFSCALE_ETCD_CA_FILE=/etc/kafscale/etcd/ca.crt
 ```
 
+Topic recovery via `kafscale-cli restore` uses the same `KAFSCALE_ETCD_*` settings for topic metadata, partition state, and recovered next offsets.
+
 ---
 
 ## Proxy Configuration

@@ -309,6 +309,21 @@ spec:
       interval: 1h
 ```
 
+### Can I restore a topic to an earlier point in time?
+
+Yes, but the supported model is **DR-side restore into a new topic**, not in-place rollback on the primary cluster.
+
+KafScale can recover a topic by copying immutable `.kfs` segment/index pairs up to a chosen timestamp into a fresh target topic:
+
+```bash
+kafscale-cli restore \
+  --topic orders \
+  --target-topic orders-restore-20260513 \
+  --to 2026-05-13T14:23:00Z
+```
+
+This is segment-granular rather than record-exact PITR. The safer workflow is restore, validate, and then cut consumers over deliberately.
+
 ### How do I monitor KafScale?
 
 Brokers expose Prometheus metrics on port 9093. Key metrics:

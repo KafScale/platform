@@ -403,6 +403,27 @@ When the operator manages etcd, each pod runs restore init containers before etc
 2. Restore container runs `etcdctl snapshot restore` if data directory is empty
 3. If no snapshot is available, etcd starts fresh
 
+### Topic recovery on the DR spine
+
+For broker topic data, KafScale supports DR-side recovery into a **new topic**. This is not in-place rollback on the primary cluster.
+
+Use `kafscale-cli restore` to create a fresh target topic, copy immutable `.kfs` segment/index pairs up to a cutoff timestamp, and set the recovered topic's next offsets in etcd:
+
+```bash
+kafscale-cli restore \
+  --topic orders \
+  --target-topic orders-restore-20260513 \
+  --to 2026-05-13T14:23:00Z
+```
+
+Operational semantics:
+
+- Recovery uses the existing S3 + etcd control plane. Configure it with `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, optional `KAFSCALE_S3_ENDPOINT` / `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
+- The target topic must be new. KafScale refuses to restore over a topic that already has persisted segment data.
+- Recovery is **segment-granular**. The cutoff is based on immutable segment creation time, then KafScale copies contiguous segment/index pairs up to the first segment created after that timestamp.
+- Offsets are preserved inside the restored topic so replay, validation, and controlled cutover can happen without rewriting the source topic.
+- The intended workflow is restore, validate, then cut consumers or downstream jobs over deliberately.
+
 ### Consumer Offsets After Restore
 
 Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:
