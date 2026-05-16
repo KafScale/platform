@@ -43,13 +43,19 @@ producer := lfs.NewProducer(lfs.ProducerConfig{
 })
 err := producer.Upload(ctx, "large-file.bin", fileReader)
 
-// Consume and resolve
+// Consume and resolve.
+// Resolve calls POST /lfs/download on the proxy with the envelope's sha256
+// and size populated in the integrity claim; the proxy verifies the S3
+// bytes against the envelope SHA-256 BEFORE streaming them back. The
+// returned reader yields only verified bytes.
 consumer := lfs.NewConsumer(lfs.ConsumerConfig{
-    S3Bucket:   "kafscale",
+    S3Bucket:   "my-bucket",
     S3Endpoint: "http://localhost:9000",
 })
 reader, err := consumer.Resolve(ctx, envelope)
 ```
+
+> **Trust model:** Kafka is authoritative; S3 is untrusted storage. SDKs must populate `integrity.sha256` AND `integrity.size` (both copied from the envelope) on every `/lfs/download` request — the proxy returns `400 missing_integrity_size` otherwise. See the [LFS Proxy doc](/lfs-proxy/#trust-model-and-integrity-verification) for the full integrity-verification design.
 
 ## Java
 
