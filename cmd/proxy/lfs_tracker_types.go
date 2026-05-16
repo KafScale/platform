@@ -22,12 +22,13 @@ import (
 
 // Event types for LFS operations tracking.
 const (
-	EventTypeUploadStarted     = "upload_started"
-	EventTypeUploadCompleted   = "upload_completed"
-	EventTypeUploadFailed      = "upload_failed"
-	EventTypeDownloadRequested = "download_requested"
-	EventTypeDownloadCompleted = "download_completed"
-	EventTypeOrphanDetected    = "orphan_detected"
+	EventTypeUploadStarted           = "upload_started"
+	EventTypeUploadCompleted         = "upload_completed"
+	EventTypeUploadFailed            = "upload_failed"
+	EventTypeDownloadRequested       = "download_requested"
+	EventTypeDownloadCompleted       = "download_completed"
+	EventTypeDownloadIntegrityFailed = "download_integrity_failed"
+	EventTypeOrphanDetected          = "orphan_detected"
 )
 
 // TrackerEventVersion is the current schema version for tracker events.
@@ -102,6 +103,21 @@ type DownloadCompletedEvent struct {
 	Size       int64  `json:"size,omitempty"`
 }
 
+// DownloadIntegrityFailedEvent is emitted when the bytes served from S3 do not
+// match the client-supplied envelope checksum. This indicates either post-upload
+// tampering in S3, a compromised bucket, or a stale/incorrect envelope.
+type DownloadIntegrityFailedEvent struct {
+	BaseEvent
+	S3Bucket       string `json:"s3_bucket"`
+	S3Key          string `json:"s3_key"`
+	Mode           string `json:"mode"`
+	ChecksumAlg    string `json:"checksum_alg"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+	ActualSHA256   string `json:"actual_sha256"`
+	BytesRead      int64  `json:"bytes_read"`
+	ExpectedSize   int64  `json:"expected_size,omitempty"`
+}
+
 // OrphanDetectedEvent is emitted when an orphaned S3 object is detected.
 type OrphanDetectedEvent struct {
 	BaseEvent
@@ -127,20 +143,22 @@ func (e *BaseEvent) GetEventType() string {
 }
 
 // GetTopic returns the topic for partitioning.
-func (e *UploadStartedEvent) GetTopic() string     { return e.Topic }
-func (e *UploadCompletedEvent) GetTopic() string   { return e.Topic }
-func (e *UploadFailedEvent) GetTopic() string      { return e.Topic }
-func (e *DownloadRequestedEvent) GetTopic() string { return "" }
-func (e *DownloadCompletedEvent) GetTopic() string { return "" }
-func (e *OrphanDetectedEvent) GetTopic() string    { return e.Topic }
+func (e *UploadStartedEvent) GetTopic() string            { return e.Topic }
+func (e *UploadCompletedEvent) GetTopic() string          { return e.Topic }
+func (e *UploadFailedEvent) GetTopic() string             { return e.Topic }
+func (e *DownloadRequestedEvent) GetTopic() string        { return "" }
+func (e *DownloadCompletedEvent) GetTopic() string        { return "" }
+func (e *DownloadIntegrityFailedEvent) GetTopic() string  { return "" }
+func (e *OrphanDetectedEvent) GetTopic() string           { return e.Topic }
 
 // Marshal serializes the event to JSON.
-func (e *UploadStartedEvent) Marshal() ([]byte, error)     { return json.Marshal(e) }
-func (e *UploadCompletedEvent) Marshal() ([]byte, error)   { return json.Marshal(e) }
-func (e *UploadFailedEvent) Marshal() ([]byte, error)      { return json.Marshal(e) }
-func (e *DownloadRequestedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
-func (e *DownloadCompletedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
-func (e *OrphanDetectedEvent) Marshal() ([]byte, error)    { return json.Marshal(e) }
+func (e *UploadStartedEvent) Marshal() ([]byte, error)            { return json.Marshal(e) }
+func (e *UploadCompletedEvent) Marshal() ([]byte, error)          { return json.Marshal(e) }
+func (e *UploadFailedEvent) Marshal() ([]byte, error)             { return json.Marshal(e) }
+func (e *DownloadRequestedEvent) Marshal() ([]byte, error)        { return json.Marshal(e) }
+func (e *DownloadCompletedEvent) Marshal() ([]byte, error)        { return json.Marshal(e) }
+func (e *DownloadIntegrityFailedEvent) Marshal() ([]byte, error)  { return json.Marshal(e) }
+func (e *OrphanDetectedEvent) Marshal() ([]byte, error)           { return json.Marshal(e) }
 
 // newBaseEvent creates a new base event with common fields.
 func newBaseEvent(eventType, proxyID, requestID string) BaseEvent {
@@ -220,6 +238,21 @@ func NewDownloadCompletedEvent(proxyID, requestID, s3Key, mode string, durationM
 		Mode:       mode,
 		DurationMs: durationMs,
 		Size:       size,
+	}
+}
+
+// NewDownloadIntegrityFailedEvent creates a new integrity-failure event.
+func NewDownloadIntegrityFailedEvent(proxyID, requestID, s3Bucket, s3Key, mode, checksumAlg, expectedSHA256, actualSHA256 string, bytesRead, expectedSize int64) *DownloadIntegrityFailedEvent {
+	return &DownloadIntegrityFailedEvent{
+		BaseEvent:      newBaseEvent(EventTypeDownloadIntegrityFailed, proxyID, requestID),
+		S3Bucket:       s3Bucket,
+		S3Key:          s3Key,
+		Mode:           mode,
+		ChecksumAlg:    checksumAlg,
+		ExpectedSHA256: expectedSHA256,
+		ActualSHA256:   actualSHA256,
+		BytesRead:      bytesRead,
+		ExpectedSize:   expectedSize,
 	}
 }
 

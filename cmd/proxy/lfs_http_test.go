@@ -17,12 +17,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -572,11 +575,18 @@ func TestHandleHTTPDownload_WrongBucket(t *testing.T) {
 func TestHandleHTTPDownload_PresignMode(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
+	m.presignEnabled = true
 
+	const sha = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	body, _ := json.Marshal(lfsDownloadRequest{
 		Bucket: "test-bucket",
 		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
 		Mode:   "presign",
+		Integrity: &lfsIntegrityRequest{
+			SHA256:      sha,
+			ChecksumAlg: "sha256",
+			Size:        1024,
+		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -598,16 +608,86 @@ func TestHandleHTTPDownload_PresignMode(t *testing.T) {
 	if resp.ExpiresAt == "" {
 		t.Fatal("expected non-empty expires_at")
 	}
+	if resp.Integrity == nil {
+		t.Fatal("expected integrity block in presign response")
+	}
+	if resp.Integrity.SHA256 != sha {
+		t.Fatalf("expected integrity.sha256=%s, got %s", sha, resp.Integrity.SHA256)
+	}
 }
 
-func TestHandleHTTPDownload_DefaultModeIsPresign(t *testing.T) {
+func TestHandleHTTPDownload_PresignDisabledByDefault(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
+	// presignEnabled defaults to false — do not override
 
 	body, _ := json.Marshal(lfsDownloadRequest{
 		Bucket: "test-bucket",
 		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
-		// Mode intentionally omitted (empty string)
+		Mode:   "presign",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "presign_disabled" {
+		t.Fatalf("expected code=presign_disabled, got %s", errResp.Code)
+	}
+}
+
+func TestHandleHTTPDownload_MissingIntegrity(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.presignEnabled = true
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket",
+		Key:    "test-ns/topic/lfs/2025/01/01/obj-123",
+		Mode:   "presign",
+		// Integrity intentionally omitted
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "missing_integrity" {
+		t.Fatalf("expected code=missing_integrity, got %s", errResp.Code)
+	}
+}
+
+func TestHandleHTTPDownload_StreamVerifyMatch(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	payload := []byte("hello integrity world")
+	key := "test-ns/topic/lfs/2025/01/01/obj-verify-ok"
+	m.s3Uploader.api.(*fakeS3).objects[key] = payload
+	h := sha256.New()
+	h.Write(payload)
+	expectedSHA := hex.EncodeToString(h.Sum(nil))
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: key, Mode: "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: expectedSHA, ChecksumAlg: "sha256", Size: int64(len(payload)),
+		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
 	rr := httptest.NewRecorder()
@@ -616,12 +696,120 @@ func TestHandleHTTPDownload_DefaultModeIsPresign(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", rr.Code, rr.Body.String())
 	}
-	var resp lfsDownloadResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
+	if got := rr.Header().Get("X-Kafscale-LFS-Checksum"); got != "sha256="+expectedSHA {
+		t.Errorf("expected X-Kafscale-LFS-Checksum=sha256=%s, got %q", expectedSHA, got)
 	}
-	if resp.Mode != "presign" {
-		t.Fatalf("expected default mode=presign, got %s", resp.Mode)
+	if got := rr.Header().Get("Content-Length"); got != "21" {
+		t.Errorf("expected Content-Length=21 on verified response, got %q", got)
+	}
+	if !bytes.Equal(rr.Body.Bytes(), payload) {
+		t.Errorf("response body mismatch")
+	}
+}
+
+func TestHandleHTTPDownload_StreamVerifyMismatch_ReturnsErrorJSON(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	tampered := []byte("legitimate content")
+	key := "test-ns/topic/lfs/2025/01/01/obj-tampered"
+	m.s3Uploader.api.(*fakeS3).objects[key] = tampered
+
+	wrongSHA := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: key, Mode: "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: wrongSHA, ChecksumAlg: "sha256", Size: int64(len(tampered)),
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 on integrity mismatch, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("expected JSON error response, got: %s", rr.Body.String())
+	}
+	if errResp.Code != "integrity_failure" {
+		t.Fatalf("expected error code=integrity_failure, got %q", errResp.Code)
+	}
+	// Tampered bytes MUST NOT appear in the response body.
+	if bytes.Contains(rr.Body.Bytes(), tampered) {
+		t.Fatalf("SECURITY: tampered bytes leaked into mismatch response body")
+	}
+}
+
+func TestHandleHTTPDownload_DefaultModeIsStream(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	// presignEnabled stays false — default mode must be stream, not presign,
+	// otherwise requests without explicit mode would hit presign_disabled.
+
+	// Provide a real envelope (sha + size). Stream mode now requires Size,
+	// so omitting it would short-circuit to missing_integrity_size before
+	// reaching the mode-routing logic this test cares about.
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: "test-ns/topic/lfs/2025/01/01/obj-123",
+		// Mode intentionally omitted (empty string → default)
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+			Size:   42,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	// With default mode = stream, the request should NOT short-circuit to
+	// presign_disabled (which would happen if default were presign). Instead
+	// it should reach the verify path: fakeS3 returns no object → 502 with
+	// either s3_get_failed or integrity_failure (the exact code depends on
+	// the fake's GetObject behavior, both are valid stream-mode outcomes).
+	if rr.Code == http.StatusBadRequest {
+		var errResp lfsErrorResponse
+		if err := json.NewDecoder(rr.Body).Decode(&errResp); err == nil {
+			if errResp.Code == "presign_disabled" {
+				t.Fatalf("default mode must not be presign; got presign_disabled")
+			}
+			if errResp.Code == "missing_integrity_size" {
+				t.Fatalf("test setup bug: Integrity.Size must be set")
+			}
+		}
+	}
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 from stream-mode verify path, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandleHTTPDownload_StreamRequiresIntegritySize(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: "test-ns/topic/lfs/2025/01/01/obj-no-size",
+		Mode: "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+			// Size intentionally omitted
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when stream mode is missing Integrity.Size, got %d", rr.Code)
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "missing_integrity_size" {
+		t.Fatalf("expected code=missing_integrity_size, got %s", errResp.Code)
 	}
 }
 
@@ -1345,5 +1533,228 @@ func TestHandleHTTPUploadSession_S3Unhealthy(t *testing.T) {
 
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", rr.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stream-mode integrity wire-format tests (PR #139).
+//
+// Real httptest.NewServer + http.Client. The earlier recorder-based and
+// chunked-trailer designs both proved unsound; this suite asserts the
+// buffer-then-verify guarantee directly: tampered bytes are NEVER written
+// to the response body. Object sizes span 256 B → 1 MiB to defeat the
+// "small payloads stay in Go's chunk-writer buffer" test artifact that
+// hid the same-size-tampering bug in the previous iteration.
+// ---------------------------------------------------------------------------
+
+func streamVerifyPostBody(t *testing.T, srv *httptest.Server, key, sha string, size int64) *http.Response {
+	t.Helper()
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: key, Mode: "stream",
+		Integrity: &lfsIntegrityRequest{SHA256: sha, ChecksumAlg: "sha256", Size: size},
+	})
+	resp, err := http.Post(srv.URL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST failed: %v", err)
+	}
+	return resp
+}
+
+func TestStreamVerify_HonestObject_AtMultipleSizes(t *testing.T) {
+	sizes := []int{256, 4 * 1024, 64 * 1024, 1024 * 1024}
+	for _, n := range sizes {
+		n := n
+		t.Run("size="+strconv.Itoa(n), func(t *testing.T) {
+			m := testHTTPModule(t)
+			m.httpAPIKey = ""
+
+			payload := bytes.Repeat([]byte("A"), n)
+			key := "test-ns/topic/lfs/2025/01/01/obj-honest-" + strconv.Itoa(n)
+			m.s3Uploader.api.(*fakeS3).objects[key] = payload
+			h := sha256.New()
+			h.Write(payload)
+			sha := hex.EncodeToString(h.Sum(nil))
+
+			srv := httptest.NewServer(http.HandlerFunc(m.handleHTTPDownload))
+			defer srv.Close()
+
+			resp := streamVerifyPostBody(t, srv, key, sha, int64(n))
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("expected 200, got %d", resp.StatusCode)
+			}
+			if cl := resp.Header.Get("Content-Length"); cl != strconv.Itoa(n) {
+				t.Errorf("expected Content-Length=%d on verified response, got %q", n, cl)
+			}
+			got, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("body read failed: %v", err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Errorf("body mismatch at size=%d", n)
+			}
+		})
+	}
+}
+
+// TestStreamVerify_SameSizeTamper_NoTamperedBytesInResponse is the headline
+// regression test for the issue @novatechflow flagged on PR #139. It uses
+// payload sizes well above Go's internal chunk-writer buffer to catch the
+// failure mode that hid behind small-payload tests in the earlier design.
+func TestStreamVerify_SameSizeTamper_NoTamperedBytesInResponse(t *testing.T) {
+	sizes := []int{256, 4 * 1024, 64 * 1024, 1024 * 1024}
+	for _, n := range sizes {
+		n := n
+		t.Run("size="+strconv.Itoa(n), func(t *testing.T) {
+			m := testHTTPModule(t)
+			m.httpAPIKey = ""
+
+			honest := bytes.Repeat([]byte("A"), n)
+			tampered := bytes.Repeat([]byte("X"), n) // same length, different content
+			key := "test-ns/topic/lfs/2025/01/01/obj-tamper-" + strconv.Itoa(n)
+			m.s3Uploader.api.(*fakeS3).objects[key] = tampered
+
+			// Envelope SHA is for the HONEST bytes.
+			h := sha256.New()
+			h.Write(honest)
+			envelopeSHA := hex.EncodeToString(h.Sum(nil))
+
+			srv := httptest.NewServer(http.HandlerFunc(m.handleHTTPDownload))
+			defer srv.Close()
+
+			resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(n))
+			defer resp.Body.Close()
+
+			// Mismatch must produce a structured error response, never 200.
+			if resp.StatusCode != http.StatusBadGateway {
+				t.Fatalf("expected 502 on integrity mismatch, got %d at size=%d", resp.StatusCode, n)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("error reading 502 body: %v", err)
+			}
+			// THE security assertion: tampered bytes MUST NOT appear in the
+			// response under any circumstance. A previous design returned
+			// the tampered bytes and signalled failure via framing tricks
+			// that most HTTP clients ignored.
+			if bytes.Contains(body, tampered) {
+				t.Fatalf("SECURITY: tampered payload (%d bytes of 'X') leaked into mismatch response at size=%d. "+
+					"This is the @novatechflow PR #139 failure mode.", n, n)
+			}
+			// And the error code is the expected one.
+			var errResp lfsErrorResponse
+			if err := json.Unmarshal(body, &errResp); err != nil {
+				t.Fatalf("expected JSON error body, got: %q", body)
+			}
+			if errResp.Code != "integrity_failure" {
+				t.Errorf("expected code=integrity_failure, got %q", errResp.Code)
+			}
+		})
+	}
+}
+
+// TestStreamVerify_OversizedS3Response_RefusesToServe defends against an
+// attacker who replaces an S3 object with one larger than the envelope-
+// declared size. Without the LimitReader cap, the proxy could buffer
+// arbitrary attacker-controlled bytes (disk exhaustion) before realising
+// the hash mismatch.
+func TestStreamVerify_OversizedS3Response_RefusesToServe(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	declaredSize := 1024
+	honest := bytes.Repeat([]byte("A"), declaredSize)
+	oversized := bytes.Repeat([]byte("X"), declaredSize*10) // 10x larger
+	key := "test-ns/topic/lfs/2025/01/01/obj-oversize"
+	m.s3Uploader.api.(*fakeS3).objects[key] = oversized
+
+	h := sha256.New()
+	h.Write(honest)
+	envelopeSHA := hex.EncodeToString(h.Sum(nil))
+
+	srv := httptest.NewServer(http.HandlerFunc(m.handleHTTPDownload))
+	defer srv.Close()
+
+	resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(declaredSize))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 for oversized S3 object, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(body, oversized[:100]) {
+		t.Fatalf("SECURITY: oversized attacker bytes leaked into response")
+	}
+}
+
+// TestStreamVerify_EmptyObjectSubstitution_RefusesToServe defends against
+// the simplest bucket-takeover attack: replace the S3 object with a 0-byte
+// file. The previous chunked-truncation design was racey on this case
+// (Go might or might not have flushed status bytes before the abort,
+// so client outcomes were transport-dependent). Buffer-then-verify
+// produces a deterministic 502.
+func TestStreamVerify_EmptyObjectSubstitution_RefusesToServe(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	declaredSize := 1024
+	honest := bytes.Repeat([]byte("A"), declaredSize)
+	key := "test-ns/topic/lfs/2025/01/01/obj-empty-sub"
+	m.s3Uploader.api.(*fakeS3).objects[key] = []byte{} // 0 bytes
+
+	h := sha256.New()
+	h.Write(honest)
+	envelopeSHA := hex.EncodeToString(h.Sum(nil))
+
+	srv := httptest.NewServer(http.HandlerFunc(m.handleHTTPDownload))
+	defer srv.Close()
+
+	resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(declaredSize))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 for empty-object substitution, got %d", resp.StatusCode)
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+		t.Fatalf("expected JSON error body: %v", err)
+	}
+	if errResp.Code != "integrity_failure" {
+		t.Errorf("expected code=integrity_failure, got %q", errResp.Code)
+	}
+}
+
+// TestStreamVerify_ContentLengthSetOnlyAfterVerification guards against
+// the previous broken design. If Content-Length appears on a non-2xx
+// response, or before the verify step, the framing assumption breaks.
+func TestStreamVerify_ContentLengthSetOnlyAfterVerification(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	declaredSize := 4096
+	honest := bytes.Repeat([]byte("A"), declaredSize)
+	tampered := bytes.Repeat([]byte("X"), declaredSize)
+	key := "test-ns/topic/lfs/2025/01/01/obj-cl-check"
+	m.s3Uploader.api.(*fakeS3).objects[key] = tampered
+
+	h := sha256.New()
+	h.Write(honest)
+	envelopeSHA := hex.EncodeToString(h.Sum(nil))
+
+	srv := httptest.NewServer(http.HandlerFunc(m.handleHTTPDownload))
+	defer srv.Close()
+
+	resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(declaredSize))
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("regression: 200 OK on integrity mismatch")
+	}
+	// On the error response the body is the JSON error envelope — its size
+	// is small and NOT declaredSize. If Content-Length somehow equals
+	// declaredSize a future regression has reintroduced the leak.
+	if cl := resp.Header.Get("Content-Length"); cl == strconv.Itoa(declaredSize) {
+		t.Fatalf("regression: error response Content-Length=%s matches S3 size; bytes may be leaking", cl)
 	}
 }

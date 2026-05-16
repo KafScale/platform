@@ -76,6 +76,7 @@ type lfsModule struct {
 	httpShutdownTimeout  time.Duration
 	topicMaxLength       int
 	downloadTTLMax       time.Duration
+	presignEnabled       bool
 	dialTimeout          time.Duration
 	backendTLSConfig     *tls.Config
 	backendSASLMechanism string
@@ -235,6 +236,7 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 		httpShutdownTimeout:  httpShutdownTimeout,
 		topicMaxLength:       topicMaxLength,
 		downloadTTLMax:       time.Duration(downloadTTLSec) * time.Second,
+		presignEnabled:       lfsEnvBoolDefault("KAFSCALE_LFS_PROXY_PRESIGN_ENABLED", false),
 		dialTimeout:          dialTimeout,
 		backendRetries:       backendRetries,
 		backendBackoff:       backendBackoff,
@@ -255,7 +257,30 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	s3HealthInterval := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC", defaultLFSS3HealthIntervalSec)) * time.Second
 	m.startS3HealthCheck(ctx, s3HealthInterval)
 
+	if m.presignEnabled {
+		m.logger.Warn("presign download mode is ENABLED — LFS downloads in presign mode bypass server-side integrity verification. Clients must verify payloads against the envelope checksum. Bare consumption of presigned URLs (e.g. curl) opts out of tamper detection.",
+			"flag", "KAFSCALE_LFS_PROXY_PRESIGN_ENABLED")
+		go m.runPresignWarningLoop(ctx)
+	}
+
 	return m, nil
+}
+
+// runPresignWarningLoop logs a recurring warning every 5 minutes while presign
+// mode is enabled. This makes the security trade-off visible in long-running
+// logs, so operators cannot silently forget they opted out of integrity checks.
+func (m *lfsModule) runPresignWarningLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.logger.Warn("presign download mode is ENABLED — clients must verify payloads against envelope checksum",
+				"flag", "KAFSCALE_LFS_PROXY_PRESIGN_ENABLED")
+		}
+	}
 }
 
 // rewriteProduceRequest is the integration point called from handleProduceRouting.

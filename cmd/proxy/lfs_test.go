@@ -69,7 +69,12 @@ func (f *fakeS3) PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 	return &s3.PutObjectOutput{}, nil
 }
 func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-	return &s3.GetObjectOutput{}, nil
+	data := f.objects[*params.Key]
+	length := int64(len(data))
+	return &s3.GetObjectOutput{
+		Body:          io.NopCloser(bytes.NewReader(data)),
+		ContentLength: &length,
+	}, nil
 }
 func (f *fakeS3) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	f.deleted = append(f.deleted, *params.Key)
