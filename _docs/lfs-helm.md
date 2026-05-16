@@ -66,7 +66,7 @@ lfsProxy:
   # S3 backend.
   # bucket and region are REQUIRED; the proxy fails to start if either is empty.
   # The bucket name `kafscale-lfs` is permanently blocklisted at startup
-  # (registered by a third party — see CVE / PR #139). Use your own name.
+  # (security fix / PR #139). Use your own name.
   s3:
     bucket: my-bucket
     region: us-east-1

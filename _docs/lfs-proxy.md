@@ -40,20 +40,21 @@ Producer ──▶ LFS Proxy ──▶ S3 (blob)
             Kafka (pointer envelope)
                 │
                 ▼
-Consumer ◀── LFS SDK ──▶ S3 (fetch blob)
+Consumer ◀── LFS SDK ──▶ S3 (direct fetch + local checksum)
+Consumer ◀── HTTP client ──▶ LFS Proxy ──▶ S3 (verified stream)
 ```
 
 1. **Write path (Kafka protocol)**: The proxy intercepts Produce requests. Records tagged with an `LFS_BLOB` header are rewritten: the payload is uploaded to S3 and the Kafka record is replaced with a JSON envelope containing the S3 key, checksum, and content type.
 
 2. **Write path (HTTP API)**: Clients can also upload files via the REST API (`POST /lfs/produce` or the multipart upload session endpoints under `/lfs/uploads/...`). The proxy uploads the file to S3 and publishes the envelope to Kafka in one operation. See the OpenAPI spec at `cmd/proxy/openapi.yaml` for full schema.
 
-3. **Read path**: Consumer SDKs (Go, Java, Python, JS) detect LFS envelopes and fetch the object via the proxy's `POST /lfs/download` endpoint. The proxy verifies the envelope-recorded SHA-256 against the bytes returned from S3 **before** delivering them to the client (see [Trust model and integrity verification](#trust-model-and-integrity-verification) below).
+3. **Read path**: Consumer SDKs (Go, Java, Python, JS) detect LFS envelopes and can fetch the object directly from S3 while validating the envelope checksum locally. Clients that want the proxy to enforce the trust boundary call `POST /lfs/download`; the proxy verifies the envelope-recorded SHA-256 against the bytes returned from S3 **before** delivering them to the client (see [Trust model and integrity verification](#trust-model-and-integrity-verification) below).
 
 ## Key features
 
 - **Transparent Kafka proxy** — existing producers work without code changes by adding an `LFS_BLOB` header
 - **HTTP upload API** — RESTful endpoint for browser and SDK uploads with OpenAPI spec
-- **Checksum verification** — SHA-256, CRC-32, or MD5 integrity checks on upload and download
+- **Checksum verification** — upload checksum support plus server-side SHA-256 verification for proxy-streamed downloads
 - **TLS and SASL** — full TLS support for HTTP endpoints and SASL/SCRAM for Kafka backend
 - **Prometheus metrics** — upload/download counters, latencies, S3 operation histograms
 - **CORS support** — configurable cross-origin headers for browser-based uploads
@@ -66,20 +67,21 @@ Consumer ◀── LFS SDK ──▶ S3 (fetch blob)
 S3 objects are stored under a deterministic key:
 
 ```
-lfs/{namespace}/{topic}/{partition}/{offset}-{uuid}.bin
+{namespace}/{topic}/lfs/{yyyy}/{mm}/{dd}/obj-{uuid}
 ```
 
 ### Envelope format
 
 ```json
 {
-  "lfs_version": 1,
-  "s3_bucket": "my-bucket",
-  "s3_key": "lfs/default/demo-topic/0/42-abc123.bin",
+  "kfs_lfs": 1,
+  "bucket": "my-bucket",
+  "key": "default/demo-topic/lfs/2026/02/05/obj-abc123",
+  "size": 10485760,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "content_type": "application/octet-stream",
-  "content_length": 10485760,
-  "checksum_algo": "sha256",
-  "checksum": "e3b0c44298fc1c14..."
+  "created_at": "2026-02-05T10:30:00Z",
+  "proxy_id": "lfs-proxy-0"
 }
 ```
 
@@ -99,7 +101,7 @@ curl -X POST http://localhost:8080/lfs/download \
   -H "Content-Type: application/json" \
   -d '{
     "bucket": "my-bucket",
-    "key": "lfs/default/demo-topic/0/42-abc123.bin",
+    "key": "default/demo-topic/lfs/2026/02/05/obj-abc123",
     "mode": "stream",
     "integrity": {
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -110,7 +112,7 @@ curl -X POST http://localhost:8080/lfs/download \
   -o downloaded-blob.bin
 ```
 
-Both `integrity.sha256` AND `integrity.size` are **required** on stream-mode requests — the size enables a hard cap on the S3 read so a compromised bucket cannot exhaust proxy temporary storage. SDKs populate them from the Kafka envelope automatically.
+Both `integrity.sha256` AND `integrity.size` are **required** on stream-mode requests — the size enables a hard cap on the S3 read so a compromised bucket cannot exhaust proxy temporary storage. Clients should copy both values from the Kafka envelope.
 
 ### Presign-mode download (off by default)
 
@@ -121,10 +123,12 @@ Both `integrity.sha256` AND `integrity.size` are **required** on stream-mode req
 | HTTP | `code` | Meaning |
 |---|---|---|
 | 400 | `missing_integrity` | `integrity.sha256` was not supplied |
+| 400 | `invalid_integrity` | `integrity.sha256` is not a 64-character hex digest, or `integrity.size` is negative |
 | 400 | `missing_integrity_size` | stream mode requires `integrity.size` |
-| 400 | `payload_too_large` | `integrity.size` exceeds `KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE` |
+| 400 | `payload_too_large` | `integrity.size` exceeds `KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE` or cannot be verified safely |
 | 400 | `presign_disabled` | presign mode requested but operator did not opt in |
 | 400 | `unsupported_checksum_alg` | only `sha256` is accepted |
+| 500 | `temp_storage_failed` | temporary verification storage is unavailable or full |
 | 502 | `integrity_failure` | SHA-256 mismatch or S3 returned more bytes than declared |
 | 502 | `s3_get_failed` | S3 read failed |
 
@@ -134,7 +138,7 @@ The LFS proxy is configured via environment variables. All variables are prefixe
 
 | Variable | Default | Description |
 |---|---|---|
-| `KAFSCALE_LFS_PROXY_S3_BUCKET` | **required** | S3 bucket for blob storage. The bucket name `kafscale-lfs` is permanently blocklisted at startup (CVE — registered by a third party). Use your own name. |
+| `KAFSCALE_LFS_PROXY_S3_BUCKET` | **required** | S3 bucket for blob storage. The bucket name `kafscale-lfs` is permanently blocklisted at startup (security fix / PR #139). Use your own name. |
 | `KAFSCALE_LFS_PROXY_S3_REGION` | **required** | S3 region |
 | `KAFSCALE_LFS_PROXY_S3_ENDPOINT` | — | Custom S3 endpoint (for MinIO or non-AWS S3) |
 | `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE` | auto | Use path-style S3 addressing (defaults true when endpoint is set) |
