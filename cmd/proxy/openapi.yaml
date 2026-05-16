@@ -223,12 +223,19 @@ paths:
       description: |
         Retrieves an LFS object from S3 storage. Supports two modes:
 
-        - **stream** (default): Streams the object content through the proxy.
-          The proxy hashes bytes on the fly and verifies them against the
-          client-supplied envelope checksum. On mismatch the TCP connection
-          is aborted mid-stream — the client sees a truncated response and
-          must retry. An `integrity_failure` event is emitted to the LFS
-          ops tracker topic.
+        - **stream** (default): The proxy buffers the S3 object to temporary
+          storage while computing SHA-256, then verifies the digest against
+          the client-supplied envelope checksum. **Only on a successful match
+          are the bytes streamed to the client** (200 OK with `Content-Length`
+          set to the verified size). On mismatch — or if the S3 response
+          exceeds the envelope-declared size — the proxy returns 502 with
+          `code: integrity_failure` and no payload bytes ever reach the
+          client. An `integrity_failure` event is emitted to the LFS ops
+          tracker topic for operator alerting.
+
+          Requires `integrity.sha256` AND `integrity.size` in the request
+          body; the size enables a hard cap on the S3 read so a compromised
+          bucket cannot exhaust proxy temp storage.
         - **presign**: Returns a presigned S3 URL for direct client-to-S3
           download. Disabled by default; enable with
           `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true`. When enabled, the
@@ -300,10 +307,13 @@ paths:
                 type: string
                 format: binary
               description: |
-                Streamed object content (when mode=stream). Response headers
-                `X-Kafscale-LFS-Checksum` and `X-Kafscale-LFS-Content-Length`
-                allow advanced clients to verify independently. On checksum
-                mismatch the connection is aborted mid-stream.
+                Streamed object content (when mode=stream), returned only
+                after server-side SHA-256 verification has succeeded.
+                Response headers `Content-Length`, `X-Kafscale-LFS-Checksum`
+                (`sha256=<hex>`) and `X-Kafscale-LFS-Content-Length` allow
+                clients to verify independently. On checksum mismatch or
+                oversize S3 payload, the proxy returns 502
+                `code: integrity_failure` instead of any body bytes.
         "400":
           description: Invalid request
           content:
@@ -317,7 +327,11 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "502":
-          description: Upstream storage failure
+          description: |
+            Upstream storage failure or integrity verification failure.
+            Possible `code` values: `s3_get_failed`, `s3_presign_failed`,
+            `integrity_failure` (SHA-256 mismatch or S3 payload exceeds
+            envelope-declared size).
           content:
             application/json:
               schema:
@@ -416,9 +430,10 @@ components:
           default: stream
           description: |
             Download mode:
-            - stream (default): Stream content through the proxy with
-              server-side integrity verification against `integrity.sha256`.
-              Connection is aborted on mismatch.
+            - stream (default): Proxy buffers S3 → verifies SHA-256 against
+              `integrity.sha256` → only then streams to client. Mismatch or
+              oversize S3 payload → 502 `code: integrity_failure`. Requires
+              `integrity.sha256` AND `integrity.size`.
             - presign: Return a presigned URL for direct S3 download. Requires
               `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true` on the proxy. Client
               SDK must verify downloaded bytes against `integrity.sha256` in
