@@ -476,6 +476,16 @@ func (m *lfsModule) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 			"integrity.size is required for stream mode; pass the size from the LFS envelope")
 		return
 	}
+	// Upper-bound the client-claimed size against the proxy's configured
+	// max-blob ceiling. Without this cap a caller (or a compromised producer
+	// upstream) can claim Integrity.Size = TB-scale and force the proxy to
+	// allocate that much temp storage per request. Also avoids the
+	// expectedSize+1 integer overflow when computing the io.LimitReader cap.
+	if mode == "stream" && m.maxBlob > 0 && req.Integrity.Size > m.maxBlob {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "payload_too_large",
+			"integrity.size exceeds proxy maximum blob size (KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE)")
+		return
+	}
 	expectedSize := req.Integrity.Size
 	if expectedSize < 0 {
 		expectedSize = 0

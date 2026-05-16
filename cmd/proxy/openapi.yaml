@@ -306,16 +306,21 @@ paths:
               schema:
                 type: string
                 format: binary
-              description: |
-                Streamed object content (when mode=stream), returned only
-                after server-side SHA-256 verification has succeeded.
-                Response headers `Content-Length`, `X-Kafscale-LFS-Checksum`
-                (`sha256=<hex>`) and `X-Kafscale-LFS-Content-Length` allow
-                clients to verify independently. On checksum mismatch or
-                oversize S3 payload, the proxy returns 502
-                `code: integrity_failure` instead of any body bytes.
+                description: |
+                  Streamed object content (when mode=stream), returned only
+                  after server-side SHA-256 verification has succeeded.
+                  Response headers `Content-Length`, `X-Kafscale-LFS-Checksum`
+                  (`sha256=<hex>`) and `X-Kafscale-LFS-Content-Length` allow
+                  clients to verify independently. On checksum mismatch or
+                  oversize S3 payload, the proxy returns 502
+                  `code: integrity_failure` instead of any body bytes.
         "400":
-          description: Invalid request
+          description: |
+            Invalid request. Possible `code` values include
+            `missing_integrity` (no sha256 supplied), `missing_integrity_size`
+            (no size on stream mode), `payload_too_large` (Integrity.Size
+            exceeds proxy's KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE),
+            `presign_disabled`, `invalid_mode`, `unsupported_checksum_alg`.
           content:
             application/json:
               schema:

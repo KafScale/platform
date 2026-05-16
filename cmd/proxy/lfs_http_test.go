@@ -785,6 +785,39 @@ func TestHandleHTTPDownload_DefaultModeIsStream(t *testing.T) {
 	}
 }
 
+func TestHandleHTTPDownload_StreamRejectsOversizedIntegritySize(t *testing.T) {
+	// Defense against tmpfs exhaustion / integer overflow on expectedSize+1.
+	// Without this cap, a caller can claim Integrity.Size = TB-scale and the
+	// proxy would attempt to buffer that much per request (the LimitReader
+	// would also overflow to a negative N, yielding misleading errors).
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.maxBlob = 10 * 1024 * 1024 // 10 MiB cap for the test
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: "test-ns/topic/lfs/2025/01/01/obj-oversize-claim",
+		Mode: "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+			Size:   m.maxBlob + 1, // 1 byte over the cap
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when Integrity.Size exceeds maxBlob, got %d", rr.Code)
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("expected JSON error: %v", err)
+	}
+	if errResp.Code != "payload_too_large" {
+		t.Fatalf("expected code=payload_too_large, got %q", errResp.Code)
+	}
+}
+
 func TestHandleHTTPDownload_StreamRequiresIntegritySize(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
