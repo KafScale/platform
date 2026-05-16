@@ -317,9 +317,11 @@ paths:
         "400":
           description: |
             Invalid request. Possible `code` values include
-            `missing_integrity` (no sha256 supplied), `missing_integrity_size`
-            (no size on stream mode), `payload_too_large` (Integrity.Size
-            exceeds proxy's KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE),
+            `missing_integrity` (no sha256 supplied), `invalid_integrity`
+            (sha256 is not a 64-character hex digest or size is negative),
+            `missing_integrity_size` (no size on stream mode),
+            `payload_too_large` (Integrity.Size exceeds proxy's
+            KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE or cannot be verified safely),
             `presign_disabled`, `invalid_mode`, `unsupported_checksum_alg`.
           content:
             application/json:
@@ -327,6 +329,15 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: |
+            Internal proxy failure. Possible `code` values:
+            `temp_storage_failed` (temporary verification storage unavailable
+            or full).
           content:
             application/json:
               schema:
@@ -474,7 +485,8 @@ components:
         size:
           type: integer
           format: int64
-          description: Expected object size in bytes
+          minimum: 1
+          description: Expected object size in bytes; required for stream mode
           example: 10485760
 
     DownloadResponse:

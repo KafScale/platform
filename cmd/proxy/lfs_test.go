@@ -69,7 +69,10 @@ func (f *fakeS3) PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 	return &s3.PutObjectOutput{}, nil
 }
 func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
-	data := f.objects[*params.Key]
+	data, ok := f.objects[*params.Key]
+	if !ok {
+		return nil, errors.New("NoSuchKey: object not found")
+	}
 	length := int64(len(data))
 	return &s3.GetObjectOutput{
 		Body:          io.NopCloser(bytes.NewReader(data)),

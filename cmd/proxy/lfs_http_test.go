@@ -23,6 +23,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -349,8 +350,11 @@ func TestLfsCORSMiddleware_Preflight(t *testing.T) {
 	if rr.Header().Get("Access-Control-Allow-Headers") == "" {
 		t.Fatal("expected Access-Control-Allow-Headers header")
 	}
-	if rr.Header().Get("Access-Control-Expose-Headers") != "X-Request-ID" {
-		t.Fatal("expected Access-Control-Expose-Headers: X-Request-ID")
+	exposed := rr.Header().Get("Access-Control-Expose-Headers")
+	for _, header := range []string{"X-Request-ID", "X-Kafscale-LFS-Checksum", "X-Kafscale-LFS-Content-Length"} {
+		if !strings.Contains(exposed, header) {
+			t.Fatalf("expected Access-Control-Expose-Headers to include %s, got %q", header, exposed)
+		}
 	}
 }
 
@@ -672,6 +676,35 @@ func TestHandleHTTPDownload_MissingIntegrity(t *testing.T) {
 	}
 }
 
+func TestHandleHTTPDownload_InvalidIntegritySHA(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket",
+		Key:    "test-ns/topic/lfs/2025/01/01/obj-invalid-sha",
+		Mode:   "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "not-a-sha256",
+			Size:   1024,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid integrity sha, got %d; body: %s", rr.Code, rr.Body.String())
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if errResp.Code != "invalid_integrity" {
+		t.Fatalf("expected code=invalid_integrity, got %s", errResp.Code)
+	}
+}
+
 func TestHandleHTTPDownload_StreamVerifyMatch(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
@@ -766,9 +799,8 @@ func TestHandleHTTPDownload_DefaultModeIsStream(t *testing.T) {
 
 	// With default mode = stream, the request should NOT short-circuit to
 	// presign_disabled (which would happen if default were presign). Instead
-	// it should reach the verify path: fakeS3 returns no object → 502 with
-	// either s3_get_failed or integrity_failure (the exact code depends on
-	// the fake's GetObject behavior, both are valid stream-mode outcomes).
+	// it should reach the verify path: fakeS3 returns no object -> 502
+	// s3_get_failed.
 	if rr.Code == http.StatusBadRequest {
 		var errResp lfsErrorResponse
 		if err := json.NewDecoder(rr.Body).Decode(&errResp); err == nil {
@@ -808,6 +840,35 @@ func TestHandleHTTPDownload_StreamRejectsOversizedIntegritySize(t *testing.T) {
 
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 when Integrity.Size exceeds maxBlob, got %d", rr.Code)
+	}
+	var errResp lfsErrorResponse
+	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {
+		t.Fatalf("expected JSON error: %v", err)
+	}
+	if errResp.Code != "payload_too_large" {
+		t.Fatalf("expected code=payload_too_large, got %q", errResp.Code)
+	}
+}
+
+func TestHandleHTTPDownload_StreamRejectsMaxInt64IntegritySizeWhenUncapped(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.maxBlob = 0 // unlimited cap must still not overflow expectedSize+1
+
+	body, _ := json.Marshal(lfsDownloadRequest{
+		Bucket: "test-bucket", Key: "test-ns/topic/lfs/2025/01/01/obj-maxint-claim",
+		Mode: "stream",
+		Integrity: &lfsIntegrityRequest{
+			SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+			Size:   math.MaxInt64,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/lfs/download", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	m.handleHTTPDownload(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when Integrity.Size is MaxInt64, got %d", rr.Code)
 	}
 	var errResp lfsErrorResponse
 	if err := json.NewDecoder(rr.Body).Decode(&errResp); err != nil {

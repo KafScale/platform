@@ -220,7 +220,7 @@ func (m *lfsModule) lfsCORSMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Range, X-Kafka-Topic, X-Kafka-Key, X-Kafka-Partition, X-LFS-Checksum, X-LFS-Checksum-Alg, X-LFS-Size, X-LFS-Mode, X-Request-ID, X-API-Key, Authorization")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Kafscale-LFS-Checksum, X-Kafscale-LFS-Content-Length")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -458,6 +458,16 @@ func (m *lfsModule) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expectedSHA := strings.ToLower(strings.TrimSpace(req.Integrity.SHA256))
+	if len(expectedSHA) != sha256.Size*2 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_integrity",
+			"integrity.sha256 must be a 64-character hex-encoded SHA-256 digest")
+		return
+	}
+	if _, err := hex.DecodeString(expectedSHA); err != nil {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_integrity",
+			"integrity.sha256 must be hex-encoded")
+		return
+	}
 	expectedAlg := strings.ToLower(strings.TrimSpace(req.Integrity.ChecksumAlg))
 	if expectedAlg == "" {
 		expectedAlg = "sha256"
@@ -465,6 +475,11 @@ func (m *lfsModule) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 	if expectedAlg != "sha256" {
 		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "unsupported_checksum_alg",
 			"only checksum_alg=sha256 is supported")
+		return
+	}
+	if req.Integrity.Size < 0 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_integrity",
+			"integrity.size must be non-negative")
 		return
 	}
 	// Size is required for stream mode because the proxy enforces a hard byte
@@ -486,10 +501,12 @@ func (m *lfsModule) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 			"integrity.size exceeds proxy maximum blob size (KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE)")
 		return
 	}
-	expectedSize := req.Integrity.Size
-	if expectedSize < 0 {
-		expectedSize = 0
+	if mode == "stream" && req.Integrity.Size == math.MaxInt64 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "payload_too_large",
+			"integrity.size is too large to verify safely")
+		return
 	}
+	expectedSize := req.Integrity.Size
 
 	clientIP := lfsGetClientIP(r)
 	start := time.Now()
@@ -584,13 +601,35 @@ func (m *lfsModule) streamDownloadWithVerify(r *http.Request, w http.ResponseWri
 	limited := io.LimitReader(obj.Body, sizeLimit)
 
 	hasher := sha256.New()
-	sink := io.MultiWriter(tmpFile, hasher)
-	written, copyErr := io.Copy(sink, limited)
-	if copyErr != nil {
-		m.metrics.IncS3Errors()
-		m.logger.Warn("S3 read failed during verification buffer", "error", copyErr, "bytes", written)
-		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "s3_get_failed", copyErr.Error())
-		return
+	buf := make([]byte, 32*1024)
+	var written int64
+	for {
+		n, readErr := limited.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			nw, writeErr := tmpFile.Write(chunk)
+			if writeErr != nil {
+				m.logger.Warn("temporary file write failed during verification buffer", "error", writeErr, "bytes", written)
+				m.lfsWriteHTTPError(w, requestID, "", http.StatusInternalServerError, "temp_storage_failed", writeErr.Error())
+				return
+			}
+			if nw != len(chunk) {
+				m.logger.Warn("temporary file short write during verification buffer", "written", nw, "expected", len(chunk), "bytes", written)
+				m.lfsWriteHTTPError(w, requestID, "", http.StatusInternalServerError, "temp_storage_failed", io.ErrShortWrite.Error())
+				return
+			}
+			_, _ = hasher.Write(chunk)
+			written += int64(n)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			m.metrics.IncS3Errors()
+			m.logger.Warn("S3 read failed during verification buffer", "error", readErr, "bytes", written)
+			m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "s3_get_failed", readErr.Error())
+			return
+		}
 	}
 
 	if written > expectedSize {
