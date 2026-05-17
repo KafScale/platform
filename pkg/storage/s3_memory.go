@@ -59,6 +59,20 @@ func (m *MemoryS3Client) UploadIndex(ctx context.Context, key string, body []byt
 	return nil
 }
 
+func (m *MemoryS3Client) DeleteSegment(ctx context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, key)
+	return nil
+}
+
+func (m *MemoryS3Client) DeleteIndex(ctx context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.index, key)
+	return nil
+}
+
 func (m *MemoryS3Client) DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -35,6 +35,7 @@ import (
 type awsS3API interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
 	CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
@@ -153,6 +154,14 @@ func (c *awsS3Client) UploadIndex(ctx context.Context, key string, body []byte) 
 	return c.putObject(ctx, key, body)
 }
 
+func (c *awsS3Client) DeleteSegment(ctx context.Context, key string) error {
+	return c.deleteObject(ctx, key)
+}
+
+func (c *awsS3Client) DeleteIndex(ctx context.Context, key string) error {
+	return c.deleteObject(ctx, key)
+}
+
 func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
@@ -175,6 +184,17 @@ func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) er
 			}
 		}
 		return fmt.Errorf("put object %s: %w", key, err)
+	}
+	return nil
+}
+
+func (c *awsS3Client) deleteObject(ctx context.Context, key string) error {
+	_, err := c.api.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("delete object %s: %w", key, err)
 	}
 	return nil
 }
