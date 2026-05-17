@@ -41,6 +41,14 @@ func (d *dualS3Client) UploadIndex(ctx context.Context, key string, body []byte)
 	return d.write.UploadIndex(ctx, key, body)
 }
 
+func (d *dualS3Client) DeleteSegment(ctx context.Context, key string) error {
+	return d.write.DeleteSegment(ctx, key)
+}
+
+func (d *dualS3Client) DeleteIndex(ctx context.Context, key string) error {
+	return d.write.DeleteIndex(ctx, key)
+}
+
 func (d *dualS3Client) DownloadSegment(ctx context.Context, key string, rng *storage.ByteRange) ([]byte, error) {
 	data, err := d.read.DownloadSegment(ctx, key, rng)
 	if err == nil {
