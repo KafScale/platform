@@ -143,22 +143,22 @@ func (e *BaseEvent) GetEventType() string {
 }
 
 // GetTopic returns the topic for partitioning.
-func (e *UploadStartedEvent) GetTopic() string            { return e.Topic }
-func (e *UploadCompletedEvent) GetTopic() string          { return e.Topic }
-func (e *UploadFailedEvent) GetTopic() string             { return e.Topic }
-func (e *DownloadRequestedEvent) GetTopic() string        { return "" }
-func (e *DownloadCompletedEvent) GetTopic() string        { return "" }
-func (e *DownloadIntegrityFailedEvent) GetTopic() string  { return "" }
-func (e *OrphanDetectedEvent) GetTopic() string           { return e.Topic }
+func (e *UploadStartedEvent) GetTopic() string           { return e.Topic }
+func (e *UploadCompletedEvent) GetTopic() string         { return e.Topic }
+func (e *UploadFailedEvent) GetTopic() string            { return e.Topic }
+func (e *DownloadRequestedEvent) GetTopic() string       { return "" }
+func (e *DownloadCompletedEvent) GetTopic() string       { return "" }
+func (e *DownloadIntegrityFailedEvent) GetTopic() string { return "" }
+func (e *OrphanDetectedEvent) GetTopic() string          { return e.Topic }
 
 // Marshal serializes the event to JSON.
-func (e *UploadStartedEvent) Marshal() ([]byte, error)            { return json.Marshal(e) }
-func (e *UploadCompletedEvent) Marshal() ([]byte, error)          { return json.Marshal(e) }
-func (e *UploadFailedEvent) Marshal() ([]byte, error)             { return json.Marshal(e) }
-func (e *DownloadRequestedEvent) Marshal() ([]byte, error)        { return json.Marshal(e) }
-func (e *DownloadCompletedEvent) Marshal() ([]byte, error)        { return json.Marshal(e) }
-func (e *DownloadIntegrityFailedEvent) Marshal() ([]byte, error)  { return json.Marshal(e) }
-func (e *OrphanDetectedEvent) Marshal() ([]byte, error)           { return json.Marshal(e) }
+func (e *UploadStartedEvent) Marshal() ([]byte, error)           { return json.Marshal(e) }
+func (e *UploadCompletedEvent) Marshal() ([]byte, error)         { return json.Marshal(e) }
+func (e *UploadFailedEvent) Marshal() ([]byte, error)            { return json.Marshal(e) }
+func (e *DownloadRequestedEvent) Marshal() ([]byte, error)       { return json.Marshal(e) }
+func (e *DownloadCompletedEvent) Marshal() ([]byte, error)       { return json.Marshal(e) }
+func (e *DownloadIntegrityFailedEvent) Marshal() ([]byte, error) { return json.Marshal(e) }
+func (e *OrphanDetectedEvent) Marshal() ([]byte, error)          { return json.Marshal(e) }
 
 // newBaseEvent creates a new base event with common fields.
 func newBaseEvent(eventType, proxyID, requestID string) BaseEvent {
