@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -191,6 +192,19 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
+	restoreCommitted := false
+	targetCreated := false
+	defer func() {
+		if restoreCommitted || !targetCreated {
+			return
+		}
+		if err := store.DeleteTopic(context.Background(), cfg.TargetTopic); err != nil {
+			if !errors.Is(err, metadata.ErrUnknownTopic) {
+				fmt.Fprintf(os.Stderr, "warning: failed to roll back target topic %s: %v\n", cfg.TargetTopic, err)
+			}
+		}
+	}()
+
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              cfg.TargetTopic,
 		NumPartitions:     sourceCfg.Partitions,
@@ -198,11 +212,12 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	}); err != nil {
 		return err
 	}
+	targetCreated = true
 
 	targetCfg := cloneTopicConfig(sourceCfg)
 	targetCfg.Name = cfg.TargetTopic
 	targetCfg.CreatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := store.UpdateTopicConfig(ctx, targetCfg); err != nil {
+	if err := persistTopicConfig(ctx, store, targetCfg); err != nil {
 		return err
 	}
 
@@ -244,6 +259,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	for _, partition := range result.Partitions {
 		_, _ = fmt.Fprintf(stdout, "partition=%d segments=%d last_offset=%d\n", partition.Partition, partition.SegmentsCopied, partition.LastOffset)
 	}
+	restoreCommitted = true
 	return nil
 }
 
@@ -284,6 +300,17 @@ func writePartitionStates(ctx context.Context, store *metadata.EtcdStore, topic 
 		}
 	}
 	return nil
+}
+
+func persistTopicConfig(ctx context.Context, store *metadata.EtcdStore, cfg *metadatapb.TopicConfig) error {
+	payload, err := metadata.EncodeTopicConfig(cfg)
+	if err != nil {
+		return err
+	}
+	putCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err = store.EtcdClient().Put(putCtx, metadata.TopicConfigKey(cfg.Name), string(payload))
+	return err
 }
 
 func cloneTopicConfig(cfg *metadatapb.TopicConfig) *metadatapb.TopicConfig {

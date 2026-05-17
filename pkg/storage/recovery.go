@@ -75,6 +75,11 @@ type sourceSegment struct {
 	RecoveredSegment
 }
 
+type copiedObject struct {
+	segmentKey string
+	indexKey   string
+}
+
 // RecoverTopicToTimestamp copies immutable segment/index pairs from one topic to
 // another up to the first segment created after the requested cutoff.
 func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecoveryConfig) (*TopicRecoveryResult, error) {
@@ -100,7 +105,7 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		return nil, fmt.Errorf("target topic must differ from source topic")
 	}
 
-	targetPrefix := path.Join(cfg.TargetNamespace, cfg.TargetTopic)
+	targetPrefix := path.Join(cfg.TargetNamespace, cfg.TargetTopic) + "/"
 	existing, err := s3.ListSegments(ctx, targetPrefix)
 	if err != nil {
 		return nil, err
@@ -111,7 +116,7 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		}
 	}
 
-	sourcePrefix := path.Join(cfg.SourceNamespace, cfg.SourceTopic)
+	sourcePrefix := path.Join(cfg.SourceNamespace, cfg.SourceTopic) + "/"
 	objects, err := s3.ListSegments(ctx, sourcePrefix)
 	if err != nil {
 		return nil, err
@@ -153,6 +158,18 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		RestoreTo:       cfg.RestoreTo.UTC(),
 		Partitions:      make([]RecoveredPartition, 0, len(partitions)),
 	}
+	copiedObjects := make([]copiedObject, 0)
+	restoreCommitted := false
+	defer func() {
+		if restoreCommitted {
+			return
+		}
+		for i := len(copiedObjects) - 1; i >= 0; i-- {
+			copied := copiedObjects[i]
+			_ = s3.DeleteIndex(context.Background(), copied.indexKey)
+			_ = s3.DeleteSegment(context.Background(), copied.segmentKey)
+		}
+	}()
 
 	for _, partition := range partitions {
 		segments := segmentsByPartition[partition]
@@ -182,6 +199,10 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 			if err := s3.UploadSegment(ctx, targetSegmentKey, segmentBytes); err != nil {
 				return nil, err
 			}
+			copiedObjects = append(copiedObjects, copiedObject{
+				segmentKey: targetSegmentKey,
+				indexKey:   targetIndexKey,
+			})
 			if err := s3.UploadIndex(ctx, targetIndexKey, indexBytes); err != nil {
 				return nil, err
 			}
@@ -197,6 +218,7 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		result.Partitions = append(result.Partitions, summary)
 	}
 
+	restoreCommitted = true
 	return result, nil
 }
 

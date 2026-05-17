@@ -31,6 +31,7 @@ type fakeS3 struct {
 	putInputs []*s3.PutObjectInput
 	getInput  *s3.GetObjectInput
 	getData   []byte
+	deleteKey *string
 	putErr    error
 	getErr    error
 	headErr   error
@@ -51,6 +52,11 @@ func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 	return &s3.GetObjectOutput{
 		Body: io.NopCloser(bytes.NewReader(f.getData)),
 	}, nil
+}
+
+func (f *fakeS3) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	f.deleteKey = params.Key
+	return &s3.DeleteObjectOutput{}, nil
 }
 
 func (f *fakeS3) HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
@@ -180,6 +186,18 @@ func TestAWSS3Client_UploadNoKMS(t *testing.T) {
 	}
 	if api.putInputs[0].SSEKMSKeyId != nil {
 		t.Fatal("expected no KMS key when empty")
+	}
+}
+
+func TestAWSS3Client_DeleteSegment(t *testing.T) {
+	api := &fakeS3{}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+
+	if err := client.DeleteSegment(context.Background(), "topic/0/segment-0"); err != nil {
+		t.Fatalf("DeleteSegment: %v", err)
+	}
+	if api.deleteKey == nil || *api.deleteKey != "topic/0/segment-0" {
+		t.Fatalf("unexpected delete key: %v", api.deleteKey)
 	}
 }
 
@@ -362,5 +380,24 @@ func TestMemoryS3Client_ListSegments(t *testing.T) {
 	}
 	if len(objs) != 0 {
 		t.Fatalf("expected 0 objects, got %d", len(objs))
+	}
+}
+
+func TestMemoryS3Client_DeleteSegmentAndIndex(t *testing.T) {
+	m := NewMemoryS3Client()
+	_ = m.UploadSegment(context.Background(), "topic/0/seg-0", []byte("a"))
+	_ = m.UploadIndex(context.Background(), "topic/0/seg-0.index", []byte("idx"))
+
+	if err := m.DeleteSegment(context.Background(), "topic/0/seg-0"); err != nil {
+		t.Fatalf("DeleteSegment: %v", err)
+	}
+	if err := m.DeleteIndex(context.Background(), "topic/0/seg-0.index"); err != nil {
+		t.Fatalf("DeleteIndex: %v", err)
+	}
+	if _, err := m.DownloadSegment(context.Background(), "topic/0/seg-0", nil); err == nil {
+		t.Fatal("expected deleted segment to be missing")
+	}
+	if _, err := m.DownloadIndex(context.Background(), "topic/0/seg-0.index"); err == nil {
+		t.Fatal("expected deleted index to be missing")
 	}
 }
