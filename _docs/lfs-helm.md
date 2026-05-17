@@ -63,9 +63,12 @@ lfsProxy:
     repository: ghcr.io/kafscale/kafscale-lfs-proxy
     tag: latest
 
-  # S3 backend
+  # S3 backend.
+  # bucket and region are REQUIRED; the proxy fails to start if either is empty.
+  # The bucket name `kafscale-lfs` is permanently blocklisted at startup
+  # (security fix / PR #139). Use your own name.
   s3:
-    bucket: kafscale
+    bucket: my-bucket
     region: us-east-1
     endpoint: ""          # Custom endpoint for MinIO
     pathStyle: false       # Set true for MinIO

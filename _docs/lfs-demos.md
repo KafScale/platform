@@ -214,7 +214,7 @@ make e72-browser-demo       # local with port-forward
 make e72-browser-demo-k8s   # in-cluster deployment
 ```
 
-Features drag-and-drop upload, real-time progress, SHA-256 verification, presigned URL download, and an inline video player for MP4 content.
+Features drag-and-drop upload, real-time progress, SHA-256 verification, proxy-verified download, and an inline video player for MP4 content.
 
 ---
 

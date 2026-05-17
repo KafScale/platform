@@ -27,7 +27,7 @@ limitations under the License.
 
 # LFS Client SDKs
 
-KafScale provides LFS client SDKs in four languages. Each SDK handles envelope encoding/decoding, HTTP upload to the LFS proxy, and transparent S3 object resolution.
+KafScale provides LFS client SDKs in four languages. Each SDK handles envelope encoding/decoding, HTTP upload to the LFS proxy, and S3 object resolution with checksum validation.
 
 ## Go (built-in)
 
@@ -36,20 +36,23 @@ The Go SDK lives in `pkg/lfs/` and is used internally by the LFS proxy, console,
 ```go
 import "github.com/KafScale/platform/pkg/lfs"
 
-// Produce a large file
-producer := lfs.NewProducer(lfs.ProducerConfig{
-    ProxyAddr: "http://localhost:8080",
-    Topic:     "demo-topic",
-})
-err := producer.Upload(ctx, "large-file.bin", fileReader)
+// Produce a large file through the LFS proxy HTTP API.
+producer := lfs.NewProducer("http://localhost:8080")
+result, err := producer.Produce(ctx, "demo-topic", "large-file.bin", fileReader)
 
-// Consume and resolve
-consumer := lfs.NewConsumer(lfs.ConsumerConfig{
-    S3Bucket:   "kafscale",
-    S3Endpoint: "http://localhost:9000",
+// Resolve a consumed envelope directly from S3 with local checksum validation.
+s3Client, err := lfs.NewS3Client(ctx, lfs.S3Config{
+    Bucket:         "my-bucket",
+    Region:         "us-east-1",
+    Endpoint:       "http://localhost:9000", // optional, for MinIO
+    ForcePathStyle: true,                    // optional, for MinIO
 })
-reader, err := consumer.Resolve(ctx, envelope)
+consumer := lfs.NewConsumer(s3Client)
+envelopeBytes, _ := lfs.EncodeEnvelope(result.Envelope)
+_, payload, err := consumer.Unwrap(ctx, envelopeBytes)
 ```
+
+> **Trust model:** Kafka is authoritative; S3 is untrusted storage. Current SDK resolvers fetch directly from S3 and validate the envelope checksum locally. HTTP clients that use `POST /lfs/download` must pass `integrity.sha256` AND `integrity.size` from the envelope so the proxy can verify before streaming. See the [LFS Proxy doc](/lfs-proxy/#trust-model-and-integrity-verification) for the full design.
 
 ## Java
 
