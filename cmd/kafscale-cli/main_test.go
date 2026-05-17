@@ -33,6 +33,15 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+type failingListS3 struct {
+	*storage.MemoryS3Client
+	err error
+}
+
+func (f *failingListS3) ListSegments(context.Context, string) ([]storage.S3Object, error) {
+	return nil, f.err
+}
+
 func TestRunHelpAndUnknownCommand(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := run(context.Background(), []string{"help"}, &stdout, &bytes.Buffer{}); err != nil {
@@ -363,5 +372,52 @@ func TestExecuteRestoreRejectsUnknownPartition(t *testing.T) {
 	}, storage.NewMemoryS3Client(), store)
 	if err == nil || !strings.Contains(err.Error(), "partition 99") {
 		t.Fatalf("expected unknown partition error, got %v", err)
+	}
+}
+
+func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	defer func() { _ = store.EtcdClient().Close() }()
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	s3 := &failingListS3{
+		MemoryS3Client: storage.NewMemoryS3Client(),
+		err:            errors.New("list failed"),
+	}
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       time.Now().UTC(),
+	}, s3, store)
+	if err == nil || !strings.Contains(err.Error(), "list failed") {
+		t.Fatalf("expected list failure, got %v", err)
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-restored"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("expected rolled back target topic to be absent, got %+v", meta.Topics)
 	}
 }

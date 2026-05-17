@@ -191,6 +191,17 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
+	restoreCommitted := false
+	targetCreated := false
+	defer func() {
+		if restoreCommitted || !targetCreated {
+			return
+		}
+		if err := store.DeleteTopic(context.Background(), cfg.TargetTopic); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to roll back target topic %s: %v\n", cfg.TargetTopic, err)
+		}
+	}()
+
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              cfg.TargetTopic,
 		NumPartitions:     sourceCfg.Partitions,
@@ -198,6 +209,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	}); err != nil {
 		return err
 	}
+	targetCreated = true
 
 	targetCfg := cloneTopicConfig(sourceCfg)
 	targetCfg.Name = cfg.TargetTopic
@@ -244,6 +256,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	for _, partition := range result.Partitions {
 		_, _ = fmt.Fprintf(stdout, "partition=%d segments=%d last_offset=%d\n", partition.Partition, partition.SegmentsCopied, partition.LastOffset)
 	}
+	restoreCommitted = true
 	return nil
 }
 

@@ -100,7 +100,7 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		return nil, fmt.Errorf("target topic must differ from source topic")
 	}
 
-	targetPrefix := path.Join(cfg.TargetNamespace, cfg.TargetTopic)
+	targetPrefix := path.Join(cfg.TargetNamespace, cfg.TargetTopic) + "/"
 	existing, err := s3.ListSegments(ctx, targetPrefix)
 	if err != nil {
 		return nil, err
@@ -111,7 +111,7 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		}
 	}
 
-	sourcePrefix := path.Join(cfg.SourceNamespace, cfg.SourceTopic)
+	sourcePrefix := path.Join(cfg.SourceNamespace, cfg.SourceTopic) + "/"
 	objects, err := s3.ListSegments(ctx, sourcePrefix)
 	if err != nil {
 		return nil, err
