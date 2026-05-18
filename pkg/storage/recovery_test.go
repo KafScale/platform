@@ -132,12 +132,7 @@ func uploadRecoverySegment(t *testing.T, s3 *MemoryS3Client, namespace string, t
 	t.Helper()
 
 	artifact, err := BuildSegment(SegmentWriterConfig{IndexIntervalMessages: 1}, []RecordBatch{
-		{
-			BaseOffset:      baseOffset,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		buildRecoveryBatch(baseOffset, created.UnixMilli(), []int64{0}),
 	}, created)
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)

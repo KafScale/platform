@@ -18,7 +18,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"strings"
 	"testing"
 	"time"
@@ -95,12 +97,7 @@ func TestRunRestoreCommandUsesInjectedClients(t *testing.T) {
 
 	s3 := storage.NewMemoryS3Client()
 	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
-		{
-			BaseOffset:      0,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
 	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)
@@ -123,8 +120,13 @@ func TestRunRestoreCommandUsesInjectedClients(t *testing.T) {
 	newS3Client = func(context.Context, storage.S3Config) (storage.S3Client, error) {
 		return s3, nil
 	}
-	newEtcdStore = func(context.Context, metadata.ClusterMetadata, metadata.EtcdStoreConfig) (*metadata.EtcdStore, error) {
-		return store, nil
+	newEtcdStore = func(ctx context.Context, _ metadata.ClusterMetadata, cfg metadata.EtcdStoreConfig) (*metadata.EtcdStore, error) {
+		return metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+			Brokers: []protocol.MetadataBroker{
+				{NodeID: 1, Host: "broker-0", Port: 9092},
+			},
+			ControllerID: 1,
+		}, cfg)
 	}
 	newMemoryS3 = func() storage.S3Client { return s3 }
 
@@ -237,12 +239,7 @@ func TestExecuteRestoreCreatesRecoveredTopic(t *testing.T) {
 
 	s3 := storage.NewMemoryS3Client()
 	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
-		{
-			BaseOffset:      0,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
 	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)
@@ -460,12 +457,7 @@ func TestExecuteRestoreRollsBackCopiedS3ObjectsOnPartialFailure(t *testing.T) {
 
 	mem := storage.NewMemoryS3Client()
 	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
-		{
-			BaseOffset:      0,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
 	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)
@@ -506,5 +498,78 @@ func TestExecuteRestoreRollsBackCopiedS3ObjectsOnPartialFailure(t *testing.T) {
 	}
 	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == 0 {
 		t.Fatalf("expected rolled back target topic to be absent, got %+v", meta.Topics)
+	}
+}
+
+func makeStorageRecoveryBatch(baseOffset, firstTimestamp int64, timestampDeltas []int64) storage.RecordBatch {
+	records := make([][]byte, 0, len(timestampDeltas))
+	maxTimestamp := firstTimestamp
+	for i, delta := range timestampDeltas {
+		records = append(records, makeStorageRecoveryRecord(delta, int64(i)))
+		if ts := firstTimestamp + delta; ts > maxTimestamp {
+			maxTimestamp = ts
+		}
+	}
+
+	bodyLen := 0
+	for _, record := range records {
+		bodyLen += len(record)
+	}
+	const recordBatchHeaderLen = 61
+	const batchFrameHeaderLen = 12
+	batch := make([]byte, recordBatchHeaderLen+bodyLen)
+	binary.BigEndian.PutUint64(batch[0:8], uint64(baseOffset))
+	binary.BigEndian.PutUint32(batch[8:12], uint32(len(batch)-batchFrameHeaderLen))
+	batch[16] = 2
+	binary.BigEndian.PutUint64(batch[27:35], uint64(firstTimestamp))
+	binary.BigEndian.PutUint64(batch[35:43], uint64(maxTimestamp))
+	binary.BigEndian.PutUint64(batch[43:51], uint64(^uint64(0)))
+	binary.BigEndian.PutUint16(batch[51:53], uint16(^uint16(0)))
+	binary.BigEndian.PutUint32(batch[53:57], uint32(^uint32(0)))
+	binary.BigEndian.PutUint32(batch[57:61], uint32(len(records)))
+	offset := recordBatchHeaderLen
+	for _, record := range records {
+		copy(batch[offset:], record)
+		offset += len(record)
+	}
+	binary.BigEndian.PutUint32(batch[23:27], uint32(len(records)-1))
+	binary.BigEndian.PutUint32(batch[17:21], crc32.Checksum(batch[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	return storage.RecordBatch{
+		BaseOffset:      baseOffset,
+		LastOffsetDelta: int32(len(records) - 1),
+		MessageCount:    int32(len(records)),
+		Bytes:           batch,
+	}
+}
+
+func makeStorageRecoveryRecord(timestampDelta, offsetDelta int64) []byte {
+	payload := bytes.NewBuffer(nil)
+	payload.WriteByte(0)
+	payload.Write(encodeStorageRecoveryVarint(timestampDelta))
+	payload.Write(encodeStorageRecoveryVarint(offsetDelta))
+	payload.Write(encodeStorageRecoveryVarint(-1))
+	payload.Write(encodeStorageRecoveryVarint(-1))
+	payload.Write(encodeStorageRecoveryVarint(0))
+
+	record := bytes.NewBuffer(nil)
+	record.Write(encodeStorageRecoveryVarint(int64(payload.Len())))
+	record.Write(payload.Bytes())
+	return record.Bytes()
+}
+
+func encodeStorageRecoveryVarint(value int64) []byte {
+	zigzag := uint64(value<<1) ^ uint64(value>>63)
+	out := make([]byte, 0, 10)
+	for {
+		b := byte(zigzag & 0x7f)
+		zigzag >>= 7
+		if zigzag != 0 {
+			b |= 0x80
+		}
+		out = append(out, b)
+		if zigzag == 0 {
+			return out
+		}
 	}
 }

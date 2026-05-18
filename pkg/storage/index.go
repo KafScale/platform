@@ -87,44 +87,48 @@ func (b *IndexBuilder) BuildBytes() ([]byte, error) {
 
 // ParseIndex validates and returns entries from serialized bytes.
 func ParseIndex(data []byte) ([]*IndexEntry, error) {
+	_, entries, err := parseIndexMetadata(data)
+	return entries, err
+}
+
+func parseIndexMetadata(data []byte) (int32, []*IndexEntry, error) {
 	if len(data) < 16 {
-		return nil, fmt.Errorf("index too small")
+		return 0, nil, fmt.Errorf("index too small")
 	}
 	if string(data[:4]) != indexMagic {
-		return nil, fmt.Errorf("invalid index magic")
+		return 0, nil, fmt.Errorf("invalid index magic")
 	}
 	reader := bytes.NewReader(data[4:])
 	var version uint16
 	if err := binary.Read(reader, binary.BigEndian, &version); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if version != 1 {
-		return nil, fmt.Errorf("unsupported index version %d", version)
+		return 0, nil, fmt.Errorf("unsupported index version %d", version)
 	}
 	var count int32
 	if err := binary.Read(reader, binary.BigEndian, &count); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	var interval int32
 	if err := binary.Read(reader, binary.BigEndian, &interval); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	var reserved uint16
 	if err := binary.Read(reader, binary.BigEndian, &reserved); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	entries := make([]*IndexEntry, count)
 	for i := int32(0); i < count; i++ {
 		var offset int64
 		var position int32
 		if err := binary.Read(reader, binary.BigEndian, &offset); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		if err := binary.Read(reader, binary.BigEndian, &position); err != nil {
-			return nil, err
+			return 0, nil, err
 		}
 		entries[i] = &IndexEntry{Offset: offset, Position: position}
 	}
-	_ = interval
-	return entries, nil
+	return interval, entries, nil
 }

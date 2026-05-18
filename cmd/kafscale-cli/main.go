@@ -174,7 +174,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 	if len(sourceMeta.Topics) == 0 || sourceMeta.Topics[0].ErrorCode != 0 {
-		return metadata.ErrUnknownTopic
+		return fmt.Errorf("source topic metadata: %w", metadata.ErrUnknownTopic)
 	}
 
 	sourcePartitions := make(map[int32]struct{}, len(sourceMeta.Topics[0].Partitions))
@@ -238,7 +238,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 	if len(targetMeta.Topics) == 0 || targetMeta.Topics[0].ErrorCode != 0 {
-		return metadata.ErrUnknownTopic
+		return fmt.Errorf("target topic metadata: %w", metadata.ErrUnknownTopic)
 	}
 
 	recoveredByPartition := make(map[int32]storage.RecoveredPartition, len(result.Partitions))
