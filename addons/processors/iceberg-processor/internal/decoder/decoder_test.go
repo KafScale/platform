@@ -17,9 +17,15 @@ package decoder
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
+	"io"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 func TestDecodeSegment(t *testing.T) {
@@ -59,6 +65,30 @@ func TestParseIndex(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+}
+
+func TestDecodeSkipsIndexDownload(t *testing.T) {
+	segment := buildSegmentBytes(10, 1, time.Now().UnixMilli(), buildRecordBatch(10, time.Now().UnixMilli(), []byte("k1"), []byte("v1")))
+	client := &fakeGetObjectClient{
+		objects: map[string][]byte{
+			"segment.kfs": segment,
+		},
+	}
+	dec := &s3Decoder{
+		client: client,
+		bucket: "test-bucket",
+	}
+
+	records, err := dec.Decode(context.Background(), "segment.kfs", "segment.index", "orders", 0)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if len(client.requests) != 1 || client.requests[0] != "segment.kfs" {
+		t.Fatalf("unexpected requests: %+v", client.requests)
 	}
 }
 
@@ -151,4 +181,19 @@ func encodeVarint(value int64) []byte {
 		out = append(out, b|0x80)
 	}
 	return out
+}
+
+type fakeGetObjectClient struct {
+	objects  map[string][]byte
+	requests []string
+}
+
+func (f *fakeGetObjectClient) GetObject(ctx context.Context, params *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	key := aws.ToString(params.Key)
+	f.requests = append(f.requests, key)
+	data, ok := f.objects[key]
+	if !ok {
+		return nil, errors.New("missing object")
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(data))}, nil
 }

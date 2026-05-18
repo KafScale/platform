@@ -17,8 +17,14 @@ package decoder
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
+	"io"
 	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 func TestParseIndex(t *testing.T) {
@@ -79,6 +85,31 @@ func TestDecodeBatchCompressed(t *testing.T) {
 	batch[22] = 1
 	if _, err := decodeBatchRecords(batch, "orders", 0); err == nil {
 		t.Fatalf("expected error for compressed batch")
+	}
+}
+
+func TestDecodeSkipsIndexDownload(t *testing.T) {
+	segment := buildSegment(buildBatch(5, 1000, buildRecord(0, 0, []byte("k"), []byte("v"))))
+	client := &fakeGetObjectClient{
+		objects: map[string][]byte{
+			"segment.kfs": segment,
+		},
+	}
+	dec := &s3Decoder{
+		client:  client,
+		bucket:  "test-bucket",
+		metrics: newS3Metrics(),
+	}
+
+	records, err := dec.Decode(context.Background(), "segment.kfs", "segment.index", "orders", 0)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if len(client.requests) != 1 || client.requests[0] != "segment.kfs" {
+		t.Fatalf("unexpected requests: %+v", client.requests)
 	}
 }
 
@@ -149,4 +180,19 @@ func makeRecordPayload(tsDelta int32, offsetDelta int32, key []byte, value []byt
 	body.Write(value)
 	writeVarint(&body, 0)
 	return body.Bytes()
+}
+
+type fakeGetObjectClient struct {
+	objects  map[string][]byte
+	requests []string
+}
+
+func (f *fakeGetObjectClient) GetObject(ctx context.Context, params *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	key := aws.ToString(params.Key)
+	f.requests = append(f.requests, key)
+	data, ok := f.objects[key]
+	if !ok {
+		return nil, errors.New("missing object")
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader(data))}, nil
 }
