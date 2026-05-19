@@ -16,6 +16,7 @@
 package storage
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 )
@@ -117,5 +118,31 @@ func TestIndexRoundTrip(t *testing.T) {
 		if e.Offset != int64(i)*100 {
 			t.Fatalf("entry %d: expected offset %d, got %d", i, i*100, e.Offset)
 		}
+	}
+}
+
+func TestParseIndexRejectsNegativeCount(t *testing.T) {
+	data := make([]byte, indexHeaderLen)
+	copy(data, indexMagic)
+	binary.BigEndian.PutUint16(data[4:6], 1)
+	binary.BigEndian.PutUint32(data[6:10], uint32(^uint32(0)))
+	binary.BigEndian.PutUint32(data[10:14], 1)
+
+	_, err := ParseIndex(data)
+	if err == nil || !strings.Contains(err.Error(), "invalid index entry count") {
+		t.Fatalf("expected invalid count error, got: %v", err)
+	}
+}
+
+func TestParseIndexRejectsTruncatedEntries(t *testing.T) {
+	data := make([]byte, indexHeaderLen)
+	copy(data, indexMagic)
+	binary.BigEndian.PutUint16(data[4:6], 1)
+	binary.BigEndian.PutUint32(data[6:10], 2)
+	binary.BigEndian.PutUint32(data[10:14], 1)
+
+	_, err := ParseIndex(data)
+	if err == nil || !strings.Contains(err.Error(), "index truncated") {
+		t.Fatalf("expected truncated index error, got: %v", err)
 	}
 }

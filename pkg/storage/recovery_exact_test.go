@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/crc32"
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,6 +107,49 @@ func TestRecoverTopicToTimestampSkipsFinalSegmentWhenItsFirstRecordIsAfterCutoff
 	}
 }
 
+func TestRecoverTopicToTimestampTruncatesFirstPostCutoffSegment(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	created := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	cutoff := created.Add(90 * time.Second)
+	uploadRecoverySegmentWithBatches(t, s3, "default", "orders", 0, created, 1, buildRecoveryBatch(0, created.UnixMilli(), []int64{0}))
+	uploadRecoverySegmentWithBatches(t, s3, "default", "orders", 0, created.Add(2*time.Minute), 1, buildRecoveryBatch(1, cutoff.Add(-30*time.Second).UnixMilli(), []int64{0, 45_000}))
+
+	result, err := RecoverTopicToTimestamp(context.Background(), s3, TopicRecoveryConfig{
+		SourceNamespace: "default",
+		SourceTopic:     "orders",
+		TargetNamespace: "default",
+		TargetTopic:     "orders-restore",
+		RestoreTo:       cutoff,
+	})
+	if err != nil {
+		t.Fatalf("RecoverTopicToTimestamp: %v", err)
+	}
+	if result.SegmentsCopied != 2 {
+		t.Fatalf("expected 2 copied segments, got %d", result.SegmentsCopied)
+	}
+	if result.Partitions[0].LastOffset != 1 {
+		t.Fatalf("expected last offset 1, got %d", result.Partitions[0].LastOffset)
+	}
+
+	segmentBytes, err := s3.DownloadSegment(context.Background(), "default/orders-restore/0/segment-00000000000000000001.kfs", nil)
+	if err != nil {
+		t.Fatalf("download restored segment: %v", err)
+	}
+	if got := int32(binary.BigEndian.Uint32(segmentBytes[16:20])); got != 1 {
+		t.Fatalf("expected 1 message in restored segment header, got %d", got)
+	}
+	if got := CountRecordBatchMessages(segmentBytes[segmentHeaderLen : len(segmentBytes)-segmentFooterLen]); got != 1 {
+		t.Fatalf("expected 1 message in restored segment body, got %d", got)
+	}
+	lastOffset, err := parseSegmentFooter(segmentBytes[len(segmentBytes)-segmentFooterLen:])
+	if err != nil {
+		t.Fatalf("parse footer: %v", err)
+	}
+	if lastOffset != 1 {
+		t.Fatalf("expected footer last offset 1, got %d", lastOffset)
+	}
+}
+
 func TestRecoverTopicToTimestampRejectsCompressedIntersectingBatch(t *testing.T) {
 	s3 := NewMemoryS3Client()
 	created := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
@@ -123,6 +167,18 @@ func TestRecoverTopicToTimestampRejectsCompressedIntersectingBatch(t *testing.T)
 	})
 	if err == nil {
 		t.Fatal("expected compressed intersecting batch to fail exact PITR")
+	}
+}
+
+func TestScanRecordRejectsLengthsBeyondRemainingBytes(t *testing.T) {
+	reader := bytes.NewReader(append(encodeRecoveryVarint(32), 0x00))
+
+	_, _, err := scanRecord(reader)
+	if err == nil {
+		t.Fatal("expected oversized record length to fail")
+	}
+	if !strings.Contains(err.Error(), "exceeds remaining batch bytes") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

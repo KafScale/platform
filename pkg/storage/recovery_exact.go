@@ -164,7 +164,10 @@ func scanRecord(reader *bytes.Reader) (timestampDelta int64, offsetDelta int32, 
 	if recordLen < 0 {
 		return 0, 0, fmt.Errorf("invalid record length")
 	}
-	recordData := make([]byte, recordLen)
+	if recordLen > int64(reader.Len()) {
+		return 0, 0, fmt.Errorf("record length %d exceeds remaining batch bytes %d", recordLen, reader.Len())
+	}
+	recordData := make([]byte, int(recordLen))
 	if _, err := io.ReadFull(reader, recordData); err != nil {
 		return 0, 0, err
 	}

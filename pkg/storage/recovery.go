@@ -175,9 +175,10 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 	for _, partition := range partitions {
 		segments := segmentsByPartition[partition]
 		sort.Slice(segments, func(i, j int) bool { return segments[i].BaseOffset < segments[j].BaseOffset })
-		lastCandidate := -1
+		lastCandidate := len(segments) - 1
 		for i, segment := range segments {
 			if segment.CreatedAt.After(cfg.RestoreTo) {
+				lastCandidate = i
 				break
 			}
 			lastCandidate = i

@@ -22,7 +22,9 @@ import (
 )
 
 const (
-	indexMagic = "IDX\x00"
+	indexMagic     = "IDX\x00"
+	indexHeaderLen = 16
+	indexEntryLen  = 12
 )
 
 // IndexBuilder tracks offsets and file positions for sparse indexing.
@@ -92,7 +94,7 @@ func ParseIndex(data []byte) ([]*IndexEntry, error) {
 }
 
 func parseIndexMetadata(data []byte) (int32, []*IndexEntry, error) {
-	if len(data) < 16 {
+	if len(data) < indexHeaderLen {
 		return 0, nil, fmt.Errorf("index too small")
 	}
 	if string(data[:4]) != indexMagic {
@@ -117,6 +119,14 @@ func parseIndexMetadata(data []byte) (int32, []*IndexEntry, error) {
 	var reserved uint16
 	if err := binary.Read(reader, binary.BigEndian, &reserved); err != nil {
 		return 0, nil, err
+	}
+	if count < 0 {
+		return 0, nil, fmt.Errorf("invalid index entry count %d", count)
+	}
+	remaining := len(data) - indexHeaderLen
+	requiredBytes := int64(count) * indexEntryLen
+	if requiredBytes > int64(remaining) {
+		return 0, nil, fmt.Errorf("index truncated: need %d bytes for %d entries, have %d", requiredBytes, count, remaining)
 	}
 	entries := make([]*IndexEntry, count)
 	for i := int32(0); i < count; i++ {
