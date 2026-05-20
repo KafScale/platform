@@ -57,6 +57,24 @@ operator:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Pod-level security context. PSA-restricted compliant defaults: the
+  # operator image runs as USER 10001 (Dockerfile-baked), so we declare
+  # runAsNonRoot + fsGroup at the pod level. Override per-environment
+  # via `--set operator.podSecurityContext.<key>=<value>` or an
+  # environment values file.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  # Container-level security context. PSA-restricted-required defaults.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   metrics:
     enabled: true
     port: 8080
@@ -107,6 +125,21 @@ console:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # PSA-restricted compliant defaults. The console image runs as
+  # USER 10001 (Dockerfile-baked); pod + container security context
+  # declare the four PSA-restricted requirements.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   service:
     type: ClusterIP
     port: 80
@@ -146,6 +179,21 @@ proxy:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # PSA-restricted compliant defaults. The proxy image runs as
+  # USER 10001 (Dockerfile-baked); pod + container security context
+  # declare the four PSA-restricted requirements.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   service:
     type: LoadBalancer
     port: 9092
