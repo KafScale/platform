@@ -41,10 +41,18 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
+{{- with .Values.console.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: console
           image: "{{ .Values.console.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.console.image.tag) .Values.console.image.useLatest }}"
           imagePullPolicy: {{ ternary "Always" .Values.console.image.pullPolicy .Values.console.image.useLatest }}
+{{- with .Values.console.containerSecurityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
           env:
             - name: KAFSCALE_CONSOLE_HTTP_ADDR
               value: ":8080"
