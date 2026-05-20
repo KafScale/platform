@@ -182,6 +182,19 @@ proxy:
   resources: {}
   nodeSelector: {}
   tolerations: []
+  # Pod affinity for the proxy Deployment.
+  #
+  # When left empty, proxy-deployment.yaml renders a default soft
+  # (preferredDuring) podAntiAffinity that prefers to place the proxy
+  # replicas on different nodes, with a label selector templated from the
+  # proxy's own pod labels so it always matches the pods it spreads, even
+  # under nameOverride/fullnameOverride. Soft so single-node KIND clusters
+  # still schedule every replica; flip to requiredDuring in multi-node
+  # production by setting an explicit affinity here.
+  #
+  # Backward-compat note: setting this key REPLACES the chart default
+  # rather than merging with it. If you want anti-affinity plus extra
+  # affinity rules, include the anti-affinity block in your override.
   affinity: {}
   # PSA-restricted compliant defaults. The proxy image runs as
   # USER 10001 (Dockerfile-baked). These defaults assume the shipped image;
