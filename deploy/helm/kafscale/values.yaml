@@ -145,7 +145,24 @@ proxy:
   resources: {}
   nodeSelector: {}
   tolerations: []
-  affinity: {}
+  # Default soft anti-affinity: the scheduler prefers to place the
+  # two proxy replicas on different nodes. Soft (preferredDuring) so
+  # single-node KIND clusters still schedule both replicas; flip to
+  # requiredDuring in multi-node production.
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/component: proxy
+                app.kubernetes.io/name: kafscale-proxy
+            topologyKey: kubernetes.io/hostname
+  # Topology spread complements anti-affinity: the scheduler tries to
+  # keep proxy replicas spread evenly across zones (when present).
+  # Empty by default; populate when running in a multi-zone cluster.
+  topologySpreadConstraints: []
   service:
     type: LoadBalancer
     port: 9092
