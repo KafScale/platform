@@ -182,6 +182,19 @@ func TestHandlerApiVersionsUnsupported(t *testing.T) {
 	}
 }
 
+func TestGenerateApiVersionsAdvertisesListGroupsCompatibility(t *testing.T) {
+	for _, entry := range generateApiVersions() {
+		if entry.ApiKey != protocol.APIKeyListGroups {
+			continue
+		}
+		if entry.MinVersion != 0 || entry.MaxVersion != 5 {
+			t.Fatalf("expected LIST_GROUPS version range 0..5, got %d..%d", entry.MinVersion, entry.MaxVersion)
+		}
+		return
+	}
+	t.Fatal("LIST_GROUPS api version entry not found")
+}
+
 func TestHandleFetch(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	handler := newTestHandler(store)

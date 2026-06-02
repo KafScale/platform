@@ -2711,9 +2711,9 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyOffsetCommit, minVersion: 3, maxVersion: 3},
 		{key: protocol.APIKeyOffsetFetch, minVersion: 5, maxVersion: 5},
 		{key: protocol.APIKeyDescribeGroups, minVersion: 5, maxVersion: 5},
-		// OPS-005: Java admin-client negotiates LIST_GROUPS in range [0,4].
-		// Narrow 5-5 range breaks `kafka-consumer-groups --list`. Widen to 0-5
-		// — the underlying coordinator handler is version-agnostic.
+		// Older Kafka admin clients negotiate LIST_GROUPS in range [0,4].
+		// Narrow 5-5 advertisement breaks `kafka-consumer-groups --list` even
+		// though the coordinator handler is version-agnostic.
 		{key: protocol.APIKeyListGroups, minVersion: 0, maxVersion: 5},
 		{key: protocol.APIKeyOffsetForLeaderEpoch, minVersion: 3, maxVersion: 3},
 		{key: protocol.APIKeyDescribeConfigs, minVersion: 4, maxVersion: 4},
