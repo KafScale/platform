@@ -26,7 +26,7 @@ RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
       go mod edit -dropreplace github.com/KafScale/platform || true; \
     fi
 RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
-      go mod download github.com/KafScale/platform@v1.5.0 || true; \
+      go mod download github.com/KafScale/platform@v1.6.0 || true; \
     fi
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
