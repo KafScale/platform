@@ -303,6 +303,9 @@ func writePartitionStates(ctx context.Context, store *metadata.EtcdStore, topic 
 }
 
 func persistTopicConfig(ctx context.Context, store *metadata.EtcdStore, cfg *metadatapb.TopicConfig) error {
+	if cfg == nil || cfg.Name == "" {
+		return metadata.ErrInvalidTopic
+	}
 	payload, err := metadata.EncodeTopicConfig(cfg)
 	if err != nil {
 		return err
