@@ -18,7 +18,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,28 @@ import (
 	"github.com/KafScale/platform/pkg/storage"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+type failingListS3 struct {
+	*storage.MemoryS3Client
+	err error
+}
+
+func (f *failingListS3) ListSegments(context.Context, string) ([]storage.S3Object, error) {
+	return nil, f.err
+}
+
+type failingUploadIndexS3 struct {
+	*storage.MemoryS3Client
+	targetPrefix string
+	err          error
+}
+
+func (f *failingUploadIndexS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	if strings.HasPrefix(key, f.targetPrefix) {
+		return f.err
+	}
+	return f.MemoryS3Client.UploadIndex(ctx, key, body)
+}
 
 func TestRunHelpAndUnknownCommand(t *testing.T) {
 	var stdout bytes.Buffer
@@ -73,12 +97,7 @@ func TestRunRestoreCommandUsesInjectedClients(t *testing.T) {
 
 	s3 := storage.NewMemoryS3Client()
 	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
-		{
-			BaseOffset:      0,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
 	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)
@@ -101,8 +120,13 @@ func TestRunRestoreCommandUsesInjectedClients(t *testing.T) {
 	newS3Client = func(context.Context, storage.S3Config) (storage.S3Client, error) {
 		return s3, nil
 	}
-	newEtcdStore = func(context.Context, metadata.ClusterMetadata, metadata.EtcdStoreConfig) (*metadata.EtcdStore, error) {
-		return store, nil
+	newEtcdStore = func(ctx context.Context, _ metadata.ClusterMetadata, cfg metadata.EtcdStoreConfig) (*metadata.EtcdStore, error) {
+		return metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+			Brokers: []protocol.MetadataBroker{
+				{NodeID: 1, Host: "broker-0", Port: 9092},
+			},
+			ControllerID: 1,
+		}, cfg)
 	}
 	newMemoryS3 = func() storage.S3Client { return s3 }
 
@@ -215,12 +239,7 @@ func TestExecuteRestoreCreatesRecoveredTopic(t *testing.T) {
 
 	s3 := storage.NewMemoryS3Client()
 	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
-		{
-			BaseOffset:      0,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
 	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)
@@ -363,5 +382,194 @@ func TestExecuteRestoreRejectsUnknownPartition(t *testing.T) {
 	}, storage.NewMemoryS3Client(), store)
 	if err == nil || !strings.Contains(err.Error(), "partition 99") {
 		t.Fatalf("expected unknown partition error, got %v", err)
+	}
+}
+
+func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	defer func() { _ = store.EtcdClient().Close() }()
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	s3 := &failingListS3{
+		MemoryS3Client: storage.NewMemoryS3Client(),
+		err:            errors.New("list failed"),
+	}
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       time.Now().UTC(),
+	}, s3, store)
+	if err == nil || !strings.Contains(err.Error(), "list failed") {
+		t.Fatalf("expected list failure, got %v", err)
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-restored"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("expected rolled back target topic to be absent, got %+v", meta.Topics)
+	}
+}
+
+func TestExecuteRestoreRollsBackCopiedS3ObjectsOnPartialFailure(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	defer func() { _ = store.EtcdClient().Close() }()
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	mem := storage.NewMemoryS3Client()
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
+	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
+	}
+	if err := mem.UploadSegment(ctx, "default/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := mem.UploadIndex(ctx, "default/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	s3 := &failingUploadIndexS3{
+		MemoryS3Client: mem,
+		targetPrefix:   "default/orders-restored/",
+		err:            errors.New("upload index failed"),
+	}
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       time.Now().UTC(),
+	}, s3, store)
+	if err == nil || !strings.Contains(err.Error(), "upload index failed") {
+		t.Fatalf("expected upload index failure, got %v", err)
+	}
+
+	if _, err := mem.DownloadSegment(ctx, "default/orders-restored/0/segment-00000000000000000000.kfs", nil); err == nil {
+		t.Fatal("expected restored segment to be cleaned up after failure")
+	}
+	if _, err := mem.DownloadIndex(ctx, "default/orders-restored/0/segment-00000000000000000000.index"); err == nil {
+		t.Fatal("expected restored index to be cleaned up after failure")
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-restored"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("expected rolled back target topic to be absent, got %+v", meta.Topics)
+	}
+}
+
+func makeStorageRecoveryBatch(baseOffset, firstTimestamp int64, timestampDeltas []int64) storage.RecordBatch {
+	records := make([][]byte, 0, len(timestampDeltas))
+	maxTimestamp := firstTimestamp
+	for i, delta := range timestampDeltas {
+		records = append(records, makeStorageRecoveryRecord(delta, int64(i)))
+		if ts := firstTimestamp + delta; ts > maxTimestamp {
+			maxTimestamp = ts
+		}
+	}
+
+	bodyLen := 0
+	for _, record := range records {
+		bodyLen += len(record)
+	}
+	const recordBatchHeaderLen = 61
+	const batchFrameHeaderLen = 12
+	batch := make([]byte, recordBatchHeaderLen+bodyLen)
+	binary.BigEndian.PutUint64(batch[0:8], uint64(baseOffset))
+	binary.BigEndian.PutUint32(batch[8:12], uint32(len(batch)-batchFrameHeaderLen))
+	batch[16] = 2
+	binary.BigEndian.PutUint64(batch[27:35], uint64(firstTimestamp))
+	binary.BigEndian.PutUint64(batch[35:43], uint64(maxTimestamp))
+	binary.BigEndian.PutUint64(batch[43:51], uint64(^uint64(0)))
+	binary.BigEndian.PutUint16(batch[51:53], uint16(^uint16(0)))
+	binary.BigEndian.PutUint32(batch[53:57], uint32(^uint32(0)))
+	binary.BigEndian.PutUint32(batch[57:61], uint32(len(records)))
+	offset := recordBatchHeaderLen
+	for _, record := range records {
+		copy(batch[offset:], record)
+		offset += len(record)
+	}
+	binary.BigEndian.PutUint32(batch[23:27], uint32(len(records)-1))
+	binary.BigEndian.PutUint32(batch[17:21], crc32.Checksum(batch[21:], crc32.MakeTable(crc32.Castagnoli)))
+
+	return storage.RecordBatch{
+		BaseOffset:      baseOffset,
+		LastOffsetDelta: int32(len(records) - 1),
+		MessageCount:    int32(len(records)),
+		Bytes:           batch,
+	}
+}
+
+func makeStorageRecoveryRecord(timestampDelta, offsetDelta int64) []byte {
+	payload := bytes.NewBuffer(nil)
+	payload.WriteByte(0)
+	payload.Write(encodeStorageRecoveryVarint(timestampDelta))
+	payload.Write(encodeStorageRecoveryVarint(offsetDelta))
+	payload.Write(encodeStorageRecoveryVarint(-1))
+	payload.Write(encodeStorageRecoveryVarint(-1))
+	payload.Write(encodeStorageRecoveryVarint(0))
+
+	record := bytes.NewBuffer(nil)
+	record.Write(encodeStorageRecoveryVarint(int64(payload.Len())))
+	record.Write(payload.Bytes())
+	return record.Bytes()
+}
+
+func encodeStorageRecoveryVarint(value int64) []byte {
+	zigzag := uint64(value<<1) ^ uint64(value>>63)
+	out := make([]byte, 0, 10)
+	for {
+		b := byte(zigzag & 0x7f)
+		zigzag >>= 7
+		if zigzag != 0 {
+			b |= 0x80
+		}
+		out = append(out, b)
+		if zigzag == 0 {
+			return out
+		}
 	}
 }

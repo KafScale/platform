@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -173,7 +174,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 	if len(sourceMeta.Topics) == 0 || sourceMeta.Topics[0].ErrorCode != 0 {
-		return metadata.ErrUnknownTopic
+		return fmt.Errorf("source topic metadata: %w", metadata.ErrUnknownTopic)
 	}
 
 	sourcePartitions := make(map[int32]struct{}, len(sourceMeta.Topics[0].Partitions))
@@ -191,6 +192,19 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
+	restoreCommitted := false
+	targetCreated := false
+	defer func() {
+		if restoreCommitted || !targetCreated {
+			return
+		}
+		if err := store.DeleteTopic(context.Background(), cfg.TargetTopic); err != nil {
+			if !errors.Is(err, metadata.ErrUnknownTopic) {
+				fmt.Fprintf(os.Stderr, "warning: failed to roll back target topic %s: %v\n", cfg.TargetTopic, err)
+			}
+		}
+	}()
+
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              cfg.TargetTopic,
 		NumPartitions:     sourceCfg.Partitions,
@@ -198,6 +212,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	}); err != nil {
 		return err
 	}
+	targetCreated = true
 
 	targetCfg := cloneTopicConfig(sourceCfg)
 	targetCfg.Name = cfg.TargetTopic
@@ -223,7 +238,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 	if len(targetMeta.Topics) == 0 || targetMeta.Topics[0].ErrorCode != 0 {
-		return metadata.ErrUnknownTopic
+		return fmt.Errorf("target topic metadata: %w", metadata.ErrUnknownTopic)
 	}
 
 	recoveredByPartition := make(map[int32]storage.RecoveredPartition, len(result.Partitions))
@@ -244,6 +259,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	for _, partition := range result.Partitions {
 		_, _ = fmt.Fprintf(stdout, "partition=%d segments=%d last_offset=%d\n", partition.Partition, partition.SegmentsCopied, partition.LastOffset)
 	}
+	restoreCommitted = true
 	return nil
 }
 

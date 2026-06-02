@@ -133,10 +133,21 @@ These settings allow 6+ GB streaming uploads without hitting default limits.
 ### LFS Download
 
 ```bash
-# Get presigned URL
+# Stream a verified object through the proxy.
+# Use bucket/key/sha256/size from the LFS envelope returned by /lfs/produce.
 curl -X POST http://localhost:8080/lfs/download \
   -H "Content-Type: application/json" \
-  -d '{"bucket":"kafscale","key":"default/test-uploads/lfs/...","mode":"presign"}'
+  -d '{
+    "bucket": "kafscale",
+    "key": "default/test-uploads/lfs/2026/02/05/obj-...",
+    "mode": "stream",
+    "integrity": {
+      "sha256": "<envelope-sha256>",
+      "checksum_alg": "sha256",
+      "size": 1024
+    }
+  }' \
+  -o downloaded-blob.bin
 ```
 
 ## Traceability

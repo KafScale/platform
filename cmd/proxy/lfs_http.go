@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -58,16 +59,35 @@ type lfsErrorResponse struct {
 }
 
 type lfsDownloadRequest struct {
-	Bucket         string `json:"bucket"`
-	Key            string `json:"key"`
-	Mode           string `json:"mode"`
-	ExpiresSeconds int    `json:"expires_seconds"`
+	Bucket         string               `json:"bucket"`
+	Key            string               `json:"key"`
+	Mode           string               `json:"mode"`
+	ExpiresSeconds int                  `json:"expires_seconds"`
+	Integrity      *lfsIntegrityRequest `json:"integrity,omitempty"`
+}
+
+// lfsIntegrityRequest carries the Kafka-authoritative checksum from the
+// consumer's envelope into the proxy. The proxy verifies S3 bytes against this
+// value on stream-mode downloads and echoes it back on presign-mode responses.
+type lfsIntegrityRequest struct {
+	SHA256      string `json:"sha256"`
+	ChecksumAlg string `json:"checksum_alg,omitempty"`
+	Size        int64  `json:"size,omitempty"`
 }
 
 type lfsDownloadResponse struct {
-	Mode      string `json:"mode"`
-	URL       string `json:"url"`
-	ExpiresAt string `json:"expires_at"`
+	Mode      string                `json:"mode"`
+	URL       string                `json:"url,omitempty"`
+	ExpiresAt string                `json:"expires_at,omitempty"`
+	Integrity *lfsIntegrityResponse `json:"integrity,omitempty"`
+}
+
+// lfsIntegrityResponse is the echoed checksum returned in presign-mode
+// responses so client SDKs can verify the downloaded bytes themselves.
+type lfsIntegrityResponse struct {
+	SHA256      string `json:"sha256"`
+	ChecksumAlg string `json:"checksum_alg"`
+	Size        int64  `json:"size,omitempty"`
 }
 
 type lfsUploadInitRequest struct {
@@ -200,7 +220,7 @@ func (m *lfsModule) lfsCORSMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Range, X-Kafka-Topic, X-Kafka-Key, X-Kafka-Partition, X-LFS-Checksum, X-LFS-Checksum-Alg, X-LFS-Size, X-LFS-Mode, X-Request-ID, X-API-Key, Authorization")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID, X-Kafscale-LFS-Checksum, X-Kafscale-LFS-Content-Length")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -416,12 +436,77 @@ func (m *lfsModule) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 
 	mode := strings.ToLower(strings.TrimSpace(req.Mode))
 	if mode == "" {
-		mode = "presign"
+		mode = "stream"
 	}
 	if mode != "presign" && mode != "stream" {
 		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_mode", "mode must be presign or stream")
 		return
 	}
+
+	if mode == "presign" && !m.presignEnabled {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "presign_disabled",
+			"presign mode is disabled on this proxy; use mode=stream or set KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true")
+		return
+	}
+
+	// The consumer's Kafka envelope is the authoritative source of the
+	// checksum. The proxy refuses to serve an object without one — S3 is
+	// treated as untrusted storage.
+	if req.Integrity == nil || strings.TrimSpace(req.Integrity.SHA256) == "" {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "missing_integrity",
+			"integrity.sha256 is required; pass the checksum from the LFS envelope")
+		return
+	}
+	expectedSHA := strings.ToLower(strings.TrimSpace(req.Integrity.SHA256))
+	if len(expectedSHA) != sha256.Size*2 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_integrity",
+			"integrity.sha256 must be a 64-character hex-encoded SHA-256 digest")
+		return
+	}
+	if _, err := hex.DecodeString(expectedSHA); err != nil {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_integrity",
+			"integrity.sha256 must be hex-encoded")
+		return
+	}
+	expectedAlg := strings.ToLower(strings.TrimSpace(req.Integrity.ChecksumAlg))
+	if expectedAlg == "" {
+		expectedAlg = "sha256"
+	}
+	if expectedAlg != "sha256" {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "unsupported_checksum_alg",
+			"only checksum_alg=sha256 is supported")
+		return
+	}
+	if req.Integrity.Size < 0 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "invalid_integrity",
+			"integrity.size must be non-negative")
+		return
+	}
+	// Size is required for stream mode because the proxy enforces a hard byte
+	// cap on the S3 read (defense against attacker-extended payloads from a
+	// compromised bucket). Presign mode can do without — the URL it returns
+	// carries no proxy-side byte transfer.
+	if mode == "stream" && req.Integrity.Size <= 0 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "missing_integrity_size",
+			"integrity.size is required for stream mode; pass the size from the LFS envelope")
+		return
+	}
+	// Upper-bound the client-claimed size against the proxy's configured
+	// max-blob ceiling. Without this cap a caller (or a compromised producer
+	// upstream) can claim Integrity.Size = TB-scale and force the proxy to
+	// allocate that much temp storage per request. Also avoids the
+	// expectedSize+1 integer overflow when computing the io.LimitReader cap.
+	if mode == "stream" && m.maxBlob > 0 && req.Integrity.Size > m.maxBlob {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "payload_too_large",
+			"integrity.size exceeds proxy maximum blob size (KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE)")
+		return
+	}
+	if mode == "stream" && req.Integrity.Size == math.MaxInt64 {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadRequest, "payload_too_large",
+			"integrity.size is too large to verify safely")
+		return
+	}
+	expectedSize := req.Integrity.Size
 
 	clientIP := lfsGetClientIP(r)
 	start := time.Now()
@@ -455,33 +540,139 @@ func (m *lfsModule) handleHTTPDownload(w http.ResponseWriter, r *http.Request) {
 			Mode:      "presign",
 			URL:       url,
 			ExpiresAt: time.Now().UTC().Add(ttl).Format(time.RFC3339),
+			Integrity: &lfsIntegrityResponse{
+				SHA256:      expectedSHA,
+				ChecksumAlg: "sha256",
+				Size:        expectedSize,
+			},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(resp)
 	case "stream":
-		obj, err := m.s3Uploader.GetObject(r.Context(), req.Key)
-		if err != nil {
+		m.streamDownloadWithVerify(r, w, requestID, req.Bucket, req.Key, expectedSHA, expectedSize, start)
+	}
+}
+
+// streamDownloadWithVerify fetches the S3 object, buffers it to a temporary
+// file while computing SHA-256, and only begins streaming to the client if
+// the hash matches the envelope checksum. On mismatch (or oversize) the
+// handler returns 502 with a structured error JSON — no tampered bytes ever
+// reach the client.
+//
+// This is intentionally NOT a stream-and-verify-at-end design. An earlier
+// attempt (PR #139, commit c4b230f) tried to stream + verify + truncate on
+// mismatch via chunked-transfer framing tricks. Adversarial review showed
+// the design was unsound: for any object larger than Go's internal chunk
+// buffer the tampered bytes were already on the wire before the abort;
+// HTTP intermediaries (nginx-ingress, ALB, CDNs) buffer responses and
+// erase the truncation signal; trailer-based signaling is invisible to
+// most HTTP client libraries (Python requests, JS fetch, curl --output).
+//
+// Buffer-then-verify trades latency and temporary disk for an actual
+// security guarantee that holds across transports and intermediaries.
+// The S3 read is capped at expectedSize+1 via io.LimitReader so a
+// compromised bucket cannot exhaust proxy disk by returning a larger
+// payload than the envelope declares.
+func (m *lfsModule) streamDownloadWithVerify(r *http.Request, w http.ResponseWriter, requestID, bucket, key, expectedSHA string, expectedSize int64, start time.Time) {
+	obj, err := m.s3Uploader.GetObject(r.Context(), key)
+	if err != nil {
+		m.metrics.IncS3Errors()
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "s3_get_failed", err.Error())
+		return
+	}
+	defer func() { _ = obj.Body.Close() }()
+
+	tmpFile, err := os.CreateTemp("", "kafscale-lfs-verify-*")
+	if err != nil {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusInternalServerError, "temp_storage_failed", err.Error())
+		return
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	// Cap S3 read at expectedSize+1. The +1 lets us detect over-size payloads
+	// (a compromised bucket returning more bytes than the envelope declares)
+	// without trusting the S3-reported Content-Length.
+	sizeLimit := expectedSize + 1
+	limited := io.LimitReader(obj.Body, sizeLimit)
+
+	hasher := sha256.New()
+	buf := make([]byte, 32*1024)
+	var written int64
+	for {
+		n, readErr := limited.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			nw, writeErr := tmpFile.Write(chunk)
+			if writeErr != nil {
+				m.logger.Warn("temporary file write failed during verification buffer", "error", writeErr, "bytes", written)
+				m.lfsWriteHTTPError(w, requestID, "", http.StatusInternalServerError, "temp_storage_failed", writeErr.Error())
+				return
+			}
+			if nw != len(chunk) {
+				m.logger.Warn("temporary file short write during verification buffer", "written", nw, "expected", len(chunk), "bytes", written)
+				m.lfsWriteHTTPError(w, requestID, "", http.StatusInternalServerError, "temp_storage_failed", io.ErrShortWrite.Error())
+				return
+			}
+			_, _ = hasher.Write(chunk)
+			written += int64(n)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
 			m.metrics.IncS3Errors()
-			m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "s3_get_failed", err.Error())
+			m.logger.Warn("S3 read failed during verification buffer", "error", readErr, "bytes", written)
+			m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "s3_get_failed", readErr.Error())
 			return
 		}
-		defer func() { _ = obj.Body.Close() }()
-		contentType := "application/octet-stream"
-		if obj.ContentType != nil && *obj.ContentType != "" {
-			contentType = *obj.ContentType
-		}
-		w.Header().Set("Content-Type", contentType)
-		var size int64
-		if obj.ContentLength != nil {
-			size = *obj.ContentLength
-			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-		}
-		if _, err := io.Copy(w, obj.Body); err != nil {
-			m.logger.Warn("download stream failed", "error", err)
-		}
-		m.tracker.EmitDownloadCompleted(requestID, req.Key, mode, time.Since(start), size)
 	}
+
+	if written > expectedSize {
+		m.logger.Error("LFS download size exceeded envelope — possible bucket compromise",
+			"bucket", bucket, "key", key, "expected_size", expectedSize, "read_at_least", written)
+		m.tracker.EmitDownloadIntegrityFailed(requestID, bucket, key, "stream", "sha256", expectedSHA, "", written, expectedSize)
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "integrity_failure",
+			"S3 object exceeds envelope-declared size; refusing to serve")
+		return
+	}
+
+	actualSHA := hex.EncodeToString(hasher.Sum(nil))
+	if actualSHA != expectedSHA {
+		m.logger.Error("LFS download integrity check FAILED — S3 bytes do not match Kafka envelope checksum",
+			"bucket", bucket, "key", key,
+			"expected_sha256", expectedSHA, "actual_sha256", actualSHA,
+			"bytes_read", written)
+		m.tracker.EmitDownloadIntegrityFailed(requestID, bucket, key, "stream", "sha256", expectedSHA, actualSHA, written, expectedSize)
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "integrity_failure",
+			"S3 bytes do not match Kafka envelope SHA-256; refusing to serve")
+		return
+	}
+
+	// Verified. Stream the temp file to the client with Content-Length set —
+	// the bytes are now provably authentic, so a complete Content-Length-N
+	// response is correct.
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusInternalServerError, "temp_storage_failed", err.Error())
+		return
+	}
+	contentType := "application/octet-stream"
+	if obj.ContentType != nil && *obj.ContentType != "" {
+		contentType = *obj.ContentType
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(written, 10))
+	w.Header().Set("X-Kafscale-LFS-Checksum", "sha256="+actualSHA)
+	w.Header().Set("X-Kafscale-LFS-Content-Length", strconv.FormatInt(written, 10))
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, tmpFile); err != nil {
+		m.logger.Warn("download stream to client failed after verification", "error", err)
+	}
+	m.tracker.EmitDownloadCompleted(requestID, key, "stream", time.Since(start), written)
 }
 
 func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request) {

@@ -86,16 +86,53 @@ func TestRecoverTopicToTimestampRejectsExistingTarget(t *testing.T) {
 	}
 }
 
+func TestRecoverTopicToTimestamp_IgnoresSiblingTopicPrefixes(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	uploadRecoverySegment(t, s3, "default", "orders", 0, 0, created)
+	uploadRecoverySegment(t, s3, "default", "orders-v2", 0, 0, created)
+
+	result, err := RecoverTopicToTimestamp(context.Background(), s3, TopicRecoveryConfig{
+		SourceNamespace: "default",
+		SourceTopic:     "orders",
+		TargetNamespace: "default",
+		TargetTopic:     "orders-restore",
+		RestoreTo:       created.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("RecoverTopicToTimestamp: %v", err)
+	}
+	if result.SegmentsCopied != 1 {
+		t.Fatalf("expected 1 copied segment, got %d", result.SegmentsCopied)
+	}
+}
+
+func TestRecoverTopicToTimestamp_IgnoresSiblingTargetPrefixes(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	uploadRecoverySegment(t, s3, "default", "orders", 0, 0, created)
+	uploadRecoverySegment(t, s3, "default", "orders-restore-old", 0, 0, created)
+
+	result, err := RecoverTopicToTimestamp(context.Background(), s3, TopicRecoveryConfig{
+		SourceNamespace: "default",
+		SourceTopic:     "orders",
+		TargetNamespace: "default",
+		TargetTopic:     "orders-restore",
+		RestoreTo:       created.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("RecoverTopicToTimestamp: %v", err)
+	}
+	if result.SegmentsCopied != 1 {
+		t.Fatalf("expected 1 copied segment, got %d", result.SegmentsCopied)
+	}
+}
+
 func uploadRecoverySegment(t *testing.T, s3 *MemoryS3Client, namespace string, topic string, partition int32, baseOffset int64, created time.Time) {
 	t.Helper()
 
 	artifact, err := BuildSegment(SegmentWriterConfig{IndexIntervalMessages: 1}, []RecordBatch{
-		{
-			BaseOffset:      baseOffset,
-			LastOffsetDelta: 0,
-			MessageCount:    1,
-			Bytes:           make([]byte, 70),
-		},
+		buildRecoveryBatch(baseOffset, created.UnixMilli(), []int64{0}),
 	}, created)
 	if err != nil {
 		t.Fatalf("BuildSegment: %v", err)

@@ -1040,6 +1040,14 @@ func (f *failingS3Client) UploadIndex(ctx context.Context, key string, body []by
 	return errors.New("s3 unavailable")
 }
 
+func (f *failingS3Client) DeleteSegment(ctx context.Context, key string) error {
+	return errors.New("s3 unavailable")
+}
+
+func (f *failingS3Client) DeleteIndex(ctx context.Context, key string) error {
+	return errors.New("s3 unavailable")
+}
+
 func (f *failingS3Client) DownloadSegment(ctx context.Context, key string, rng *storage.ByteRange) ([]byte, error) {
 	return nil, errors.New("unsupported")
 }

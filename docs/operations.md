@@ -235,7 +235,7 @@ The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_
 
 ### Topic Recovery On The DR Spine
 
-For broker topic data, KafScale now supports **segment-granular recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
+For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
 
 Use `kafscale-cli restore` to create a fresh target topic, copy `.kfs` segment/index pairs up to a cutoff timestamp, and set the recovered topic's next offsets:
 
@@ -250,7 +250,8 @@ Operational semantics:
 
 - Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
 - The target topic must be new. KafScale refuses to restore over an existing persisted topic.
-- Recovery is **segment-granular**. The cutoff uses the immutable segment creation time, then copies contiguous segment/index pairs up to the first segment created after that timestamp.
+- Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
+- If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
 - Offsets are preserved inside the recovered topic so replay, validation, and downstream cutover can happen without rewriting the source topic.
 - The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
 
