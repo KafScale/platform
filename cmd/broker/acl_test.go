@@ -116,6 +116,28 @@ func TestACLListOffsetsDenied(t *testing.T) {
 	}
 }
 
+func TestACLListGroupsDenied(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
+	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"client-a","allow":[]}]}`)
+
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+
+	clientID := "client-a"
+	payload, err := handler.Handle(context.Background(), &protocol.RequestHeader{
+		CorrelationID: 18,
+		APIVersion:    5,
+		ClientID:      &clientID,
+	}, kmsg.NewPtrListGroupsRequest())
+	if err != nil {
+		t.Fatalf("Handle ListGroups: %v", err)
+	}
+	resp := decodeKmsgResponse(t, 5, payload, kmsg.NewPtrListGroupsResponse)
+	if resp.ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
+		t.Fatalf("expected group auth failed, got %d", resp.ErrorCode)
+	}
+}
+
 func TestACLOffsetFetchDenied(t *testing.T) {
 	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
 	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"client-a","allow":[]}]}`)
