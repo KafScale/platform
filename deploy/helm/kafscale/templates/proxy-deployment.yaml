@@ -41,10 +41,18 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
+{{- with .Values.proxy.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: proxy
           image: "{{ .Values.proxy.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.proxy.image.tag) .Values.proxy.image.useLatest }}"
           imagePullPolicy: {{ ternary "Always" .Values.proxy.image.pullPolicy .Values.proxy.image.useLatest }}
+{{- with .Values.proxy.containerSecurityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
           env:
             - name: KAFSCALE_PROXY_ADDR
               value: ":{{ .Values.proxy.service.port }}"
