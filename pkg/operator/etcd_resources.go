@@ -406,6 +406,16 @@ func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 		"--initial-cluster=" + initialCluster,
 		"--initial-cluster-state=new",
 		"--initial-cluster-token=" + cluster.Name + "-etcd",
+		// Periodic auto-compaction. KafScale writes one etcd revision per
+		// offset update (one per produce), so without compaction the DB fills
+		// to the default 2 GiB quota under load and the broker starts rejecting
+		// produce with `mvcc: database space exceeded`. 5 minutes of retention
+		// keeps recovery/audit data while the GC keeps up with the write rate.
+		"--auto-compaction-mode=periodic",
+		"--auto-compaction-retention=5m",
+		// Headroom above the default 2 GiB so a burst cannot exceed the quota
+		// between compactions; just raises the soft cap inside etcd.
+		"--quota-backend-bytes=4294967296",
 	}
 }
 
