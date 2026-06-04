@@ -151,6 +151,10 @@ proxy:
     port: 9092
     annotations: {}
     loadBalancerSourceRanges: []
+    # When type is NodePort, pin the node port (otherwise Kubernetes assigns a
+    # random one and a fixed host:port mapping cannot reach the proxy). Leave
+    # empty to let Kubernetes choose. Only rendered when type == NodePort.
+    nodePort: ""
 
 # NOTE: The standalone lfs-proxy has been removed.
 # LFS is now a feature-flag on the unified proxy: set proxy.lfs.enabled=true.
