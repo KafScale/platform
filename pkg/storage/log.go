@@ -461,6 +461,14 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 	l.mu.Unlock()
 
 	if !found {
+		// Not in any flushed segment. The offset may still be in the in-memory
+		// write buffer (acked but not yet flushed: flush is append-triggered, so
+		// a partition that goes quiet below the flush threshold keeps its tail
+		// buffered). Serve it so acked records are consumable (Kafka
+		// read-after-ack) instead of returning ErrOffsetOutOfRange.
+		if body := l.buffer.RecordsFrom(offset, maxBytes); len(body) > 0 {
+			return body, nil
+		}
 		return nil, ErrOffsetOutOfRange
 	}
 
