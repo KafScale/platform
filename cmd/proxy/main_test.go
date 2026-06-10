@@ -19,7 +19,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
+	"log/slog"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -935,25 +938,9 @@ func TestAddFetchErrorForAllPartitions(t *testing.T) {
 	}
 }
 
-// TestFetchForwardTransportErrorRetry documents the regression target for
-// https://github.com/KafScale/platform/issues/155 (Fetch returns empty/EOF
-// (v13 decode) after proxy restart).
-//
-// Previously, any error from fanOutFetch (forwardToBackend ReadFrame EOF or
-// parseFetchResponse "decode fetch response v13") caused an *immediate*
-// addFetchErrorForAllPartitions(..., REQUEST_TIMED_OUT) with no further
-// attempts on a fresh connection. This produced 0-record responses to
-// consumers and no recovery until a coordinated broker+proxy restart.
-//
-// The fix collects partitions from errored sub-requests for regroup/retry
-// (using triedBackends to avoid the bad addr, and the existing maxRetries
-// loop + connectForAddr), and only emits REQUEST_TIMED_OUT on the final
-// exhausted attempt. This matches the existing NOT_LEADER retry pattern
-// while avoiding router invalidation for pure transport problems.
 func TestFetchForwardTransportErrorRetry(t *testing.T) {
-	// On the last attempt we still end up calling the same helper that
-	// the old code always called. This test ensures the "exhaust" path
-	// continues to produce the expected error code for clients.
+	// Ensures the exhaust path for transport errors still produces
+	// REQUEST_TIMED_OUT (the new code only takes this on the final attempt).
 	resp := &kmsg.FetchResponse{}
 	req := makeFetchRequest(map[string][]int32{
 		"orders": {0, 1},
@@ -964,7 +951,7 @@ func TestFetchForwardTransportErrorRetry(t *testing.T) {
 	for _, topic := range resp.Topics {
 		for _, part := range topic.Partitions {
 			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
-				t.Fatalf("expected REQUEST_TIMED_OUT on exhausted backend error, got %d", part.ErrorCode)
+				t.Fatalf("expected REQUEST_TIMED_OUT, got %d", part.ErrorCode)
 			}
 			total++
 		}
@@ -972,13 +959,6 @@ func TestFetchForwardTransportErrorRetry(t *testing.T) {
 	if total != 2 {
 		t.Fatalf("expected 2 errored partitions, got %d", total)
 	}
-
-	// The real protection is in forwardFetch: non-final-attempt transport
-	// errors (r.err != nil from fanOutFetch) now populate failedPartitions
-	// (see cmd/proxy/main.go:1705) and trigger another
-	// groupFetchPartitionsByBroker + fanOutFetch iteration instead of
-	// immediately poisoning the response to the real client.
-	// triedBackends is now hoisted so bad addrs are excluded on retries.
 }
 
 func TestUpdateTopicNames(t *testing.T) {
@@ -1094,5 +1074,109 @@ func TestResolveFetchTopicNames(t *testing.T) {
 	}
 	if req.Topics[1].Topic != "events" {
 		t.Fatalf("topic[1] name: got %q, want %q", req.Topics[1].Topic, "events")
+	}
+}
+
+// regression test for the fetch forward error retry fix (issue 155).
+// a backend that closes the conn on first fetch (triggering read EOF or decode error)
+// should cause retry on fresh conn instead of immediate REQUEST_TIMED_OUT to client.
+
+func buildGoodFetchResponse(version int16, topic string, partition int32) []byte {
+	resp := kmsg.NewPtrFetchResponse()
+	resp.SetVersion(version)
+	tr := kmsg.NewFetchResponseTopic()
+	tr.Topic = topic
+	pr := kmsg.NewFetchResponseTopicPartition()
+	pr.Partition = partition
+	pr.ErrorCode = 0
+	pr.HighWatermark = 100
+	pr.LastStableOffset = 100
+	tr.Partitions = append(tr.Partitions, pr)
+	resp.Topics = append(resp.Topics, tr)
+	return protocol.EncodeResponse(1, version, resp)
+}
+
+type failingFirstBackend struct {
+	ln       net.Listener
+	mu       sync.Mutex
+	attempts int
+	fail     int
+}
+
+func (b *failingFirstBackend) run() {
+	for {
+		c, err := b.ln.Accept()
+		if err != nil {
+			return
+		}
+		go func(conn net.Conn) {
+			defer conn.Close()
+			_, _ = protocol.ReadFrame(conn)
+			b.mu.Lock()
+			b.attempts++
+			att := b.attempts
+			b.mu.Unlock()
+			if att <= b.fail {
+				return
+			}
+			good := buildGoodFetchResponse(13, "orders", 0)
+			_ = protocol.WriteFrame(conn, good)
+		}(c)
+	}
+}
+
+func TestForwardFetchRetriesOnBackendError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	fb := &failingFirstBackend{ln: ln, fail: 1}
+	go fb.run()
+
+	p := &proxy{
+		backends:       []string{ln.Addr().String()},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		dialTimeout:    2 * time.Second,
+		backendRetries: 3,
+	}
+	p.setReady(true)
+
+	hdr := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyFetch,
+		APIVersion:    13,
+		CorrelationID: 99,
+		ClientID:      kmsg.StringPtr("regtest"),
+	}
+	fetchReq := makeFetchRequest(map[string][]int32{"orders": {0}})
+	fetchReq.Version = 13
+	groups := p.groupFetchPartitionsByBroker(context.Background(), fetchReq, nil)
+
+	pool := newConnPool(2 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	respBytes, err := p.forwardFetch(ctx, hdr, fetchReq, nil, groups, pool)
+	if err != nil {
+		t.Fatalf("forwardFetch: %v", err)
+	}
+
+	parsed, perr := parseFetchResponse(respBytes, 13)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	if len(parsed.Topics) == 0 || len(parsed.Topics[0].Partitions) == 0 {
+		t.Fatal("no partition response")
+	}
+	ec := parsed.Topics[0].Partitions[0].ErrorCode
+	if ec == protocol.REQUEST_TIMED_OUT {
+		t.Fatal("got REQUEST_TIMED_OUT without retry (bug not fixed)")
+	}
+	if ec != 0 {
+		t.Fatalf("unexpected error code: %d", ec)
+	}
+	if fb.attempts < 2 {
+		t.Fatalf("expected >=2 backend attempts (error then retry success), got %d", fb.attempts)
 	}
 }

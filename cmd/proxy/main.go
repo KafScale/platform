@@ -1686,11 +1686,7 @@ type fetchFanOutResult struct {
 }
 
 // forwardFetch fans out sub-requests, merges responses, and retries
-// NOT_LEADER_OR_FOLLOWER partitions or backend transport/decode errors
-// (e.g. "read frame size: EOF", "decode fetch response v13: ...") on a
-// different broker / fresh connection. This provides resilience for the
-// proxy-as-entrypoint model when a routine proxy restart leaves half-open
-// or version-skewed connections to the broker for Fetch v11+.
+// NOT_LEADER_OR_FOLLOWER or transport/decode errors on fresh connections.
 func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader, fullReq *kmsg.FetchRequest, originalPayload []byte, groups map[string]*kmsg.FetchRequest, pool *connPool) ([]byte, error) {
 	const maxRetries = 3
 
@@ -1700,12 +1696,9 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 	}
 
 	var failedPartitions map[string]map[int32]bool
-	// triedBackends is kept across attempts so that a broker addr that
-	// previously produced a frame EOF or v13 decode error is avoided for
-	// the remainder of this client fetch (connectForAddr + excluding).
-	triedBackends := make(map[string]bool)
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		failedPartitions = nil
+		triedBackends := make(map[string]bool)
 		subResults := p.fanOutFetch(ctx, header, groups, originalPayload, triedBackends, pool)
 
 		for _, r := range subResults {
@@ -1715,15 +1708,8 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 					triedBackends[r.target] = true
 				}
 				if attempt == maxRetries-1 {
-					// Exhausted retries for this sub-fetch: surface to client.
-					// (Previously this happened on the *first* error, causing
-					// permanent-looking empty reads until coordinated restart.)
 					addFetchErrorForAllPartitions(merged, r.subReq, protocol.REQUEST_TIMED_OUT)
 				} else {
-					// Collect partitions for regroup + retry on a fresh conn.
-					// Unlike NOT_LEADER, do not invalidate the router here —
-					// the partition placement was probably correct; the TCP
-					// or response from that broker was bad (stale conn, etc.).
 					for _, topic := range r.subReq.Topics {
 						key := fetchTopicKey(topic.Topic, topic.TopicID)
 						if failedPartitions == nil {
