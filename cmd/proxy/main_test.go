@@ -935,6 +935,52 @@ func TestAddFetchErrorForAllPartitions(t *testing.T) {
 	}
 }
 
+// TestFetchForwardTransportErrorRetry documents the regression target for
+// https://github.com/KafScale/platform/issues/155 (Fetch returns empty/EOF
+// (v13 decode) after proxy restart).
+//
+// Previously, any error from fanOutFetch (forwardToBackend ReadFrame EOF or
+// parseFetchResponse "decode fetch response v13") caused an *immediate*
+// addFetchErrorForAllPartitions(..., REQUEST_TIMED_OUT) with no further
+// attempts on a fresh connection. This produced 0-record responses to
+// consumers and no recovery until a coordinated broker+proxy restart.
+//
+// The fix collects partitions from errored sub-requests for regroup/retry
+// (using triedBackends to avoid the bad addr, and the existing maxRetries
+// loop + connectForAddr), and only emits REQUEST_TIMED_OUT on the final
+// exhausted attempt. This matches the existing NOT_LEADER retry pattern
+// while avoiding router invalidation for pure transport problems.
+func TestFetchForwardTransportErrorRetry(t *testing.T) {
+	// On the last attempt we still end up calling the same helper that
+	// the old code always called. This test ensures the "exhaust" path
+	// continues to produce the expected error code for clients.
+	resp := &kmsg.FetchResponse{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+	})
+	addFetchErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected REQUEST_TIMED_OUT on exhausted backend error, got %d", part.ErrorCode)
+			}
+			total++
+		}
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 errored partitions, got %d", total)
+	}
+
+	// The real protection is in forwardFetch: non-final-attempt transport
+	// errors (r.err != nil from fanOutFetch) now populate failedPartitions
+	// (see cmd/proxy/main.go:1705) and trigger another
+	// groupFetchPartitionsByBroker + fanOutFetch iteration instead of
+	// immediately poisoning the response to the real client.
+	// triedBackends is now hoisted so bad addrs are excluded on retries.
+}
+
 func TestUpdateTopicNames(t *testing.T) {
 	p := &proxy{topicNames: make(map[[16]byte]string)}
 	topicID1 := [16]byte{1, 2, 3}

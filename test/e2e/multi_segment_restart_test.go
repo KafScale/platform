@@ -35,6 +35,20 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+// TestMultiSegmentRestartDurability exercises storage durability across
+// broker restarts.
+//
+// NOTE (regression target for issue #155 "empty-eof-race-edge"):
+// A closely related scenario is *proxy* restart while consumers are active.
+// After a proxy restart, the fetch forward path (cmd/proxy/main.go:forwardFetch)
+// must retry backend connection / "decode fetch response v13" errors on fresh
+// conns instead of immediately returning REQUEST_TIMED_OUT to the client.
+// See TestFetchForwardTransportErrorRetry in cmd/proxy/main_test.go and the
+// changes on branch empty-eof-race-edge.
+// A full end-to-end version would start a proxy process (similar to the
+// broker here), connect the kgo client via the proxy addr, restart the proxy
+// mid-consume, and assert that PollFetches continues to return the produced
+// records without requiring a broker restart.
 func TestMultiSegmentRestartDurability(t *testing.T) {
 	const enableEnv = "KAFSCALE_E2E"
 	if os.Getenv(enableEnv) != "1" {
