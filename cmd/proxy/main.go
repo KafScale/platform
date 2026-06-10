@@ -1686,7 +1686,7 @@ type fetchFanOutResult struct {
 }
 
 // forwardFetch fans out sub-requests, merges responses, and retries
-// NOT_LEADER_OR_FOLLOWER partitions on a different broker.
+// NOT_LEADER_OR_FOLLOWER or transport/decode errors on fresh connections.
 func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader, fullReq *kmsg.FetchRequest, originalPayload []byte, groups map[string]*kmsg.FetchRequest, pool *connPool) ([]byte, error) {
 	const maxRetries = 3
 
@@ -1704,7 +1704,25 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 		for _, r := range subResults {
 			if r.err != nil {
 				p.logger.Warn("fetch forward failed", "target", r.target, "error", r.err)
-				addFetchErrorForAllPartitions(merged, r.subReq, protocol.REQUEST_TIMED_OUT)
+				if r.target != "" {
+					triedBackends[r.target] = true
+				}
+				if attempt == maxRetries-1 {
+					addFetchErrorForAllPartitions(merged, r.subReq, protocol.REQUEST_TIMED_OUT)
+				} else {
+					for _, topic := range r.subReq.Topics {
+						key := fetchTopicKey(topic.Topic, topic.TopicID)
+						if failedPartitions == nil {
+							failedPartitions = make(map[string]map[int32]bool)
+						}
+						if failedPartitions[key] == nil {
+							failedPartitions[key] = make(map[int32]bool)
+						}
+						for _, part := range topic.Partitions {
+							failedPartitions[key][part.Partition] = true
+						}
+					}
+				}
 				continue
 			}
 			if r.conn != nil {
@@ -1751,7 +1769,7 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 		if len(groups) == 0 {
 			break
 		}
-		p.logger.Debug("retrying NOT_LEADER fetch partitions", "attempt", attempt+1, "partitions", len(failedPartitions))
+		p.logger.Debug("retrying fetch partitions", "attempt", attempt+1, "partitions", len(failedPartitions))
 	}
 
 	for _, topic := range fullReq.Topics {
