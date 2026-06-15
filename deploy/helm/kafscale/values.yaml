@@ -57,16 +57,18 @@ operator:
   nodeSelector: {}
   tolerations: []
   affinity: {}
-  # Pod-level security context. PSA-restricted compliant defaults: the
-  # operator image runs as USER 10001 (Dockerfile-baked), so we declare
-  # runAsNonRoot + fsGroup at the pod level. Override per-environment
-  # via `--set operator.podSecurityContext.<key>=<value>` or an
-  # environment values file.
+  # Pod-level security context. PSA-restricted compliant defaults.
+  # These defaults assume the shipped images (UID 10001). If you override
+  # image.repository with a root-running image, set
+  # operator.podSecurityContext.runAsNonRoot=false. Override per-environment
+  # via `--set operator.podSecurityContext.<key>=<value>` or a values file.
   podSecurityContext:
     runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. If the image
+    # USER changes, change this in lockstep. PSA restricted itself only
+    # requires runAsNonRoot, not a specific UID.
     runAsUser: 10001
     runAsGroup: 10001
-    fsGroup: 10001
     seccompProfile:
       type: RuntimeDefault
   # Container-level security context. PSA-restricted-required defaults.
@@ -126,13 +128,15 @@ console:
   tolerations: []
   affinity: {}
   # PSA-restricted compliant defaults. The console image runs as
-  # USER 10001 (Dockerfile-baked); pod + container security context
-  # declare the four PSA-restricted requirements.
+  # USER 10001 (Dockerfile-baked). These defaults assume the shipped image;
+  # if you override image.repository with a root-running image, set
+  # console.podSecurityContext.runAsNonRoot=false.
   podSecurityContext:
     runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. Change in
+    # lockstep with the image USER. PSA restricted requires only runAsNonRoot.
     runAsUser: 10001
     runAsGroup: 10001
-    fsGroup: 10001
     seccompProfile:
       type: RuntimeDefault
   containerSecurityContext:
@@ -180,10 +184,16 @@ proxy:
   tolerations: []
   affinity: {}
   # PSA-restricted compliant defaults. The proxy image runs as
-  # USER 10001 (Dockerfile-baked); pod + container security context
-  # declare the four PSA-restricted requirements.
+  # USER 10001 (Dockerfile-baked). These defaults assume the shipped image;
+  # if you override image.repository with a root-running image, set
+  # proxy.podSecurityContext.runAsNonRoot=false.
+  # fsGroup is kept here (unlike operator/console) because the proxy mounts a
+  # writable /tmp emptyDir for the LFS verify path; fsGroup sets that volume's
+  # group ownership so the non-root process can write to it.
   podSecurityContext:
     runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. Change in
+    # lockstep with the image USER. PSA restricted requires only runAsNonRoot.
     runAsUser: 10001
     runAsGroup: 10001
     fsGroup: 10001
@@ -267,6 +277,23 @@ mcp:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # PSA-restricted compliant defaults. The mcp image runs as
+  # USER 10001 (Dockerfile-baked, deploy/docker/mcp.Dockerfile). These
+  # defaults assume the shipped image; if you override image.repository with
+  # a root-running image, set mcp.podSecurityContext.runAsNonRoot=false.
+  podSecurityContext:
+    runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. Change in
+    # lockstep with the image USER. PSA restricted requires only runAsNonRoot.
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   service:
     type: ClusterIP
     port: 80

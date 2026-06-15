@@ -115,6 +115,16 @@ spec:
 {{- else }}
             {}
 {{- end }}
+          # The proxy LFS verify path writes a temp file via os.CreateTemp("", ...)
+          # which resolves to /tmp. With readOnlyRootFilesystem: true the root FS is
+          # read-only, so /tmp must be a writable mount or LFS verify returns HTTP 500.
+          # This emptyDir keeps the restricted default and LFS coexisting.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- with .Values.proxy.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}

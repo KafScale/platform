@@ -95,3 +95,8 @@ jobs:
 
       - name: Lint chart
         run: helm lint deploy/helm/kafscale
+
+      - name: Chart conformance tests
+        run: |
+          make test-chart-proxy-nodeport
+          make test-chart-psa
