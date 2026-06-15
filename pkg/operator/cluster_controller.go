@@ -163,11 +163,11 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 }
 
 // softPodAntiAffinity returns a preferred (soft) pod anti-affinity that spreads
-// replicas across nodes by hostname. BUG-0012: operator-managed broker and etcd
-// StatefulSets shipped with no anti-affinity, so all replicas could land on one
-// node and a single node loss took the whole quorum. Soft (not required) so the
-// default single-node KIND demo still schedules every replica instead of leaving
-// them Pending; on a multi-node cluster the scheduler spreads them.
+// replicas across nodes by hostname, so a single-node loss does not take the
+// whole quorum (broker or etcd) at once. The selector reuses the pod-template
+// label map, so it always matches the very pods it is meant to spread. Soft
+// (not required) so a single-node cluster still schedules every replica instead
+// of leaving them Pending; on a multi-node cluster the scheduler spreads them.
 func softPodAntiAffinity(labels map[string]string) *corev1.Affinity {
 	return &corev1.Affinity{
 		PodAntiAffinity: &corev1.PodAntiAffinity{
