@@ -1820,6 +1820,22 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 				continue
 			}
 			nextOffset, offsetErr := h.waitForFetchData(ctx, topicName, part.Partition, part.FetchOffset, maxWait)
+			// In flush-disabled / acks=0 mode (KAFSCALE_PRODUCE_SYNC_FLUSH=false)
+			// no flush fires for the buffered tail, so the metadata store's
+			// high-watermark (nextOffset) lags the records already acknowledged to
+			// the producer. The fetch handler bounds reads at the watermark, so a
+			// consumer would otherwise never request those acknowledged offsets.
+			// Raise the effective watermark to include the in-memory buffered tail
+			// so acknowledged records are consumable (read-after-ack). This is a
+			// non-durable visibility raise: those buffered records are lost on a
+			// broker restart (the buffer is in-memory; restore is segment-only). In
+			// the default flushOnAck=true path every acknowledged produce is already
+			// flushed, the buffer is empty at fetch time, and this is a no-op.
+			if !h.flushOnAck && offsetErr == nil {
+				if buffered := plog.BufferedHighWatermark(); buffered > nextOffset {
+					nextOffset = buffered
+				}
+			}
 			if offsetErr != nil {
 				if errors.Is(offsetErr, metadata.ErrUnknownTopic) {
 					p := kmsg.NewFetchResponseTopicPartition()

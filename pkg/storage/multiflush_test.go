@@ -25,13 +25,14 @@ import (
 
 // TestPartitionLogMultiFlushAllOffsetsReadable appends many batches across many
 // flush rotations (MaxBatches=3 -> a flush roughly every 3 appends) and asserts
-// that EVERY acked offset is still readable afterwards. This isolates the deeper
-// "1019 acked -> ~32 readable" data loss seen end-to-end on v1.6.0 in pure
-// storage logic over a MemoryS3 backend (no network/S3 flakiness).
+// that EVERY acknowledged offset is still readable afterwards: the offsets that
+// rotated into segments via the flushed-segment path, and the buffered tail via
+// the write-buffer fallback. It checks this in pure storage logic over a
+// MemoryS3 backend (no network/S3 flakiness).
 //
-// If segments overwrite each other, are not registered in l.segments, or the
-// flush path drops drained batches, mid-stream offsets become ErrOffsetOutOfRange
-// and this test fails.
+// If segments overwrite each other, are not registered in l.segments, the flush
+// path drops drained batches, or the buffered tail is not served, mid-stream
+// offsets become ErrOffsetOutOfRange and this test fails.
 func TestPartitionLogMultiFlushAllOffsetsReadable(t *testing.T) {
 	s3 := NewMemoryS3Client()
 	c := cache.NewSegmentCache(1 << 20)
@@ -73,7 +74,7 @@ func TestPartitionLogMultiFlushAllOffsetsReadable(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Fatalf("data loss across flush rotations: %d/%d acked offsets unreadable: %v",
+		t.Fatalf("read-after-ack across flush rotations: %d/%d acknowledged offsets unreadable: %v",
 			len(missing), n, missing)
 	}
 }

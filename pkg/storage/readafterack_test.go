@@ -23,28 +23,34 @@ import (
 	"github.com/KafScale/platform/pkg/cache"
 )
 
-// TestPartitionLogReadAfterAckBeforeFlush reproduces the "acks-but-unreadable"
-// data-consistency bug.
+// TestPartitionLogReadAfterAckBeforeFlush exercises read-after-ack at the
+// storage layer: an acknowledged record that is still in the in-memory write
+// buffer (not yet flushed to a segment) must be readable through
+// PartitionLog.Read.
 //
 // AppendBatch returns an AppendResult (with assigned offsets) as soon as the
-// batch is buffered; that return value is what the broker uses to ACK the
-// produce to the client. But flushing to a segment happens only when a
-// WriteBuffer threshold trips (MaxBytes/MaxMessages/MaxBatches/FlushInterval),
-// and flushing is only ever evaluated inside AppendBatch (there is no background
-// flusher). Read serves only flushed segments and returns ErrOffsetOutOfRange
-// for anything still in the buffer.
+// batch is buffered; that return value is the basis for ACKing the produce to
+// the client. Flushing to a segment happens only when a WriteBuffer threshold
+// trips (MaxBytes/MaxMessages/MaxBatches/FlushInterval), evaluated inside
+// AppendBatch (there is no background flusher). Before this change Read served
+// only flushed segments and returned ErrOffsetOutOfRange for anything still in
+// the buffer.
 //
-// Consequence: when produce to a partition stops below the flush threshold, the
-// just-acked tail stays in the in-memory buffer and is NOT consumable, violating
-// Kafka's read-after-ack contract (and, because the buffer is in-memory, the
-// acked records are lost on a broker restart). Observed end-to-end as
-// 1015 acked -> 588 readable against KafScale v1.6.0.
+// Consequence at the storage layer: when produce to a partition stops below the
+// flush threshold, the just-acknowledged tail stays in the buffer and Read
+// returns ErrOffsetOutOfRange for it. This test asserts Read serves that
+// buffered tail.
+//
+// Scope: this is the storage-layer half of read-after-ack. Whether a real Kafka
+// consumer reaches these offsets through the fetch path additionally depends on
+// the broker advertising a high-watermark that includes the buffered tail; that
+// end-to-end path is covered by the broker test
+// TestHandleFetchReadAfterAckFlushDisabled. The buffer is in-memory, so these
+// records are readable while the process lives but lost on restart; this is not
+// a durability guarantee.
 //
 // Existing tests use MaxBytes:1 so every append flushes immediately, which is
 // why they never exercised this path.
-//
-// This test FAILS on v1.6.0 and must pass once Read serves the in-memory write
-// buffer (or produce flushes before acking under acks=all).
 func TestPartitionLogReadAfterAckBeforeFlush(t *testing.T) {
 	s3 := NewMemoryS3Client()
 	c := cache.NewSegmentCache(1024)
