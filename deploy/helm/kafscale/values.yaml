@@ -154,6 +154,10 @@ proxy:
     # When type is NodePort, pin the node port (otherwise Kubernetes assigns a
     # random one and a fixed host:port mapping cannot reach the proxy). Leave
     # empty to let Kubernetes choose. Only rendered when type == NodePort.
+    # Valid range is 30000-32767; a value outside it renders but is rejected
+    # at apply time. Scoped to the proxy because it is the single Kafka
+    # entrypoint; console/mcp expose service.type but are left as-is and
+    # tracked separately.
     nodePort: ""
 
 # NOTE: The standalone lfs-proxy has been removed.

@@ -111,6 +111,31 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `lfsDemos.*` | Demo applications |
 | `mcp.*` | MCP server settings |
 
+### Proxy Service
+
+The proxy is the single Kafka entrypoint, so its Service is the one clients connect to.
+
+| Key | Description | Default |
+|-----|-------------|---------|
+| `proxy.service.type` | Service type (`ClusterIP`, `NodePort`, `LoadBalancer`) | `LoadBalancer` |
+| `proxy.service.port` | Service port for the Kafka listener | `9092` |
+| `proxy.service.nodePort` | Pin the node port for the Kafka listener. Only rendered when `type == NodePort`; leave empty to let Kubernetes auto-assign | `""` |
+
+When `type` is `NodePort` and `nodePort` is empty, Kubernetes assigns a random
+node port, so a fixed host-to-node-port mapping (for example a kind
+`hostPort: 9092 -> containerPort: 30092` mapping) never reaches the proxy. Set
+`proxy.service.nodePort` to a value in the valid NodePort range `30000-32767`
+to pin it. A value outside that range renders fine but is rejected by the API
+server at apply time.
+
+```yaml
+proxy:
+  enabled: true
+  service:
+    type: NodePort
+    nodePort: 30092
+```
+
 ## LFS Proxy
 
 The LFS Proxy implements the claim-check pattern for large Kafka messages:

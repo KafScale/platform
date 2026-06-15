@@ -23,7 +23,7 @@ LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
 LOCAL_NODE := $(LOCAL_NODE_BIN)/node
 LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
 
-.PHONY: proto build test test-nested-modules tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check
+.PHONY: proto build test test-nested-modules tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -204,6 +204,9 @@ fmt-check: ## Check formatting (fails if unformatted)
 
 test-fuzz: ## Run Go fuzz test(s)
 	bash scripts/test_fuzz.sh
+
+test-chart-proxy-nodeport: ## Run the proxy Service nodePort chart template test (helm only, no cluster)
+	bash test/chart/proxy-nodeport_test.sh
 
 code-ql: ensure-local-node ## Run local CodeQL and emit SARIF under .tmp/codeql/
 	bash scripts/codeql_local.sh
