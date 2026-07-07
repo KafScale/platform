@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Copyright 2026 KafScale team.
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
