@@ -379,9 +379,9 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 	if err := s.metadata.CreatePartitions(ctx, topic, partitionCount); err != nil {
 		return err
 	}
-	if err := s.persistSnapshot(ctx); err != nil {
-		return err
-	}
+	// Read new partition metadata before persisting. The snapshot watcher can
+	// refresh in-memory state from etcd while persistSnapshot runs, so a later
+	// Metadata call may see a stale partition count and panic on index access.
 	updated, err := s.metadata.Metadata(ctx, []string{topic})
 	if err != nil {
 		return err
@@ -389,8 +389,14 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 	if len(updated.Topics) == 0 || updated.Topics[0].ErrorCode != 0 {
 		return ErrUnknownTopic
 	}
-	for i := current; i < partitionCount; i++ {
-		part := updated.Topics[0].Partitions[i]
+	newPartitions := updated.Topics[0].Partitions[current:partitionCount]
+	if int32(len(newPartitions)) != partitionCount-current {
+		return fmt.Errorf("metadata: expected %d new partitions, got %d", partitionCount-current, len(newPartitions))
+	}
+	if err := s.persistSnapshot(ctx); err != nil {
+		return err
+	}
+	for _, part := range newPartitions {
 		state := &metadatapb.PartitionState{
 			Topic:          topic,
 			Partition:      part.Partition,

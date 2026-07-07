@@ -17,6 +17,7 @@ package operator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -93,6 +94,8 @@ func TestEnsureEtcdCreatesManagedCluster(t *testing.T) {
 	assertFound(t, c, &corev1.Service{}, cluster.Namespace, cluster.Name+"-etcd-client")
 	assertFound(t, c, &policyv1.PodDisruptionBudget{}, cluster.Namespace, cluster.Name+"-etcd")
 	assertFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-snapshot")
+	assertFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-maintenance")
+	assertFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-maintenance-check")
 
 	sts := &appsv1.StatefulSet{}
 	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
@@ -185,6 +188,202 @@ func TestSnapshotStaleAfterEnv(t *testing.T) {
 	t.Setenv(operatorEtcdSnapshotStaleAfterEnv, "0")
 	if got := snapshotStaleAfterSeconds(); got != defaultSnapshotStaleAfterSeconds {
 		t.Fatalf("expected default stale after, got %d", got)
+	}
+}
+
+// argValue returns the value of a `--flag=value` argument, or "" if the flag
+// is not present in args.
+func argValue(args []string, flag string) string {
+	prefix := flag + "="
+	for _, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			return strings.TrimPrefix(a, prefix)
+		}
+	}
+	return ""
+}
+
+func TestEtcdArgsSpaceManagement(t *testing.T) {
+	cluster := testCluster("compaction", nil)
+
+	cases := []struct {
+		name          string
+		env           map[string]string
+		wantMode      string
+		wantRetention string
+		wantQuota     string
+	}{
+		{
+			name:          "defaults",
+			env:           nil,
+			wantMode:      "periodic",
+			wantRetention: "5m",
+			wantQuota:     "4294967296", // 4 GiB
+		},
+		{
+			name: "env overrides",
+			env: map[string]string{
+				operatorEtcdAutoCompactionModeEnv:      "revision",
+				operatorEtcdAutoCompactionRetentionEnv: "10000",
+				operatorEtcdQuotaBackendBytesEnv:       "8589934592", // 8 GiB
+			},
+			wantMode:      "revision",
+			wantRetention: "10000",
+			wantQuota:     "8589934592",
+		},
+		{
+			name: "garbage falls back to defaults",
+			env: map[string]string{
+				operatorEtcdAutoCompactionModeEnv:      "bogus",
+				operatorEtcdAutoCompactionRetentionEnv: "", // empty -> default
+				operatorEtcdQuotaBackendBytesEnv:       "-1",
+			},
+			wantMode:      "periodic",
+			wantRetention: "5m",
+			wantQuota:     "4294967296",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			args := etcdArgs(cluster)
+			if got := argValue(args, "--auto-compaction-mode"); got != tc.wantMode {
+				t.Errorf("auto-compaction-mode = %q, want %q", got, tc.wantMode)
+			}
+			if got := argValue(args, "--auto-compaction-retention"); got != tc.wantRetention {
+				t.Errorf("auto-compaction-retention = %q, want %q", got, tc.wantRetention)
+			}
+			if got := argValue(args, "--quota-backend-bytes"); got != tc.wantQuota {
+				t.Errorf("quota-backend-bytes = %q, want %q", got, tc.wantQuota)
+			}
+		})
+	}
+}
+
+func TestEtcdMemoryModeSetsContainerMemoryLimit(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdStorageMemoryEnv, "true")
+	cluster := testCluster("mem-guard", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	if len(sts.Spec.VolumeClaimTemplates) != 0 {
+		t.Fatalf("memory mode should not declare a PVC template, got %d", len(sts.Spec.VolumeClaimTemplates))
+	}
+	if len(sts.Spec.Template.Spec.Containers) == 0 {
+		t.Fatalf("expected etcd container")
+	}
+	res := sts.Spec.Template.Spec.Containers[0].Resources
+	memReq, okReq := res.Requests[corev1.ResourceMemory]
+	memLim, okLim := res.Limits[corev1.ResourceMemory]
+	if !okReq || !okLim {
+		t.Fatalf("memory mode must set memory request and limit, got requests=%v limits=%v", res.Requests, res.Limits)
+	}
+	// request == quota (4 GiB), limit == quota + 512 MiB headroom.
+	if got := memReq.Value(); got != defaultEtcdQuotaBackendBytes {
+		t.Errorf("memory request = %d, want %d", got, defaultEtcdQuotaBackendBytes)
+	}
+	if got := memLim.Value(); got != defaultEtcdQuotaBackendBytes+(512*1024*1024) {
+		t.Errorf("memory limit = %d, want %d", got, defaultEtcdQuotaBackendBytes+(512*1024*1024))
+	}
+}
+
+func TestEtcdMaintenanceCronJobs(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdMaintenanceScheduleEnv, "15 4 * * *")
+	t.Setenv(operatorEtcdMaintenanceCheckScheduleEnv, "*/10 * * * *")
+	cluster := testCluster("maintenance", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+
+	cron := &batchv1.CronJob{}
+	assertFound(t, c, cron, cluster.Namespace, cluster.Name+"-etcd-maintenance")
+	if cron.Spec.Schedule != "15 4 * * *" {
+		t.Fatalf("maintenance schedule = %q, want %q", cron.Spec.Schedule, "15 4 * * *")
+	}
+	if got := cron.Labels["kafscale.io/etcd-task"]; got != "maintenance" {
+		t.Fatalf("maintenance task label = %q, want maintenance", got)
+	}
+	maintenance := cron.Spec.JobTemplate.Spec.Template.Spec.Containers[0]
+	if got := envValue(maintenance.Env, "CHECK_ONLY"); got != "0" {
+		t.Fatalf("CHECK_ONLY = %q, want 0", got)
+	}
+	script := strings.Join(maintenance.Args, "\n")
+	if !strings.Contains(script, "endpoint defrag") || !strings.Contains(script, "alarm disarm") {
+		t.Fatalf("maintenance script missing defrag/disarm: %s", script)
+	}
+
+	check := &batchv1.CronJob{}
+	assertFound(t, c, check, cluster.Namespace, cluster.Name+"-etcd-maintenance-check")
+	if check.Spec.Schedule != "*/10 * * * *" {
+		t.Fatalf("check schedule = %q, want %q", check.Spec.Schedule, "*/10 * * * *")
+	}
+	if got := envValue(check.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env, "CHECK_ONLY"); got != "1" {
+		t.Fatalf("checker CHECK_ONLY = %q, want 1", got)
+	}
+}
+
+func TestEtcdMaintenanceDisabled(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdMaintenanceEnabledEnv, "0")
+	cluster := testCluster("maintenance-off", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+
+	assertNotFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-maintenance")
+	assertNotFound(t, c, &batchv1.CronJob{}, cluster.Namespace, cluster.Name+"-etcd-maintenance-check")
+}
+
+func TestEtcdMaintenanceSizeThresholdPct(t *testing.T) {
+	t.Setenv(operatorEtcdMaintenanceSizeThresholdPctEnv, "80")
+	if got := etcdMaintenanceSizeThresholdPct(); got != 80 {
+		t.Fatalf("threshold pct = %d, want 80", got)
+	}
+	if got := etcdMaintenanceSizeThresholdBytes(1000); got != 800 {
+		t.Fatalf("threshold bytes = %d, want 800", got)
+	}
+	t.Setenv(operatorEtcdMaintenanceSizeThresholdPctEnv, "0")
+	if got := etcdMaintenanceSizeThresholdPct(); got != defaultEtcdMaintenanceSizeThresholdPct {
+		t.Fatalf("expected default threshold pct, got %d", got)
+	}
+}
+
+func TestEtcdDiskModeHasNoContainerMemoryLimit(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	// storage-memory mode explicitly off (the default); disk-backed PVC path.
+	cluster := testCluster("disk-mode", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	if len(sts.Spec.VolumeClaimTemplates) == 0 {
+		t.Fatalf("disk mode must declare a PVC template")
+	}
+	res := sts.Spec.Template.Spec.Containers[0].Resources
+	if len(res.Requests) != 0 || len(res.Limits) != 0 {
+		t.Fatalf("disk mode must not set container resources, got requests=%v limits=%v", res.Requests, res.Limits)
 	}
 }
 
