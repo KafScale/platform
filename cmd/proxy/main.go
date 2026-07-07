@@ -1900,7 +1900,13 @@ func addFetchErrorForAllPartitions(resp *kmsg.FetchResponse, req *kmsg.FetchRequ
 // encodeProduceRequest serializes a produce request with header into a wire frame.
 func encodeProduceRequest(header *protocol.RequestHeader, req *kmsg.ProduceRequest) []byte {
 	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientIDStr(header.ClientID)))
-	return formatter.AppendRequest(nil, req, header.CorrelationID)
+	b := formatter.AppendRequest(nil, req, header.CorrelationID)
+	// AppendRequest emits a 4-byte size prefix, but WriteFrame re-adds one;
+	// strip it here so the wire frame is single-prefixed (header+body only).
+	if len(b) < 4 {
+		return b
+	}
+	return b[4:]
 }
 
 // parseProduceResponse deserializes a produce response from wire bytes.
@@ -1920,7 +1926,13 @@ func parseProduceResponse(data []byte, version int16) (*kmsg.ProduceResponse, er
 // encodeFetchRequest serializes a fetch request with header into a wire frame.
 func encodeFetchRequest(header *protocol.RequestHeader, req *kmsg.FetchRequest) []byte {
 	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientIDStr(header.ClientID)))
-	return formatter.AppendRequest(nil, req, header.CorrelationID)
+	b := formatter.AppendRequest(nil, req, header.CorrelationID)
+	// AppendRequest emits a 4-byte size prefix, but WriteFrame re-adds one;
+	// strip it here so the wire frame is single-prefixed (header+body only).
+	if len(b) < 4 {
+		return b
+	}
+	return b[4:]
 }
 
 // parseFetchResponse deserializes a fetch response from wire bytes.
