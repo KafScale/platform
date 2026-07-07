@@ -18,6 +18,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/KafScale/platform/pkg/cache"
@@ -97,5 +98,52 @@ func TestPartitionLogReadAfterAckBeforeFlush(t *testing.T) {
 		if len(data) == 0 {
 			t.Fatalf("Read acked offset %d returned no data", off)
 		}
+	}
+}
+
+func TestPartitionLogConcurrentReadDuringBufferedAppend(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	c := cache.NewSegmentCache(1 << 20)
+	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
+		Buffer:  WriteBufferConfig{MaxBytes: 1 << 30},
+		Segment: SegmentWriterConfig{IndexIntervalMessages: 1},
+	}, nil, nil, nil)
+
+	const readers = 8
+	var wg sync.WaitGroup
+	errCh := make(chan error, readers)
+
+	for r := 0; r < readers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for off := int64(0); off < 20; off++ {
+				data, err := log.Read(context.Background(), off, 1<<20)
+				if err != nil && !errors.Is(err, ErrOffsetOutOfRange) {
+					errCh <- err
+					return
+				}
+				if err == nil && len(data) == 0 {
+					errCh <- errors.New("read returned empty body without error")
+					return
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < 20; i++ {
+		batch, err := NewRecordBatchFromBytes(make([]byte, 70))
+		if err != nil {
+			t.Fatalf("NewRecordBatchFromBytes: %v", err)
+		}
+		if _, err := log.AppendBatch(context.Background(), batch); err != nil {
+			t.Fatalf("AppendBatch %d: %v", i, err)
+		}
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
 	}
 }

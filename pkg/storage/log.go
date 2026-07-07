@@ -489,34 +489,36 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 			break
 		}
 	}
-	l.mu.Unlock()
-
 	if !found {
 		// Not in any flushed segment. The offset may still be in the in-memory
 		// write buffer (acked but not yet flushed: flush is append-triggered, so
 		// a partition that goes quiet below the flush threshold keeps its tail
 		// buffered). Serve it so acked records are consumable (Kafka
 		// read-after-ack) instead of returning ErrOffsetOutOfRange.
-		if body := l.buffer.RecordsFrom(offset, maxBytes); len(body) > 0 {
-			// Observability for the flush-disabled / acks=0 path: this read was
-			// served from the in-memory buffer, not a durable segment.
-			l.logger().Debug("read served from write buffer (acked-but-unflushed)",
-				"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
-			return body, nil
+		//
+		// Hold l.mu across both fallbacks so an in-flight flush cannot move
+		// batches from the buffer into flushingBatches (or commit a segment)
+		// between the two checks.
+		body := l.buffer.RecordsFrom(offset, maxBytes)
+		fromFlushWindow := false
+		if len(body) == 0 {
+			body = recordsFromBatches(l.flushingBatches, offset, maxBytes)
+			fromFlushWindow = len(body) > 0
 		}
-		// Or the offset may be mid-flush: prepareFlush drained it from the buffer
-		// but uploadFlush has not yet committed the segment to l.segments. Serve
-		// the in-flight batches so the record stays readable across that window.
-		l.mu.Lock()
-		body := recordsFromBatches(l.flushingBatches, offset, maxBytes)
 		l.mu.Unlock()
 		if len(body) > 0 {
-			l.logger().Debug("read served from in-flight flush batches (flush window)",
-				"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
+			if fromFlushWindow {
+				l.logger().Debug("read served from in-flight flush batches (flush window)",
+					"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
+			} else {
+				l.logger().Debug("read served from write buffer (acked-but-unflushed)",
+					"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
+			}
 			return body, nil
 		}
 		return nil, ErrOffsetOutOfRange
 	}
+	l.mu.Unlock()
 
 	var data []byte
 	ok := false
