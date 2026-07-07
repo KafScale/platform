@@ -108,15 +108,28 @@ Broker pods exit immediately if they cannot read metadata or write a probe objec
 
 Each broker advertises a numeric `NodeID` in etcd. In a single-node demo you'll always see `Leader=0` in the Console's topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
-## External Broker Access
+## External Kafka Access
 
-By default, brokers advertise the in-cluster service DNS name. That works for clients running inside Kubernetes, but external clients must connect to a reachable address. Configure both the broker Service exposure and the advertised address so clients learn the external endpoint from metadata responses.
+By default, brokers advertise the in-cluster service DNS name. That works for
+clients running inside Kubernetes. External clients need a reachable address in
+Metadata responses.
 
-See [Runtime Settings — External Broker Access](/configuration/#external-broker-access) for all CRD fields.
+**Recommended:** deploy the Kafka-aware proxy (`proxy.enabled=true`). When the
+proxy is enabled, clients connect to the **proxy Service**, not individual broker
+pods. The proxy answers Metadata/FindCoordinator with a single stable endpoint,
+then forwards all other Kafka requests to brokers.
 
-### Kafka Proxy (recommended for external access)
+**Optional:** expose brokers directly via `KafscaleCluster` `spec.brokers` Service
+settings. Use this only when you intentionally bypass the proxy. Broker NodePort
+does not replace the proxy entrypoint in scaled deployments.
 
-For external clients plus broker churn, deploy the Kafka-aware proxy. It answers Metadata/FindCoordinator requests with a single stable endpoint (the proxy service), then forwards all other Kafka requests to the brokers. This keeps clients connected even as broker pods scale or rotate.
+The Helm chart does **not** ship a Kafka Ingress resource. External TLS uses
+LoadBalancer annotations or an external TCP gateway (see
+[Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer-recommended)).
+
+See [Runtime Settings — External Kafka Access](/configuration/#external-kafka-access) for CRD and Helm fields.
+
+### Kafka Proxy (recommended)
 
 Recommended settings:
 - Run 2+ proxy replicas behind a LoadBalancer service
@@ -137,9 +150,27 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
 ```
 
-### Direct broker exposure
+For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
+stay stable. Set `proxy.service.type=NodePort` and `proxy.service.nodePort` to a
+value in `30000–32767`, then set `proxy.advertisedHost` to the node IP.
 
-Use direct broker Service settings when you intentionally expose dedicated brokers (for example, isolating traffic or pinning producers to specific nodes). This requires explicit endpoint management.
+Example (kind / local dev):
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set proxy.enabled=true \
+  --set proxy.service.type=NodePort \
+  --set proxy.service.nodePort=30092 \
+  --set proxy.advertisedHost=127.0.0.1 \
+  --set proxy.advertisedPort=30092 \
+  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+```
+
+### Direct broker exposure (optional)
+
+Use direct broker Service settings when you intentionally expose dedicated brokers
+(for example, isolating traffic or pinning producers to specific nodes).
 
 Example (GKE/AWS/Azure load balancer):
 
