@@ -30,6 +30,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+func newTestEtcdStore(t *testing.T, ctx context.Context, initial ClusterMetadata, endpoints []string) *EtcdStore {
+	t.Helper()
+	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
 func TestEtcdStoreCreateTopicPersistsSnapshot(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 
@@ -40,12 +50,9 @@ func TestEtcdStoreCreateTopicPersistsSnapshot(t *testing.T) {
 		},
 		ControllerID: 1,
 	}
-	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, initial, endpoints)
 
-	_, err = store.CreateTopic(ctx, TopicSpec{
+	_, err := store.CreateTopic(ctx, TopicSpec{
 		Name:              "orders",
 		NumPartitions:     3,
 		ReplicationFactor: 1,
@@ -67,10 +74,7 @@ func TestEtcdStoreTopicConfigAndPartitions(t *testing.T) {
 		},
 		ControllerID: 1,
 	}
-	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, initial, endpoints)
 	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}); err != nil {
 		t.Fatalf("CreateTopic: %v", err)
 	}
@@ -125,10 +129,7 @@ func TestEtcdStoreDeleteTopicRemovesOffsets(t *testing.T) {
 			},
 		},
 	}
-	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, initial, endpoints)
 
 	if err := store.UpdateOffsets(ctx, "orders", 0, 10); err != nil {
 		t.Fatalf("UpdateOffsets: %v", err)
@@ -173,10 +174,7 @@ func TestEtcdStoreConsumerGroupPersistence(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 
 	ctx := context.Background()
-	store, err := NewEtcdStore(ctx, ClusterMetadata{}, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, endpoints)
 
 	group := &metadatapb.ConsumerGroup{
 		GroupId:      "group-1",
@@ -308,10 +306,7 @@ func TestEtcdStoreMetadataAndAvailable(t *testing.T) {
 			{Topic: kmsg.StringPtr("orders"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1}}},
 		},
 	}
-	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, initial, endpoints)
 
 	// Metadata
 	meta, err := store.Metadata(ctx, nil)
@@ -341,12 +336,9 @@ func TestEtcdStoreNextOffset(t *testing.T) {
 		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "b0", Port: 9092}},
 		ControllerID: 1,
 	}
-	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, initial, endpoints)
 
-	_, err = store.CreateTopic(ctx, TopicSpec{Name: "events", NumPartitions: 2, ReplicationFactor: 1})
+	_, err := store.CreateTopic(ctx, TopicSpec{Name: "events", NumPartitions: 2, ReplicationFactor: 1})
 	if err != nil {
 		t.Fatalf("CreateTopic: %v", err)
 	}
@@ -372,13 +364,107 @@ func TestEtcdStoreNextOffset(t *testing.T) {
 	}
 }
 
+func TestEtcdStoreRefreshSnapshotRecoversAfterLatePublish(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, endpoints)
+
+	meta, err := store.Metadata(ctx, nil)
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Brokers) != 0 {
+		t.Fatalf("expected empty brokers before snapshot publish, got %d", len(meta.Brokers))
+	}
+
+	late := ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "broker-0", Port: 9092},
+			{NodeID: 1, Host: "broker-1", Port: 9092},
+		},
+		ControllerID: 0,
+		Topics: []protocol.MetadataTopic{
+			{
+				Topic: kmsg.StringPtr("events"),
+				Partitions: []protocol.MetadataPartition{
+					{Partition: 0, Leader: 0},
+				},
+			},
+		},
+	}
+	putSnapshot(t, endpoints, late)
+
+	if err := store.RefreshSnapshot(ctx); err != nil {
+		t.Fatalf("RefreshSnapshot: %v", err)
+	}
+	meta, err = store.Metadata(ctx, nil)
+	if err != nil {
+		t.Fatalf("Metadata after refresh: %v", err)
+	}
+	if len(meta.Brokers) != 2 {
+		t.Fatalf("expected 2 brokers after refresh, got %d", len(meta.Brokers))
+	}
+	if len(meta.Topics) != 1 || *meta.Topics[0].Topic != "events" {
+		t.Fatalf("expected events topic after refresh, got %+v", meta.Topics)
+	}
+}
+
+func TestEtcdStoreWatchSnapshotRecoversAfterLatePublish(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, endpoints)
+
+	late := ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 0,
+		Topics: []protocol.MetadataTopic{
+			{
+				Topic: kmsg.StringPtr("orders"),
+				Partitions: []protocol.MetadataPartition{
+					{Partition: 0, Leader: 0},
+				},
+			},
+		},
+	}
+	putSnapshot(t, endpoints, late)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		meta, err := store.Metadata(ctx, nil)
+		if err != nil {
+			t.Fatalf("Metadata: %v", err)
+		}
+		if len(meta.Brokers) == 1 && len(meta.Topics) == 1 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("watch did not pick up late-published snapshot")
+}
+
+func putSnapshot(t *testing.T, endpoints []string, meta ClusterMetadata) {
+	t.Helper()
+	cli := newEtcdClient(t, endpoints)
+	defer func() { _ = cli.Close() }()
+	payload, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	putCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Put(putCtx, snapshotKey(), string(payload)); err != nil {
+		t.Fatalf("put snapshot: %v", err)
+	}
+}
+
 func TestEtcdStoreConsumerOffsets(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
-	store, err := NewEtcdStore(ctx, ClusterMetadata{}, EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, endpoints)
 
 	if err := store.CommitConsumerOffset(ctx, "g1", "orders", 0, 100, "meta-0"); err != nil {
 		t.Fatalf("CommitConsumerOffset: %v", err)

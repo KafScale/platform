@@ -19,13 +19,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"io"
+	"log/slog"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
@@ -935,6 +941,29 @@ func TestAddFetchErrorForAllPartitions(t *testing.T) {
 	}
 }
 
+func TestFetchForwardTransportErrorRetry(t *testing.T) {
+	// Ensures the exhaust path for transport errors still produces
+	// REQUEST_TIMED_OUT (the new code only takes this on the final attempt).
+	resp := &kmsg.FetchResponse{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+	})
+	addFetchErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected REQUEST_TIMED_OUT, got %d", part.ErrorCode)
+			}
+			total++
+		}
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 errored partitions, got %d", total)
+	}
+}
+
 func TestUpdateTopicNames(t *testing.T) {
 	p := &proxy{topicNames: make(map[[16]byte]string)}
 	topicID1 := [16]byte{1, 2, 3}
@@ -1048,5 +1077,213 @@ func TestResolveFetchTopicNames(t *testing.T) {
 	}
 	if req.Topics[1].Topic != "events" {
 		t.Fatalf("topic[1] name: got %q, want %q", req.Topics[1].Topic, "events")
+	}
+}
+
+// regression test for the fetch forward error retry fix (issue 155).
+// a backend that closes the conn on first fetch (triggering read EOF or decode error)
+// should cause retry on fresh conn instead of immediate REQUEST_TIMED_OUT to client.
+
+func buildGoodFetchResponse(version int16, topic string, partition int32) []byte {
+	resp := kmsg.NewPtrFetchResponse()
+	resp.SetVersion(version)
+	tr := kmsg.NewFetchResponseTopic()
+	tr.Topic = topic
+	pr := kmsg.NewFetchResponseTopicPartition()
+	pr.Partition = partition
+	pr.ErrorCode = 0
+	pr.HighWatermark = 100
+	pr.LastStableOffset = 100
+	tr.Partitions = append(tr.Partitions, pr)
+	resp.Topics = append(resp.Topics, tr)
+	return protocol.EncodeResponse(1, version, resp)
+}
+
+type failingFirstBackend struct {
+	ln       net.Listener
+	mu       sync.Mutex
+	attempts int
+	fail     int
+}
+
+func (b *failingFirstBackend) run() {
+	for {
+		c, err := b.ln.Accept()
+		if err != nil {
+			return
+		}
+		go func(conn net.Conn) {
+			defer conn.Close()
+			_, _ = protocol.ReadFrame(conn)
+			b.mu.Lock()
+			b.attempts++
+			att := b.attempts
+			b.mu.Unlock()
+			if att <= b.fail {
+				return
+			}
+			good := buildGoodFetchResponse(13, "orders", 0)
+			_ = protocol.WriteFrame(conn, good)
+		}(c)
+	}
+}
+
+func TestForwardFetchRetriesOnBackendError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	fb := &failingFirstBackend{ln: ln, fail: 1}
+	go fb.run()
+
+	p := &proxy{
+		backends:       []string{ln.Addr().String()},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		dialTimeout:    2 * time.Second,
+		backendRetries: 3,
+	}
+	p.setReady(true)
+
+	hdr := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyFetch,
+		APIVersion:    13,
+		CorrelationID: 99,
+		ClientID:      kmsg.StringPtr("regtest"),
+	}
+	fetchReq := makeFetchRequest(map[string][]int32{"orders": {0}})
+	fetchReq.Version = 13
+	groups := p.groupFetchPartitionsByBroker(context.Background(), fetchReq, nil)
+
+	pool := newConnPool(2 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	respBytes, err := p.forwardFetch(ctx, hdr, fetchReq, nil, groups, pool)
+	if err != nil {
+		t.Fatalf("forwardFetch: %v", err)
+	}
+
+	parsed, perr := parseFetchResponse(respBytes, 13)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	if len(parsed.Topics) == 0 || len(parsed.Topics[0].Partitions) == 0 {
+		t.Fatal("no partition response")
+	}
+	ec := parsed.Topics[0].Partitions[0].ErrorCode
+	if ec == protocol.REQUEST_TIMED_OUT {
+		t.Fatal("got REQUEST_TIMED_OUT without retry (bug not fixed)")
+	}
+	if ec != 0 {
+		t.Fatalf("unexpected error code: %d", ec)
+	}
+	if fb.attempts < 2 {
+		t.Fatalf("expected >=2 backend attempts (error then retry success), got %d", fb.attempts)
+	}
+}
+
+func TestCheckReadyNotReadyWithEmptySnapshot(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	p := &proxy{
+		store:    store,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL: 60 * time.Second,
+	}
+
+	p.refreshMetadataCache(ctx)
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready with empty etcd snapshot")
+	}
+
+	// Simulate the old bug: touchHealthy without backends should not satisfy readiness.
+	p.touchHealthy()
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready when cache is fresh but no backends are cached")
+	}
+}
+
+func TestRefreshMetadataCacheRecoversAfterEtcdSlowStart(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	p := &proxy{
+		store:    store,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL: 60 * time.Second,
+	}
+
+	p.refreshMetadataCache(ctx)
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready before operator publishes snapshot")
+	}
+
+	late := metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 0,
+		Topics: []protocol.MetadataTopic{
+			{
+				Topic: kmsg.StringPtr("events"),
+				Partitions: []protocol.MetadataPartition{
+					{Partition: 0, Leader: 0},
+				},
+			},
+		},
+	}
+	putProxyTestSnapshot(t, endpoints, late)
+
+	p.refreshMetadataCache(ctx)
+	if !p.checkReady(ctx) {
+		t.Fatal("expected ready after snapshot sync from etcd")
+	}
+	if cached := p.cachedBackendsSnapshot(); len(cached) != 1 || cached[0] != "broker-0:9092" {
+		t.Fatalf("unexpected cached backends: %#v", cached)
+	}
+}
+
+func TestCheckReadyWithStaticBackends(t *testing.T) {
+	p := &proxy{
+		backends: []string{"broker-0:9092"},
+		cacheTTL: 60 * time.Second,
+	}
+	if !p.checkReady(context.Background()) {
+		t.Fatal("expected ready when static backends are configured")
+	}
+}
+
+func putProxyTestSnapshot(t *testing.T, endpoints []string, snap metadata.ClusterMetadata) {
+	t.Helper()
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new etcd client: %v", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	putCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Put(putCtx, "/kafscale/metadata/snapshot", string(payload)); err != nil {
+		t.Fatalf("put snapshot: %v", err)
 	}
 }

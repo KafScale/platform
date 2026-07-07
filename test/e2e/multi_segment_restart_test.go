@@ -35,6 +35,8 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+// TestMultiSegmentRestartDurability exercises storage durability across
+// broker restarts.
 func TestMultiSegmentRestartDurability(t *testing.T) {
 	const enableEnv = "KAFSCALE_E2E"
 	if os.Getenv(enableEnv) != "1" {
