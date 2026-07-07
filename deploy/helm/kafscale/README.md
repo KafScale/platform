@@ -104,6 +104,9 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `proxy.*` | Kafka proxy settings (external entrypoint) |
 | `lfsDemos.*` | Optional LFS browser demo UI |
 | `mcp.*` | MCP server settings |
+| `<component>.podSecurityContext` | Pod-level PSA `restricted` defaults (UID/GID `10001`, `runAsNonRoot`, `seccompProfile`) |
+| `<component>.containerSecurityContext` | Container hardening (`readOnlyRootFilesystem`, dropped capabilities) |
+| `proxy.affinity` | Pod affinity override; when empty the chart applies soft hostname anti-affinity |
 
 ### Proxy Service
 
