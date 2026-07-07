@@ -16,20 +16,21 @@
 # =============================================================================
 # LFS Demo Stack Values
 # =============================================================================
-# This values file enables the LFS proxy with HTTP endpoint and browser demo.
+# This values file enables the LFS browser demo UI (lfsDemos).
+#
+# LFS itself is configured on your KafscaleCluster CRD (spec.lfsProxy), not via
+# Helm lfsProxy values — see deploy/helm/kafscale/README.md.
 #
 # Usage:
 #   helm upgrade --install kafscale ./deploy/helm/kafscale \
-#     -f ./deploy/helm/kafscale/values-lfs-demo.yaml \
-#     --set lfsProxy.s3.bucket=my-bucket \
-#     --set lfsProxy.s3.endpoint=http://minio:9000 \
-#     --set lfsProxy.s3.accessKey=minioadmin \
-#     --set lfsProxy.s3.secretKey=minioadmin
+#     -f ./deploy/helm/kafscale/values-lfs-demo.yaml
+#
+# Then apply a KafscaleCluster with spec.lfsProxy.enabled=true and S3 settings.
 #
 # For local development with port-forward:
-#   kubectl port-forward svc/kafscale-lfs-proxy 8080:8080 &
-#   kubectl port-forward svc/kafscale-lfs-demo-e72 3000:80 &
-#   open http://localhost:3000
+#   kubectl port-forward svc/<cluster>-lfs-proxy 8080:8080 &
+#   kubectl port-forward svc/kafscale-lfs-demo-e72 30072:80 &
+#   open http://localhost:30072
 # =============================================================================
 
 # Enable LFS Proxy with HTTP endpoint

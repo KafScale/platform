@@ -72,6 +72,8 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
+- **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
+- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default; broker/etcd affinity overrides via the CR are tracked separately ([#164](https://github.com/KafScale/platform/issues/164)).
 - **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
   - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
@@ -376,11 +378,16 @@ Cost-optimized (accepts a larger loss window after crash):
 ### Proxy
 
 - `KAFSCALE_PROXY_ADDR` – Proxy listen address (host:port).
+- `KAFSCALE_PROXY_HEALTH_ADDR` – Health/readiness listen address (default `:9094`; exposes `/readyz` and `/livez`).
 - `KAFSCALE_PROXY_ADVERTISED_HOST` – Address Kafka clients should connect to.
 - `KAFSCALE_PROXY_ADVERTISED_PORT` – Advertised port (default `9092`).
 - `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
 - `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
 - `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
+- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`).
+- `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
+- `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
+- `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS HTTP API on the unified proxy (default `false`).
 
 ### Console
 
@@ -390,33 +397,28 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL` – Broker Prometheus endpoint.
 - `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD` – Console login credentials.
 
-## External Broker Access
+## External Kafka Access
 
 By default, brokers advertise the in-cluster service DNS name. That works for
-clients running inside Kubernetes, but external clients must connect to a
-reachable address. Configure both the broker Service exposure and the advertised
-address so clients learn the external endpoint from metadata responses.
+clients running inside Kubernetes. External clients need a reachable address in
+Metadata responses.
 
-Broker exposure settings (KafscaleCluster `spec.brokers`):
-- `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
-- `service.type` – `ClusterIP`, `LoadBalancer`, or `NodePort`.
-- `service.annotations` – Cloud provider LB annotations.
-- `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
-- `service.externalTrafficPolicy` – `Cluster` or `Local`.
-- `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
+**Recommended:** deploy the Kafka-aware proxy (`proxy.enabled=true`). When the
+proxy is enabled, clients connect to the **proxy Service**, not individual broker
+pods. The proxy answers Metadata/FindCoordinator with a single stable endpoint,
+then forwards all other Kafka requests to brokers. This keeps clients connected as
+broker pods scale or rotate.
 
-### Kafka Proxy (external scaling)
+**Optional:** expose brokers directly via `KafscaleCluster` `spec.brokers` Service
+settings (LoadBalancer or NodePort). Use this only when you intentionally bypass
+the proxy (traffic isolation, pinned producers, or legacy integrations). Broker
+NodePort does not replace the proxy entrypoint in scaled deployments.
 
-For external clients plus broker churn, deploy the Kafka-aware proxy. It answers
-Metadata/FindCoordinator requests with a single stable endpoint (the proxy
-service), then forwards all other Kafka requests to the brokers. This keeps
-clients connected even as broker pods scale or rotate. The proxy is the
-recommended external access layer and enables automated horizontal scaling
-without exposing individual broker pods.
+The Helm chart does **not** ship a Kafka Ingress resource. External TLS uses
+LoadBalancer annotations or an external TCP gateway (see
+[Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer-recommended)).
 
-Use the broker Service settings above when you intentionally expose dedicated
-brokers (for example, isolating traffic or pinning producers to specific nodes).
-That path is more controllable but requires explicit endpoint management.
+### Kafka Proxy (recommended)
 
 Recommended settings:
 - Run 2+ proxy replicas behind a LoadBalancer service.
@@ -442,7 +444,35 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
 ```
 
-Helm chart docs: `deploy/helm/README.md`.
+For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
+stay stable. Set `proxy.service.type=NodePort` and `proxy.service.nodePort` to a
+value in `30000–32767`, then set `proxy.advertisedHost` to the node IP (or the
+mapped host address). See `deploy/helm/kafscale/README.md` for details.
+
+Example (kind / local dev):
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set proxy.enabled=true \
+  --set proxy.service.type=NodePort \
+  --set proxy.service.nodePort=30092 \
+  --set proxy.advertisedHost=127.0.0.1 \
+  --set proxy.advertisedPort=30092 \
+  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+```
+
+Helm chart docs: `deploy/helm/kafscale/README.md`.
+
+### Direct broker exposure (optional)
+
+Broker exposure settings (KafscaleCluster `spec.brokers`):
+- `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
+- `service.type` – `ClusterIP`, `LoadBalancer`, or `NodePort`.
+- `service.annotations` – Cloud provider LB annotations.
+- `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
+- `service.externalTrafficPolicy` – `Cluster` or `Local`.
+- `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
 
 Example (GKE/AWS/Azure load balancer):
 
