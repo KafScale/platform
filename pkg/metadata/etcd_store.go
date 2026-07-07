@@ -51,7 +51,7 @@ type EtcdStore struct {
 	cancel    context.CancelFunc
 	available int32
 	lastError atomic.Value // stores etcdError
-	persistMu sync.Mutex    // serializes snapshot read/write to avoid out-of-order etcd puts
+	persistMu sync.Mutex   // serializes snapshot read/write to avoid out-of-order etcd puts
 }
 
 func (s *EtcdStore) EtcdClient() *clientv3.Client {
