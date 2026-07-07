@@ -156,10 +156,11 @@ kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-b
 ```
 Note: Kafka clients that default to idempotent producers or transactions must disable them explicitly.
 
-External clients: configure `spec.brokers.advertisedHost` / `advertisedPort` and
-`spec.brokers.service` in your `KafscaleCluster` so Kafka clients learn a
-reachable endpoint. See `docs/operations.md` and `deploy/helm/README.md` for
-examples.
+External clients: enable the Kafka proxy (`proxy.enabled=true`) and set
+`proxy.advertisedHost` / `proxy.advertisedPort` so clients learn a stable
+endpoint. For local clusters, pin `proxy.service.nodePort` (see
+`docs/operations.md`). Direct broker exposure via `spec.brokers.service` is
+optional when you intentionally bypass the proxy.
 
 ## Next Steps
 
