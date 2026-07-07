@@ -256,12 +256,17 @@ The proxy provides a single entry point that routes Kafka requests to the approp
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KAFSCALE_PROXY_ADDR` | `:9092` | Proxy listen address (host:port) |
+| `KAFSCALE_PROXY_HEALTH_ADDR` | `:9094` | Health/readiness listen address (`/readyz`, `/livez`) |
 | `KAFSCALE_PROXY_ADVERTISED_HOST` | | Address clients should connect to |
 | `KAFSCALE_PROXY_ADVERTISED_PORT` | `9092` | Advertised port |
 | `KAFSCALE_PROXY_ETCD_ENDPOINTS` | | etcd endpoints for metadata |
 | `KAFSCALE_PROXY_ETCD_USERNAME` | | etcd basic auth username |
 | `KAFSCALE_PROXY_ETCD_PASSWORD` | | etcd basic auth password |
 | `KAFSCALE_PROXY_BACKENDS` | | Optional comma-separated broker list for static routing |
+| `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` | `60` | Seconds to cache backend metadata before refreshing from etcd |
+| `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` | `500` | Backoff between backend connection retries |
+| `KAFSCALE_PROXY_BACKEND_RETRIES` | `6` | Backend connection retry count |
+| `KAFSCALE_PROXY_LFS_ENABLED` | `false` | Enable the LFS HTTP API on the unified proxy |
 
 The proxy discovers brokers via etcd by default. Use `KAFSCALE_PROXY_BACKENDS` for static configuration:
 
@@ -278,8 +283,9 @@ KAFSCALE_PROXY_BACKENDS=broker-0:9092,broker-1:9092,broker-2:9092
 | `proxy.advertisedHost` | | Public DNS clients should use |
 | `proxy.advertisedPort` | `9092` | Advertised port |
 | `proxy.etcdEndpoints` | | etcd endpoints array |
-| `proxy.service.type` | `ClusterIP` | Service type |
+| `proxy.service.type` | `LoadBalancer` | Service type |
 | `proxy.service.port` | `9092` | Service port |
+| `proxy.service.nodePort` | | Pin NodePort when `type=NodePort` (range `30000–32767`) |
 
 ---
 
@@ -395,11 +401,28 @@ See [Security](/security/) for complete TLS setup instructions.
 
 ---
 
-## External Broker Access
+## External Kafka Access
 
-By default, brokers advertise the in-cluster service DNS name. External clients need a reachable address.
+By default, brokers advertise the in-cluster service DNS name. External clients
+need a reachable address.
 
-### CRD Settings (`spec.brokers`)
+**Recommended:** enable the Helm proxy (`proxy.enabled=true`) and set
+`proxy.advertisedHost`. Clients connect to the proxy Service, not individual
+broker pods. The chart does not ship a Kafka Ingress resource.
+
+**Optional:** expose brokers directly via `spec.brokers` (bypassing the proxy).
+
+### Helm proxy settings
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `proxy.enabled` | `false` | Deploy the Kafka-aware proxy |
+| `proxy.advertisedHost` | | Public DNS or node IP clients should use |
+| `proxy.advertisedPort` | `9092` | Advertised port |
+| `proxy.service.type` | `LoadBalancer` | `LoadBalancer`, `NodePort`, or `ClusterIP` |
+| `proxy.service.nodePort` | | Pin NodePort when `type=NodePort` |
+
+### CRD Settings (`spec.brokers`) — direct broker exposure
 
 | Field | Description |
 |-------|-------------|

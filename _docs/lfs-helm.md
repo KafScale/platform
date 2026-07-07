@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: LFS Helm Deployment
-description: Deploy and configure the LFS proxy via the KafScale Helm chart.
+description: Deploy and configure LFS via the KafscaleCluster CRD and Helm chart.
 permalink: /lfs-helm/
 nav_title: LFS Helm
 nav_order: 2
@@ -25,15 +25,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# LFS Proxy Helm Deployment
+# LFS on Kubernetes
 
-The LFS Proxy is deployed as part of the KafScale Helm chart and provides:
+Large File Support (LFS) uses the claim-check pattern: blobs land in S3 and Kafka
+carries a pointer. The **operator** deploys an LFS proxy when you enable
+`spec.lfsProxy` on your `KafscaleCluster`.
 
-- **Kafka Protocol Support**: Transparent claim-check pattern for large messages via Kafka protocol (port 9092)
-- **HTTP API**: RESTful endpoint for browser and SDK uploads (port 8080)
-- **S3 Storage**: Configurable S3-compatible object storage backend
-- **CORS Support**: Configurable cross-origin resource sharing for browser access
-- **Metrics**: Prometheus-compatible metrics endpoint (port 9095)
+Standalone Helm `lfsProxy.*` values were removed in v1.6. Configure LFS on the
+cluster CRD, not via chart values.
 
 ## Prerequisites
 
@@ -44,100 +43,94 @@ The LFS Proxy is deployed as part of the KafScale Helm chart and provides:
 
 ## Installation
 
+1. Install the Helm chart (operator + console):
+
 ```bash
-# Install with LFS proxy enabled
-helm install kafscale deploy/helm/kafscale \
-  -f deploy/helm/kafscale/values-lfs-demo.yaml \
-  --set lfsProxy.enabled=true
+helm upgrade --install kafscale deploy/helm/kafscale \
+  -n kafscale --create-namespace
 ```
 
-## Helm values
-
-### Core settings
+2. Apply a `KafscaleCluster` with LFS enabled:
 
 ```yaml
-lfsProxy:
-  enabled: true
-  replicas: 1
-  image:
-    repository: ghcr.io/kafscale/kafscale-lfs-proxy
-    tag: latest
-
-  # S3 backend.
-  # bucket and region are REQUIRED; the proxy fails to start if either is empty.
-  # The bucket name `kafscale-lfs` is permanently blocklisted at startup
-  # (security fix / PR #139). Use your own name.
-  s3:
-    bucket: my-bucket
-    region: us-east-1
-    endpoint: ""          # Custom endpoint for MinIO
-    pathStyle: false       # Set true for MinIO
-    credentialsSecretRef: s3-credentials
-
-  # HTTP API
-  http:
-    port: 8080
-    corsOrigins: "*"
-    maxUploadSize: 0       # 0 = unlimited
-
-  # Kafka backend
-  kafka:
-    brokers: kafscale-broker:9092
-
-  # Metrics
-  metrics:
+apiVersion: kafscale.io/v1alpha1
+kind: KafscaleCluster
+metadata:
+  name: kafscale
+  namespace: kafscale
+spec:
+  lfsProxy:
     enabled: true
-    port: 9095
-    serviceMonitor:
-      enabled: false
-    prometheusRule:
-      enabled: false
-
-  # Resources
-  resources:
-    requests:
-      cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: "1"
-      memory: 512Mi
+    http:
+      enabled: true
+      port: 8080
+    s3:
+      bucket: my-bucket
+      region: us-east-1
+      credentialsSecretRef: s3-credentials
+  s3:
+    bucket: kafscale
+    region: us-east-1
+    credentialsSecretRef: kafscale-s3-credentials
 ```
 
-### TLS configuration
+`spec.lfsProxy.s3.bucket` and `region` are required. The bucket name
+`kafscale-lfs` is permanently blocklisted at startup — use your own name.
+
+## LFS demo UI (optional)
+
+The chart can deploy a browser demo UI via `lfsDemos`:
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  -f deploy/helm/kafscale/values-lfs-demo.yaml
+```
+
+This enables the demo UI only. LFS itself still requires `spec.lfsProxy` on your
+`KafscaleCluster`.
+
+## Core CRD settings
 
 ```yaml
-lfsProxy:
-  tls:
-    enabled: false
-    certSecretRef: lfs-proxy-tls
-  kafka:
-    sasl:
-      enabled: false
-      mechanism: SCRAM-SHA-256
-      credentialsSecretRef: kafka-sasl
+spec:
+  lfsProxy:
+    enabled: true
+    replicas: 1
+    http:
+      enabled: true
+      port: 8080
+      apiKeySecretRef: lfs-api-key
+    s3:
+      bucket: my-bucket
+      region: us-east-1
+      forcePathStyle: true   # Required for MinIO
+      credentialsSecretRef: s3-credentials
+    service:
+      type: ClusterIP
+      port: 9092
+    metrics:
+      enabled: true
+      port: 9095
 ```
 
-### Ingress
+## HTTP API
 
-```yaml
-lfsProxy:
-  ingress:
-    enabled: false
-    className: nginx
-    host: lfs.example.com
-    tls:
-      enabled: false
-      secretName: lfs-tls
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/lfs/produce` | POST | Upload blob to S3, produce pointer to Kafka |
+| `/lfs/download` | POST | Get presigned URL or stream blob from S3 |
+| `/readyz` | GET | Readiness probe |
+| `/livez` | GET | Liveness probe |
+
+OpenAPI spec: [`api/lfs-proxy/openapi.yaml`](https://github.com/KafScale/platform/blob/main/api/lfs-proxy/openapi.yaml)
 
 ## Monitoring
 
-When `metrics.serviceMonitor.enabled` is set to `true`, the chart creates a Prometheus `ServiceMonitor` that scrapes the LFS proxy metrics endpoint.
-
-Key metrics:
+When `spec.lfsProxy.metrics.enabled` is true, the operator exposes a metrics
+Service on the configured port.
 
 | Metric | Type | Description |
-|---|---|---|
+|--------|------|-------------|
 | `lfs_uploads_total` | Counter | Total upload operations |
 | `lfs_downloads_total` | Counter | Total download operations |
 | `lfs_upload_bytes_total` | Counter | Total bytes uploaded |
@@ -154,4 +147,4 @@ cd deploy/docker-compose
 docker compose up -d
 ```
 
-This starts MinIO, a KafScale broker, and the LFS proxy with pre-configured defaults. See `deploy/docker-compose/README.md` for details.
+This starts MinIO, a KafScale broker, and the LFS proxy with pre-configured defaults.

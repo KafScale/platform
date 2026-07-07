@@ -50,6 +50,19 @@ For a dev/latest install, set `operator.image.useLatest=true`, `console.image.us
 
 After the chart is running you can create a cluster by applying a `KafscaleCluster` resource (see `config/samples/` for an example). The console service is exposed as a ClusterIP by default; enable ingress by toggling `.Values.console.ingress`.
 
+### External Kafka Access
+
+**Recommended:** enable the chart proxy (`proxy.enabled=true`) and set
+`proxy.advertisedHost` to the address external clients should use. The proxy is
+the single Kafka entrypoint and supports broker scaling without client
+reconfiguration. For production, use `proxy.service.type=LoadBalancer`. For
+local clusters (kind), pin `proxy.service.nodePort` (range `30000–32767`).
+
+**Optional:** to expose brokers directly (bypassing the proxy), configure
+`KafscaleCluster` `spec.brokers.service` and `advertisedHost` / `advertisedPort`.
+
+See [Operations](/operations/) for full examples and TLS termination guidance.
+
 ### MCP
 
 The MCP service is optional and disabled by default. Enable it with `mcp.enabled=true`; it will deploy into the dedicated namespace defined by `mcp.namespace.name`.
@@ -63,6 +76,10 @@ The MCP service is optional and disabled by default. Enable it with `mcp.enabled
 | `operator.etcdEndpoints` | List of etcd endpoints the operator will connect to. | `["http://etcd:2379"]` |
 | `console.service.type` | Kubernetes service type for the console. | `ClusterIP` |
 | `console.ingress.*` | Optional ingress configuration for exposing the console. | disabled |
+| `proxy.enabled` | Deploy the Kafka-aware proxy for external client access. | `false` |
+| `proxy.advertisedHost` | Address Kafka clients should connect to (public DNS or node IP). | `""` |
+| `proxy.service.type` | Proxy Service type (`LoadBalancer`, `NodePort`, `ClusterIP`). | `LoadBalancer` |
+| `proxy.service.nodePort` | Pin NodePort when `type=NodePort` (range `30000–32767`). | `""` |
 | `mcp.enabled` | Deploy the MCP service. | `false` |
 | `mcp.namespace.name` | Namespace to deploy the MCP service into. | `kafscale-mcp` |
 | `mcp.ingress.*` | Optional ingress configuration for exposing the MCP service. | disabled |
