@@ -100,6 +100,17 @@ func (s *EtcdStore) RefreshSnapshot(ctx context.Context) error {
 	return s.refreshSnapshot(ctx)
 }
 
+// Close stops snapshot watchers and closes the etcd client.
+func (s *EtcdStore) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.client != nil {
+		return s.client.Close()
+	}
+	return nil
+}
+
 // Available reports whether the most recent etcd operation succeeded.
 func (s *EtcdStore) Available() bool {
 	return atomic.LoadInt32(&s.available) == 1

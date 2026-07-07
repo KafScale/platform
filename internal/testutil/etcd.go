@@ -22,15 +22,45 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"go.etcd.io/etcd/server/v3/embed"
 )
 
+var embeddedEtcdStartMu sync.Mutex
+
 // StartEmbeddedEtcd launches an embedded etcd server on random ports and
 // registers cleanup via t.Cleanup. Returns the endpoints (e.g. ["http://127.0.0.1:PORT"]).
 func StartEmbeddedEtcd(t *testing.T) []string {
+	t.Helper()
+
+	embeddedEtcdStartMu.Lock()
+	defer embeddedEtcdStartMu.Unlock()
+
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 50 * time.Millisecond)
+		}
+		endpoints, err := startEmbeddedEtcdOnce(t)
+		if err == nil {
+			return endpoints
+		}
+		lastErr = err
+		if !isEmbeddedEtcdBindError(err) {
+			break
+		}
+	}
+	if lastErr != nil && strings.Contains(lastErr.Error(), "operation not permitted") {
+		t.Skipf("skipping: embedded etcd not permitted: %v", lastErr)
+	}
+	t.Fatalf("start embedded etcd: %v", lastErr)
+	return nil
+}
+
+func startEmbeddedEtcdOnce(t *testing.T) ([]string, error) {
 	t.Helper()
 
 	cfg := embed.NewConfig()
@@ -49,17 +79,14 @@ func StartEmbeddedEtcd(t *testing.T) []string {
 
 	e, err := embed.StartEtcd(cfg)
 	if err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("skipping: embedded etcd not permitted: %v", err)
-		}
-		t.Fatalf("start embedded etcd: %v", err)
+		return nil, err
 	}
 
 	select {
 	case <-e.Server.ReadyNotify():
 	case <-time.After(10 * time.Second):
 		e.Server.Stop()
-		t.Fatalf("embedded etcd took too long to start")
+		return nil, fmt.Errorf("embedded etcd took too long to start")
 	}
 
 	t.Cleanup(func() {
@@ -67,7 +94,16 @@ func StartEmbeddedEtcd(t *testing.T) []string {
 	})
 
 	clientURL := e.Clients[0].Addr().String()
-	return []string{fmt.Sprintf("http://%s", clientURL)}
+	return []string{fmt.Sprintf("http://%s", clientURL)}, nil
+}
+
+func isEmbeddedEtcdBindError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "bind: address already in use") ||
+		strings.Contains(msg, "address already in use")
 }
 
 func freeLocalPort(t *testing.T) int {

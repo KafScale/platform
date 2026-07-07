@@ -90,6 +90,54 @@ func (b *WriteBuffer) Drain() []RecordBatch {
 	return drained
 }
 
+// RecordsFrom returns the raw bytes of buffered batches needed to serve a read
+// starting at offset, concatenated, non-destructively. A batch is included when
+// its last offset (BaseOffset+LastOffsetDelta) is >= offset, i.e. the batch that
+// contains the requested offset plus every batch after it.
+//
+// maxBytes caps the result. The first matching batch is always returned in full
+// even if it alone exceeds maxBytes, so a read can always make progress (this
+// mirrors how Kafka returns at least one batch regardless of fetch.max.bytes).
+// maxBytes <= 0 is treated as "first matching batch only": a non-positive cap
+// returns a single bounded unit rather than draining the whole buffered tail, so
+// a malformed or zero PartitionMaxBytes can never produce an unbounded response.
+//
+// Returns nil when no buffered batch reaches offset.
+//
+// This makes acked-but-not-yet-flushed records readable (Kafka read-after-ack):
+// flush is append-triggered, so a partition that goes quiet leaves its tail in
+// the buffer; without this the fetch path (segments only) returns
+// ErrOffsetOutOfRange for those acked offsets.
+func (b *WriteBuffer) RecordsFrom(offset int64, maxBytes int32) []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return recordsFromBatches(b.batches, offset, maxBytes)
+}
+
+// recordsFromBatches concatenates the bytes of the batches needed to serve a
+// read starting at offset. It implements the RecordsFrom contract and is shared
+// with PartitionLog.Read so the live buffer and the in-flight (mid-flush)
+// batches are served identically. Callers hold the lock that guards batches.
+func recordsFromBatches(batches []RecordBatch, offset int64, maxBytes int32) []byte {
+	var out []byte
+	for i := range batches {
+		batch := batches[i]
+		if batch.BaseOffset+int64(batch.LastOffsetDelta) < offset {
+			continue
+		}
+		if len(out) > 0 {
+			// A first matching batch is already included. Stop unless this batch
+			// still fits under a positive cap. maxBytes <= 0 stops here, so the
+			// result is just the first matching batch.
+			if maxBytes <= 0 || len(out)+len(batch.Bytes) > int(maxBytes) {
+				break
+			}
+		}
+		out = append(out, batch.Bytes...)
+	}
+	return out
+}
+
 // Size returns the accumulated byte count (for tests/metrics).
 func (b *WriteBuffer) Size() int {
 	b.mu.Lock()

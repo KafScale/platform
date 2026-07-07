@@ -60,6 +60,13 @@ type PartitionLog struct {
 	flushCond    *sync.Cond
 	s3sem        *semaphore.Weighted
 	flushing     bool
+	// flushingBatches holds the batches drained by prepareFlush but not yet
+	// committed to a segment by uploadFlush. During that window an acknowledged
+	// offset is in neither the live buffer (drained) nor l.segments (not yet
+	// registered); Read consults this slice so the record stays readable. Set
+	// under l.mu by prepareFlush, cleared under l.mu by uploadFlush on commit or
+	// on the upload-failure reset.
+	flushingBatches []RecordBatch
 }
 
 type segmentRange struct {
@@ -261,6 +268,23 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 	return result, nil
 }
 
+// BufferedHighWatermark returns the in-memory high-watermark: one past the last
+// offset this log has assigned (whether that offset is in a flushed segment or
+// still in the write buffer). It is NOT durable. The flushed/durable
+// high-watermark is the metadata store's NextOffset, advanced only on flush.
+//
+// In flush-disabled / acks=0 mode no flush fires for the buffered tail, so the
+// durable watermark lags. The fetch handler uses this value, gated on
+// flushOnAck=false, to make acknowledged-but-buffered records consumable while
+// the process lives. These records are LOST on restart: the buffer is in-memory
+// and RestoreFromS3 rebuilds from segments only. This is a read-after-ack
+// visibility helper for the non-default config, not a durability guarantee.
+func (l *PartitionLog) BufferedHighWatermark() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.nextOffset
+}
+
 // EarliestOffset returns the lowest offset available in the log.
 func (l *PartitionLog) EarliestOffset() int64 {
 	l.mu.Lock()
@@ -329,6 +353,10 @@ func (l *PartitionLog) prepareFlush() (*SegmentArtifact, error) {
 		return nil, fmt.Errorf("build segment: %w", err)
 	}
 	l.flushing = true
+	// Keep the drained batches readable until uploadFlush commits the segment to
+	// l.segments. Without this, an acknowledged offset is unreadable for the
+	// duration of the S3 upload (in neither the buffer nor a committed segment).
+	l.flushingBatches = batches
 	return artifact, nil
 }
 
@@ -366,6 +394,7 @@ func (l *PartitionLog) uploadFlush(ctx context.Context, artifact *SegmentArtifac
 	if err := g.Wait(); err != nil {
 		l.mu.Lock()
 		l.flushing = false
+		l.flushingBatches = nil
 		l.flushCond.Broadcast()
 		l.mu.Unlock()
 		return err
@@ -385,6 +414,8 @@ func (l *PartitionLog) uploadFlush(ctx context.Context, artifact *SegmentArtifac
 		l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
 	}
 	l.flushing = false
+	// The segment is now in l.segments; the in-flight copy is no longer needed.
+	l.flushingBatches = nil
 	l.flushCond.Broadcast()
 	lastSegIdx := len(l.segments) - 1
 	l.mu.Unlock()
@@ -458,11 +489,36 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 			break
 		}
 	}
-	l.mu.Unlock()
-
 	if !found {
+		// Not in any flushed segment. The offset may still be in the in-memory
+		// write buffer (acked but not yet flushed: flush is append-triggered, so
+		// a partition that goes quiet below the flush threshold keeps its tail
+		// buffered). Serve it so acked records are consumable (Kafka
+		// read-after-ack) instead of returning ErrOffsetOutOfRange.
+		//
+		// Hold l.mu across both fallbacks so an in-flight flush cannot move
+		// batches from the buffer into flushingBatches (or commit a segment)
+		// between the two checks.
+		body := l.buffer.RecordsFrom(offset, maxBytes)
+		fromFlushWindow := false
+		if len(body) == 0 {
+			body = recordsFromBatches(l.flushingBatches, offset, maxBytes)
+			fromFlushWindow = len(body) > 0
+		}
+		l.mu.Unlock()
+		if len(body) > 0 {
+			if fromFlushWindow {
+				l.logger().Debug("read served from in-flight flush batches (flush window)",
+					"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
+			} else {
+				l.logger().Debug("read served from write buffer (acked-but-unflushed)",
+					"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
+			}
+			return body, nil
+		}
 		return nil, ErrOffsetOutOfRange
 	}
+	l.mu.Unlock()
 
 	var data []byte
 	ok := false
