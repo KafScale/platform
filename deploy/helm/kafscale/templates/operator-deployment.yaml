@@ -41,10 +41,18 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
+{{- with .Values.operator.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: operator
           image: "{{ .Values.operator.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.image.tag) .Values.operator.image.useLatest }}"
           imagePullPolicy: {{ ternary "Always" .Values.operator.image.pullPolicy .Values.operator.image.useLatest }}
+{{- with .Values.operator.containerSecurityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.operator.metrics.port }}
