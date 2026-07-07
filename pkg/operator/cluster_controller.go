@@ -78,6 +78,8 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
+	r.pollManagedEtcdHealth(ctx, &cluster, etcdResolution)
+	r.populateEtcdMaintenanceStatus(ctx, &cluster, etcdResolution)
 	if err := r.deleteLegacyBrokerDeployment(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -550,6 +552,45 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 		Type:               "EtcdSnapshot",
 		Status:             metav1.ConditionTrue,
 		Reason:             "SnapshotHealthy",
+		Message:            message,
+		LastTransitionTime: metav1.NewTime(now),
+	})
+}
+
+func (r *ClusterReconciler) populateEtcdMaintenanceStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
+	now := time.Now()
+	if !resolution.Managed || !etcdMaintenanceEnabled() {
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdMaintenance",
+			Status:             metav1.ConditionFalse,
+			Reason:             "MaintenanceNotManaged",
+			Message:            "Etcd maintenance jobs are not managed for this cluster.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	cron := &batchv1.CronJob{}
+	cronKey := client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-etcd-maintenance", cluster.Name)}
+	if err := r.Client.Get(ctx, cronKey, cron); err != nil {
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdMaintenance",
+			Status:             metav1.ConditionFalse,
+			Reason:             "MaintenanceCronMissing",
+			Message:            "Etcd maintenance CronJob is missing.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	message := "Etcd maintenance CronJobs are scheduled."
+	if cron.Status.LastSuccessfulTime != nil {
+		message = fmt.Sprintf("Last successful maintenance %s ago.", now.Sub(cron.Status.LastSuccessfulTime.Time).Round(time.Second))
+	}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               "EtcdMaintenance",
+		Status:             metav1.ConditionTrue,
+		Reason:             "MaintenanceScheduled",
 		Message:            message,
 		LastTransitionTime: metav1.NewTime(now),
 	})
