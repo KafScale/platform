@@ -38,4 +38,7 @@ spec:
       port: {{ .Values.proxy.service.port }}
       targetPort: kafka
       protocol: TCP
+      {{- if and (eq .Values.proxy.service.type "NodePort") .Values.proxy.service.nodePort }}
+      nodePort: {{ .Values.proxy.service.nodePort }}
+      {{- end }}
 {{- end }}
