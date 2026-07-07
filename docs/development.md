@@ -52,7 +52,7 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 |---------|---------|
 | `make build` | Compile all Go binaries. |
 | `make test` | Run unit tests (includes `go vet` and race detector). |
-| `make commit-check` | Run the standard pre-PR quality gate (`check`, `fmt`, `test`, `test-fuzz`, `code-ql-gate`). |
+| `make commit-check` | Run the standard pre-PR quality gate (`check`, `fmt`, `test`, `test-nested-modules`, `test-lfs-sdk-unit`, `test-fuzz`, `code-ql-gate`). |
 | `make test-produce-consume` | MinIO + Franz produce/consume e2e suite plus Kafka CLI producer smoke test (Docker image required). |
 | `make test-consumer-group` | Consumer group persistence e2e (embedded etcd + memory S3). |
 | `make test-ops-api` | Ops/admin API e2e (embedded etcd + memory S3). |

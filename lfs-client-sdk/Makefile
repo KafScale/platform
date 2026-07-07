@@ -149,7 +149,7 @@ build-js:
 	@cd js && npm run build
 
 test-js:
-	@cd js && npm test
+	@cd js && npm ci && npm test
 
 build-python:
 	@cd python && $(PYTHON) -c "import build" >/dev/null 2>&1 || { echo "python -m pip install build"; exit 1; }
@@ -162,7 +162,7 @@ build-js-browser:
 	@cd js-browser && npm run build
 
 test-js-browser:
-	@cd js-browser && npm test
+	@cd js-browser && npm install && npm test
 
 build-all: build-java build-js build-python build-js-browser
 
