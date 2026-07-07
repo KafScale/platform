@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +51,7 @@ type EtcdStore struct {
 	cancel    context.CancelFunc
 	available int32
 	lastError atomic.Value // stores etcdError
+	persistMu sync.Mutex    // serializes snapshot read/write to avoid out-of-order etcd puts
 }
 
 func (s *EtcdStore) EtcdClient() *clientv3.Client {
@@ -521,6 +523,9 @@ func (s *EtcdStore) watchSnapshot(ctx context.Context) {
 }
 
 func (s *EtcdStore) refreshSnapshot(ctx context.Context) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.Get(ctx, snapshotKey())
@@ -545,6 +550,9 @@ func snapshotKey() string {
 }
 
 func (s *EtcdStore) persistSnapshot(ctx context.Context) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	state, err := s.metadata.Metadata(context.Background(), nil)
 	if err != nil {
 		return err
