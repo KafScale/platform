@@ -35,6 +35,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+func newTestEtcdStore(t *testing.T, ctx context.Context, initial metadata.ClusterMetadata, endpoints []string) *metadata.EtcdStore {
+	t.Helper()
+	store, err := metadata.NewEtcdStore(ctx, initial, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
 type failingListS3 struct {
 	*storage.MemoryS3Client
 	err error
@@ -76,16 +86,12 @@ func TestRunRestoreCommandUsesInjectedClients(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
 
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{
 			{NodeID: 1, Host: "broker-0", Port: 9092},
 		},
 		ControllerID: 1,
-	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
-	defer func() { _ = store.EtcdClient().Close() }()
+	}, endpoints)
 
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              "orders",
@@ -209,16 +215,12 @@ func TestExecuteRestoreCreatesRecoveredTopic(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
 
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{
 			{NodeID: 1, Host: "broker-0", Port: 9092},
 		},
 		ControllerID: 1,
-	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
-	defer func() { _ = store.EtcdClient().Close() }()
+	}, endpoints)
 
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              "orders",
@@ -353,7 +355,7 @@ func TestExecuteRestoreRejectsUnknownPartition(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
 
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{
 			{NodeID: 1, Host: "broker-0", Port: 9092},
 		},
@@ -366,13 +368,9 @@ func TestExecuteRestoreRejectsUnknownPartition(t *testing.T) {
 				},
 			},
 		},
-	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
-	defer func() { _ = store.EtcdClient().Close() }()
+	}, endpoints)
 
-	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+	err := executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
 		SourceTopic:     "orders",
 		SourceNamespace: "default",
 		TargetTopic:     "orders-restored",
@@ -389,16 +387,12 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
 
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{
 			{NodeID: 1, Host: "broker-0", Port: 9092},
 		},
 		ControllerID: 1,
-	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
-	defer func() { _ = store.EtcdClient().Close() }()
+	}, endpoints)
 
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              "orders",
@@ -412,7 +406,7 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 		MemoryS3Client: storage.NewMemoryS3Client(),
 		err:            errors.New("list failed"),
 	}
-	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+	err := executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
 		SourceTopic:     "orders",
 		SourceNamespace: "default",
 		TargetTopic:     "orders-restored",
@@ -436,16 +430,12 @@ func TestExecuteRestoreRollsBackCopiedS3ObjectsOnPartialFailure(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
 
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{
 			{NodeID: 1, Host: "broker-0", Port: 9092},
 		},
 		ControllerID: 1,
-	}, metadata.EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatalf("NewEtcdStore: %v", err)
-	}
-	defer func() { _ = store.EtcdClient().Close() }()
+	}, endpoints)
 
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
 		Name:              "orders",
