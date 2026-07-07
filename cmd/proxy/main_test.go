@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -26,9 +27,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
@@ -1178,5 +1181,109 @@ func TestForwardFetchRetriesOnBackendError(t *testing.T) {
 	}
 	if fb.attempts < 2 {
 		t.Fatalf("expected >=2 backend attempts (error then retry success), got %d", fb.attempts)
+	}
+}
+
+func TestCheckReadyNotReadyWithEmptySnapshot(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	p := &proxy{
+		store:    store,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL: 60 * time.Second,
+	}
+
+	p.refreshMetadataCache(ctx)
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready with empty etcd snapshot")
+	}
+
+	// Simulate the old bug: touchHealthy without backends should not satisfy readiness.
+	p.touchHealthy()
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready when cache is fresh but no backends are cached")
+	}
+}
+
+func TestRefreshMetadataCacheRecoversAfterEtcdSlowStart(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	p := &proxy{
+		store:    store,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL: 60 * time.Second,
+	}
+
+	p.refreshMetadataCache(ctx)
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready before operator publishes snapshot")
+	}
+
+	late := metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 0,
+		Topics: []protocol.MetadataTopic{
+			{
+				Topic: kmsg.StringPtr("events"),
+				Partitions: []protocol.MetadataPartition{
+					{Partition: 0, Leader: 0},
+				},
+			},
+		},
+	}
+	putProxyTestSnapshot(t, endpoints, late)
+
+	p.refreshMetadataCache(ctx)
+	if !p.checkReady(ctx) {
+		t.Fatal("expected ready after snapshot sync from etcd")
+	}
+	if cached := p.cachedBackendsSnapshot(); len(cached) != 1 || cached[0] != "broker-0:9092" {
+		t.Fatalf("unexpected cached backends: %#v", cached)
+	}
+}
+
+func TestCheckReadyWithStaticBackends(t *testing.T) {
+	p := &proxy{
+		backends: []string{"broker-0:9092"},
+		cacheTTL: 60 * time.Second,
+	}
+	if !p.checkReady(context.Background()) {
+		t.Fatal("expected ready when static backends are configured")
+	}
+}
+
+func putProxyTestSnapshot(t *testing.T, endpoints []string, snap metadata.ClusterMetadata) {
+	t.Helper()
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new etcd client: %v", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	putCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Put(putCtx, "/kafscale/metadata/snapshot", string(payload)); err != nil {
+		t.Fatalf("put snapshot: %v", err)
 	}
 }

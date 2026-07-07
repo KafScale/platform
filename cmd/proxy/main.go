@@ -352,7 +352,7 @@ func (p *proxy) checkReady(ctx context.Context) bool {
 	if len(p.backends) > 0 {
 		return true
 	}
-	if p.cacheFresh() {
+	if p.cacheFresh() && len(p.cachedBackendsSnapshot()) > 0 {
 		return true
 	}
 	if p.store == nil {
@@ -369,9 +369,9 @@ func (p *proxy) initMetadataCache(ctx context.Context) {
 		return
 	}
 	p.refreshMetadataCache(ctx)
-	// Periodic refresh so topology changes are picked up without a cache miss.
+	// Periodic refresh pulls from etcd so cold-start races self-heal without restart.
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1390,17 +1390,12 @@ func (p *proxy) currentBackends(ctx context.Context) ([]string, error) {
 	if len(p.backends) > 0 {
 		return p.backends, nil
 	}
+	p.syncStoreSnapshot(ctx)
 	meta, err := p.store.Metadata(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	addrs := make([]string, 0, len(meta.Brokers))
-	for _, broker := range meta.Brokers {
-		if broker.Host == "" || broker.Port == 0 {
-			continue
-		}
-		addrs = append(addrs, fmt.Sprintf("%s:%d", broker.Host, broker.Port))
-	}
+	addrs := brokerAddrsFromMetadata(meta.Brokers)
 	if len(addrs) > 0 {
 		p.setCachedBackends(addrs)
 		p.touchHealthy()
@@ -1425,6 +1420,15 @@ func (p *proxy) updateBrokerAddrs(brokers []protocol.MetadataBroker) {
 	p.brokerAddrMu.Unlock()
 }
 
+// syncStoreSnapshot reloads the etcd metadata snapshot when the store supports it.
+func (p *proxy) syncStoreSnapshot(ctx context.Context) {
+	if etcdStore, ok := p.store.(*metadata.EtcdStore); ok {
+		if err := etcdStore.RefreshSnapshot(ctx); err != nil {
+			p.logger.Warn("metadata snapshot sync failed", "error", err)
+		}
+	}
+}
+
 // refreshMetadataCache updates broker address and topic name caches from
 // metadata. Concurrent calls are coalesced via singleflight. Uses a detached
 // context so that a single caller's cancellation does not abort the shared fetch.
@@ -1435,18 +1439,34 @@ func (p *proxy) refreshMetadataCache(ctx context.Context) {
 	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_, err, _ := p.metaFlight.Do("refresh", func() (interface{}, error) {
+		p.syncStoreSnapshot(fetchCtx)
 		meta, err := p.store.Metadata(fetchCtx, nil)
 		if err != nil {
 			return nil, err
 		}
 		p.updateBrokerAddrs(meta.Brokers)
 		p.updateTopicNames(meta.Topics)
-		p.touchHealthy()
+		if addrs := brokerAddrsFromMetadata(meta.Brokers); len(addrs) > 0 {
+			p.setCachedBackends(addrs)
+			p.touchHealthy()
+			p.setReady(true)
+		}
 		return nil, nil
 	})
 	if err != nil {
 		p.logger.Warn("metadata cache refresh failed", "error", err)
 	}
+}
+
+func brokerAddrsFromMetadata(brokers []protocol.MetadataBroker) []string {
+	addrs := make([]string, 0, len(brokers))
+	for _, broker := range brokers {
+		if broker.Host == "" || broker.Port == 0 {
+			continue
+		}
+		addrs = append(addrs, fmt.Sprintf("%s:%d", broker.Host, broker.Port))
+	}
+	return addrs
 }
 
 func (p *proxy) updateTopicNames(topics []protocol.MetadataTopic) {

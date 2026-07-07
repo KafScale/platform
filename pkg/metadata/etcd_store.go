@@ -94,6 +94,12 @@ func (s *EtcdStore) Metadata(ctx context.Context, topics []string) (*ClusterMeta
 	return s.metadata.Metadata(ctx, topics)
 }
 
+// RefreshSnapshot reloads cluster metadata from etcd. Callers use this to recover
+// when the initial snapshot read failed or the watch stream was interrupted.
+func (s *EtcdStore) RefreshSnapshot(ctx context.Context) error {
+	return s.refreshSnapshot(ctx)
+}
+
 // Available reports whether the most recent etcd operation succeeded.
 func (s *EtcdStore) Available() bool {
 	return atomic.LoadInt32(&s.available) == 1
@@ -474,14 +480,26 @@ func (s *EtcdStore) startWatchers() {
 }
 
 func (s *EtcdStore) watchSnapshot(ctx context.Context) {
-	watchChan := s.client.Watch(ctx, snapshotKey(), clientv3.WithPrefix())
-	for resp := range watchChan {
-		if resp.Err() != nil {
-			continue
+	for {
+		watchChan := s.client.Watch(ctx, snapshotKey(), clientv3.WithPrefix())
+		for resp := range watchChan {
+			if resp.Err() != nil {
+				continue
+			}
+			if err := s.refreshSnapshot(ctx); err != nil {
+				continue
+			}
 		}
-		if err := s.refreshSnapshot(ctx); err != nil {
-			continue
+
+		// Watch channel closed. If the context is done, exit for good.
+		if ctx.Err() != nil {
+			return
 		}
+
+		// Transient failure (etcd leader election, compaction, network blip).
+		// Reseed from a full read and re-establish the watch.
+		time.Sleep(time.Second)
+		_ = s.refreshSnapshot(ctx)
 	}
 }
 
