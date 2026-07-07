@@ -153,12 +153,35 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Template.Labels = labels
+		sts.Spec.Template.Spec.Affinity = softPodAntiAffinity(labels)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
 		}
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
 	return err
+}
+
+// softPodAntiAffinity returns a preferred (soft) pod anti-affinity that spreads
+// replicas across nodes by hostname, so a single-node loss does not take the
+// whole quorum (broker or etcd) at once. The selector reuses the pod-template
+// label map, so it always matches the very pods it is meant to spread. Soft
+// (not required) so a single-node cluster still schedules every replica instead
+// of leaving them Pending; on a multi-node cluster the scheduler spreads them.
+func softPodAntiAffinity(labels map[string]string) *corev1.Affinity {
+	return &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+				{
+					Weight: 100,
+					PodAffinityTerm: corev1.PodAffinityTerm{
+						LabelSelector: &metav1.LabelSelector{MatchLabels: labels},
+						TopologyKey:   "kubernetes.io/hostname",
+					},
+				},
+			},
+		},
+	}
 }
 
 func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
