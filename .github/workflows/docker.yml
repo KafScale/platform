@@ -21,7 +21,7 @@ on:
       - 'v*'
   workflow_dispatch:
 
-permissions: {}
+permissions: read-all
 
 jobs:
   build-and-push:
