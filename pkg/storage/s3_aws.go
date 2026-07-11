@@ -21,8 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -33,6 +35,7 @@ import (
 type awsS3API interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 	HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error)
 	CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
@@ -60,27 +63,22 @@ func NewS3Client(ctx context.Context, cfg S3Config) (S3Client, error) {
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		loadOpts = append(loadOpts, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
 	}
-	if cfg.Endpoint != "" {
-		customResolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{
-					URL:           cfg.Endpoint,
-					PartitionID:   "aws",
-					SigningRegion: cfg.Region,
-				}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		})
-		loadOpts = append(loadOpts, config.WithEndpointResolverWithOptions(customResolver))
-	}
-
 	awsCfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("load aws config: %w", err)
 	}
 
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
 		o.UsePathStyle = cfg.ForcePathStyle
+		if cfg.MaxConnections > 0 {
+			o.HTTPClient = awshttp.NewBuildableClient().WithTransportOptions(func(t *http.Transport) {
+				t.MaxIdleConnsPerHost = cfg.MaxConnections
+				t.MaxConnsPerHost = cfg.MaxConnections
+			})
+		}
 	})
 
 	return newAWSClientWithAPI(cfg.Bucket, cfg.Region, cfg.KMSKeyARN, client), nil
@@ -156,6 +154,14 @@ func (c *awsS3Client) UploadIndex(ctx context.Context, key string, body []byte) 
 	return c.putObject(ctx, key, body)
 }
 
+func (c *awsS3Client) DeleteSegment(ctx context.Context, key string) error {
+	return c.deleteObject(ctx, key)
+}
+
+func (c *awsS3Client) DeleteIndex(ctx context.Context, key string) error {
+	return c.deleteObject(ctx, key)
+}
+
 func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
@@ -182,6 +188,32 @@ func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) er
 	return nil
 }
 
+func (c *awsS3Client) deleteObject(ctx context.Context, key string) error {
+	_, err := c.api.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("delete object %s: %w", key, err)
+	}
+	return nil
+}
+
+func isNotFoundErr(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "NoSuchKey", "NotFound":
+			return true
+		}
+	}
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		return true
+	}
+	return false
+}
+
 func isBucketMissingErr(err error) bool {
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
@@ -205,7 +237,7 @@ func (c *awsS3Client) DownloadSegment(ctx context.Context, key string, rng *Byte
 	if err != nil {
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", key, err)
@@ -220,9 +252,12 @@ func (c *awsS3Client) DownloadIndex(ctx context.Context, key string) ([]byte, er
 	}
 	resp, err := c.api.GetObject(ctx, input)
 	if err != nil {
+		if isNotFoundErr(err) {
+			return nil, fmt.Errorf("get object %s: %w", key, ErrNotFound)
+		}
 		return nil, fmt.Errorf("get object %s: %w", key, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read body %s: %w", key, err)

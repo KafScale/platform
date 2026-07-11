@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -39,13 +40,22 @@ type EtcdStoreConfig struct {
 	DialTimeout time.Duration
 }
 
+// etcdError wraps an error for storage in an atomic.Value, which requires a
+// consistent concrete type across all Store calls.
+type etcdError struct{ err error }
+
 // EtcdStore uses etcd for offset persistence while delegating metadata to an in-memory snapshot.
 type EtcdStore struct {
 	client    *clientv3.Client
 	metadata  *InMemoryStore
 	cancel    context.CancelFunc
 	available int32
-	lastError atomic.Value
+	lastError atomic.Value // stores etcdError
+	persistMu sync.Mutex   // serializes snapshot read/write to avoid out-of-order etcd puts
+}
+
+func (s *EtcdStore) EtcdClient() *clientv3.Client {
+	return s.client
 }
 
 type consumerOffsetRecord struct {
@@ -76,9 +86,7 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 		metadata:  NewInMemoryStore(snapshot),
 		available: 1,
 	}
-	if err := store.refreshSnapshot(ctx); err != nil {
-		// ignore if snapshot missing; operator will populate later
-	}
+	_ = store.refreshSnapshot(ctx) // best-effort; snapshot may not exist yet
 	store.startWatchers()
 	return store, nil
 }
@@ -86,6 +94,23 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 // Metadata delegates to the snapshot captured at startup (operator keeps it fresh).
 func (s *EtcdStore) Metadata(ctx context.Context, topics []string) (*ClusterMetadata, error) {
 	return s.metadata.Metadata(ctx, topics)
+}
+
+// RefreshSnapshot reloads cluster metadata from etcd. Callers use this to recover
+// when the initial snapshot read failed or the watch stream was interrupted.
+func (s *EtcdStore) RefreshSnapshot(ctx context.Context) error {
+	return s.refreshSnapshot(ctx)
+}
+
+// Close stops snapshot watchers and closes the etcd client.
+func (s *EtcdStore) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.client != nil {
+		return s.client.Close()
+	}
+	return nil
 }
 
 // Available reports whether the most recent etcd operation succeeded.
@@ -99,7 +124,7 @@ func (s *EtcdStore) recordEtcdResult(err error) {
 		return
 	}
 	atomic.StoreInt32(&s.available, 0)
-	s.lastError.Store(err)
+	s.lastError.Store(etcdError{err})
 }
 
 // NextOffset reads the last committed offset from etcd and returns the next offset to assign.
@@ -356,9 +381,9 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 	if err := s.metadata.CreatePartitions(ctx, topic, partitionCount); err != nil {
 		return err
 	}
-	if err := s.persistSnapshot(ctx); err != nil {
-		return err
-	}
+	// Read new partition metadata before persisting. The snapshot watcher can
+	// refresh in-memory state from etcd while persistSnapshot runs, so a later
+	// Metadata call may see a stale partition count and panic on index access.
 	updated, err := s.metadata.Metadata(ctx, []string{topic})
 	if err != nil {
 		return err
@@ -366,12 +391,18 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 	if len(updated.Topics) == 0 || updated.Topics[0].ErrorCode != 0 {
 		return ErrUnknownTopic
 	}
-	for i := current; i < partitionCount; i++ {
-		part := updated.Topics[0].Partitions[i]
+	newPartitions := updated.Topics[0].Partitions[current:partitionCount]
+	if int32(len(newPartitions)) != partitionCount-current {
+		return fmt.Errorf("metadata: expected %d new partitions, got %d", partitionCount-current, len(newPartitions))
+	}
+	if err := s.persistSnapshot(ctx); err != nil {
+		return err
+	}
+	for _, part := range newPartitions {
 		state := &metadatapb.PartitionState{
 			Topic:          topic,
-			Partition:      part.PartitionIndex,
-			LeaderBroker:   fmt.Sprintf("%d", part.LeaderID),
+			Partition:      part.Partition,
+			LeaderBroker:   fmt.Sprintf("%d", part.Leader),
 			LeaderEpoch:    part.LeaderEpoch,
 			LogStartOffset: 0,
 			LogEndOffset:   0,
@@ -383,7 +414,7 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 			return err
 		}
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_, err = s.client.Put(ctx, PartitionStateKey(topic, part.PartitionIndex), string(payload))
+		_, err = s.client.Put(ctx, PartitionStateKey(topic, part.Partition), string(payload))
 		cancel()
 		if err != nil {
 			s.recordEtcdResult(err)
@@ -397,11 +428,14 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 // CreateTopic currently updates only the in-memory snapshot; the operator is still responsible
 // for reconciling durable topic configuration into etcd/S3.
 func (s *EtcdStore) CreateTopic(ctx context.Context, spec TopicSpec) (*protocol.MetadataTopic, error) {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	topic, err := s.metadata.CreateTopic(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.persistSnapshot(ctx); err != nil {
+	if err := s.persistSnapshotLocked(ctx); err != nil {
 		return nil, err
 	}
 	return topic, nil
@@ -420,7 +454,7 @@ func (s *EtcdStore) partitionExists(ctx context.Context, topic string, partition
 		return false, nil
 	}
 	for _, part := range t.Partitions {
-		if part.PartitionIndex == partition {
+		if part.Partition == partition {
 			return true, nil
 		}
 	}
@@ -429,6 +463,9 @@ func (s *EtcdStore) partitionExists(ctx context.Context, topic string, partition
 
 // DeleteTopic updates the local snapshot so admin APIs behave consistently.
 func (s *EtcdStore) DeleteTopic(ctx context.Context, name string) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	metaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	state, err := s.metadata.Metadata(metaCtx, []string{name})
@@ -437,7 +474,7 @@ func (s *EtcdStore) DeleteTopic(ctx context.Context, name string) error {
 	}
 	var found bool
 	for _, topic := range state.Topics {
-		if topic.Name == name {
+		if *topic.Topic == name {
 			found = true
 			break
 		}
@@ -454,10 +491,7 @@ func (s *EtcdStore) DeleteTopic(ctx context.Context, name string) error {
 	if err := s.deleteConsumerOffsets(ctx, name); err != nil {
 		return err
 	}
-	if err := s.persistSnapshot(ctx); err != nil {
-		return err
-	}
-	return nil
+	return s.persistSnapshotLocked(ctx)
 }
 
 func (s *EtcdStore) startWatchers() {
@@ -468,18 +502,33 @@ func (s *EtcdStore) startWatchers() {
 }
 
 func (s *EtcdStore) watchSnapshot(ctx context.Context) {
-	watchChan := s.client.Watch(ctx, snapshotKey(), clientv3.WithPrefix())
-	for resp := range watchChan {
-		if resp.Err() != nil {
-			continue
+	for {
+		watchChan := s.client.Watch(ctx, snapshotKey(), clientv3.WithPrefix())
+		for resp := range watchChan {
+			if resp.Err() != nil {
+				continue
+			}
+			if err := s.refreshSnapshot(ctx); err != nil {
+				continue
+			}
 		}
-		if err := s.refreshSnapshot(ctx); err != nil {
-			continue
+
+		// Watch channel closed. If the context is done, exit for good.
+		if ctx.Err() != nil {
+			return
 		}
+
+		// Transient failure (etcd leader election, compaction, network blip).
+		// Reseed from a full read and re-establish the watch.
+		time.Sleep(time.Second)
+		_ = s.refreshSnapshot(ctx)
 	}
 }
 
 func (s *EtcdStore) refreshSnapshot(ctx context.Context) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.Get(ctx, snapshotKey())
@@ -504,6 +553,12 @@ func snapshotKey() string {
 }
 
 func (s *EtcdStore) persistSnapshot(ctx context.Context) error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	return s.persistSnapshotLocked(ctx)
+}
+
+func (s *EtcdStore) persistSnapshotLocked(ctx context.Context) error {
 	state, err := s.metadata.Metadata(context.Background(), nil)
 	if err != nil {
 		return err

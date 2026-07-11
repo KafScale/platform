@@ -65,21 +65,21 @@ func (m *adminMetrics) writePrometheus(w io.Writer) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	fmt.Fprintln(w, "# HELP kafscale_admin_requests_total Total admin API requests.")
-	fmt.Fprintln(w, "# TYPE kafscale_admin_requests_total counter")
-	fmt.Fprintln(w, "# HELP kafscale_admin_request_errors_total Total admin API requests that returned an error.")
-	fmt.Fprintln(w, "# TYPE kafscale_admin_request_errors_total counter")
-	fmt.Fprintln(w, "# HELP kafscale_admin_request_latency_ms_avg Average admin API request latency in milliseconds.")
-	fmt.Fprintln(w, "# TYPE kafscale_admin_request_latency_ms_avg gauge")
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_admin_requests_total Total admin API requests.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_admin_requests_total counter")
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_admin_request_errors_total Total admin API requests that returned an error.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_admin_request_errors_total counter")
+	_, _ = fmt.Fprintln(w, "# HELP kafscale_admin_request_latency_ms_avg Average admin API request latency in milliseconds.")
+	_, _ = fmt.Fprintln(w, "# TYPE kafscale_admin_request_latency_ms_avg gauge")
 	for apiKey, entry := range m.data {
 		name := adminAPIName(apiKey)
 		avg := 0.0
 		if entry.count > 0 {
 			avg = float64(entry.latencySum.Milliseconds()) / float64(entry.count)
 		}
-		fmt.Fprintf(w, "kafscale_admin_requests_total{api=%q} %d\n", name, entry.count)
-		fmt.Fprintf(w, "kafscale_admin_request_errors_total{api=%q} %d\n", name, entry.errorCount)
-		fmt.Fprintf(w, "kafscale_admin_request_latency_ms_avg{api=%q} %.3f\n", name, avg)
+		_, _ = fmt.Fprintf(w, "kafscale_admin_requests_total{api=%q} %d\n", name, entry.count)
+		_, _ = fmt.Fprintf(w, "kafscale_admin_request_errors_total{api=%q} %d\n", name, entry.errorCount)
+		_, _ = fmt.Fprintf(w, "kafscale_admin_request_latency_ms_avg{api=%q} %.3f\n", name, avg)
 	}
 }
 

@@ -125,6 +125,82 @@ spec:
                         type: string
                     useKubeEtcd:
                       type: boolean
+
+                lfsProxy:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                    replicas:
+                      type: integer
+                      minimum: 1
+                    image:
+                      type: string
+                    imagePullPolicy:
+                      type: string
+                    backends:
+                      type: array
+                      items:
+                        type: string
+                    advertisedHost:
+                      type: string
+                    advertisedPort:
+                      type: integer
+                    backendCacheTTLSeconds:
+                      type: integer
+                    service:
+                      type: object
+                      properties:
+                        type:
+                          type: string
+                        annotations:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        loadBalancerSourceRanges:
+                          type: array
+                          items:
+                            type: string
+                        port:
+                          type: integer
+                    http:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        port:
+                          type: integer
+                        apiKeySecretRef:
+                          type: string
+                        apiKeySecretKey:
+                          type: string
+                    metrics:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        port:
+                          type: integer
+                    health:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        port:
+                          type: integer
+                    s3:
+                      type: object
+                      properties:
+                        namespace:
+                          type: string
+                        maxBlobSize:
+                          type: integer
+                        chunkSize:
+                          type: integer
+                        forcePathStyle:
+                          type: boolean
+                        ensureBucket:
+                          type: boolean
                 ui:
                   type: object
                   properties:

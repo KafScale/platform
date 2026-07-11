@@ -26,11 +26,11 @@ import (
 	"strings"
 	"time"
 
+	processorconfig "github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	processorconfig "github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/pkg/metadata"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -278,17 +278,20 @@ func buildTopicPartitionFilter(snapshot metadata.ClusterMetadata) map[string]map
 		if topic.ErrorCode != 0 {
 			continue
 		}
+		if topic.Topic == nil || *topic.Topic == "" {
+			continue
+		}
 		partitions := make(map[int32]struct{}, len(topic.Partitions))
 		for _, partition := range topic.Partitions {
 			if partition.ErrorCode != 0 {
 				continue
 			}
-			partitions[partition.PartitionIndex] = struct{}{}
+			partitions[partition.Partition] = struct{}{}
 		}
 		if len(partitions) == 0 {
 			continue
 		}
-		filter[topic.Name] = partitions
+		filter[*topic.Topic] = partitions
 	}
 	return filter
 }

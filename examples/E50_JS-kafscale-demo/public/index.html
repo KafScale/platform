@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Kanban - KafScale Demo</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 Agent Kanban Board</h1>
+            <div class="header-stats">
+                <div class="stat">
+                    <span class="label">Tasks:</span>
+                    <span id="task-count">0</span>
+                </div>
+                <div class="stat">
+                    <span class="label">Completed:</span>
+                    <span id="completed-count">0</span>
+                </div>
+                <div class="stat agent-status" id="agent-status">
+                    <span class="status-dot offline"></span>
+                    <span>Agent Offline</span>
+                </div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- Left Panel: Kanban Board -->
+            <div class="panel board-panel">
+                <div class="panel-header">
+                    <h2>📋 Your Task Board</h2>
+                    <button id="new-task-btn" class="btn btn-primary">+ New Task</button>
+                </div>
+
+                <div class="kanban-board">
+                    <!-- Backlog Lane -->
+                    <div class="lane" data-lane="backlog">
+                        <div class="lane-header">
+                            <h3>📥 Backlog</h3>
+                            <span class="count">0</span>
+                        </div>
+                        <div class="cards" id="backlog-cards"></div>
+                    </div>
+
+                    <!-- Agent Processing Lane -->
+                    <div class="lane" data-lane="processing">
+                        <div class="lane-header">
+                            <h3>⚙️ Agent Processing</h3>
+                            <span class="count">0</span>
+                        </div>
+                        <div class="cards" id="processing-cards"></div>
+                    </div>
+
+                    <!-- Completed Lane -->
+                    <div class="lane" data-lane="completed">
+                        <div class="lane-header">
+                            <h3>✅ Completed</h3>
+                            <span class="count">0</span>
+                        </div>
+                        <div class="cards" id="completed-cards"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Agent View -->
+            <div class="panel agent-panel">
+                <div class="panel-header">
+                    <h2>🤖 Agent Activity</h2>
+                </div>
+
+                <div class="agent-view">
+                    <!-- Current Task -->
+                    <div class="agent-section">
+                        <h3>Current Task</h3>
+                        <div id="current-task" class="current-task empty">
+                            <p>Waiting for tasks...</p>
+                        </div>
+                    </div>
+
+                    <!-- Agent Prompt -->
+                    <div class="agent-section">
+                        <h3>Prompt Built</h3>
+                        <div id="agent-prompt" class="agent-prompt">
+                            <code>No active prompt</code>
+                        </div>
+                    </div>
+
+                    <!-- LLM Processing -->
+                    <div class="agent-section">
+                        <h3>LLM Processing</h3>
+                        <div id="llm-status" class="llm-status idle">
+                            <div class="status-indicator"></div>
+                            <span>Idle</span>
+                        </div>
+                    </div>
+
+                    <!-- Task History -->
+                    <div class="agent-section">
+                        <h3>Task History</h3>
+                        <div id="task-history" class="task-history"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Creation Modal -->
+    <div id="task-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Task</h2>
+                <button class="close-btn" id="close-modal">&times;</button>
+            </div>
+            <form id="task-form">
+                <div class="form-group">
+                    <label for="task-input">Task Description</label>
+                    <input type="text" id="task-input" placeholder="e.g., Write a blog post about Kafka" required>
+                </div>
+                <div class="form-group">
+                    <label for="spec-input">Specifications</label>
+                    <input type="text" id="spec-input" placeholder="e.g., 800 words, markdown format">
+                </div>
+                <div class="form-group">
+                    <label for="context-input">Context</label>
+                    <textarea id="context-input" rows="3" placeholder="e.g., Target audience: developers learning Kafka"></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="cancel-btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Task</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Connection Status Toast -->
+    <div id="connection-toast" class="toast hidden">
+        <span id="toast-message"></span>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -26,10 +26,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	console "github.com/KafScale/platform/internal/console"
 	"github.com/KafScale/platform/internal/mcpserver"
 	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 var version = "dev"

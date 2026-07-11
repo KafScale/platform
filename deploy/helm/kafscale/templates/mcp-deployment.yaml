@@ -43,10 +43,18 @@ spec:
 {{- end }}
 {{- end }}
       serviceAccountName: {{ include "kafscale.mcpServiceAccountName" . }}
+{{- with .Values.mcp.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: mcp
           image: "{{ .Values.mcp.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.mcp.image.tag) .Values.mcp.image.useLatest }}"
           imagePullPolicy: {{ ternary "Always" .Values.mcp.image.pullPolicy .Values.mcp.image.useLatest }}
+{{- with .Values.mcp.containerSecurityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
           env:
             - name: KAFSCALE_MCP_HTTP_ADDR
               value: ":8090"

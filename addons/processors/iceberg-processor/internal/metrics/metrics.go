@@ -77,6 +77,39 @@ var (
 		},
 		[]string{"topic", "partition"},
 	)
+	LfsResolvedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "lfs_resolved_total",
+			Help:      "Total LFS blobs resolved per topic.",
+		},
+		[]string{"topic"},
+	)
+	LfsResolvedBytesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "lfs_resolved_bytes_total",
+			Help:      "Total bytes resolved from LFS per topic.",
+		},
+		[]string{"topic"},
+	)
+	LfsResolutionErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "lfs_resolution_errors_total",
+			Help:      "Total LFS resolution errors per topic and reason.",
+		},
+		[]string{"topic", "reason"},
+	)
+	LfsResolutionDurationSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "lfs_resolution_duration_seconds",
+			Help:      "LFS resolution duration in seconds.",
+			Buckets:   prometheus.DefBuckets,
+		},
+		[]string{"topic"},
+	)
 )
 
 func init() {
@@ -88,5 +121,9 @@ func init() {
 		LastOffset,
 		WatermarkOffset,
 		WatermarkTimestamp,
+		LfsResolvedTotal,
+		LfsResolvedBytesTotal,
+		LfsResolutionErrorsTotal,
+		LfsResolutionDurationSeconds,
 	)
 }

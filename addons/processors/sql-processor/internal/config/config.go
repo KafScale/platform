@@ -112,11 +112,11 @@ type ManifestConfig struct {
 }
 
 type TimeIndexConfig struct {
-	Enabled         bool  `yaml:"enabled"`
-	KeySuffix       string `yaml:"key_suffix"`
-	BuildMaxSegments int   `yaml:"build_max_segments"`
-	BuildMaxBytes    int64 `yaml:"build_max_bytes"`
-	BuildLeaseTTLSeconds int `yaml:"build_lease_ttl_seconds"`
+	Enabled              bool   `yaml:"enabled"`
+	KeySuffix            string `yaml:"key_suffix"`
+	BuildMaxSegments     int    `yaml:"build_max_segments"`
+	BuildMaxBytes        int64  `yaml:"build_max_bytes"`
+	BuildLeaseTTLSeconds int    `yaml:"build_lease_ttl_seconds"`
 }
 
 type ResultCacheConfig struct {

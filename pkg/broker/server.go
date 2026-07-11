@@ -23,21 +23,23 @@ import (
 	"net"
 	"sync"
 
+	"github.com/twmb/franz-go/pkg/kmsg"
+
 	"github.com/KafScale/platform/pkg/protocol"
 )
 
 // Handler processes parsed Kafka protocol requests and returns the response payload.
 type Handler interface {
-	Handle(ctx context.Context, header *protocol.RequestHeader, req protocol.Request) ([]byte, error)
+	Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error)
 }
 
 // Server implements minimal Kafka TCP handling for milestone 1.
 type Server struct {
-	Addr             string
-	Handler          Handler
-	ConnContextFunc  ConnContextFunc
-	listener         net.Listener
-	wg               sync.WaitGroup
+	Addr            string
+	Handler         Handler
+	ConnContextFunc ConnContextFunc
+	listener        net.Listener
+	wg              sync.WaitGroup
 }
 
 // ConnContextFunc can wrap a connection and attach connection-scoped context data.
@@ -68,8 +70,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				log.Printf("accept temporary error: %v", err)
+			if ne, ok := err.(net.Error); ok && !ne.Timeout() {
+				log.Printf("accept error: %v", err)
 				continue
 			}
 			return err
@@ -98,7 +100,7 @@ func (s *Server) ListenAddress() string {
 func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if s.ConnContextFunc != nil {
 		wrapped, info, err := s.ConnContextFunc(conn)
 		if err != nil {
@@ -128,8 +130,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 		respPayload, err := s.Handler.Handle(ctx, header, req)
 		if err != nil {
-			log.Printf("handle request: %v", err)
-			return
+			log.Printf("handle request api=%d v=%d: %v", header.APIKey, header.APIVersion, err)
+			// Send an UNKNOWN_SERVER_ERROR response instead of dropping the
+			// connection so the client can recover gracefully.
+			if errResp := buildErrorResponse(header); errResp != nil {
+				_ = protocol.WriteFrame(conn, errResp)
+			}
+			continue
 		}
 		if respPayload == nil {
 			continue
@@ -139,4 +146,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 	}
+}
+
+// buildErrorResponse creates a minimal Kafka error response for the given
+// request header so the client receives a proper error instead of a closed
+// connection. Returns nil if no suitable response can be constructed.
+func buildErrorResponse(header *protocol.RequestHeader) []byte {
+	resp := kmsg.ResponseForKey(header.APIKey)
+	if resp == nil {
+		return nil
+	}
+	resp.SetVersion(header.APIVersion)
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp)
 }

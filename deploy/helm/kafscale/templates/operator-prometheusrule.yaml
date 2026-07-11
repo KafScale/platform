@@ -51,4 +51,20 @@ spec:
           annotations:
             summary: Kafscale snapshot has never succeeded
             description: No successful etcd snapshots recorded yet for cluster {{`{{ $labels.cluster }}`}}.
+        - alert: KafscaleEtcdBackendSizeHigh
+          expr: kafscale_operator_etcd_db_size_high == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Kafscale etcd backend size is high
+            description: Managed etcd backend size exceeded the maintenance threshold for cluster {{`{{ $labels.cluster }}`}}.
+        - alert: KafscaleEtcdNOSPACE
+          expr: kafscale_operator_etcd_nospace_alarm == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: Kafscale etcd NOSPACE alarm active
+            description: Managed etcd has an active NOSPACE alarm for cluster {{`{{ $labels.cluster }}`}}. Produce may fail until maintenance runs.
 {{- end }}

@@ -30,6 +30,7 @@ type Record struct {
 	Key       []byte
 	Value     []byte
 	Headers   []decoder.Header
+	Columns   map[string]interface{}
 }
 
 // Writer writes records to a downstream system (Iceberg, OLAP, etc).

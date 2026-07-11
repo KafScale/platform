@@ -58,6 +58,22 @@ var (
 		Name: "kafscale_operator_etcd_snapshot_access_ok",
 		Help: "1 if the operator can write to the snapshot bucket.",
 	}, []string{"cluster"})
+	operatorEtcdDbTotalSizeBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_db_total_size_bytes",
+		Help: "Physical etcd backend size per managed member.",
+	}, []string{"cluster", "member"})
+	operatorEtcdDbInUseBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_db_in_use_bytes",
+		Help: "Logical in-use etcd backend size per managed member.",
+	}, []string{"cluster", "member"})
+	operatorEtcdDbSizeHigh = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_db_size_high",
+		Help: "1 when any managed etcd member exceeds the maintenance size threshold.",
+	}, []string{"cluster"})
+	operatorEtcdNospaceAlarm = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_nospace_alarm",
+		Help: "1 when the managed etcd cluster has an active NOSPACE alarm.",
+	}, []string{"cluster"})
 )
 
 func init() {
@@ -70,6 +86,10 @@ func init() {
 		operatorEtcdSnapshotStale,
 		operatorEtcdSnapshotSuccess,
 		operatorEtcdSnapshotAccessOK,
+		operatorEtcdDbTotalSizeBytes,
+		operatorEtcdDbInUseBytes,
+		operatorEtcdDbSizeHigh,
+		operatorEtcdNospaceAlarm,
 	)
 }
 

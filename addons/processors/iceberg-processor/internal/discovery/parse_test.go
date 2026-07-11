@@ -19,12 +19,12 @@ import "testing"
 
 func TestParseSegmentKey(t *testing.T) {
 	cases := []struct {
-		name      string
-		prefix    string
-		key       string
-		expected  segmentKey
-		kind      string
-		shouldOK  bool
+		name     string
+		prefix   string
+		key      string
+		expected segmentKey
+		kind     string
+		shouldOK bool
 	}{
 		{
 			name:   "kfs with namespace",

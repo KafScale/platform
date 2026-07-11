@@ -53,6 +53,21 @@ const (
 	operatorEtcdSnapshotProtectBucketEnv = "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET"
 	operatorEtcdStorageMemoryEnv         = "KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY"
 
+	// etcd space-management knobs. KafScale writes one MVCC revision per
+	// offset update (one per produce), so the store grows fast under load.
+	// These three control periodic compaction and the backend quota; all
+	// have safe defaults and only need an override on high-write clusters.
+	operatorEtcdQuotaBackendBytesEnv           = "KAFSCALE_OPERATOR_ETCD_QUOTA_BACKEND_BYTES"
+	operatorEtcdAutoCompactionRetentionEnv     = "KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_RETENTION"
+	operatorEtcdAutoCompactionModeEnv          = "KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_MODE"
+	operatorEtcdMaintenanceScheduleEnv         = "KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE"
+	operatorEtcdMaintenanceCheckScheduleEnv    = "KAFSCALE_OPERATOR_ETCD_MAINTENANCE_CHECK_SCHEDULE"
+	operatorEtcdMaintenanceEnabledEnv          = "KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED"
+	operatorEtcdMaintenanceSizeThresholdPctEnv = "KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SIZE_THRESHOLD_PCT"
+	// Deprecated aliases kept for backward compatibility.
+	operatorEtcdDefragScheduleEnv = "KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE"
+	operatorEtcdDefragEnabledEnv  = "KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED"
+
 	defaultEtcdImage                 = "kubesphere/etcd:3.6.4-0"
 	defaultEtcdctlImage              = "ghcr.io/kafscale/kafscale-etcd-tools:dev"
 	defaultEtcdStorageSize           = "10Gi"
@@ -62,6 +77,20 @@ const (
 	defaultSnapshotSchedule          = "0 * * * *"
 	defaultSnapshotImage             = "amazon/aws-cli:2.15.0"
 	defaultSnapshotStaleAfterSeconds = 2 * 60 * 60
+
+	// 4 GiB backend quota: headroom above etcd's 2 GiB default so a write
+	// burst cannot exceed the quota between compaction cycles.
+	defaultEtcdQuotaBackendBytes = int64(4 * 1024 * 1024 * 1024)
+	// 5 minutes of retained revisions keeps recovery/audit history while the
+	// compactor keeps pace with the broker write rate.
+	defaultEtcdAutoCompactionRetention = "5m"
+	// "periodic" compacts on a wall-clock interval (the retention value);
+	// "revision" is the only other valid mode.
+	defaultEtcdAutoCompactionMode = "periodic"
+	// Maintenance CronJob: defrag + alarm disarm. One member at a time.
+	defaultEtcdMaintenanceSchedule         = "0 */6 * * *"
+	defaultEtcdMaintenanceCheckSchedule    = "*/15 * * * *"
+	defaultEtcdMaintenanceSizeThresholdPct = int64(75)
 )
 
 type EtcdResolution struct {
@@ -129,6 +158,9 @@ func reconcileEtcdResources(ctx context.Context, c client.Client, scheme *runtim
 	if err := reconcileEtcdSnapshotCronJob(ctx, c, scheme, cluster); err != nil {
 		return err
 	}
+	if err := reconcileEtcdMaintenanceCronJobs(ctx, c, scheme, cluster); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -182,7 +214,8 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 		sts.Spec.ServiceName = fmt.Sprintf("%s-etcd", cluster.Name)
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		sts.Spec.Template.ObjectMeta.Labels = labels
+		sts.Spec.Template.Labels = labels
+		sts.Spec.Template.Spec.Affinity = softPodAntiAffinity(labels)
 
 		useMemory := parseBoolEnv(operatorEtcdStorageMemoryEnv)
 		if useMemory {
@@ -242,9 +275,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				{Name: "SNAPSHOT_BUCKET", Value: bucket},
 				{Name: "SNAPSHOT_PREFIX", Value: prefix},
 			}
-			if endpoint != "" {
-				restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
-			}
+			restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
 			if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
 				secretRef := corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef}
 				restoreEnv = append(restoreEnv,
@@ -308,7 +339,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 			downloadScript := "set -euo pipefail\n" +
 				"DATA_DIR=/var/lib/etcd\n" +
 				"ENDPOINT_OPT=\"\"\n" +
-				"if [ -n \"$AWS_ENDPOINT_URL\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
+				"if [ -n \"${AWS_ENDPOINT_URL:-}\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
 				"if [ -d \"$DATA_DIR/member\" ] && [ \"$(ls -A \"$DATA_DIR\")\" ]; then\n" +
 				"  echo \"etcd data dir not empty; skipping snapshot download\"\n" +
 				"  exit 0\n" +
@@ -369,25 +400,46 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				},
 			}
 		}
-		sts.Spec.Template.Spec.Containers = []corev1.Container{
-			{
-				Name:  "etcd",
-				Image: image,
-				Ports: []corev1.ContainerPort{
-					{Name: "client", ContainerPort: 2379},
-					{Name: "peer", ContainerPort: 2380},
-				},
-				Env: []corev1.EnvVar{
-					{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
-					{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
-				},
-				Command: []string{"etcd"},
-				Args:    etcdArgs(cluster),
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: "data", MountPath: "/var/lib/etcd"},
-				},
+		etcdContainer := corev1.Container{
+			Name:  "etcd",
+			Image: image,
+			Ports: []corev1.ContainerPort{
+				{Name: "client", ContainerPort: 2379},
+				{Name: "peer", ContainerPort: 2380},
+			},
+			Env: []corev1.EnvVar{
+				{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
+				{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
+			},
+			Command: []string{"etcd"},
+			Args:    etcdArgs(cluster),
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "data", MountPath: "/var/lib/etcd"},
 			},
 		}
+		// Memory-mode guard. With storage-memory mode the data dir is a tmpfs
+		// emptyDir, so every byte etcd writes (up to the backend quota) is
+		// resident node RAM. A tmpfs has no size cap of its own, so a 4 GiB
+		// quota could drive ~4 GiB of node memory and risk an OOM that takes
+		// the node down. The tmpfs allocation counts against this container's
+		// memory cgroup, so a memory limit bounds it: the kernel reclaims/kills
+		// inside the container before the node is starved. The limit is the
+		// quota plus headroom for etcd's own heap and bbolt mmap pages; the
+		// request matches the quota so the scheduler reserves real capacity.
+		// Disk-backed (PVC) mode is unchanged: bytes land on the volume, not RAM.
+		if useMemory {
+			quota := etcdQuotaBackendBytes()
+			memLimit := quota + (512 * 1024 * 1024)
+			etcdContainer.Resources = corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceMemory: *resource.NewQuantity(quota, resource.BinarySI),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceMemory: *resource.NewQuantity(memLimit, resource.BinarySI),
+				},
+			}
+		}
+		sts.Spec.Template.Spec.Containers = []corev1.Container{etcdContainer}
 		return controllerutil.SetControllerReference(cluster, sts, scheme)
 	})
 	return err
@@ -408,6 +460,18 @@ func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 		"--initial-cluster=" + initialCluster,
 		"--initial-cluster-state=new",
 		"--initial-cluster-token=" + cluster.Name + "-etcd",
+		// Periodic auto-compaction. KafScale writes one etcd revision per
+		// offset update (one per produce), so without compaction the DB fills
+		// to the default 2 GiB quota under load and the broker starts rejecting
+		// produce with `mvcc: database space exceeded`. Compaction reclaims
+		// revisions logically (bbolt pages become reusable). Physical reclaim
+		// and NOSPACE alarm disarm run on a separate defrag CronJob.
+		// Mode + retention + quota are env-configurable for high-write clusters.
+		"--auto-compaction-mode=" + etcdAutoCompactionMode(),
+		"--auto-compaction-retention=" + etcdAutoCompactionRetention(),
+		// Headroom above the default 2 GiB so a burst cannot exceed the quota
+		// between compactions; raises the soft cap inside etcd.
+		"--quota-backend-bytes=" + strconv.FormatInt(etcdQuotaBackendBytes(), 10),
 	}
 }
 
@@ -472,7 +536,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		cron.Spec.ConcurrencyPolicy = batchv1.ForbidConcurrent
 		cron.Spec.SuccessfulJobsHistoryLimit = int32Ptr(3)
 		cron.Spec.FailedJobsHistoryLimit = int32Ptr(3)
-		cron.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels = labels
+		cron.Spec.JobTemplate.Spec.Template.Labels = labels
 		cron.Spec.JobTemplate.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
 		cron.Spec.JobTemplate.Spec.Template.Spec.Volumes = []corev1.Volume{
 			{
@@ -523,9 +587,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 			{Name: "CREATE_BUCKET", Value: boolToString(createBucket)},
 			{Name: "PROTECT_BUCKET", Value: boolToString(protectBucket)},
 		}
-		if endpoint != "" {
-			uploadEnv = append(uploadEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
-		}
+		uploadEnv = append(uploadEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
 		if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
 			secretRef := corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef}
 			uploadEnv = append(uploadEnv,
@@ -574,7 +636,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 						"SNAPSHOT=/snapshots/etcd-snapshot.db\n" +
 						"CHECKSUM=/snapshots/etcd-snapshot.db.sha256\n" +
 						"ENDPOINT_OPT=\"\"\n" +
-						"if [ -n \"$AWS_ENDPOINT_URL\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
+						"if [ -n \"${AWS_ENDPOINT_URL:-}\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
 						"if [ \"$CREATE_BUCKET\" = \"1\" ]; then\n" +
 						"  if ! aws $ENDPOINT_OPT s3api head-bucket --bucket \"$SNAPSHOT_BUCKET\" >/dev/null 2>&1; then\n" +
 						"    if [ \"$AWS_REGION\" = \"us-east-1\" ]; then\n" +
@@ -605,6 +667,147 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		return controllerutil.SetControllerReference(cluster, cron, scheme)
 	})
 	return err
+}
+
+func reconcileEtcdMaintenanceCronJobs(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+	if !etcdMaintenanceEnabled() {
+		return nil
+	}
+	etcdctlImage := getEnv(operatorEtcdSnapshotEtcdctlEnv, defaultEtcdctlImage)
+	memberEndpoints := strings.Join(managedEtcdMemberClientEndpoints(cluster), ",")
+	quota := strconv.FormatInt(etcdQuotaBackendBytes(), 10)
+	thresholdPct := strconv.FormatInt(etcdMaintenanceSizeThresholdPct(), 10)
+
+	if err := reconcileEtcdMaintenanceCronJob(ctx, c, scheme, cluster, etcdMaintenanceCronSpec{
+		name:            fmt.Sprintf("%s-etcd-maintenance", cluster.Name),
+		schedule:        etcdMaintenanceSchedule(),
+		etcdctlImage:    etcdctlImage,
+		memberEndpoints: memberEndpoints,
+		quotaBytes:      quota,
+		thresholdPct:    thresholdPct,
+		checkOnly:       "0",
+		taskLabel:       "maintenance",
+	}); err != nil {
+		return err
+	}
+
+	return reconcileEtcdMaintenanceCronJob(ctx, c, scheme, cluster, etcdMaintenanceCronSpec{
+		name:            fmt.Sprintf("%s-etcd-maintenance-check", cluster.Name),
+		schedule:        etcdMaintenanceCheckSchedule(),
+		etcdctlImage:    etcdctlImage,
+		memberEndpoints: memberEndpoints,
+		quotaBytes:      quota,
+		thresholdPct:    thresholdPct,
+		checkOnly:       "1",
+		taskLabel:       "maintenance-check",
+	})
+}
+
+type etcdMaintenanceCronSpec struct {
+	name            string
+	schedule        string
+	etcdctlImage    string
+	memberEndpoints string
+	quotaBytes      string
+	thresholdPct    string
+	checkOnly       string
+	taskLabel       string
+}
+
+func reconcileEtcdMaintenanceCronJob(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster, spec etcdMaintenanceCronSpec) error {
+	cron := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{
+		Name:      spec.name,
+		Namespace: cluster.Namespace,
+	}}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, c, cron, func() error {
+		labels := etcdMaintenanceLabels(cluster, spec.taskLabel)
+		cron.Labels = labels
+		cron.Spec.Schedule = spec.schedule
+		cron.Spec.ConcurrencyPolicy = batchv1.ForbidConcurrent
+		cron.Spec.SuccessfulJobsHistoryLimit = int32Ptr(3)
+		cron.Spec.FailedJobsHistoryLimit = int32Ptr(3)
+		cron.Spec.JobTemplate.Spec.Template.Labels = labels
+		cron.Spec.JobTemplate.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
+		activeDeadline := int64(1800)
+		cron.Spec.JobTemplate.Spec.Template.Spec.ActiveDeadlineSeconds = &activeDeadline
+		cron.Spec.JobTemplate.Spec.Template.Spec.Containers = []corev1.Container{
+			{
+				Name:  "maintenance",
+				Image: spec.etcdctlImage,
+				Env: []corev1.EnvVar{
+					{Name: "ETCD_MEMBERS", Value: spec.memberEndpoints},
+					{Name: "ETCDCTL_API", Value: "3"},
+					{Name: "ETCD_QUOTA_BYTES", Value: spec.quotaBytes},
+					{Name: "THRESHOLD_PCT", Value: spec.thresholdPct},
+					{Name: "CHECK_ONLY", Value: spec.checkOnly},
+				},
+				Command: []string{"/bin/sh", "-c"},
+				Args:    []string{etcdMaintenanceShellScript()},
+			},
+		}
+		return controllerutil.SetControllerReference(cluster, cron, scheme)
+	})
+	return err
+}
+
+func etcdMaintenanceLabels(cluster *kafscalev1alpha1.KafscaleCluster, task string) map[string]string {
+	labels := etcdLabels(cluster)
+	labels["app.kubernetes.io/component"] = "etcd-maintenance"
+	labels["kafscale.io/etcd-task"] = task
+	return labels
+}
+
+func etcdMaintenanceShellScript() string {
+	return "set -euo pipefail\n" +
+		"THRESHOLD_BYTES=$(( ETCD_QUOTA_BYTES * THRESHOLD_PCT / 100 ))\n" +
+		"needs_work=0\n" +
+		"IFS=',' read -ra MEMBERS <<< \"${ETCD_MEMBERS}\"\n" +
+		"for ep in \"${MEMBERS[@]}\"; do\n" +
+		"  status_json=$(etcdctl --endpoints=\"${ep}\" endpoint status -w json 2>/dev/null || true)\n" +
+		"  if [ -z \"${status_json}\" ]; then\n" +
+		"    echo \"status unavailable for ${ep}\"\n" +
+		"    needs_work=1\n" +
+		"    continue\n" +
+		"  fi\n" +
+		"  db_size=$(printf '%s' \"${status_json}\" | sed -n 's/.*\"dbSize\":\\([0-9]*\\).*/\\1/p' | head -1)\n" +
+		"  db_size=${db_size:-0}\n" +
+		"  echo \"member ${ep} dbSize=${db_size} threshold=${THRESHOLD_BYTES}\"\n" +
+		"  if [ \"${db_size}\" -ge \"${THRESHOLD_BYTES}\" ]; then\n" +
+		"    needs_work=1\n" +
+		"  fi\n" +
+		"  if etcdctl --endpoints=\"${ep}\" alarm list 2>/dev/null | grep -q NOSPACE; then\n" +
+		"    echo \"NOSPACE alarm on ${ep}\"\n" +
+		"    needs_work=1\n" +
+		"  fi\n" +
+		"done\n" +
+		"if [ \"${CHECK_ONLY}\" = \"1\" ] && [ \"${needs_work}\" -eq 0 ]; then\n" +
+		"  echo \"check: below threshold, skipping maintenance\"\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"for ep in \"${MEMBERS[@]}\"; do\n" +
+		"  echo \"defrag ${ep}\"\n" +
+		"  etcdctl --endpoints=\"${ep}\" endpoint defrag\n" +
+		"  echo \"disarm alarms on ${ep}\"\n" +
+		"  etcdctl --endpoints=\"${ep}\" alarm disarm\n" +
+		"  sleep 2\n" +
+		"done\n"
+}
+
+func managedEtcdMemberClientEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
+	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
+	replicas := int(etcdReplicas())
+	if replicas < 1 {
+		replicas = 1
+	}
+	endpoints := make([]string, 0, replicas)
+	for i := 0; i < replicas; i++ {
+		endpoints = append(endpoints, fmt.Sprintf(
+			"http://%s-etcd-%d.%s.%s.svc.cluster.local:2379",
+			cluster.Name, i, peerSvc, cluster.Namespace,
+		))
+	}
+	return endpoints
 }
 
 func snapshotBucket(cluster *kafscalev1alpha1.KafscaleCluster) string {
@@ -714,7 +917,7 @@ func etcdReplicas() int32 {
 		return int32(defaultEtcdReplicas)
 	}
 	parsed, err := strconv.ParseInt(raw, 10, 32)
-	if err != nil || parsed < int64(defaultEtcdReplicas) {
+	if err != nil || parsed < 1 {
 		return int32(defaultEtcdReplicas)
 	}
 	return int32(parsed)
@@ -725,4 +928,66 @@ func stringPtrOrNil(val string) *string {
 		return nil
 	}
 	return &val
+}
+
+// etcdQuotaBackendBytes returns the configured backend quota in bytes, or the
+// default. Empty or non-positive / unparseable values fall back to the default
+// so a garbage override never disables the quota.
+func etcdQuotaBackendBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv(operatorEtcdQuotaBackendBytesEnv))
+	if raw == "" {
+		return defaultEtcdQuotaBackendBytes
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return defaultEtcdQuotaBackendBytes
+	}
+	return parsed
+}
+
+// etcdAutoCompactionRetention returns the configured retention window, or the
+// default. The value is passed verbatim to etcd, which interprets it per the
+// compaction mode (a duration like "5m" for periodic, a count for revision).
+func etcdAutoCompactionRetention() string {
+	raw := strings.TrimSpace(os.Getenv(operatorEtcdAutoCompactionRetentionEnv))
+	if raw == "" {
+		return defaultEtcdAutoCompactionRetention
+	}
+	return raw
+}
+
+// etcdAutoCompactionMode returns the configured compaction mode, restricted to
+// the two values etcd accepts ("periodic", "revision"); anything else falls
+// back to the default.
+func etcdAutoCompactionMode() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(operatorEtcdAutoCompactionModeEnv))) {
+	case "periodic":
+		return "periodic"
+	case "revision":
+		return "revision"
+	default:
+		return defaultEtcdAutoCompactionMode
+	}
+}
+
+func etcdMaintenanceSchedule() string {
+	if raw := strings.TrimSpace(os.Getenv(operatorEtcdMaintenanceScheduleEnv)); raw != "" {
+		return raw
+	}
+	return getEnv(operatorEtcdDefragScheduleEnv, defaultEtcdMaintenanceSchedule)
+}
+
+func etcdMaintenanceCheckSchedule() string {
+	return getEnv(operatorEtcdMaintenanceCheckScheduleEnv, defaultEtcdMaintenanceCheckSchedule)
+}
+
+// etcdMaintenanceEnabled returns true unless explicitly disabled.
+func etcdMaintenanceEnabled() bool {
+	for _, key := range []string{operatorEtcdMaintenanceEnabledEnv, operatorEtcdDefragEnabledEnv} {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+		case "0", "false", "no", "off":
+			return false
+		}
+	}
+	return true
 }

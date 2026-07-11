@@ -133,6 +133,214 @@ kafscale_fetch_rps 7
 	}
 }
 
+func TestNewPromMetricsClient(t *testing.T) {
+	provider := NewPromMetricsClient("http://localhost:9093/metrics")
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestPickMemBytes(t *testing.T) {
+	if got := pickMemBytes(1000, 500); got != 1000 {
+		t.Fatalf("expected heap bytes 1000, got %d", got)
+	}
+	if got := pickMemBytes(0, 500); got != 500 {
+		t.Fatalf("expected alloc bytes 500, got %d", got)
+	}
+	if got := pickMemBytes(0, 0); got != 0 {
+		t.Fatalf("expected 0, got %d", got)
+	}
+}
+
+func TestNewCompositeMetricsProvider(t *testing.T) {
+	provider := NewCompositeMetricsProvider(nil, "")
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestCompositeMetricsProviderSnapshotNoBroker(t *testing.T) {
+	provider := NewCompositeMetricsProvider(nil, "")
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap == nil {
+		t.Fatal("expected non-nil snapshot")
+	}
+}
+
+type mockBrokerMetrics struct {
+	snap *MetricsSnapshot
+	err  error
+}
+
+func (m *mockBrokerMetrics) Snapshot(_ context.Context) (*MetricsSnapshot, error) {
+	return m.snap, m.err
+}
+
+func TestCompositeMetricsProviderWithBroker(t *testing.T) {
+	broker := &mockBrokerMetrics{
+		snap: &MetricsSnapshot{
+			ProduceRPS: 100,
+			FetchRPS:   200,
+		},
+	}
+	provider := NewCompositeMetricsProvider(broker, "")
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.ProduceRPS != 100 || snap.FetchRPS != 200 {
+		t.Fatalf("unexpected rps: %f %f", snap.ProduceRPS, snap.FetchRPS)
+	}
+}
+
+func TestCompositeMetricsProviderWithOperator(t *testing.T) {
+	opHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`
+kafscale_operator_clusters 2
+kafscale_operator_etcd_snapshot_age_seconds 60
+kafscale_operator_etcd_snapshot_access_ok 1
+`))
+	})
+	opServer := httptest.NewServer(opHandler)
+	defer opServer.Close()
+
+	provider := NewCompositeMetricsProvider(nil, opServer.URL)
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !snap.OperatorMetricsAvailable {
+		t.Fatal("expected operator metrics available")
+	}
+	if snap.OperatorClusters != 2 {
+		t.Fatalf("expected 2 clusters, got %f", snap.OperatorClusters)
+	}
+	if snap.OperatorEtcdSnapshotAgeSeconds != 60 {
+		t.Fatalf("expected age 60, got %f", snap.OperatorEtcdSnapshotAgeSeconds)
+	}
+}
+
+func TestFetchPromSnapshotWithAdminMetrics(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`
+kafscale_admin_requests_total{handler="metadata"} 10
+kafscale_admin_requests_total{handler="produce"} 20
+kafscale_admin_request_errors_total{handler="metadata"} 1
+kafscale_admin_request_latency_ms_avg{handler="metadata"} 5
+kafscale_admin_request_latency_ms_avg{handler="produce"} 15
+kafscale_fetch_rps 300
+kafscale_broker_heap_inuse_bytes 2097152
+kafscale_broker_mem_alloc_bytes 1048576
+`))
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	snap, err := fetchPromSnapshot(context.Background(), server.Client(), server.URL)
+	if err != nil {
+		t.Fatalf("fetchPromSnapshot: %v", err)
+	}
+	if snap.AdminRequestsTotal != 30 {
+		t.Fatalf("expected admin total 30, got %f", snap.AdminRequestsTotal)
+	}
+	if snap.AdminRequestErrorsTotal != 1 {
+		t.Fatalf("expected admin errors 1, got %f", snap.AdminRequestErrorsTotal)
+	}
+	if snap.AdminRequestLatencyMS != 10 {
+		t.Fatalf("expected admin latency avg 10, got %f", snap.AdminRequestLatencyMS)
+	}
+	if snap.FetchRPS != 300 {
+		t.Fatalf("expected fetch rps 300, got %f", snap.FetchRPS)
+	}
+	// heapBytes > 0 should be preferred
+	if snap.BrokerMemBytes != 2097152 {
+		t.Fatalf("expected heap bytes 2097152, got %d", snap.BrokerMemBytes)
+	}
+}
+
+func TestFetchPromSnapshotHTTPError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	_, err := fetchPromSnapshot(context.Background(), server.Client(), server.URL)
+	if err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+}
+
+func TestFetchOperatorSnapshotHTTPError(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	_, err := fetchOperatorSnapshot(context.Background(), server.Client(), server.URL)
+	if err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+}
+
+func TestParsePromSampleEdgeCases(t *testing.T) {
+	// Empty line
+	_, ok := parsePromSample("")
+	if ok {
+		t.Fatal("expected false for empty line")
+	}
+	// Comment
+	_, ok = parsePromSample("# HELP some metric")
+	if ok {
+		t.Fatal("expected false for comment")
+	}
+}
+
+func TestAggregatedNoBrokersNoFallback(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	client := NewAggregatedPromMetricsClient(store, "")
+	_, err := client.Snapshot(context.Background())
+	if err == nil {
+		t.Fatal("expected error with no brokers and no fallback")
+	}
+}
+
+func TestAggregatedAllBrokersDown(t *testing.T) {
+	// Server that is not reachable (use a closed server)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	server := httptest.NewServer(handler)
+	parsedURL, _ := url.Parse(server.URL)
+	server.Close() // close immediately so connections fail
+
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: parsedURL.Host},
+		},
+	})
+	client := NewAggregatedPromMetricsClient(store, "")
+	_, err := client.Snapshot(context.Background())
+	if err == nil {
+		t.Fatal("expected error when all brokers are down")
+	}
+}
+
+func TestNewAggregatedPromMetricsClientURLParsing(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	// Custom scheme and port
+	client := NewAggregatedPromMetricsClient(store, "https://broker:9999/custom_metrics")
+	if client == nil {
+		t.Fatal("expected non-nil client")
+	}
+}
+
 func TestFetchOperatorSnapshot(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

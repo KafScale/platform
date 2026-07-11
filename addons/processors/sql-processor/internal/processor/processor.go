@@ -137,9 +137,8 @@ func (p *Processor) Run(ctx context.Context) error {
 				}
 
 				mapped := mapRecords(records)
-				if dropped := len(mapped); dropped > 0 {
+				if len(mapped) > 0 {
 					mapped = filterRecords(mapped, state.Offset)
-					dropped -= len(mapped)
 				}
 				if len(mapped) == 0 {
 					continue

@@ -18,6 +18,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -75,11 +76,12 @@ type RegistryConfig struct {
 }
 
 type Mapping struct {
-	Topic               string `yaml:"topic"`
-	Table               string `yaml:"table"`
-	Mode                string `yaml:"mode"`
-	CreateTableIfAbsent bool   `yaml:"create_table_if_missing"`
+	Topic               string              `yaml:"topic"`
+	Table               string              `yaml:"table"`
+	Mode                string              `yaml:"mode"`
+	CreateTableIfAbsent bool                `yaml:"create_table_if_missing"`
 	Schema              MappingSchemaConfig `yaml:"schema"`
+	Lfs                 LfsConfig           `yaml:"lfs"`
 }
 
 type MappingSchemaConfig struct {
@@ -92,6 +94,14 @@ type Column struct {
 	Name     string `yaml:"name"`
 	Type     string `yaml:"type"`
 	Required bool   `yaml:"required"`
+}
+
+type LfsConfig struct {
+	Mode               string `yaml:"mode"`
+	MaxInlineSize      int64  `yaml:"max_inline_size"`
+	StoreMetadata      bool   `yaml:"store_metadata"`
+	ValidateChecksum   *bool  `yaml:"validate_checksum"`
+	ResolveConcurrency int    `yaml:"resolve_concurrency"`
 }
 
 type IcebergConfig struct {
@@ -151,6 +161,7 @@ func Load(path string) (Config, error) {
 	if cfg.Offsets.Backend == "etcd" && len(cfg.Etcd.Endpoints) == 0 {
 		return Config{}, fmt.Errorf("etcd.endpoints is required for offsets.backend=etcd")
 	}
+	applyLfsEnvOverrides(&cfg)
 	for i, mapping := range cfg.Mappings {
 		if mapping.Topic == "" {
 			return Config{}, fmt.Errorf("mappings[%d].topic is required", i)
@@ -163,6 +174,10 @@ func Load(path string) (Config, error) {
 		}
 		if mapping.Mode != "append" {
 			return Config{}, fmt.Errorf("mappings[%d].mode must be append", i)
+		}
+		applyLfsDefaults(&mapping)
+		if err := validateLfsConfig(mapping.Lfs, i); err != nil {
+			return Config{}, err
 		}
 		if mapping.Schema.Source == "" {
 			if len(mapping.Schema.Columns) > 0 {
@@ -201,6 +216,110 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func (l LfsConfig) ChecksumEnabled() bool {
+	if l.ValidateChecksum == nil {
+		return true
+	}
+	return *l.ValidateChecksum
+}
+
+func applyLfsDefaults(mapping *Mapping) {
+	if mapping.Lfs.Mode == "" {
+		mapping.Lfs.Mode = "off"
+	}
+	if mapping.Lfs.ResolveConcurrency == 0 {
+		mapping.Lfs.ResolveConcurrency = 4
+	}
+	if mapping.Lfs.ValidateChecksum == nil {
+		value := true
+		mapping.Lfs.ValidateChecksum = &value
+	}
+}
+
+func validateLfsConfig(lfsCfg LfsConfig, idx int) error {
+	switch lfsCfg.Mode {
+	case "off", "resolve", "reference", "skip", "hybrid":
+	default:
+		return fmt.Errorf("mappings[%d].lfs.mode %q is not supported", idx, lfsCfg.Mode)
+	}
+	if lfsCfg.Mode == "hybrid" && lfsCfg.MaxInlineSize <= 0 {
+		return fmt.Errorf("mappings[%d].lfs.max_inline_size must be > 0 for mode=hybrid", idx)
+	}
+	if lfsCfg.ResolveConcurrency < 0 {
+		return fmt.Errorf("mappings[%d].lfs.resolve_concurrency must be >= 0", idx)
+	}
+	return nil
+}
+
+func applyLfsEnvOverrides(cfg *Config) {
+	mode := envString("KAFSCALE_ICEBERG_LFS_MODE")
+	maxInline := envInt64("KAFSCALE_ICEBERG_LFS_MAX_INLINE_SIZE")
+	storeMetadata := envBool("KAFSCALE_ICEBERG_LFS_STORE_METADATA")
+	validateChecksum := envBool("KAFSCALE_ICEBERG_LFS_VALIDATE_CHECKSUM")
+	resolveConcurrency := envInt("KAFSCALE_ICEBERG_LFS_RESOLVE_CONCURRENCY")
+	for i := range cfg.Mappings {
+		if mode != nil {
+			cfg.Mappings[i].Lfs.Mode = *mode
+		}
+		if maxInline != nil {
+			cfg.Mappings[i].Lfs.MaxInlineSize = *maxInline
+		}
+		if storeMetadata != nil {
+			cfg.Mappings[i].Lfs.StoreMetadata = *storeMetadata
+		}
+		if validateChecksum != nil {
+			cfg.Mappings[i].Lfs.ValidateChecksum = validateChecksum
+		}
+		if resolveConcurrency != nil {
+			cfg.Mappings[i].Lfs.ResolveConcurrency = *resolveConcurrency
+		}
+	}
+}
+
+func envString(key string) *string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func envBool(key string) *bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func envInt64(key string) *int64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+func envInt(key string) *int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 func isSupportedColumnType(value string) bool {

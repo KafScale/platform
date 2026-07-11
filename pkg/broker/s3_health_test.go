@@ -57,3 +57,60 @@ func TestS3HealthStateTransitions(t *testing.T) {
 		t.Fatalf("expected healthy after recovery got %s", got)
 	}
 }
+
+func TestS3HealthSnapshot(t *testing.T) {
+	monitor := NewS3HealthMonitor(S3HealthConfig{
+		Window:      time.Minute,
+		LatencyWarn: 100 * time.Millisecond,
+		LatencyCrit: time.Second,
+		ErrorWarn:   0.3,
+		ErrorCrit:   0.7,
+		MaxSamples:  64,
+	})
+
+	monitor.RecordOperation("upload", 10*time.Millisecond, nil)
+	snap := monitor.Snapshot()
+	if snap.State != S3StateHealthy {
+		t.Fatalf("expected healthy state, got %s", snap.State)
+	}
+	if snap.Since.IsZero() {
+		t.Fatal("expected non-zero Since")
+	}
+	if snap.AvgLatency == 0 {
+		t.Fatal("expected non-zero avg latency")
+	}
+	if snap.ErrorRate != 0 {
+		t.Fatalf("expected 0 error rate, got %f", snap.ErrorRate)
+	}
+}
+
+func TestS3HealthMonitorDefaults(t *testing.T) {
+	// All zero config → should use defaults
+	monitor := NewS3HealthMonitor(S3HealthConfig{})
+	if monitor.State() != S3StateHealthy {
+		t.Fatalf("expected healthy initial state")
+	}
+	// Record a few operations to ensure it works with defaults
+	monitor.RecordOperation("upload", time.Millisecond, nil)
+	snap := monitor.Snapshot()
+	if snap.State != S3StateHealthy {
+		t.Fatalf("expected healthy after normal ops")
+	}
+}
+
+func TestS3HealthTruncation(t *testing.T) {
+	monitor := NewS3HealthMonitor(S3HealthConfig{
+		Window:     100 * time.Millisecond,
+		MaxSamples: 4,
+	})
+
+	// Record several operations
+	for i := 0; i < 10; i++ {
+		monitor.RecordOperation("upload", time.Millisecond, nil)
+	}
+	// After truncation, max samples should be honored
+	snap := monitor.Snapshot()
+	if snap.State != S3StateHealthy {
+		t.Fatalf("expected healthy, got %s", snap.State)
+	}
+}

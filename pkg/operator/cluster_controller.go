@@ -78,6 +78,8 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
+	r.pollManagedEtcdHealth(ctx, &cluster, etcdResolution)
+	r.populateEtcdMaintenanceStatus(ctx, &cluster, etcdResolution)
 	if err := r.deleteLegacyBrokerDeployment(ctx, &cluster); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -88,6 +90,9 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileBrokerService(ctx, &cluster); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileLfsProxyResources(ctx, &cluster, etcdResolution.Endpoints); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileBrokerHPA(ctx, &cluster); err != nil {
@@ -123,6 +128,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kafscalev1alpha1.KafscaleCluster{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
@@ -146,13 +152,36 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.ServiceName = brokerHeadlessServiceName(cluster)
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Replicas = &replicas
-		sts.Spec.Template.ObjectMeta.Labels = labels
+		sts.Spec.Template.Labels = labels
+		sts.Spec.Template.Spec.Affinity = softPodAntiAffinity(labels)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
 		}
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
 	return err
+}
+
+// softPodAntiAffinity returns a preferred (soft) pod anti-affinity that spreads
+// replicas across nodes by hostname, so a single-node loss does not take the
+// whole quorum (broker or etcd) at once. The selector reuses the pod-template
+// label map, so it always matches the very pods it is meant to spread. Soft
+// (not required) so a single-node cluster still schedules every replica instead
+// of leaving them Pending; on a multi-node cluster the scheduler spreads them.
+func softPodAntiAffinity(labels map[string]string) *corev1.Affinity {
+	return &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+				{
+					Weight: 100,
+					PodAffinityTerm: corev1.PodAffinityTerm{
+						LabelSelector: &metav1.LabelSelector{MatchLabels: labels},
+						TopologyKey:   "kubernetes.io/hostname",
+					},
+				},
+			},
+		},
+	}
 }
 
 func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
@@ -247,6 +276,12 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 	if val := strings.TrimSpace(os.Getenv("KAFSCALE_PROXY_PROTOCOL")); val != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_PROXY_PROTOCOL", Value: val})
 	}
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_LOG_LEVEL")); val != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LOG_LEVEL", Value: val})
+	}
+	if val := strings.TrimSpace(os.Getenv("KAFSCALE_TRACE_KAFKA")); val != "" {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_TRACE_KAFKA", Value: val})
+	}
 	var envFrom []corev1.EnvFromSource
 	if cluster.Spec.S3.CredentialsSecretRef != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{
@@ -300,7 +335,7 @@ func parseServiceType(serviceType string) corev1.ServiceType {
 	}
 }
 
-func parseExternalTrafficPolicy(policy string) corev1.ServiceExternalTrafficPolicyType {
+func parseExternalTrafficPolicy(policy string) corev1.ServiceExternalTrafficPolicy {
 	switch strings.TrimSpace(policy) {
 	case string(corev1.ServiceExternalTrafficPolicyTypeLocal):
 		return corev1.ServiceExternalTrafficPolicyTypeLocal
@@ -540,6 +575,45 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 		Type:               "EtcdSnapshot",
 		Status:             metav1.ConditionTrue,
 		Reason:             "SnapshotHealthy",
+		Message:            message,
+		LastTransitionTime: metav1.NewTime(now),
+	})
+}
+
+func (r *ClusterReconciler) populateEtcdMaintenanceStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
+	now := time.Now()
+	if !resolution.Managed || !etcdMaintenanceEnabled() {
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdMaintenance",
+			Status:             metav1.ConditionFalse,
+			Reason:             "MaintenanceNotManaged",
+			Message:            "Etcd maintenance jobs are not managed for this cluster.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	cron := &batchv1.CronJob{}
+	cronKey := client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-etcd-maintenance", cluster.Name)}
+	if err := r.Client.Get(ctx, cronKey, cron); err != nil {
+		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+			Type:               "EtcdMaintenance",
+			Status:             metav1.ConditionFalse,
+			Reason:             "MaintenanceCronMissing",
+			Message:            "Etcd maintenance CronJob is missing.",
+			LastTransitionTime: metav1.NewTime(now),
+		})
+		return
+	}
+
+	message := "Etcd maintenance CronJobs are scheduled."
+	if cron.Status.LastSuccessfulTime != nil {
+		message = fmt.Sprintf("Last successful maintenance %s ago.", now.Sub(cron.Status.LastSuccessfulTime.Time).Round(time.Second))
+	}
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
+		Type:               "EtcdMaintenance",
+		Status:             metav1.ConditionTrue,
+		Reason:             "MaintenanceScheduled",
 		Message:            message,
 		LastTransitionTime: metav1.NewTime(now),
 	})

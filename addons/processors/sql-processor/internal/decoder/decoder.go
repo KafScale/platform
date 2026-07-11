@@ -59,6 +59,10 @@ type Decoder interface {
 	Decode(ctx context.Context, segmentKey, indexKey string, topic string, partition int32) ([]Record, error)
 }
 
+type getObjectAPI interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
 func New(cfg config.Config) (Decoder, error) {
 	loadOptions := []func(*awsconfig.LoadOptions) error{}
 	if cfg.S3.Region != "" {
@@ -93,7 +97,7 @@ func New(cfg config.Config) (Decoder, error) {
 }
 
 type s3Decoder struct {
-	client  *s3.Client
+	client  getObjectAPI
 	bucket  string
 	metrics s3Metrics
 }
@@ -116,16 +120,8 @@ func newS3Metrics() s3Metrics {
 	}
 }
 
-func (d *s3Decoder) Decode(ctx context.Context, segmentKey, indexKey string, topic string, partition int32) ([]Record, error) {
-	indexBytes, err := d.getObject(ctx, "get", indexKey)
-	if err != nil {
-		return nil, fmt.Errorf("download index: %w", err)
-	}
-	if _, err := parseIndex(indexBytes); err != nil {
-		d.metrics.decodeErrors.Inc()
-		return nil, err
-	}
-
+// Decode only needs the segment payload; segment/index pairing is validated during discovery.
+func (d *s3Decoder) Decode(ctx context.Context, segmentKey, _ string, topic string, partition int32) ([]Record, error) {
 	segmentBytes, err := d.getObject(ctx, "get", segmentKey)
 	if err != nil {
 		return nil, fmt.Errorf("download segment: %w", err)

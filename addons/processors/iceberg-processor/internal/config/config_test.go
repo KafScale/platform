@@ -153,3 +153,52 @@ func TestLoadRejectsRegistrySourceWithoutBaseURL(t *testing.T) {
 		t.Fatalf("expected error for schema.source=registry without base_url")
 	}
 }
+
+func TestLoadRejectsInvalidLfsMode(t *testing.T) {
+	data := []byte("s3:\n  bucket: test-bucket\niceberg:\n  catalog:\n    type: rest\n    uri: http://catalog\netcd:\n  endpoints:\n    - http://etcd:2379\nschema:\n  mode: \"off\"\nmappings:\n  - topic: orders\n    table: prod.orders\n    lfs:\n      mode: nope\n")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected error for invalid lfs mode")
+	}
+}
+
+func TestLoadRejectsHybridWithoutMaxInlineSize(t *testing.T) {
+	data := []byte("s3:\n  bucket: test-bucket\niceberg:\n  catalog:\n    type: rest\n    uri: http://catalog\netcd:\n  endpoints:\n    - http://etcd:2379\nschema:\n  mode: \"off\"\nmappings:\n  - topic: orders\n    table: prod.orders\n    lfs:\n      mode: hybrid\n")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if _, err := Load(path); err == nil {
+		t.Fatalf("expected error for hybrid without max_inline_size")
+	}
+}
+
+func TestLoadDefaultsLfsConfig(t *testing.T) {
+	data := []byte("s3:\n  bucket: test-bucket\niceberg:\n  catalog:\n    type: rest\n    uri: http://catalog\netcd:\n  endpoints:\n    - http://etcd:2379\nschema:\n  mode: \"off\"\nmappings:\n  - topic: orders\n    table: prod.orders\n")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if cfg.Mappings[0].Lfs.Mode != "off" {
+		t.Fatalf("expected lfs mode off, got %q", cfg.Mappings[0].Lfs.Mode)
+	}
+	if cfg.Mappings[0].Lfs.ResolveConcurrency != 4 {
+		t.Fatalf("expected default resolve_concurrency 4, got %d", cfg.Mappings[0].Lfs.ResolveConcurrency)
+	}
+	if !cfg.Mappings[0].Lfs.ChecksumEnabled() {
+		t.Fatalf("expected checksum enabled by default")
+	}
+}

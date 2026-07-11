@@ -41,10 +41,18 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
+{{- with .Values.console.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: console
           image: "{{ .Values.console.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.console.image.tag) .Values.console.image.useLatest }}"
           imagePullPolicy: {{ ternary "Always" .Values.console.image.pullPolicy .Values.console.image.useLatest }}
+{{- with .Values.console.containerSecurityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
           env:
             - name: KAFSCALE_CONSOLE_HTTP_ADDR
               value: ":8080"
@@ -78,6 +86,42 @@ spec:
 {{- else if .Values.operator.metrics.enabled }}
             - name: KAFSCALE_CONSOLE_OPERATOR_METRICS_URL
               value: "{{ printf "http://%s-metrics.%s.svc.cluster.local:%d/metrics" (include "kafscale.componentName" (dict "root" . "component" "operator")) .Release.Namespace .Values.operator.metrics.port }}"
+{{- end }}
+{{- if .Values.console.lfs.enabled }}
+            - name: KAFSCALE_CONSOLE_LFS_ENABLED
+              value: "true"
+{{- if .Values.console.lfs.kafkaBrokers }}
+            - name: KAFSCALE_CONSOLE_KAFKA_BROKERS
+              value: "{{ join "," .Values.console.lfs.kafkaBrokers }}"
+{{- end }}
+{{- if .Values.console.lfs.trackerTopic }}
+            - name: KAFSCALE_LFS_TRACKER_TOPIC
+              value: "{{ .Values.console.lfs.trackerTopic }}"
+{{- end }}
+{{- if .Values.console.lfs.s3.bucket }}
+            - name: KAFSCALE_CONSOLE_LFS_S3_BUCKET
+              value: "{{ .Values.console.lfs.s3.bucket }}"
+{{- end }}
+{{- if .Values.console.lfs.s3.region }}
+            - name: KAFSCALE_CONSOLE_LFS_S3_REGION
+              value: "{{ .Values.console.lfs.s3.region }}"
+{{- end }}
+{{- if .Values.console.lfs.s3.endpoint }}
+            - name: KAFSCALE_CONSOLE_LFS_S3_ENDPOINT
+              value: "{{ .Values.console.lfs.s3.endpoint }}"
+{{- end }}
+{{- if .Values.console.lfs.s3.accessKey }}
+            - name: KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY
+              value: "{{ .Values.console.lfs.s3.accessKey }}"
+{{- end }}
+{{- if .Values.console.lfs.s3.secretKey }}
+            - name: KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY
+              value: "{{ .Values.console.lfs.s3.secretKey }}"
+{{- end }}
+{{- if .Values.console.lfs.s3.presignTTL }}
+            - name: KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL
+              value: "{{ .Values.console.lfs.s3.presignTTL }}"
+{{- end }}
 {{- end }}
           ports:
             - name: http

@@ -30,6 +30,7 @@ import (
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 const (
@@ -69,6 +70,7 @@ func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alph
 	return nil
 }
 
+//nolint:unused // kept for snapshot recovery workflows
 func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadata.ClusterMetadata) metadata.ClusterMetadata {
 	if len(endpoints) == 0 {
 		return next
@@ -79,16 +81,18 @@ func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadat
 	}
 	seen := make(map[string]struct{}, len(next.Topics))
 	for _, topic := range next.Topics {
-		if topic.Name == "" {
+		name := *topic.Topic
+		if name == "" {
 			continue
 		}
-		seen[topic.Name] = struct{}{}
+		seen[name] = struct{}{}
 	}
 	for _, topic := range existing.Topics {
-		if topic.Name == "" || topic.ErrorCode != 0 {
+		name := *topic.Topic
+		if name == "" || topic.ErrorCode != 0 {
 			continue
 		}
-		if _, ok := seen[topic.Name]; ok {
+		if _, ok := seen[name]; ok {
 			continue
 		}
 		next.Topics = append(next.Topics, topic)
@@ -96,6 +100,7 @@ func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadat
 	return next
 }
 
+//nolint:unused // kept for snapshot recovery workflows
 func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.ClusterMetadata, error) {
 	var snap metadata.ClusterMetadata
 	cfg := clientv3.Config{
@@ -109,7 +114,7 @@ func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.Clu
 	if err != nil {
 		return snap, err
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	getCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := cli.Get(getCtx, "/kafscale/metadata/snapshot")
@@ -169,14 +174,14 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 				leader = replicaIDs[i%int32(len(replicaIDs))]
 			}
 			partitions[i] = protocol.MetadataPartition{
-				PartitionIndex: i,
-				LeaderID:       leader,
-				ReplicaNodes:   replicaIDs,
-				ISRNodes:       replicaIDs,
+				Partition: i,
+				Leader:    leader,
+				Replicas:  replicaIDs,
+				ISR:       replicaIDs,
 			}
 		}
 		metaTopics = append(metaTopics, protocol.MetadataTopic{
-			Name:       topic.Name,
+			Topic:      kmsg.StringPtr(topic.Name),
 			TopicID:    metadata.TopicIDForName(topic.Name),
 			IsInternal: false,
 			Partitions: partitions,
@@ -289,16 +294,18 @@ func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMet
 	}
 	seen := make(map[string]struct{}, len(next.Topics))
 	for _, topic := range next.Topics {
-		if topic.Name == "" {
+		name := *topic.Topic
+		if name == "" {
 			continue
 		}
-		seen[topic.Name] = struct{}{}
+		seen[name] = struct{}{}
 	}
 	for _, topic := range existing.Topics {
-		if topic.Name == "" || topic.ErrorCode != 0 {
+		name := *topic.Topic
+		if name == "" || topic.ErrorCode != 0 {
 			continue
 		}
-		if _, ok := seen[topic.Name]; ok {
+		if _, ok := seen[name]; ok {
 			continue
 		}
 		next.Topics = append(next.Topics, topic)

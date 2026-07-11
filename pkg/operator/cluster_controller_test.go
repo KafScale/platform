@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -139,6 +140,133 @@ func TestReconcileBrokerServiceExternalAccess(t *testing.T) {
 	}
 	if svc.Spec.Ports[1].NodePort != portMetrics {
 		t.Fatalf("expected metrics node port %d, got %d", portMetrics, svc.Spec.Ports[1].NodePort)
+	}
+}
+
+func TestReconcileLfsProxyDeployment(t *testing.T) {
+	enabled := true
+	portKafka := int32(19092)
+	portHTTP := int32(18080)
+	portMetrics := int32(19095)
+	portHealth := int32(19094)
+	maxBlob := int64(1048576)
+	chunkSize := int64(262144)
+	cluster := &kafscalev1alpha1.KafscaleCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+		Spec: kafscalev1alpha1.KafscaleClusterSpec{
+			Brokers: kafscalev1alpha1.BrokerSpec{},
+			S3: kafscalev1alpha1.S3Spec{
+				Bucket:               "bucket",
+				Region:               "us-east-1",
+				Endpoint:             "http://minio.local",
+				CredentialsSecretRef: "creds",
+			},
+			LfsProxy: kafscalev1alpha1.LfsProxySpec{
+				Enabled:        true,
+				AdvertisedHost: "proxy.example.com",
+				AdvertisedPort: &portKafka,
+				Service: kafscalev1alpha1.LfsProxyServiceSpec{
+					Port: &portKafka,
+				},
+				HTTP: kafscalev1alpha1.LfsProxyHTTPSpec{
+					Enabled:         &enabled,
+					Port:            &portHTTP,
+					APIKeySecretRef: "lfs-api",
+					APIKeySecretKey: "token",
+				},
+				Metrics: kafscalev1alpha1.LfsProxyMetricsSpec{
+					Enabled: &enabled,
+					Port:    &portMetrics,
+				},
+				Health: kafscalev1alpha1.LfsProxyHealthSpec{
+					Enabled: &enabled,
+					Port:    &portHealth,
+				},
+				S3: kafscalev1alpha1.LfsProxyS3Spec{
+					Namespace:    "lfs-ns",
+					MaxBlobSize:  &maxBlob,
+					ChunkSize:    &chunkSize,
+					EnsureBucket: &enabled,
+				},
+			},
+		},
+	}
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme}
+
+	if err := r.reconcileLfsProxyDeployment(context.Background(), cluster, []string{"http://etcd:2379"}); err != nil {
+		t.Fatalf("reconcile lfs proxy deployment: %v", err)
+	}
+
+	deploy := &appsv1.Deployment{}
+	assertFound(t, c, deploy, cluster.Namespace, lfsProxyName(cluster))
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(deploy.Spec.Template.Spec.Containers))
+	}
+	container := deploy.Spec.Template.Spec.Containers[0]
+	if got := envValue(container.Env, "KAFSCALE_LFS_PROXY_ADDR"); got != ":19092" {
+		t.Fatalf("expected proxy addr, got %q", got)
+	}
+	if got := envValue(container.Env, "KAFSCALE_LFS_PROXY_S3_BUCKET"); got != "bucket" {
+		t.Fatalf("expected bucket env, got %q", got)
+	}
+	if got := envValue(container.Env, "KAFSCALE_LFS_PROXY_S3_REGION"); got != "us-east-1" {
+		t.Fatalf("expected region env, got %q", got)
+	}
+	if got := envValue(container.Env, "KAFSCALE_LFS_PROXY_HTTP_ADDR"); got != ":18080" {
+		t.Fatalf("expected http addr, got %q", got)
+	}
+	var apiKeyEnv *corev1.EnvVar
+	for i := range container.Env {
+		if container.Env[i].Name == "KAFSCALE_LFS_PROXY_HTTP_API_KEY" {
+			apiKeyEnv = &container.Env[i]
+			break
+		}
+	}
+	if apiKeyEnv == nil || apiKeyEnv.ValueFrom == nil || apiKeyEnv.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("expected api key secret ref")
+	}
+	if apiKeyEnv.ValueFrom.SecretKeyRef.Name != "lfs-api" || apiKeyEnv.ValueFrom.SecretKeyRef.Key != "token" {
+		t.Fatalf("unexpected api key secret ref: %v", apiKeyEnv.ValueFrom.SecretKeyRef)
+	}
+}
+
+func TestReconcileLfsProxyService(t *testing.T) {
+	enabled := true
+	portKafka := int32(19092)
+	portHTTP := int32(18080)
+	cluster := &kafscalev1alpha1.KafscaleCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+		Spec: kafscalev1alpha1.KafscaleClusterSpec{
+			Brokers: kafscalev1alpha1.BrokerSpec{},
+			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "creds"},
+			LfsProxy: kafscalev1alpha1.LfsProxySpec{
+				Enabled: true,
+				Service: kafscalev1alpha1.LfsProxyServiceSpec{
+					Type:        string(corev1.ServiceTypeLoadBalancer),
+					Annotations: map[string]string{"cloud.example.com/lb": "external"},
+					Port:        &portKafka,
+				},
+				HTTP: kafscalev1alpha1.LfsProxyHTTPSpec{Enabled: &enabled, Port: &portHTTP},
+			},
+		},
+	}
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme}
+
+	if err := r.reconcileLfsProxyService(context.Background(), cluster); err != nil {
+		t.Fatalf("reconcile lfs proxy service: %v", err)
+	}
+
+	svc := &corev1.Service{}
+	assertFound(t, c, svc, cluster.Namespace, lfsProxyName(cluster))
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		t.Fatalf("expected service type LoadBalancer, got %s", svc.Spec.Type)
+	}
+	if len(svc.Spec.Ports) != 2 {
+		t.Fatalf("expected 2 service ports, got %d", len(svc.Spec.Ports))
 	}
 }
 

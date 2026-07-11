@@ -13,11 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+Makefile-MK # Ignore build and IDE files
+
 # Binaries
 /bin/
 /dist/
 /out/
 /tmp/
+/.tmp/
 /.gopath/
 
 # Build artifacts
@@ -31,10 +34,14 @@
 *.key
 coverage*.out
 .build/
+target/
+**/target/
+spark-warehouse/
 
 # Local Go cache (use GOCACHE=.gocache for hermetic builds/tests)
 .gocache/
 .cache/
+.tools/
 
 # Go modules/vendor
 /vendor/
@@ -53,6 +60,7 @@ coverage*.out
 *.swp
 *.swo
 .DS_Store
+.claude/
 
 # Addon processor artifacts
 addons/processors/**/bin/
@@ -79,3 +87,28 @@ proto/**/*.swagger.json
 _site/
 Gemfile
 Gemfile.lock
+
+# Ignore demo node_modules
+examples/E50_JS-kafscale-demo/node_modules/
+
+# Go compiled binaries (top-level)
+/e2e-client
+/lfs-proxy
+/proxy
+
+# Java build artifacts
+target/
+dependency-reduced-pom.xml
+
+# JavaScript/Node.js
+node_modules/
+package-lock.json
+lfs-client-sdk/**/dist/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Test output
+records.txt

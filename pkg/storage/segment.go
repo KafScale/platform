@@ -87,19 +87,19 @@ func BuildSegment(cfg SegmentWriterConfig, batches []RecordBatch, created time.T
 func buildHeader(baseOffset int64, messageCount int32, created time.Time) []byte {
 	buf := bytes.NewBuffer(make([]byte, 0, 32))
 	buf.WriteString(segmentMagic)
-	binary.Write(buf, binary.BigEndian, uint16(1))  // version
-	binary.Write(buf, binary.BigEndian, uint16(0))  // flags
-	binary.Write(buf, binary.BigEndian, baseOffset) // base offset
-	binary.Write(buf, binary.BigEndian, messageCount)
-	binary.Write(buf, binary.BigEndian, created.UnixMilli())
-	binary.Write(buf, binary.BigEndian, uint32(0)) // reserved
+	_ = binary.Write(buf, binary.BigEndian, uint16(1))  // version
+	_ = binary.Write(buf, binary.BigEndian, uint16(0))  // flags
+	_ = binary.Write(buf, binary.BigEndian, baseOffset) // base offset
+	_ = binary.Write(buf, binary.BigEndian, messageCount)
+	_ = binary.Write(buf, binary.BigEndian, created.UnixMilli())
+	_ = binary.Write(buf, binary.BigEndian, uint32(0)) // reserved
 	return buf.Bytes()
 }
 
 func buildFooter(crc uint32, lastOffset int64) []byte {
 	buf := bytes.NewBuffer(make([]byte, 0, 16))
-	binary.Write(buf, binary.BigEndian, crc)
-	binary.Write(buf, binary.BigEndian, lastOffset)
+	_ = binary.Write(buf, binary.BigEndian, crc)
+	_ = binary.Write(buf, binary.BigEndian, lastOffset)
 	buf.WriteString(footerMagic)
 	return buf.Bytes()
 }

@@ -50,6 +50,7 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 	if os.Getenv(enableEnv) != "1" {
 		t.Skipf("set %s=1 to run integration harness", enableEnv)
 	}
+	requireMinIO(t)
 
 	requireBinaries(t, "docker")
 
@@ -233,6 +234,7 @@ func TestKafkaCliAdminTopics(t *testing.T) {
 	if os.Getenv(enableEnv) != "1" {
 		t.Skipf("set %s=1 to run integration harness", enableEnv)
 	}
+	requireMinIO(t)
 
 	requireBinaries(t, "docker")
 

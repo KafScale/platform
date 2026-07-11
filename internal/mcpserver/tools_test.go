@@ -21,6 +21,7 @@ import (
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestRequireStore(t *testing.T) {
@@ -35,8 +36,8 @@ func TestRequireStore(t *testing.T) {
 
 func TestSummarizeTopicsSorts(t *testing.T) {
 	topics := []protocol.MetadataTopic{
-		{Name: "b", Partitions: []protocol.MetadataPartition{{PartitionIndex: 0}}},
-		{Name: "a", Partitions: []protocol.MetadataPartition{{PartitionIndex: 0}, {PartitionIndex: 1}}},
+		{Topic: kmsg.StringPtr("b"), Partitions: []protocol.MetadataPartition{{Partition: 0}}},
+		{Topic: kmsg.StringPtr("a"), Partitions: []protocol.MetadataPartition{{Partition: 0}, {Partition: 1}}},
 	}
 	out := summarizeTopics(topics)
 	if len(out) != 2 || out[0].Name != "a" || out[1].Name != "b" {

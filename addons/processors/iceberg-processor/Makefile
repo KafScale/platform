@@ -19,6 +19,30 @@ BINARY := iceberg-processor
 BUILD_DIR := bin
 IMAGE ?= $(BINARY):dev
 DOCKER_BUILD_ARGS ?=
+DOCKER_BUILD_ARGS_LOCAL = --build-arg USE_LOCAL_PLATFORM=1 --build-arg REPO_ROOT=. --build-arg MODULE_DIR=addons/processors/iceberg-processor
+RSYNC_EXCLUDES = \
+	--exclude ".dockerignore" \
+	--exclude ".git" \
+	--exclude ".build" \
+	--exclude ".gocache" \
+	--exclude ".idea" \
+	--exclude ".vscode" \
+	--exclude "_site" \
+	--exclude "bin" \
+	--exclude "coverage.out" \
+	--exclude "dist" \
+	--exclude "docs" \
+	--exclude "deploy/helm" \
+	--exclude "test" \
+	--exclude "tmp" \
+	--exclude "**/.DS_Store" \
+	--exclude "**/*.log" \
+	--exclude "**/*.swp" \
+	--exclude "**/*_test.go" \
+	--exclude "**/node_modules" \
+	--exclude "ui/.next" \
+	--exclude "ui/dist" \
+	--exclude "ui/build"
 
 DOCKER_BUILD_CMD := $(shell \
 	if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; then \
@@ -46,4 +70,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 docker-build:
-	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(IMAGE) .
+	@tmp=$$(mktemp -d); \
+	rsync -a --delete $(RSYNC_EXCLUDES) ../../.. "$$tmp/"; \
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) $(DOCKER_BUILD_ARGS_LOCAL) -t $(IMAGE) -f Dockerfile "$$tmp"; \
+	rm -rf "$$tmp"

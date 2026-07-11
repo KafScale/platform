@@ -54,3 +54,54 @@ func TestWriteBufferThresholds(t *testing.T) {
 		t.Fatalf("expected flush by time")
 	}
 }
+
+func TestWriteBufferSize(t *testing.T) {
+	buf := NewWriteBuffer(WriteBufferConfig{})
+	if buf.Size() != 0 {
+		t.Fatalf("expected initial size 0, got %d", buf.Size())
+	}
+	buf.Append(RecordBatch{Bytes: make([]byte, 10), MessageCount: 1})
+	if buf.Size() != 10 {
+		t.Fatalf("expected size 10, got %d", buf.Size())
+	}
+	buf.Append(RecordBatch{Bytes: make([]byte, 5), MessageCount: 2})
+	if buf.Size() != 15 {
+		t.Fatalf("expected size 15, got %d", buf.Size())
+	}
+	buf.Drain()
+	if buf.Size() != 0 {
+		t.Fatalf("expected size 0 after drain, got %d", buf.Size())
+	}
+}
+
+func TestWriteBufferFlushByMessages(t *testing.T) {
+	buf := NewWriteBuffer(WriteBufferConfig{MaxMessages: 5})
+	buf.Append(RecordBatch{Bytes: make([]byte, 1), MessageCount: 3})
+	if buf.ShouldFlush(time.Now()) {
+		t.Fatal("3 messages should not trigger flush at threshold 5")
+	}
+	buf.Append(RecordBatch{Bytes: make([]byte, 1), MessageCount: 3})
+	if !buf.ShouldFlush(time.Now()) {
+		t.Fatal("6 messages should trigger flush at threshold 5")
+	}
+}
+
+func TestWriteBufferFlushByBatches(t *testing.T) {
+	buf := NewWriteBuffer(WriteBufferConfig{MaxBatches: 2})
+	buf.Append(RecordBatch{Bytes: make([]byte, 1), MessageCount: 1})
+	if buf.ShouldFlush(time.Now()) {
+		t.Fatal("1 batch should not trigger flush at threshold 2")
+	}
+	buf.Append(RecordBatch{Bytes: make([]byte, 1), MessageCount: 1})
+	if !buf.ShouldFlush(time.Now()) {
+		t.Fatal("2 batches should trigger flush at threshold 2")
+	}
+}
+
+func TestWriteBufferDrainEmpty(t *testing.T) {
+	buf := NewWriteBuffer(WriteBufferConfig{})
+	drained := buf.Drain()
+	if len(drained) != 0 {
+		t.Fatalf("expected 0 drained batches, got %d", len(drained))
+	}
+}

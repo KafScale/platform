@@ -72,6 +72,8 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
+- **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
+- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default; broker/etcd affinity overrides via the CR are tracked separately ([#164](https://github.com/KafScale/platform/issues/164)).
 - **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
   - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
@@ -190,6 +192,14 @@ If no etcd endpoints are supplied, the operator will provision a 3-node etcd Sta
 - Enable snapshot backups to a dedicated S3 bucket and retain at least 7 days of snapshots.
 - Monitor leader changes, fsync latency, and disk usage; alert on slow or flapping members.
 
+The operator tunes managed etcd automatically:
+
+- In-process periodic compaction (5m retention) and a 4 GiB backend quota on the etcd StatefulSet.
+- `{cluster}-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
+- `{cluster}-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
+
+Override schedules and thresholds via the operator etcd env vars listed below.
+
 ### Etcd Endpoint Resolution
 
 The operator resolves etcd endpoints in this order:
@@ -233,6 +243,28 @@ When the KafScale operator manages etcd, each cluster pod runs ```restore init c
 
 The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
+### Topic Recovery On The DR Spine
+
+For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
+
+Use `kafscale-cli restore` to create a fresh target topic, copy `.kfs` segment/index pairs up to a cutoff timestamp, and set the recovered topic's next offsets:
+
+```bash
+kafscale-cli restore \
+  --topic orders \
+  --target-topic orders-restore-20260513 \
+  --to 2026-05-13T14:23:00Z
+```
+
+Operational semantics:
+
+- Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
+- The target topic must be new. KafScale refuses to restore over an existing persisted topic.
+- Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
+- If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
+- Offsets are preserved inside the recovered topic so replay, validation, and downstream cutover can happen without rewriting the source topic.
+- The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
+
 ### Consumer Offsets After Restore
 
 Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:
@@ -261,6 +293,13 @@ Recommended operator alerting (when using Prometheus Operator):
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` – PVC size for managed etcd (default `10Gi`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` – StorageClass for managed etcd PVCs.
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY` – Use in-memory `emptyDir` for etcd data (`1` to enable, test/dev only).
+- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_MODE` – Managed etcd compaction mode (`periodic` or `revision`; default `periodic`).
+- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_RETENTION` – Compaction retention (`5m` for periodic mode; default `5m`).
+- `KAFSCALE_OPERATOR_ETCD_QUOTA_BACKEND_BYTES` – Managed etcd backend quota in bytes (default `4294967296`, 4 GiB).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE` – Baseline maintenance CronJob schedule (default `0 */6 * * *`).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_CHECK_SCHEDULE` – Reactive size-check CronJob schedule (default `*/15 * * * *`).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED` – Enable maintenance CronJobs (`0`/`false` to disable; enabled by default).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SIZE_THRESHOLD_PCT` – Backend size threshold percent of quota before reactive maintenance runs (default `75`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` – Snapshot prefix (default `etcd-snapshots`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` – Cron schedule for snapshots (default `0 * * * *`).
@@ -295,6 +334,7 @@ Recommended operator alerting (when using Prometheus Operator):
 - `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
 - `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
 - `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
+- `KAFSCALE_S3_CONCURRENCY` – Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends.
 
 Read replica example (multi-region reads):
 
@@ -338,11 +378,16 @@ Cost-optimized (accepts a larger loss window after crash):
 ### Proxy
 
 - `KAFSCALE_PROXY_ADDR` – Proxy listen address (host:port).
+- `KAFSCALE_PROXY_HEALTH_ADDR` – Health/readiness listen address (default `:9094`; exposes `/readyz` and `/livez`).
 - `KAFSCALE_PROXY_ADVERTISED_HOST` – Address Kafka clients should connect to.
 - `KAFSCALE_PROXY_ADVERTISED_PORT` – Advertised port (default `9092`).
 - `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
 - `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
 - `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
+- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`).
+- `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
+- `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
+- `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS HTTP API on the unified proxy (default `false`).
 
 ### Console
 
@@ -352,33 +397,28 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL` – Broker Prometheus endpoint.
 - `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD` – Console login credentials.
 
-## External Broker Access
+## External Kafka Access
 
 By default, brokers advertise the in-cluster service DNS name. That works for
-clients running inside Kubernetes, but external clients must connect to a
-reachable address. Configure both the broker Service exposure and the advertised
-address so clients learn the external endpoint from metadata responses.
+clients running inside Kubernetes. External clients need a reachable address in
+Metadata responses.
 
-Broker exposure settings (KafscaleCluster `spec.brokers`):
-- `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
-- `service.type` – `ClusterIP`, `LoadBalancer`, or `NodePort`.
-- `service.annotations` – Cloud provider LB annotations.
-- `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
-- `service.externalTrafficPolicy` – `Cluster` or `Local`.
-- `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
+**Recommended:** deploy the Kafka-aware proxy (`proxy.enabled=true`). When the
+proxy is enabled, clients connect to the **proxy Service**, not individual broker
+pods. The proxy answers Metadata/FindCoordinator with a single stable endpoint,
+then forwards all other Kafka requests to brokers. This keeps clients connected as
+broker pods scale or rotate.
 
-### Kafka Proxy (external scaling)
+**Optional:** expose brokers directly via `KafscaleCluster` `spec.brokers` Service
+settings (LoadBalancer or NodePort). Use this only when you intentionally bypass
+the proxy (traffic isolation, pinned producers, or legacy integrations). Broker
+NodePort does not replace the proxy entrypoint in scaled deployments.
 
-For external clients plus broker churn, deploy the Kafka-aware proxy. It answers
-Metadata/FindCoordinator requests with a single stable endpoint (the proxy
-service), then forwards all other Kafka requests to the brokers. This keeps
-clients connected even as broker pods scale or rotate. The proxy is the
-recommended external access layer and enables automated horizontal scaling
-without exposing individual broker pods.
+The Helm chart does **not** ship a Kafka Ingress resource. External TLS uses
+LoadBalancer annotations or an external TCP gateway (see
+[Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer-recommended)).
 
-Use the broker Service settings above when you intentionally expose dedicated
-brokers (for example, isolating traffic or pinning producers to specific nodes).
-That path is more controllable but requires explicit endpoint management.
+### Kafka Proxy (recommended)
 
 Recommended settings:
 - Run 2+ proxy replicas behind a LoadBalancer service.
@@ -404,7 +444,35 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
 ```
 
-Helm chart docs: `deploy/helm/README.md`.
+For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
+stay stable. Set `proxy.service.type=NodePort` and `proxy.service.nodePort` to a
+value in `30000–32767`, then set `proxy.advertisedHost` to the node IP (or the
+mapped host address). See `deploy/helm/kafscale/README.md` for details.
+
+Example (kind / local dev):
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set proxy.enabled=true \
+  --set proxy.service.type=NodePort \
+  --set proxy.service.nodePort=30092 \
+  --set proxy.advertisedHost=127.0.0.1 \
+  --set proxy.advertisedPort=30092 \
+  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+```
+
+Helm chart docs: `deploy/helm/kafscale/README.md`.
+
+### Direct broker exposure (optional)
+
+Broker exposure settings (KafscaleCluster `spec.brokers`):
+- `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
+- `service.type` – `ClusterIP`, `LoadBalancer`, or `NodePort`.
+- `service.annotations` – Cloud provider LB annotations.
+- `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
+- `service.externalTrafficPolicy` – `Cluster` or `Local`.
+- `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
 
 Example (GKE/AWS/Azure load balancer):
 

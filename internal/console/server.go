@@ -28,29 +28,25 @@ import (
 	"github.com/KafScale/platform/ui"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
-
 type MetricsSnapshot struct {
-	S3State                 string
-	S3LatencyMS             int
-	S3ErrorRate             float64
-	ProduceRPS              float64
-	FetchRPS                float64
-	AdminRequestsTotal      float64
-	AdminRequestErrorsTotal float64
-	AdminRequestLatencyMS   float64
-	BrokerCPUPercent        float64
-	BrokerMemBytes          int64
-	BrokerRuntime           map[string]BrokerRuntime
-	OperatorClusters                        float64
-	OperatorEtcdSnapshotAgeSeconds          float64
-	OperatorEtcdSnapshotLastSuccessTS       float64
-	OperatorEtcdSnapshotLastScheduleTS      float64
-	OperatorEtcdSnapshotStale               float64
-	OperatorEtcdSnapshotAccessOK            float64
-	OperatorMetricsAvailable                bool
+	S3State                            string
+	S3LatencyMS                        int
+	S3ErrorRate                        float64
+	ProduceRPS                         float64
+	FetchRPS                           float64
+	AdminRequestsTotal                 float64
+	AdminRequestErrorsTotal            float64
+	AdminRequestLatencyMS              float64
+	BrokerCPUPercent                   float64
+	BrokerMemBytes                     int64
+	BrokerRuntime                      map[string]BrokerRuntime
+	OperatorClusters                   float64
+	OperatorEtcdSnapshotAgeSeconds     float64
+	OperatorEtcdSnapshotLastSuccessTS  float64
+	OperatorEtcdSnapshotLastScheduleTS float64
+	OperatorEtcdSnapshotStale          float64
+	OperatorEtcdSnapshotAccessOK       float64
+	OperatorMetricsAvailable           bool
 }
 
 type MetricsProvider interface {
@@ -58,10 +54,11 @@ type MetricsProvider interface {
 }
 
 type ServerOptions struct {
-	Store   metadata.Store
-	Metrics MetricsProvider
-	Logger  *log.Logger
-	Auth    AuthConfig
+	Store       metadata.Store
+	Metrics     MetricsProvider
+	Logger      *log.Logger
+	Auth        AuthConfig
+	LFSHandlers *LFSHandlers
 }
 
 // StartServer launches the HTTP console on the provided address. When store is
@@ -113,6 +110,20 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 	mux.HandleFunc("/ui/api/status/topics", auth.requireAuth(handlers.handleCreateTopic))
 	mux.HandleFunc("/ui/api/status/topics/", auth.requireAuth(handlers.handleDeleteTopic))
 	mux.HandleFunc("/ui/api/metrics", auth.requireAuth(handlers.handleMetrics))
+
+	// LFS Admin API routes
+	if opts.LFSHandlers != nil {
+		lfs := opts.LFSHandlers
+		mux.HandleFunc("/ui/api/lfs/status", auth.requireAuth(lfs.HandleStatus))
+		mux.HandleFunc("/ui/api/lfs/objects", auth.requireAuth(lfs.HandleObjects))
+		mux.HandleFunc("/ui/api/lfs/topics", auth.requireAuth(lfs.HandleTopics))
+		mux.HandleFunc("/ui/api/lfs/topics/", auth.requireAuth(lfs.HandleTopicDetail))
+		mux.HandleFunc("/ui/api/lfs/events", auth.requireAuth(lfs.HandleEvents))
+		mux.HandleFunc("/ui/api/lfs/orphans", auth.requireAuth(lfs.HandleOrphans))
+		mux.HandleFunc("/ui/api/lfs/s3/browse", auth.requireAuth(lfs.HandleS3Browse))
+		mux.HandleFunc("/ui/api/lfs/s3/presign", auth.requireAuth(lfs.HandleS3Presign))
+	}
+
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -125,14 +136,14 @@ type consoleHandlers struct {
 }
 
 type statusResponse struct {
-	Cluster string       `json:"cluster"`
-	ClusterID string     `json:"cluster_id,omitempty"`
-	Version string       `json:"version"`
-	Brokers brokerStatus `json:"brokers"`
-	S3      s3Status     `json:"s3"`
-	Etcd    component    `json:"etcd"`
-	Alerts  []alert      `json:"alerts"`
-	Topics  []topicInfo  `json:"topics"`
+	Cluster   string       `json:"cluster"`
+	ClusterID string       `json:"cluster_id,omitempty"`
+	Version   string       `json:"version"`
+	Brokers   brokerStatus `json:"brokers"`
+	S3        s3Status     `json:"s3"`
+	Etcd      component    `json:"etcd"`
+	Alerts    []alert      `json:"alerts"`
+	Topics    []topicInfo  `json:"topics"`
 }
 
 type brokerStatus struct {
@@ -359,14 +370,14 @@ func statusFromMetadata(meta *metadata.ClusterMetadata, metrics *MetricsSnapshot
 		partitions := make([]partitionDetails, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
 			partitions = append(partitions, partitionDetails{
-				ID:       part.PartitionIndex,
-				Leader:   part.LeaderID,
-				Replicas: len(part.ReplicaNodes),
-				ISR:      len(part.ISRNodes),
+				ID:       part.Partition,
+				Leader:   part.Leader,
+				Replicas: len(part.Replicas),
+				ISR:      len(part.ISR),
 			})
 		}
 		resp.Topics = append(resp.Topics, topicInfo{
-			Name:              topic.Name,
+			Name:              *topic.Topic,
 			Partitions:        len(topic.Partitions),
 			State:             state,
 			PartitionsDetails: partitions,
@@ -397,9 +408,9 @@ func mockClusterStatus() statusResponse {
 		})
 	}
 	return statusResponse{
-		Cluster: "kafscale-dev",
+		Cluster:   "kafscale-dev",
 		ClusterID: "cluster-dev-1",
-		Version: "0.2.0",
+		Version:   "0.2.0",
 		Brokers: brokerStatus{
 			Ready:   2 + rand.Intn(2),
 			Desired: 3,

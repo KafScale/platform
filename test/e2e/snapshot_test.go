@@ -91,7 +91,7 @@ func TestSnapshotPublishAndBrokerConsumption(t *testing.T) {
 	if len(meta.Brokers) == 0 {
 		t.Fatalf("expected brokers in snapshot, got none")
 	}
-	if len(meta.Topics) != 1 || meta.Topics[0].Name != "orders" {
+	if len(meta.Topics) != 1 || *meta.Topics[0].Topic != "orders" {
 		t.Fatalf("snapshot missing topic: %+v", meta.Topics)
 	}
 	if meta.ClusterID == nil || *meta.ClusterID != "cluster-uid" {

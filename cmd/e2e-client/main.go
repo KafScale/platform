@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,8 @@ func main() {
 	topic := strings.TrimSpace(os.Getenv("KAFSCALE_E2E_TOPIC"))
 	count := parseEnvInt("KAFSCALE_E2E_COUNT", 1)
 	timeout := time.Duration(parseEnvInt("KAFSCALE_E2E_TIMEOUT_SEC", 40)) * time.Second
+	printValues := parseEnvBool("KAFSCALE_E2E_PRINT_VALUES", false)
+	printLimit := parseEnvInt("KAFSCALE_E2E_PRINT_LIMIT", 512)
 
 	switch mode {
 	case "produce":
@@ -47,6 +50,8 @@ func main() {
 		if count <= 0 {
 			log.Fatalf("KAFSCALE_E2E_COUNT must be > 0")
 		}
+		lfsBlob := parseEnvBool("KAFSCALE_E2E_LFS_BLOB", false)
+		msgSize := parseEnvInt("KAFSCALE_E2E_MSG_SIZE", 1024)
 		client, err := kgo.NewClient(
 			kgo.SeedBrokers(brokerAddr),
 			kgo.AllowAutoTopicCreation(),
@@ -57,10 +62,14 @@ func main() {
 		defer client.Close()
 		produceCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		if err := produceMessages(produceCtx, client, topic, count); err != nil {
+		if err := produceMessages(produceCtx, client, topic, count, lfsBlob, msgSize); err != nil {
 			log.Fatalf("produce: %v", err)
 		}
-		log.Printf("produced %d messages to %s", count, topic)
+		if lfsBlob {
+			log.Printf("produced %d LFS messages (%d bytes each) to %s", count, msgSize, topic)
+		} else {
+			log.Printf("produced %d messages to %s", count, topic)
+		}
 	case "consume":
 		if brokerAddr == "" || topic == "" {
 			log.Fatalf("KAFSCALE_E2E_BROKER_ADDR and KAFSCALE_E2E_TOPIC are required")
@@ -94,7 +103,7 @@ func main() {
 			log.Fatalf("create consumer client: %v", err)
 		}
 		defer client.Close()
-		if err := consumeMessages(context.Background(), client, topic, count, timeout); err != nil {
+		if err := consumeMessages(context.Background(), client, topic, count, timeout, printValues, printLimit); err != nil {
 			log.Fatalf("consume: %v", err)
 		}
 		log.Printf("consumed %d messages from %s", count, topic)
@@ -127,10 +136,27 @@ func main() {
 	}
 }
 
-func produceMessages(ctx context.Context, client *kgo.Client, topic string, count int) error {
+func produceMessages(ctx context.Context, client *kgo.Client, topic string, count int, lfsBlob bool, msgSize int) error {
 	for i := 0; i < count; i++ {
-		msg := fmt.Sprintf("restart-%d", i)
-		res := client.ProduceSync(ctx, &kgo.Record{Topic: topic, Value: []byte(msg)})
+		var value []byte
+		if lfsBlob && msgSize > 0 {
+			value = make([]byte, msgSize)
+			if _, err := rand.Read(value); err != nil {
+				return fmt.Errorf("generate random payload: %w", err)
+			}
+		} else {
+			value = []byte(fmt.Sprintf("restart-%d", i))
+		}
+
+		record := &kgo.Record{Topic: topic, Value: value}
+		if lfsBlob {
+			record.Headers = append(record.Headers, kgo.RecordHeader{
+				Key:   "LFS_BLOB",
+				Value: nil, // presence signals LFS, value can be checksum for validation
+			})
+		}
+
+		res := client.ProduceSync(ctx, record)
 		if err := res.FirstErr(); err != nil {
 			return err
 		}
@@ -138,7 +164,7 @@ func produceMessages(ctx context.Context, client *kgo.Client, topic string, coun
 	return nil
 }
 
-func consumeMessages(ctx context.Context, client *kgo.Client, topic string, count int, timeout time.Duration) error {
+func consumeMessages(ctx context.Context, client *kgo.Client, topic string, count int, timeout time.Duration, printValues bool, printLimit int) error {
 	deadline := time.Now().Add(timeout)
 	received := 0
 	for received < count {
@@ -156,6 +182,13 @@ func consumeMessages(ctx context.Context, client *kgo.Client, topic string, coun
 		}
 		fetches.EachRecord(func(record *kgo.Record) {
 			received++
+			if printValues {
+				value := record.Value
+				if printLimit > 0 && len(value) > printLimit {
+					value = value[:printLimit]
+				}
+				fmt.Printf("record\t%d\t%d\t%s\n", received, len(record.Value), string(value))
+			}
 		})
 	}
 	return nil
@@ -278,4 +311,12 @@ func parseEnvInt64(name string, fallback int64) int64 {
 		return fallback
 	}
 	return parsed
+}
+
+func parseEnvBool(name string, fallback bool) bool {
+	val := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if val == "" {
+		return fallback
+	}
+	return val == "true" || val == "1" || val == "yes"
 }

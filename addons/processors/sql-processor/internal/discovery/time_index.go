@@ -31,8 +31,8 @@ import (
 
 const (
 	timeIndexFooterVersion = 1
-	timeIndexFooterMagic = "KFTF"
-	timeIndexFooterSize  = 40
+	timeIndexFooterMagic   = "KFTF"
+	timeIndexFooterSize    = 40
 )
 
 type timeIndexReader struct {

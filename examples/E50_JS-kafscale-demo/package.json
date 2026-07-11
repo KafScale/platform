@@ -1,0 +1,36 @@
+{
+  "name": "e50-js-agent-kafscale-demo",
+  "version": "1.0.0",
+  "description": "JavaScript Agent Simulation with Kafka / KafScale - demonstrates agent orchestration using Kafka topics",
+  "type": "module",
+  "main": "src/agent.js",
+  "scripts": {
+    "agent": "node src/agent.js",
+    "panel": "node src/panel.js",
+    "consume": "node scripts/consume-response.js",
+    "web": "node src/web-server.js",
+    "test": "node scripts/e2e-test.js",
+    "test:e2e": "node scripts/e2e-test.js",
+    "test:producer": "node scripts/test-producer-only.js",
+    "test:consumer": "node scripts/test-consumer-only.js",
+    "debug:metadata": "node scripts/debug-metadata.js"
+  },
+  "keywords": [
+    "kafka",
+    "kafscale",
+    "agent",
+    "orchestration",
+    "llm",
+    "writingos"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

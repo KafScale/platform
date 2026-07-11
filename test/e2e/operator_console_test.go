@@ -153,8 +153,11 @@ func TestOperatorConsoleEndToEnd(t *testing.T) {
 	if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
-	if status.Cluster != string(cluster.UID) {
-		t.Fatalf("expected cluster %s, got %s", cluster.UID, status.Cluster)
+	if status.Cluster != cluster.Name {
+		t.Fatalf("expected cluster %s, got %s", cluster.Name, status.Cluster)
+	}
+	if status.ClusterID != string(cluster.UID) {
+		t.Fatalf("expected cluster id %s, got %s", cluster.UID, status.ClusterID)
 	}
 	if status.Brokers.Ready != int(replicas) {
 		t.Fatalf("expected %d brokers ready, got %d", replicas, status.Brokers.Ready)
@@ -170,8 +173,9 @@ func TestOperatorConsoleEndToEnd(t *testing.T) {
 }
 
 type consoleStatusPayload struct {
-	Cluster string `json:"cluster"`
-	Brokers struct {
+	Cluster   string `json:"cluster"`
+	ClusterID string `json:"cluster_id"`
+	Brokers   struct {
 		Ready int `json:"ready"`
 	} `json:"brokers"`
 	Topics []struct {

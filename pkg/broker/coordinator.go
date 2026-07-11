@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kmsg"
+
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -112,20 +114,18 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 	return c
 }
 
-func (c *GroupCoordinator) FindCoordinatorResponse(correlationID int32, errorCode int16) *protocol.FindCoordinatorResponse {
-	return &protocol.FindCoordinatorResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		ErrorCode:     errorCode,
-		NodeID:        c.broker.NodeID,
-		Host:          c.broker.Host,
-		Port:          c.broker.Port,
-	}
+func (c *GroupCoordinator) FindCoordinatorResponse(errorCode int16) *kmsg.FindCoordinatorResponse {
+	resp := kmsg.NewPtrFindCoordinatorResponse()
+	resp.ErrorCode = errorCode
+	resp.NodeID = c.broker.NodeID
+	resp.Host = c.broker.Host
+	resp.Port = c.broker.Port
+	return resp
 }
 
-func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *protocol.JoinGroupRequest, correlationID int32) (*protocol.JoinGroupResponse, error) {
+func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *kmsg.JoinGroupRequest) (*kmsg.JoinGroupResponse, error) {
 	c.mu.Lock()
-	state, err := c.ensureGroup(ctx, req.GroupID)
+	state, err := c.ensureGroup(ctx, req.Group)
 	if err != nil {
 		c.mu.Unlock()
 		return nil, err
@@ -135,7 +135,7 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *protocol.JoinGrou
 		state.protocolName = req.Protocols[0].Name
 	}
 
-	timeout := time.Duration(req.RebalanceTimeoutMs) * time.Millisecond
+	timeout := time.Duration(req.RebalanceTimeoutMillis) * time.Millisecond
 	if timeout <= 0 {
 		timeout = defaultRebalanceTimeout
 	}
@@ -143,14 +143,14 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *protocol.JoinGrou
 	memberID := req.MemberID
 	member, exists := state.members[memberID]
 	if memberID == "" || member == nil {
-		memberID = c.newMemberID(req.GroupID)
+		memberID = c.newMemberID(req.Group)
 		member = &memberState{}
 		state.members[memberID] = member
 		exists = false
 	}
 
-	if req.SessionTimeoutMs > 0 {
-		member.sessionTimeout = time.Duration(req.SessionTimeoutMs) * time.Millisecond
+	if req.SessionTimeoutMillis > 0 {
+		member.sessionTimeout = time.Duration(req.SessionTimeoutMillis) * time.Millisecond
 	} else if member.sessionTimeout == 0 {
 		member.sessionTimeout = defaultSessionTimeout
 	}
@@ -178,81 +178,64 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *protocol.JoinGrou
 		ready = state.completeIfReady()
 	}
 
-	var members []protocol.JoinGroupMember
+	resp := kmsg.NewPtrJoinGroupResponse()
+	resp.Generation = state.generationID
+	resp.Protocol = &state.protocolName
+	resp.LeaderID = state.leaderID
+	resp.MemberID = memberID
+	resp.ErrorCode = protocol.REBALANCE_IN_PROGRESS
+
 	if ready && memberID == state.leaderID {
-		members = c.encodeMemberSubscriptions(state)
+		resp.Members = c.encodeMemberSubscriptions(state)
 	} else {
-		members = []protocol.JoinGroupMember{}
+		resp.Members = []kmsg.JoinGroupResponseMember{}
 	}
 
-	resp := &protocol.JoinGroupResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		GenerationID:  state.generationID,
-		ProtocolName:  state.protocolName,
-		LeaderID:      state.leaderID,
-		MemberID:      memberID,
-		Members:       members,
-		ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
-	}
 	if ready {
 		resp.ErrorCode = protocol.NONE
 	}
-	if err := c.persistGroupLocked(ctx, req.GroupID, state); err != nil {
+	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
 	c.mu.Unlock()
 	return resp, nil
 }
 
-func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *protocol.SyncGroupRequest, correlationID int32) (*protocol.SyncGroupResponse, error) {
+func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *kmsg.SyncGroupRequest) (*kmsg.SyncGroupResponse, error) {
 	c.mu.Lock()
-	state, err := c.loadGroupIfMissing(ctx, req.GroupID)
+	state, err := c.loadGroupIfMissing(ctx, req.Group)
 	if err != nil {
 		c.mu.Unlock()
 		return nil, err
 	}
+
+	mkErrResp := func(code int16) *kmsg.SyncGroupResponse {
+		r := kmsg.NewPtrSyncGroupResponse()
+		r.ErrorCode = code
+		return r
+	}
+
 	if state == nil {
 		c.mu.Unlock()
-		return &protocol.SyncGroupResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
-		}, nil
+		return mkErrResp(protocol.UNKNOWN_MEMBER_ID), nil
 	}
-	if req.GenerationID != state.generationID {
+	if req.Generation != state.generationID {
 		c.mu.Unlock()
-		return &protocol.SyncGroupResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.ILLEGAL_GENERATION,
-		}, nil
+		return mkErrResp(protocol.ILLEGAL_GENERATION), nil
 	}
 	if _, ok := state.members[req.MemberID]; !ok {
 		c.mu.Unlock()
-		return &protocol.SyncGroupResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
-		}, nil
+		return mkErrResp(protocol.UNKNOWN_MEMBER_ID), nil
 	}
 	if state.state == groupStatePreparingRebalance {
 		c.mu.Unlock()
-		return &protocol.SyncGroupResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
-		}, nil
+		return mkErrResp(protocol.REBALANCE_IN_PROGRESS), nil
 	}
 
 	if state.state == groupStateCompletingRebalance && len(state.assignments) == 0 {
 		if req.MemberID != state.leaderID {
 			c.mu.Unlock()
-			return &protocol.SyncGroupResponse{
-				CorrelationID: correlationID,
-				ThrottleMs:    0,
-				ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
-			}, nil
+			return mkErrResp(protocol.REBALANCE_IN_PROGRESS), nil
 		}
 		state.assignments = c.assignPartitions(ctx, state)
 		state.markStable()
@@ -261,129 +244,95 @@ func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *protocol.SyncGrou
 	assignments := state.assignments[req.MemberID]
 	if assignments == nil && state.state != groupStateStable {
 		c.mu.Unlock()
-		return &protocol.SyncGroupResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
-		}, nil
+		return mkErrResp(protocol.REBALANCE_IN_PROGRESS), nil
 	}
 
-	var protocolTypePtr *string
+	resp := kmsg.NewPtrSyncGroupResponse()
+	resp.ErrorCode = protocol.NONE
 	if state.protocolType != "" {
-		pt := state.protocolType
-		protocolTypePtr = &pt
+		resp.ProtocolType = &state.protocolType
 	}
-	var protocolNamePtr *string
 	if state.protocolName != "" {
-		pn := state.protocolName
-		protocolNamePtr = &pn
+		resp.Protocol = &state.protocolName
 	}
-	resp := &protocol.SyncGroupResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		ErrorCode:     protocol.NONE,
-		ProtocolType:  protocolTypePtr,
-		ProtocolName:  protocolNamePtr,
-		Assignment:    encodeAssignment(assignments),
-	}
-	if err := c.persistGroupLocked(ctx, req.GroupID, state); err != nil {
+	resp.MemberAssignment = encodeAssignment(assignments)
+
+	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
 	c.mu.Unlock()
 	return resp, nil
 }
 
-func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *protocol.HeartbeatRequest, correlationID int32) *protocol.HeartbeatResponse {
+func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *kmsg.HeartbeatRequest) *kmsg.HeartbeatResponse {
 	c.mu.Lock()
-	state, err := c.loadGroupIfMissing(ctx, req.GroupID)
+	state, err := c.loadGroupIfMissing(ctx, req.Group)
+
+	mkResp := func(code int16) *kmsg.HeartbeatResponse {
+		r := kmsg.NewPtrHeartbeatResponse()
+		r.ErrorCode = code
+		return r
+	}
+
 	if err != nil {
 		c.mu.Unlock()
-		return &protocol.HeartbeatResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.UNKNOWN_SERVER_ERROR,
-		}
+		return mkResp(protocol.UNKNOWN_SERVER_ERROR)
 	}
 	if state == nil {
 		c.mu.Unlock()
-		return &protocol.HeartbeatResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
-		}
+		return mkResp(protocol.UNKNOWN_MEMBER_ID)
 	}
 	member := state.members[req.MemberID]
 	if member == nil {
 		c.mu.Unlock()
-		return &protocol.HeartbeatResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
-		}
+		return mkResp(protocol.UNKNOWN_MEMBER_ID)
 	}
-	if req.GenerationID != state.generationID {
+	if req.Generation != state.generationID {
 		c.mu.Unlock()
-		return &protocol.HeartbeatResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.ILLEGAL_GENERATION,
-		}
+		return mkResp(protocol.ILLEGAL_GENERATION)
 	}
 	if state.state != groupStateStable {
 		c.mu.Unlock()
-		return &protocol.HeartbeatResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.REBALANCE_IN_PROGRESS,
-		}
+		return mkResp(protocol.REBALANCE_IN_PROGRESS)
 	}
 	member.lastHeartbeat = time.Now()
-	resp := &protocol.HeartbeatResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		ErrorCode:     protocol.NONE,
-	}
-	if err := c.persistGroupLocked(ctx, req.GroupID, state); err != nil {
+	resp := mkResp(protocol.NONE)
+	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
 	c.mu.Unlock()
 	return resp
 }
 
-func (c *GroupCoordinator) LeaveGroup(ctx context.Context, req *protocol.LeaveGroupRequest, correlationID int32) *protocol.LeaveGroupResponse {
+func (c *GroupCoordinator) LeaveGroup(ctx context.Context, req *kmsg.LeaveGroupRequest) *kmsg.LeaveGroupResponse {
 	c.mu.Lock()
-	state, err := c.loadGroupIfMissing(ctx, req.GroupID)
+	state, err := c.loadGroupIfMissing(ctx, req.Group)
+
+	mkResp := func(code int16) *kmsg.LeaveGroupResponse {
+		r := kmsg.NewPtrLeaveGroupResponse()
+		r.ErrorCode = code
+		return r
+	}
+
 	if err != nil {
 		c.mu.Unlock()
-		return &protocol.LeaveGroupResponse{
-			CorrelationID: correlationID,
-			ErrorCode:     protocol.UNKNOWN_SERVER_ERROR,
-		}
+		return mkResp(protocol.UNKNOWN_SERVER_ERROR)
 	}
 	if state == nil {
 		c.mu.Unlock()
-		return &protocol.LeaveGroupResponse{
-			CorrelationID: correlationID,
-			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
-		}
+		return mkResp(protocol.UNKNOWN_MEMBER_ID)
 	}
 	if _, ok := state.members[req.MemberID]; !ok {
 		c.mu.Unlock()
-		return &protocol.LeaveGroupResponse{
-			CorrelationID: correlationID,
-			ErrorCode:     protocol.UNKNOWN_MEMBER_ID,
-		}
+		return mkResp(protocol.UNKNOWN_MEMBER_ID)
 	}
 	delete(state.members, req.MemberID)
 	delete(state.assignments, req.MemberID)
 
 	if len(state.members) == 0 {
-		delete(c.groups, req.GroupID)
-		resp := &protocol.LeaveGroupResponse{
-			CorrelationID: correlationID,
-			ErrorCode:     protocol.NONE,
-		}
-		if err := c.persistGroupLocked(ctx, req.GroupID, nil); err != nil {
+		delete(c.groups, req.Group)
+		resp := mkResp(protocol.NONE)
+		if err := c.persistGroupLocked(ctx, req.Group, nil); err != nil {
 			resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 		}
 		c.mu.Unlock()
@@ -393,20 +342,17 @@ func (c *GroupCoordinator) LeaveGroup(ctx context.Context, req *protocol.LeaveGr
 		state.leaderID = ""
 	}
 	state.startRebalance(0)
-	resp := &protocol.LeaveGroupResponse{
-		CorrelationID: correlationID,
-		ErrorCode:     protocol.NONE,
-	}
-	if err := c.persistGroupLocked(ctx, req.GroupID, state); err != nil {
+	resp := mkResp(protocol.NONE)
+	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
 	c.mu.Unlock()
 	return resp
 }
 
-func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *protocol.OffsetCommitRequest, correlationID int32) (*protocol.OffsetCommitResponse, error) {
+func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCommitRequest) (*kmsg.OffsetCommitResponse, error) {
 	c.mu.Lock()
-	state, err := c.loadGroupIfMissing(ctx, req.GroupID)
+	state, err := c.loadGroupIfMissing(ctx, req.Group)
 	if err != nil {
 		c.mu.Unlock()
 		return nil, err
@@ -417,171 +363,164 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *protocol.Offse
 		groupErr = protocol.UNKNOWN_MEMBER_ID
 	} else if _, ok := state.members[req.MemberID]; !ok {
 		groupErr = protocol.UNKNOWN_MEMBER_ID
-	} else if req.GenerationID != state.generationID {
+	} else if req.Generation != state.generationID {
 		groupErr = protocol.ILLEGAL_GENERATION
 	}
 	c.mu.Unlock()
 
-	results := make([]protocol.OffsetCommitTopicResponse, 0, len(req.Topics))
+	resp := kmsg.NewPtrOffsetCommitResponse()
+	resp.Topics = make([]kmsg.OffsetCommitResponseTopic, 0, len(req.Topics))
 	for _, topic := range req.Topics {
-		partitions := make([]protocol.OffsetCommitPartitionResponse, 0, len(topic.Partitions))
+		topicResp := kmsg.NewOffsetCommitResponseTopic()
+		topicResp.Topic = topic.Topic
+		topicResp.Partitions = make([]kmsg.OffsetCommitResponseTopicPartition, 0, len(topic.Partitions))
 		for _, part := range topic.Partitions {
 			code := groupErr
 			if code == protocol.NONE {
-				if err := c.store.CommitConsumerOffset(ctx, req.GroupID, topic.Name, part.Partition, part.Offset, part.Metadata); err != nil {
+				meta := ""
+				if part.Metadata != nil {
+					meta = *part.Metadata
+				}
+				if err := c.store.CommitConsumerOffset(ctx, req.Group, topic.Topic, part.Partition, part.Offset, meta); err != nil {
 					code = protocol.UNKNOWN_SERVER_ERROR
 				}
 			}
-			partitions = append(partitions, protocol.OffsetCommitPartitionResponse{
-				Partition: part.Partition,
-				ErrorCode: code,
-			})
+			partResp := kmsg.NewOffsetCommitResponseTopicPartition()
+			partResp.Partition = part.Partition
+			partResp.ErrorCode = code
+			topicResp.Partitions = append(topicResp.Partitions, partResp)
 		}
-		results = append(results, protocol.OffsetCommitTopicResponse{
-			Name:       topic.Name,
-			Partitions: partitions,
-		})
+		resp.Topics = append(resp.Topics, topicResp)
 	}
-	return &protocol.OffsetCommitResponse{
-		CorrelationID: correlationID,
-		Topics:        results,
-	}, nil
+	return resp, nil
 }
 
-func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *protocol.OffsetFetchRequest, correlationID int32) (*protocol.OffsetFetchResponse, error) {
-	topicResponses := make([]protocol.OffsetFetchTopicResponse, 0, len(req.Topics))
+func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *kmsg.OffsetFetchRequest) (*kmsg.OffsetFetchResponse, error) {
+	resp := kmsg.NewPtrOffsetFetchResponse()
+	resp.ErrorCode = protocol.NONE
+	resp.Topics = make([]kmsg.OffsetFetchResponseTopic, 0, len(req.Topics))
 	for _, topic := range req.Topics {
-		partitions := make([]protocol.OffsetFetchPartitionResponse, 0, len(topic.Partitions))
-		for _, part := range topic.Partitions {
-			offset, metadataStr, err := c.store.FetchConsumerOffset(ctx, req.GroupID, topic.Name, part.Partition)
-			code := protocol.NONE
+		topicResp := kmsg.NewOffsetFetchResponseTopic()
+		topicResp.Topic = topic.Topic
+		topicResp.Partitions = make([]kmsg.OffsetFetchResponseTopicPartition, 0, len(topic.Partitions))
+		for _, partID := range topic.Partitions {
+			offset, metadataStr, err := c.store.FetchConsumerOffset(ctx, req.Group, topic.Topic, partID)
+			code := int16(protocol.NONE)
 			if err != nil {
 				code = protocol.UNKNOWN_SERVER_ERROR
 			}
-			leaderEpoch := int32(-1)
-			metaVal := metadataStr
-			partitions = append(partitions, protocol.OffsetFetchPartitionResponse{
-				Partition:   part.Partition,
-				Offset:      offset,
-				LeaderEpoch: leaderEpoch,
-				Metadata:    &metaVal,
-				ErrorCode:   code,
-			})
+			partResp := kmsg.NewOffsetFetchResponseTopicPartition()
+			partResp.Partition = partID
+			partResp.Offset = offset
+			partResp.LeaderEpoch = -1
+			partResp.Metadata = &metadataStr
+			partResp.ErrorCode = code
+			topicResp.Partitions = append(topicResp.Partitions, partResp)
 		}
-		topicResponses = append(topicResponses, protocol.OffsetFetchTopicResponse{
-			Name:       topic.Name,
-			Partitions: partitions,
-		})
+		resp.Topics = append(resp.Topics, topicResp)
 	}
-	return &protocol.OffsetFetchResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		Topics:        topicResponses,
-		ErrorCode:     protocol.NONE,
-	}, nil
+	return resp, nil
 }
 
-func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *protocol.DescribeGroupsRequest, correlationID int32) (*protocol.DescribeGroupsResponse, error) {
-	groups := make([]protocol.DescribeGroupsResponseGroup, 0, len(req.Groups))
+func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.DescribeGroupsRequest) (*kmsg.DescribeGroupsResponse, error) {
+	resp := kmsg.NewPtrDescribeGroupsResponse()
+	resp.Groups = make([]kmsg.DescribeGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
 		group, err := c.store.FetchConsumerGroup(ctx, groupID)
 		if err != nil {
-			groups = append(groups, protocol.DescribeGroupsResponseGroup{
-				ErrorCode: protocol.UNKNOWN_SERVER_ERROR,
-				GroupID:   groupID,
-			})
+			g := kmsg.NewDescribeGroupsResponseGroup()
+			g.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+			g.Group = groupID
+			resp.Groups = append(resp.Groups, g)
 			continue
 		}
 		if group == nil {
-			groups = append(groups, protocol.DescribeGroupsResponseGroup{
-				ErrorCode: protocol.GROUP_ID_NOT_FOUND,
-				GroupID:   groupID,
-			})
+			g := kmsg.NewDescribeGroupsResponseGroup()
+			g.ErrorCode = protocol.GROUP_ID_NOT_FOUND
+			g.Group = groupID
+			resp.Groups = append(resp.Groups, g)
 			continue
 		}
-		groups = append(groups, buildDescribeGroup(group, req.IncludeAuthorizedOperations))
+		resp.Groups = append(resp.Groups, buildDescribeGroup(group, req.IncludeAuthorizedOperations))
 	}
-	return &protocol.DescribeGroupsResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		Groups:        groups,
-	}, nil
+	return resp, nil
 }
 
-func (c *GroupCoordinator) ListGroups(ctx context.Context, req *protocol.ListGroupsRequest, correlationID int32) (*protocol.ListGroupsResponse, error) {
+func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsRequest) (*kmsg.ListGroupsResponse, error) {
 	groups, err := c.store.ListConsumerGroups(ctx)
 	if err != nil {
-		return &protocol.ListGroupsResponse{
-			CorrelationID: correlationID,
-			ThrottleMs:    0,
-			ErrorCode:     protocol.UNKNOWN_SERVER_ERROR,
-			Groups:        nil,
-		}, nil
+		resp := kmsg.NewPtrListGroupsResponse()
+		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+		return resp, nil
 	}
-	entries := make([]protocol.ListGroupsResponseGroup, 0, len(groups))
+
+	var statesFilter, typesFilter []string
+	if len(req.StatesFilter) > 0 {
+		statesFilter = req.StatesFilter
+	}
+	if len(req.TypesFilter) > 0 {
+		typesFilter = req.TypesFilter
+	}
+
+	resp := kmsg.NewPtrListGroupsResponse()
+	resp.ErrorCode = protocol.NONE
+	resp.Groups = make([]kmsg.ListGroupsResponseGroup, 0, len(groups))
 	for _, group := range groups {
 		state := kafkaGroupState(group.GetState())
-		if !matchesGroupStateFilter(state, req.StatesFilter) {
+		if !matchesGroupStateFilter(state, statesFilter) {
 			continue
 		}
 		groupType := "classic"
-		if !matchesGroupTypeFilter(groupType, req.TypesFilter) {
+		if !matchesGroupTypeFilter(groupType, typesFilter) {
 			continue
 		}
 		protocolType := group.GetProtocolType()
 		if protocolType == "" {
 			protocolType = "consumer"
 		}
-		entries = append(entries, protocol.ListGroupsResponseGroup{
-			GroupID:      group.GetGroupId(),
-			ProtocolType: protocolType,
-			GroupState:   state,
-			GroupType:    groupType,
-		})
+		entry := kmsg.NewListGroupsResponseGroup()
+		entry.Group = group.GetGroupId()
+		entry.ProtocolType = protocolType
+		entry.GroupState = state
+		entry.GroupType = groupType
+		resp.Groups = append(resp.Groups, entry)
 	}
-	return &protocol.ListGroupsResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		ErrorCode:     protocol.NONE,
-		Groups:        entries,
-	}, nil
+	return resp, nil
 }
 
-func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *protocol.DeleteGroupsRequest, correlationID int32) (*protocol.DeleteGroupsResponse, error) {
-	results := make([]protocol.DeleteGroupsResponseGroup, 0, len(req.Groups))
+func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGroupsRequest) (*kmsg.DeleteGroupsResponse, error) {
+	resp := kmsg.NewPtrDeleteGroupsResponse()
+	resp.Groups = make([]kmsg.DeleteGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
-		result := protocol.DeleteGroupsResponseGroup{Group: groupID}
+		result := kmsg.NewDeleteGroupsResponseGroup()
+		result.Group = groupID
 		if strings.TrimSpace(groupID) == "" {
 			result.ErrorCode = protocol.INVALID_REQUEST
-			results = append(results, result)
+			resp.Groups = append(resp.Groups, result)
 			continue
 		}
 		group, err := c.store.FetchConsumerGroup(ctx, groupID)
 		if err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-			results = append(results, result)
+			resp.Groups = append(resp.Groups, result)
 			continue
 		}
 		if group == nil {
 			result.ErrorCode = protocol.GROUP_ID_NOT_FOUND
 			c.deleteGroupState(groupID)
-			results = append(results, result)
+			resp.Groups = append(resp.Groups, result)
 			continue
 		}
 		if err := c.store.DeleteConsumerGroup(ctx, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-			results = append(results, result)
+			resp.Groups = append(resp.Groups, result)
 			continue
 		}
 		c.deleteGroupState(groupID)
 		result.ErrorCode = protocol.NONE
-		results = append(results, result)
+		resp.Groups = append(resp.Groups, result)
 	}
-	return &protocol.DeleteGroupsResponse{
-		CorrelationID: correlationID,
-		ThrottleMs:    0,
-		Groups:        results,
-	}, nil
+	return resp, nil
 }
 
 func (c *GroupCoordinator) deleteGroupState(groupID string) {
@@ -672,45 +611,44 @@ func buildConsumerGroup(groupID string, state *groupState) *metadatapb.ConsumerG
 	return group
 }
 
-func buildDescribeGroup(group *metadatapb.ConsumerGroup, includeAuthorized bool) protocol.DescribeGroupsResponseGroup {
+func buildDescribeGroup(group *metadatapb.ConsumerGroup, includeAuthorized bool) kmsg.DescribeGroupsResponseGroup {
 	protocolType := group.GetProtocolType()
 	if protocolType == "" {
 		protocolType = "consumer"
 	}
 	protocolName := group.GetProtocol()
-	members := make([]protocol.DescribeGroupsResponseGroupMember, 0, len(group.Members))
+
 	memberIDs := make([]string, 0, len(group.Members))
 	for memberID := range group.Members {
 		memberIDs = append(memberIDs, memberID)
 	}
 	sort.Strings(memberIDs)
+
+	members := make([]kmsg.DescribeGroupsResponseGroupMember, 0, len(group.Members))
 	for _, memberID := range memberIDs {
 		member := group.Members[memberID]
 		if member == nil {
 			continue
 		}
-		members = append(members, protocol.DescribeGroupsResponseGroupMember{
-			MemberID:         memberID,
-			InstanceID:       nil,
-			ClientID:         member.ClientId,
-			ClientHost:       member.ClientHost,
-			ProtocolMetadata: nil,
-			MemberAssignment: nil,
-		})
+		m := kmsg.NewDescribeGroupsResponseGroupMember()
+		m.MemberID = memberID
+		m.ClientID = member.ClientId
+		m.ClientHost = member.ClientHost
+		members = append(members, m)
 	}
 	authorizedOps := int32(-2147483648)
 	if includeAuthorized {
 		authorizedOps = 0
 	}
-	return protocol.DescribeGroupsResponseGroup{
-		ErrorCode:            protocol.NONE,
-		GroupID:              group.GetGroupId(),
-		State:                kafkaGroupState(group.GetState()),
-		ProtocolType:         protocolType,
-		Protocol:             protocolName,
-		Members:              members,
-		AuthorizedOperations: authorizedOps,
-	}
+	g := kmsg.NewDescribeGroupsResponseGroup()
+	g.ErrorCode = protocol.NONE
+	g.Group = group.GetGroupId()
+	g.State = kafkaGroupState(group.GetState())
+	g.ProtocolType = protocolType
+	g.Protocol = protocolName
+	g.Members = members
+	g.AuthorizedOperations = authorizedOps
+	return g
 }
 
 func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
@@ -844,7 +782,7 @@ func (c *GroupCoordinator) newMemberID(group string) string {
 	return fmt.Sprintf("%s-%d", group, rand.Int63())
 }
 
-func (c *GroupCoordinator) parseSubscriptionTopics(protocols []protocol.JoinGroupProtocol) []string {
+func (c *GroupCoordinator) parseSubscriptionTopics(protocols []kmsg.JoinGroupRequestProtocol) []string {
 	if len(protocols) == 0 {
 		return nil
 	}
@@ -893,15 +831,15 @@ func (c *GroupCoordinator) encodeSubscription(topics []string) []byte {
 	return buf
 }
 
-func (c *GroupCoordinator) encodeMemberSubscriptions(state *groupState) []protocol.JoinGroupMember {
+func (c *GroupCoordinator) encodeMemberSubscriptions(state *groupState) []kmsg.JoinGroupResponseMember {
 	ids := state.sortedMembers()
-	members := make([]protocol.JoinGroupMember, 0, len(ids))
+	members := make([]kmsg.JoinGroupResponseMember, 0, len(ids))
 	for _, id := range ids {
 		member := state.members[id]
-		members = append(members, protocol.JoinGroupMember{
-			MemberID: id,
-			Metadata: c.encodeSubscription(member.topics),
-		})
+		m := kmsg.NewJoinGroupResponseMember()
+		m.MemberID = id
+		m.ProtocolMetadata = c.encodeSubscription(member.topics)
+		members = append(members, m)
 	}
 	return members
 }
@@ -998,13 +936,13 @@ func (c *GroupCoordinator) collectTopicPartitions(ctx context.Context, state *gr
 	for _, topic := range meta.Topics {
 		partitions := make([]int32, 0, len(topic.Partitions))
 		for _, p := range topic.Partitions {
-			partitions = append(partitions, p.PartitionIndex)
+			partitions = append(partitions, p.Partition)
 		}
 		if len(partitions) == 0 {
 			partitions = []int32{0}
 		}
 		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
-		result[topic.Name] = partitions
+		result[*topic.Topic] = partitions
 	}
 	return result
 }

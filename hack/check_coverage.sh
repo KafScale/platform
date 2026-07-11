@@ -17,7 +17,22 @@ set -euo pipefail
 
 MIN_COVERAGE="${1:-45}"
 
-go test ./... -coverprofile=coverage.out
+# Packages excluded from coverage: generated code, test utilities, demo tools,
+# embed-only wrappers, e2e tests, CLI entry points, and addon/skeleton packages.
+EXCLUDE=(
+  "github.com/KafScale/platform/api/v1alpha1"
+  "github.com/KafScale/platform/pkg/gen/"
+  "github.com/KafScale/platform/internal/testutil"
+  "github.com/KafScale/platform/ui"
+  "github.com/KafScale/platform/cmd/"
+  "github.com/KafScale/platform/test"
+  "github.com/KafScale/platform/addons/"
+)
+
+# Build package list excluding non-testable packages.
+PKGS=$(go list ./... | grep -v -F "$(printf '%s\n' "${EXCLUDE[@]}")")
+
+go test -coverprofile=coverage.out $PKGS
 
 total=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/,"",$3); print $3}')
 if [ -z "$total" ]; then

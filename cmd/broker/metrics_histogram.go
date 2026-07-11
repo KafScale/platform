@@ -70,17 +70,17 @@ func (h *histogram) WritePrometheus(w io.Writer, name, help string) {
 		return
 	}
 	buckets, counts, sum, count := h.Snapshot()
-	fmt.Fprintf(w, "# HELP %s %s\n", name, help)
-	fmt.Fprintf(w, "# TYPE %s histogram\n", name)
+	_, _ = fmt.Fprintf(w, "# HELP %s %s\n", name, help)
+	_, _ = fmt.Fprintf(w, "# TYPE %s histogram\n", name)
 	var cumulative int64
 	for i, upper := range buckets {
 		cumulative += counts[i]
-		fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, formatFloat(upper), cumulative)
+		_, _ = fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, formatFloat(upper), cumulative)
 	}
 	cumulative += counts[len(counts)-1]
-	fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, cumulative)
-	fmt.Fprintf(w, "%s_sum %f\n", name, sum)
-	fmt.Fprintf(w, "%s_count %d\n", name, count)
+	_, _ = fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, cumulative)
+	_, _ = fmt.Fprintf(w, "%s_sum %f\n", name, sum)
+	_, _ = fmt.Fprintf(w, "%s_count %d\n", name, count)
 }
 
 func formatFloat(val float64) string {

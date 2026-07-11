@@ -46,6 +46,7 @@ SPECIAL_FILENAMES = {
 
 SKIP_PREFIXES = (
     ".git/",
+    ".claude/",
     "bin/",
     ".gocache/",
     ".gopath/",
@@ -53,9 +54,23 @@ SKIP_PREFIXES = (
     ".vscode/",
     "third_party/",
     "pkg/gen/",
+    "lfs-client-sdk/js/node_modules/",
+    "lfs-client-sdk/java/target/",
+    "lfs-client-sdk/python/kafscale_lfs_sdk.egg-info/",
+    "examples/",
+    "deploy/demo/",
+    "deploy/templates/",
 )
 
-SKIP_FILES = {"LICENSE", "NOTICE"}
+SKIP_FILES = {"LICENSE", "NOTICE", "records.txt"}
+
+
+def _in_node_modules(rel: str) -> bool:
+    return "/node_modules/" in rel or rel.startswith("node_modules/")
+
+
+def _in_build_artifacts(rel: str) -> bool:
+    return "/target/" in rel or "/egg-info/" in rel
 
 
 def git_files() -> list[str]:
@@ -73,6 +88,8 @@ def should_check(path: pathlib.Path, rel: str) -> bool:
     if rel in SKIP_FILES:
         return False
     if any(rel.startswith(prefix) for prefix in SKIP_PREFIXES):
+        return False
+    if _in_node_modules(rel) or _in_build_artifacts(rel):
         return False
     if path.name in SPECIAL_FILENAMES:
         return True

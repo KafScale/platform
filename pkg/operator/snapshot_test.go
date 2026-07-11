@@ -69,17 +69,17 @@ func TestBuildClusterMetadata(t *testing.T) {
 	if meta.ClusterName == nil || *meta.ClusterName != "prod" {
 		t.Fatalf("unexpected cluster name: %v", meta.ClusterName)
 	}
-	if len(meta.Topics) != 1 || meta.Topics[0].Name != "orders" {
+	if len(meta.Topics) != 1 || *meta.Topics[0].Topic != "orders" {
 		t.Fatalf("expected orders topic, got %+v", meta.Topics)
 	}
 	if len(meta.Topics[0].Partitions) != 2 {
 		t.Fatalf("expected 2 partitions, got %d", len(meta.Topics[0].Partitions))
 	}
 	for _, part := range meta.Topics[0].Partitions {
-		if len(part.ReplicaNodes) != int(replicas) {
+		if len(part.Replicas) != int(replicas) {
 			t.Fatalf("partition %+v replica mismatch", part)
 		}
-		if len(part.ISRNodes) != len(part.ReplicaNodes) {
+		if len(part.ISR) != len(part.Replicas) {
 			t.Fatalf("partition %+v ISR mismatch", part)
 		}
 	}

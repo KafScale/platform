@@ -130,9 +130,8 @@ func (p *Processor) Run(ctx context.Context) error {
 					continue
 				}
 
-				if dropped := len(records); dropped > 0 {
+				if len(records) > 0 {
 					records = filterRecords(records, state.Offset)
-					dropped -= len(records)
 				}
 				if len(records) == 0 {
 					continue

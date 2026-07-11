@@ -13,7 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: proto build test tidy lint generate docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all
+SHELL := /bin/bash
+
+GO_MIN_VERSION := 1.25
+NODE_MIN_VERSION := 24
+NPM_MIN_VERSION := 11
+LOCAL_NODE_DIR := $(abspath .tools/node)
+LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
+LOCAL_NODE := $(LOCAL_NODE_BIN)/node
+LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
+
+.PHONY: proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -71,18 +81,164 @@ KAFSCALE_DEMO_ETCD_INMEM ?= 1
 KAFSCALE_DEMO_ETCD_REPLICAS ?= 3
 BROKER_PORT ?= 39092
 BROKER_PORTS ?= 39092 39093 39094
+SDK_JAVA_BUILD_CMD ?= mvn -DskipTests clean package
+SDK_JS_BUILD_CMD ?= npm install && npm run build
+SDK_PY_BUILD_CMD ?= python -m build
+SKIP_JS_SDK ?= 1
 
 proto: ## Generate protobuf + gRPC stubs
 	buf generate
 
 generate: proto
 
+check: ## Validate local toolchain prerequisites
+	@echo "Checking prerequisites..."
+	@command -v go >/dev/null 2>&1 || { \
+		echo ""; \
+		echo "  ERROR: Go is not installed."; \
+		echo "  Required: Go >= $(GO_MIN_VERSION)"; \
+		echo ""; \
+		exit 1; \
+	}
+	@GO_VER=$$(go version | sed -E 's/.*go([0-9]+\.[0-9]+).*/\1/'); \
+	GO_MAJ=$$(echo "$$GO_VER" | cut -d. -f1); \
+	GO_MIN=$$(echo "$$GO_VER" | cut -d. -f2); \
+	REQ_MAJ=$$(echo "$(GO_MIN_VERSION)" | cut -d. -f1); \
+	REQ_MIN=$$(echo "$(GO_MIN_VERSION)" | cut -d. -f2); \
+	if [ "$$GO_MAJ" -lt "$$REQ_MAJ" ] || { [ "$$GO_MAJ" -eq "$$REQ_MAJ" ] && [ "$$GO_MIN" -lt "$$REQ_MIN" ]; }; then \
+		echo ""; \
+		echo "  ERROR: Go $$GO_VER is too old."; \
+		echo "  Required: Go >= $(GO_MIN_VERSION)"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "  Go $$(go version | sed -E 's/.*go([0-9]+\.[0-9]+\.[0-9]+).*/\1/') -- OK"
+	@if [ -x "$(LOCAL_NODE)" ]; then \
+		NODE_VER=$$($(LOCAL_NODE) --version | sed 's/v//'); \
+		NODE_MAJ=$$(echo "$$NODE_VER" | cut -d. -f1); \
+		if [ "$$NODE_MAJ" -lt "$(NODE_MIN_VERSION)" ]; then \
+			echo "  WARNING: local Node.js $$NODE_VER is too old (need >= $(NODE_MIN_VERSION))"; \
+		else \
+			echo "  Node.js $$NODE_VER (local) -- OK"; \
+		fi; \
+	else \
+		echo "  WARNING: local Node.js not installed"; \
+	fi
+	@if [ -x "$(LOCAL_NPM)" ]; then \
+		NPM_VER=$$(PATH="$(LOCAL_NODE_BIN):$$PATH" $(LOCAL_NPM) --version); \
+		NPM_MAJ=$$(echo "$$NPM_VER" | cut -d. -f1); \
+		if [ "$$NPM_MAJ" -lt "$(NPM_MIN_VERSION)" ]; then \
+			echo "  WARNING: local npm $$NPM_VER is too old (need >= $(NPM_MIN_VERSION))"; \
+		else \
+			echo "  npm $$NPM_VER (local) -- OK"; \
+		fi; \
+	else \
+		echo "  WARNING: local npm not installed"; \
+	fi
+
+ensure-local-node: ## Install repo-local Node.js/npm from .nvmrc
+	bash scripts/ensure_local_node.sh
+
 build: ## Build all binaries
 	go build ./...
 
+build-sdk: ## Build all LFS client SDKs
+	@echo "Building Java SDK..."
+	@cd lfs-client-sdk/java && $(SDK_JAVA_BUILD_CMD)
+	@test -d lfs-client-sdk/java/target || { echo "Java SDK target/ missing"; exit 1; }
+	@if [ "$(SKIP_JS_SDK)" = "1" ]; then \
+		echo "Skipping JS SDK build (SKIP_JS_SDK=1)"; \
+	else \
+		echo "Building JS SDK..."; \
+		cd lfs-client-sdk/js && $(SDK_JS_BUILD_CMD); \
+	fi
+	@echo "Building Python SDK..."
+	@cd lfs-client-sdk/python && $(SDK_PY_BUILD_CMD)
+
 test: ## Run unit tests + vet + race
-	go vet ./...
-	go test -race ./...
+	@echo "==> go vet"
+	@go vet ./...
+	@echo "vet passed."
+	@echo "==> go test -race ./..."
+	@go test -race ./...
+	@echo "race passed."
+	@echo "test passed."
+
+test-nested-modules: ## Run go test across nested Go modules under addons/processors
+	@set -e; \
+	for dir in addons/processors/skeleton addons/processors/sql-processor addons/processors/iceberg-processor; do \
+		echo "==> $$dir: go test ./..."; \
+		( cd $$dir && go test ./... ); \
+	done; \
+	echo "nested module tests passed."
+
+SDK_NPM := $(if $(wildcard $(LOCAL_NPM)),$(LOCAL_NPM),npm)
+
+test-lfs-sdk-unit: ensure-local-node ## Run LFS JS SDK unit tests (node + browser)
+	@echo "==> lfs-client-sdk/js: npm test"
+	@cd lfs-client-sdk/js && $(SDK_NPM) ci && $(SDK_NPM) test
+	@echo "==> lfs-client-sdk/js-browser: npm test"
+	@cd lfs-client-sdk/js-browser && $(SDK_NPM) install && $(SDK_NPM) test
+	@echo "lfs sdk unit tests passed."
+vet: ## Run go vet
+	@echo "==> go vet"
+	@go vet ./...
+	@echo "vet passed."
+
+race: ## Run race detector tests
+	@echo "==> go test -race ./..."
+	@go test -race ./...
+	@echo "race passed."
+
+fmt: ## Auto-format Go code
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "Formatting Go files:"; \
+		echo "$$unformatted"; \
+		gofmt -w .; \
+		echo "fmt passed."; \
+	else \
+		echo "All Go files are formatted correctly."; \
+		echo "fmt passed."; \
+	fi
+
+fmt-check: ## Check formatting (fails if unformatted)
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "The following files are not gofmt-formatted:"; \
+		echo "$$unformatted"; \
+		echo "Run 'make fmt' to fix them."; \
+		exit 1; \
+	fi
+
+test-fuzz: ## Run Go fuzz test(s)
+	bash scripts/test_fuzz.sh
+
+test-chart-proxy-nodeport: ## Run the proxy Service nodePort chart template test (helm only, no cluster)
+	bash test/chart/proxy-nodeport_test.sh
+
+test-chart-psa: ## Run the PodSecurity restricted conformance chart test (helm only, no cluster)
+	bash test/chart/psa-restricted_test.sh
+
+test-chart-antiaffinity: ## Run the proxy default podAntiAffinity chart template test (helm only, no cluster)
+	bash test/chart/proxy-antiaffinity_test.sh
+
+code-ql: ensure-local-node ## Run local CodeQL and emit SARIF under .tmp/codeql/
+	bash scripts/codeql_local.sh
+
+code-ql-summary: code-ql ## Run CodeQL and print a readable summary from SARIF
+	@jq -r '.runs[]?.results[]? | "\(.level // "warning")\t\(.ruleId // "no-rule")\t\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):\(.locations[0].physicalLocation.region.startLine // 0)\t\(.message.text // "no-message")"' .tmp/codeql/*.sarif | sort || true
+
+code-ql-gate: code-ql ## Fail if CodeQL reports any error findings
+	@errors=$$(jq '[.runs[]?.results[]? | select((.level // "warning") == "error")] | length' .tmp/codeql/*.sarif | awk '{s+=$$1} END{print s+0}'); \
+	if [ "$$errors" -gt 0 ]; then \
+		echo "CodeQL gate failed: $$errors error finding(s) found."; \
+		exit 1; \
+	fi; \
+	echo "CodeQL gate passed: no error findings found."
+
+commit-check: ensure-local-node check fmt test test-nested-modules test-lfs-sdk-unit test-fuzz code-ql-gate ## Run pre-commit quality gates
+	@echo "commit-check passed."
 
 test-acl: ## Run ACL e2e test (requires KAFSCALE_E2E=1)
 	KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestACLsE2E

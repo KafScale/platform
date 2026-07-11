@@ -23,7 +23,7 @@ rbac:
   create: true
 
 operator:
-  replicaCount: 2
+  replicaCount: 1
   image:
     repository: ghcr.io/kafscale/kafscale-operator
     tag: ""
@@ -57,6 +57,26 @@ operator:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # Pod-level security context. PSA-restricted compliant defaults.
+  # These defaults assume the shipped images (UID 10001). If you override
+  # image.repository with a root-running image, set
+  # operator.podSecurityContext.runAsNonRoot=false. Override per-environment
+  # via `--set operator.podSecurityContext.<key>=<value>` or a values file.
+  podSecurityContext:
+    runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. If the image
+    # USER changes, change this in lockstep. PSA restricted itself only
+    # requires runAsNonRoot, not a specific UID.
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  # Container-level security context. PSA-restricted-required defaults.
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   metrics:
     enabled: true
     port: 8080
@@ -81,19 +101,49 @@ console:
     pullPolicy: IfNotPresent
   auth:
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   etcdEndpoints: []
   etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   metrics:
     brokerMetricsURL: ""
     operatorMetricsURL: ""
+  # LFS Dashboard configuration
+  lfs:
+    enabled: false
+    kafkaBrokers: []  # Kafka brokers for consuming tracker events
+    trackerTopic: "__lfs_ops_state"
+    s3:
+      bucket: ""
+      region: "us-east-1"
+      endpoint: ""
+      accessKey: ""
+      secretKey: ""
+      presignTTL: 300
   podAnnotations: {}
   resources: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # PSA-restricted compliant defaults. The console image runs as
+  # USER 10001 (Dockerfile-baked). These defaults assume the shipped image;
+  # if you override image.repository with a root-running image, set
+  # console.podSecurityContext.runAsNonRoot=false.
+  podSecurityContext:
+    runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. Change in
+    # lockstep with the image USER. PSA restricted requires only runAsNonRoot.
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   service:
     type: ClusterIP
     port: 80
@@ -124,19 +174,92 @@ proxy:
   advertisedPort: 9092
   etcdEndpoints: []
   etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   backends: []
   podAnnotations: {}
   resources: {}
   nodeSelector: {}
   tolerations: []
+  # Pod affinity for the proxy Deployment.
+  #
+  # When left empty, proxy-deployment.yaml renders a default soft
+  # (preferredDuring) podAntiAffinity that prefers to place the proxy
+  # replicas on different nodes, with a label selector templated from the
+  # proxy's own pod labels so it always matches the pods it spreads, even
+  # under nameOverride/fullnameOverride. Soft so single-node KIND clusters
+  # still schedule every replica; flip to requiredDuring in multi-node
+  # production by setting an explicit affinity here.
+  #
+  # Backward-compat note: setting this key REPLACES the chart default
+  # rather than merging with it. If you want anti-affinity plus extra
+  # affinity rules, include the anti-affinity block in your override.
   affinity: {}
+  # PSA-restricted compliant defaults. The proxy image runs as
+  # USER 10001 (Dockerfile-baked). These defaults assume the shipped image;
+  # if you override image.repository with a root-running image, set
+  # proxy.podSecurityContext.runAsNonRoot=false.
+  # fsGroup is kept here (unlike operator/console) because the proxy mounts a
+  # writable /tmp emptyDir for the LFS verify path; fsGroup sets that volume's
+  # group ownership so the non-root process can write to it.
+  podSecurityContext:
+    runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. Change in
+    # lockstep with the image USER. PSA restricted requires only runAsNonRoot.
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   service:
     type: LoadBalancer
     port: 9092
     annotations: {}
     loadBalancerSourceRanges: []
+    # When type is NodePort, pin the node port (otherwise Kubernetes assigns a
+    # random one and a fixed host:port mapping cannot reach the proxy). Leave
+    # empty to let Kubernetes choose. Only rendered when type == NodePort.
+    # Valid range is 30000-32767; a value outside it renders but is rejected
+    # at apply time. Scoped to the proxy because it is the single Kafka
+    # entrypoint; console/mcp expose service.type but are left as-is and
+    # tracked separately.
+    nodePort: ""
+
+# NOTE: The standalone lfs-proxy has been removed.
+# LFS is now a feature-flag on the unified proxy: set proxy.lfs.enabled=true.
+# See proxy values above for LFS configuration.
+
+lfsDemos:
+  enabled: false
+  e72Browser:
+    enabled: true  # Browser LFS SDK demo
+    lfsProxyEndpoint: ""  # Auto-detected from cluster if empty
+    defaultTopic: browser-uploads
+    image:
+      repository: ghcr.io/kafscale/kafscale-e72-browser-demo
+      tag: ""
+      useLatest: false
+      pullPolicy: IfNotPresent
+    service:
+      type: NodePort
+      port: 80
+      nodePort: 30072
+    ingress:
+      enabled: false
+      className: ""
+      annotations: {}
+      hosts:
+        - host: lfs-demo.local
+          paths:
+            - path: /
+              pathType: Prefix
+      tls: []
 
 mcp:
   enabled: false
@@ -156,8 +279,9 @@ mcp:
     token: ""
   etcdEndpoints: []
   etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""
-    password: ""
+    password: null  # Set via --set or use existingSecret
   metrics:
     brokerMetricsURL: ""
   sessionTimeout: ""
@@ -166,6 +290,23 @@ mcp:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # PSA-restricted compliant defaults. The mcp image runs as
+  # USER 10001 (Dockerfile-baked, deploy/docker/mcp.Dockerfile). These
+  # defaults assume the shipped image; if you override image.repository with
+  # a root-running image, set mcp.podSecurityContext.runAsNonRoot=false.
+  podSecurityContext:
+    runAsNonRoot: true
+    # runAsUser/runAsGroup pin the Dockerfile-baked USER 10001. Change in
+    # lockstep with the image USER. PSA restricted requires only runAsNonRoot.
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
   service:
     type: ClusterIP
     port: 80

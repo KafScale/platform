@@ -172,8 +172,6 @@ def main():
             title = gh_doc
         gh_titles[gh_doc] = title
 
-    gh_by_title = {v: k for k, v in gh_titles.items()}
-
     for main_doc in sorted(main_docs):
         basename = os.path.basename(main_doc)
         map_item = mapping_lookup(mapping, main_doc)

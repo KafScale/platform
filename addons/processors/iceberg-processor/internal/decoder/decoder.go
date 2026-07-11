@@ -23,10 +23,10 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
 )
 
 const (
@@ -57,6 +57,10 @@ type Record struct {
 // Decoder parses Kafscale segments into records.
 type Decoder interface {
 	Decode(ctx context.Context, segmentKey, indexKey string, topic string, partition int32) ([]Record, error)
+}
+
+type getObjectAPI interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
 // New returns an S3-backed decoder.
@@ -93,19 +97,12 @@ func New(cfg config.Config) (Decoder, error) {
 }
 
 type s3Decoder struct {
-	client *s3.Client
+	client getObjectAPI
 	bucket string
 }
 
-func (d *s3Decoder) Decode(ctx context.Context, segmentKey, indexKey string, topic string, partition int32) ([]Record, error) {
-	indexBytes, err := d.getObject(ctx, indexKey)
-	if err != nil {
-		return nil, fmt.Errorf("download index: %w", err)
-	}
-	if _, err := parseIndex(indexBytes); err != nil {
-		return nil, err
-	}
-
+// Decode only needs the segment payload; segment/index pairing is validated during discovery.
+func (d *s3Decoder) Decode(ctx context.Context, segmentKey, _ string, topic string, partition int32) ([]Record, error) {
 	segmentBytes, err := d.getObject(ctx, segmentKey)
 	if err != nil {
 		return nil, fmt.Errorf("download segment: %w", err)

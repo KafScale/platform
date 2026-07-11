@@ -54,7 +54,7 @@ config:
       uri: https://iceberg-catalog.example.com
       token: ""
       username: ""
-      password: ""
+      password: null
     warehouse: s3://iceberg-warehouse/production
   offsets:
     backend: etcd
@@ -68,7 +68,7 @@ config:
     endpoints:
       - http://etcd.kafscale.svc.cluster.local:2379
     username: ""
-    password: ""
+    password: null
   schema:
     mode: "off"
     registry:
@@ -89,6 +89,12 @@ config:
             type: string
             required: false
         allow_type_widening: true
+      lfs:
+        mode: off
+        max_inline_size: 1048576
+        store_metadata: false
+        validate_checksum: true
+        resolve_concurrency: 4
 
 s3:
   credentialsSecretRef: ""

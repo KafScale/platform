@@ -14,7 +14,6 @@
 // limitations under the License.
 //go:build !windows
 
-
 // fixes lingering broker processes between test runs
 package e2e
 
@@ -24,6 +23,7 @@ import (
 	"syscall"
 )
 
+//nolint:unused // kept for process group management in e2e tests
 func configureProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -31,6 +31,7 @@ func configureProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
+//nolint:unused // kept for process group management in e2e tests
 func signalProcessGroup(cmd *exec.Cmd, sig os.Signal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil

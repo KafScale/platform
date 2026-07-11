@@ -41,10 +41,18 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
+{{- with .Values.proxy.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
         - name: proxy
           image: "{{ .Values.proxy.image.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.proxy.image.tag) .Values.proxy.image.useLatest }}"
           imagePullPolicy: {{ ternary "Always" .Values.proxy.image.pullPolicy .Values.proxy.image.useLatest }}
+{{- with .Values.proxy.containerSecurityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+{{- end }}
           env:
             - name: KAFSCALE_PROXY_ADDR
               value: ":{{ .Values.proxy.service.port }}"
@@ -107,6 +115,16 @@ spec:
 {{- else }}
             {}
 {{- end }}
+          # The proxy LFS verify path writes a temp file via os.CreateTemp("", ...)
+          # which resolves to /tmp. With readOnlyRootFilesystem: true the root FS is
+          # read-only, so /tmp must be a writable mount or LFS verify returns HTTP 500.
+          # This emptyDir keeps the restricted default and LFS coexisting.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- with .Values.proxy.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}
@@ -115,8 +133,24 @@ spec:
       tolerations:
 {{ toYaml . | indent 8 }}
 {{- end }}
-{{- with .Values.proxy.affinity }}
+{{- if .Values.proxy.affinity }}
       affinity:
-{{ toYaml . | indent 8 }}
+{{ toYaml .Values.proxy.affinity | indent 8 }}
+{{- else }}
+      # Default soft anti-affinity. The label selector is templated from the
+      # proxy's own pod labels (the same componentSelectorLabels helper used
+      # for the pod template above), so it always matches the pods it spreads,
+      # even when nameOverride/fullnameOverride changes the rendered name. Soft
+      # (preferredDuring) so single-node clusters still schedule every replica.
+      # Replaced by proxy.affinity when that value is set.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+{{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "proxy") | indent 20 }}
+                topologyKey: kubernetes.io/hostname
 {{- end }}
 {{- end }}

@@ -17,11 +17,22 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net"
+	"sort"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
@@ -31,14 +42,14 @@ func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
 		},
 		Topics: []protocol.MetadataTopic{
 			{
-				Name:    "orders",
+				Topic:   kmsg.StringPtr("orders"),
 				TopicID: metadata.TopicIDForName("orders"),
 				Partitions: []protocol.MetadataPartition{
 					{
-						PartitionIndex: 0,
-						LeaderID:       1,
-						ReplicaNodes:   []int32{1, 2},
-						ISRNodes:       []int32{1},
+						Partition: 0,
+						Leader:    1,
+						Replicas:  []int32{1, 2},
+						ISR:       []int32{1},
 					},
 				},
 			},
@@ -56,14 +67,14 @@ func TestBuildProxyMetadataResponseRewritesBrokers(t *testing.T) {
 		t.Fatalf("expected 1 topic, got %d", len(resp.Topics))
 	}
 	part := resp.Topics[0].Partitions[0]
-	if part.LeaderID != 0 {
-		t.Fatalf("expected leader 0, got %d", part.LeaderID)
+	if part.Leader != 0 {
+		t.Fatalf("expected leader 0, got %d", part.Leader)
 	}
-	if len(part.ReplicaNodes) != 1 || part.ReplicaNodes[0] != 0 {
-		t.Fatalf("expected replica nodes [0], got %+v", part.ReplicaNodes)
+	if len(part.Replicas) != 1 || part.Replicas[0] != 0 {
+		t.Fatalf("expected replica nodes [0], got %+v", part.Replicas)
 	}
-	if len(part.ISRNodes) != 1 || part.ISRNodes[0] != 0 {
-		t.Fatalf("expected ISR nodes [0], got %+v", part.ISRNodes)
+	if len(part.ISR) != 1 || part.ISR[0] != 0 {
+		t.Fatalf("expected ISR nodes [0], got %+v", part.ISR)
 	}
 }
 
@@ -71,7 +82,7 @@ func TestBuildProxyMetadataResponsePreservesTopicErrors(t *testing.T) {
 	meta := &metadata.ClusterMetadata{
 		Topics: []protocol.MetadataTopic{
 			{
-				Name:      "missing",
+				Topic:     kmsg.StringPtr("missing"),
 				ErrorCode: protocol.UNKNOWN_TOPIC_OR_PARTITION,
 			},
 		},
@@ -87,12 +98,12 @@ func TestBuildProxyMetadataResponsePreservesTopicErrors(t *testing.T) {
 
 func TestBuildNotReadyResponseProduce(t *testing.T) {
 	payload := encodeProduceRequestV3("orders", 0)
-	header, _, err := protocol.ParseRequestHeader(payload)
+	header, body, err := protocol.ParseRequestHeader(payload)
 	if err != nil {
 		t.Fatalf("parse header: %v", err)
 	}
 	p := &proxy{}
-	respBytes, ok, err := p.buildNotReadyResponse(header, payload)
+	respBytes, ok, err := p.buildNotReadyResponse(header, body)
 	if err != nil {
 		t.Fatalf("build not-ready response: %v", err)
 	}
@@ -110,12 +121,12 @@ func TestBuildNotReadyResponseProduce(t *testing.T) {
 
 func TestBuildNotReadyResponseFetch(t *testing.T) {
 	payload := encodeFetchRequestV7("orders", 0)
-	header, _, err := protocol.ParseRequestHeader(payload)
+	header, body, err := protocol.ParseRequestHeader(payload)
 	if err != nil {
 		t.Fatalf("parse header: %v", err)
 	}
 	p := &proxy{}
-	respBytes, ok, err := p.buildNotReadyResponse(header, payload)
+	respBytes, ok, err := p.buildNotReadyResponse(header, body)
 	if err != nil {
 		t.Fatalf("build not-ready response: %v", err)
 	}
@@ -365,4 +376,1220 @@ func readString(r *bytes.Reader) (string, error) {
 		return "", err
 	}
 	return string(buf), nil
+}
+
+func makeProduceRequest(topics map[string][]int32) *kmsg.ProduceRequest {
+	req := &kmsg.ProduceRequest{Acks: -1, TimeoutMillis: 5000}
+	for name, parts := range topics {
+		topic := kmsg.ProduceRequestTopic{Topic: name}
+		for _, p := range parts {
+			topic.Partitions = append(topic.Partitions, kmsg.ProduceRequestTopicPartition{
+				Partition: p,
+				Records:   []byte{1, 2, 3},
+			})
+		}
+		req.Topics = append(req.Topics, topic)
+	}
+	return req
+}
+
+func TestGroupPartitionsByBrokerNoRouter(t *testing.T) {
+	p := &proxy{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0},
+	})
+	groups := p.groupPartitionsByBroker(context.Background(), req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (all round-robin), got %d", len(groups))
+	}
+	rr, ok := groups[""]
+	if !ok {
+		t.Fatalf("expected round-robin group (key=\"\"), got keys: %v", mapKeys(groups))
+	}
+	totalParts := 0
+	for _, topic := range rr.Topics {
+		totalParts += len(topic.Partitions)
+	}
+	if totalParts != 4 {
+		t.Fatalf("expected 4 total partitions, got %d", totalParts)
+	}
+	if rr.Acks != -1 || rr.TimeoutMillis != 5000 {
+		t.Fatalf("sub-request should preserve acks/timeout: got acks=%d timeout=%d", rr.Acks, rr.TimeoutMillis)
+	}
+}
+
+func TestGroupPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
+	p := &proxy{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0, 1, 2},
+	})
+	groups := p.groupPartitionsByBroker(context.Background(), req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("expected round-robin group")
+	}
+	if countPartitions(rr) != 5 {
+		t.Fatalf("expected 5 partitions, got %d", countPartitions(rr))
+	}
+	topicNames := make(map[string]int)
+	for _, topic := range rr.Topics {
+		topicNames[topic.Topic] = len(topic.Partitions)
+	}
+	if topicNames["orders"] != 2 || topicNames["events"] != 3 {
+		t.Fatalf("unexpected topic grouping: %v", topicNames)
+	}
+}
+
+func TestGroupPartitionsByBrokerFiltersCorrectly(t *testing.T) {
+	p := &proxy{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0, 1},
+	})
+	include := map[string]map[int32]bool{
+		"orders": {1: true},
+		"events": {0: true},
+	}
+	groups := p.groupPartitionsByBroker(context.Background(), req, include)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (no router), got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("missing round-robin group")
+	}
+	if countPartitions(rr) != 2 {
+		t.Fatalf("expected 2 filtered partitions, got %d", countPartitions(rr))
+	}
+}
+
+func TestFindOrAddTopicResponse(t *testing.T) {
+	resp := &kmsg.ProduceResponse{}
+
+	tr := findOrAddTopicResponse(resp, "orders")
+	tr.Partitions = append(tr.Partitions, kmsg.ProduceResponseTopicPartition{Partition: 0})
+
+	// Second call should return the same topic, not create a new one.
+	tr2 := findOrAddTopicResponse(resp, "orders")
+	if len(tr2.Partitions) != 1 {
+		t.Fatalf("expected 1 partition in existing topic, got %d", len(tr2.Partitions))
+	}
+
+	// Different topic.
+	tr3 := findOrAddTopicResponse(resp, "events")
+	if len(tr3.Partitions) != 0 {
+		t.Fatalf("expected 0 partitions in new topic, got %d", len(tr3.Partitions))
+	}
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics in response, got %d", len(resp.Topics))
+	}
+}
+
+func TestAddErrorForAllPartitions(t *testing.T) {
+	resp := &kmsg.ProduceResponse{}
+	req := makeProduceRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0},
+	})
+	addErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics, got %d", len(resp.Topics))
+	}
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected error %d, got %d", protocol.REQUEST_TIMED_OUT, part.ErrorCode)
+			}
+			if part.BaseOffset != -1 {
+				t.Fatalf("expected base offset -1, got %d", part.BaseOffset)
+			}
+			total++
+		}
+	}
+	if total != 3 {
+		t.Fatalf("expected 3 partition errors, got %d", total)
+	}
+}
+
+func TestUpdateBrokerAddrs(t *testing.T) {
+	p := &proxy{brokerAddrs: make(map[string]string)}
+	brokers := []protocol.MetadataBroker{
+		{NodeID: 1, Host: "broker1", Port: 9092},
+		{NodeID: 2, Host: "broker2", Port: 9093},
+		{NodeID: 3, Host: "", Port: 0}, // should be skipped
+	}
+	p.updateBrokerAddrs(brokers)
+
+	ctx := context.Background()
+	if got := p.brokerIDToAddr(ctx, "1"); got != "broker1:9092" {
+		t.Fatalf("broker 1: got %q, want %q", got, "broker1:9092")
+	}
+	if got := p.brokerIDToAddr(ctx, "2"); got != "broker2:9093" {
+		t.Fatalf("broker 2: got %q, want %q", got, "broker2:9093")
+	}
+	if got := p.brokerIDToAddr(ctx, "3"); got != "" {
+		t.Fatalf("broker 3 (empty host): got %q, want %q", got, "")
+	}
+}
+
+func TestConnPoolBorrowReturn(t *testing.T) {
+	pool := newConnPool(5 * time.Second)
+	defer pool.Close()
+
+	// No pooled connection: Borrow should fail for non-existent address
+	// (we can't dial in a unit test, but we can test the pool hit path).
+	// Simulate by manually inserting a connection.
+	fakeConn := &fakeNetConn{}
+	pool.Return("addr1", fakeConn)
+
+	conn, err := pool.Borrow(context.Background(), "addr1")
+	if err != nil {
+		t.Fatalf("borrow should succeed for pooled conn: %v", err)
+	}
+	if conn != fakeConn {
+		t.Fatalf("borrow should return the pooled conn")
+	}
+	// After borrow, pool should be empty for that address.
+	if _, ok := pool.conns["addr1"]; ok {
+		t.Fatalf("pool should be empty for addr1 after borrow")
+	}
+
+	// Return then Close should close all.
+	pool.Return("addr1", fakeConn)
+	pool.Close()
+	if !fakeConn.closed {
+		t.Fatalf("pool.Close should close all connections")
+	}
+}
+
+// --- Test helpers ---
+
+func countPartitions(req *kmsg.ProduceRequest) int {
+	n := 0
+	for _, t := range req.Topics {
+		n += len(t.Partitions)
+	}
+	return n
+}
+
+func mapKeys(m map[string]*kmsg.ProduceRequest) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// fakeNetConn is a minimal net.Conn for pool tests.
+type fakeNetConn struct {
+	closed bool
+}
+
+func (c *fakeNetConn) Read(b []byte) (int, error)       { return 0, nil }
+func (c *fakeNetConn) Write(b []byte) (int, error)      { return len(b), nil }
+func (c *fakeNetConn) Close() error                     { c.closed = true; return nil }
+func (c *fakeNetConn) LocalAddr() net.Addr              { return nil }
+func (c *fakeNetConn) RemoteAddr() net.Addr             { return nil }
+func (c *fakeNetConn) SetDeadline(time.Time) error      { return nil }
+func (c *fakeNetConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *fakeNetConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestExtractGroupID(t *testing.T) {
+	p := &proxy{}
+	clientID := "test-client"
+
+	// Helper to write a non-flexible request header.
+	writeHeader := func(w *testWriter, apiKey, version int16) {
+		w.Int16(apiKey)
+		w.Int16(version)
+		w.Int32(1) // correlation_id
+		w.NullableString(&clientID)
+	}
+
+	tests := []struct {
+		name    string
+		apiKey  int16
+		payload func() []byte
+		want    string
+	}{
+		{
+			name:   "JoinGroup",
+			apiKey: protocol.APIKeyJoinGroup,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyJoinGroup, 2)
+				w.String("my-join-group")   // group_id
+				w.Int32(30000)              // session_timeout
+				w.Int32(10000)              // rebalance_timeout
+				w.String("")                // member_id
+				w.String("consumer")        // protocol_type
+				w.Int32(1)                  // protocol count
+				w.String("range")           // protocol name
+				w.Bytes([]byte{0x00, 0x01}) // protocol metadata
+				return w.buf.Bytes()
+			},
+			want: "my-join-group",
+		},
+		{
+			name:   "SyncGroup",
+			apiKey: protocol.APIKeySyncGroup,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeySyncGroup, 1)
+				w.String("my-sync-group") // group_id
+				w.Int32(1)                // generation_id
+				w.String("member-1")      // member_id
+				w.Int32(0)                // assignments count
+				return w.buf.Bytes()
+			},
+			want: "my-sync-group",
+		},
+		{
+			name:   "Heartbeat",
+			apiKey: protocol.APIKeyHeartbeat,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyHeartbeat, 1)
+				w.String("my-heartbeat-group") // group_id
+				w.Int32(1)                     // generation_id
+				w.String("member-1")           // member_id
+				return w.buf.Bytes()
+			},
+			want: "my-heartbeat-group",
+		},
+		{
+			name:   "LeaveGroup",
+			apiKey: protocol.APIKeyLeaveGroup,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyLeaveGroup, 0)
+				w.String("my-leave-group") // group_id
+				w.String("member-1")       // member_id
+				return w.buf.Bytes()
+			},
+			want: "my-leave-group",
+		},
+		{
+			name:   "OffsetCommit",
+			apiKey: protocol.APIKeyOffsetCommit,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyOffsetCommit, 3)
+				w.String("my-commit-group") // group_id
+				w.Int32(1)                  // generation_id
+				w.String("member-1")        // member_id
+				w.Int64(-1)                 // retention_time_ms (v2-v4)
+				w.Int32(0)                  // topics count
+				return w.buf.Bytes()
+			},
+			want: "my-commit-group",
+		},
+		{
+			name:   "OffsetFetch",
+			apiKey: protocol.APIKeyOffsetFetch,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyOffsetFetch, 3)
+				w.String("my-fetch-group") // group_id
+				w.Int32(0)                 // topics count
+				return w.buf.Bytes()
+			},
+			want: "my-fetch-group",
+		},
+		{
+			name:   "DescribeGroups single",
+			apiKey: protocol.APIKeyDescribeGroups,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyDescribeGroups, 2)
+				w.Int32(1)                      // groups count
+				w.String("my-describe-group-1") // group[0]
+				return w.buf.Bytes()
+			},
+			want: "my-describe-group-1",
+		},
+		{
+			name:   "DescribeGroups multiple returns first",
+			apiKey: protocol.APIKeyDescribeGroups,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyDescribeGroups, 2)
+				w.Int32(2)                      // groups count
+				w.String("my-describe-group-1") // group[0]
+				w.String("my-describe-group-2") // group[1]
+				return w.buf.Bytes()
+			},
+			want: "my-describe-group-1",
+		},
+		{
+			name:   "DescribeGroups empty returns blank",
+			apiKey: protocol.APIKeyDescribeGroups,
+			payload: func() []byte {
+				w := &testWriter{}
+				writeHeader(w, protocol.APIKeyDescribeGroups, 2)
+				w.Int32(0) // groups count
+				return w.buf.Bytes()
+			},
+			want: "",
+		},
+		{
+			name:   "truncated payload returns blank",
+			apiKey: protocol.APIKeyJoinGroup,
+			payload: func() []byte {
+				return []byte{0, 11, 0, 2} // just api_key + version, no body
+			},
+			want: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := p.extractGroupID(tc.apiKey, tc.payload())
+			if got != tc.want {
+				t.Fatalf("extractGroupID() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// --- Fetch routing tests ---
+
+func makeFetchRequest(topics map[string][]int32) *kmsg.FetchRequest {
+	req := &kmsg.FetchRequest{
+		ReplicaID:     -1,
+		MaxWaitMillis: 500,
+		MinBytes:      1,
+		MaxBytes:      1048576,
+		SessionID:     0,
+		SessionEpoch:  -1,
+	}
+	for name, parts := range topics {
+		topic := kmsg.FetchRequestTopic{Topic: name}
+		for _, p := range parts {
+			topic.Partitions = append(topic.Partitions, kmsg.FetchRequestTopicPartition{
+				Partition:         p,
+				FetchOffset:       0,
+				PartitionMaxBytes: 1048576,
+			})
+		}
+		req.Topics = append(req.Topics, topic)
+	}
+	return req
+}
+
+func countFetchPartitions(req *kmsg.FetchRequest) int {
+	n := 0
+	for _, t := range req.Topics {
+		n += len(t.Partitions)
+	}
+	return n
+}
+
+func fetchMapKeys(m map[string]*kmsg.FetchRequest) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func TestGroupFetchPartitionsByBrokerNoRouter(t *testing.T) {
+	p := &proxy{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0},
+	})
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (all round-robin), got %d", len(groups))
+	}
+	rr, ok := groups[""]
+	if !ok {
+		t.Fatalf("expected round-robin group (key=\"\"), got keys: %v", fetchMapKeys(groups))
+	}
+	if countFetchPartitions(rr) != 4 {
+		t.Fatalf("expected 4 total partitions, got %d", countFetchPartitions(rr))
+	}
+	if rr.MaxWaitMillis != 500 || rr.MaxBytes != 1048576 {
+		t.Fatalf("sub-request should preserve settings: got maxWait=%d maxBytes=%d", rr.MaxWaitMillis, rr.MaxBytes)
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerNoRouterMultipleTopics(t *testing.T) {
+	p := &proxy{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0, 1, 2},
+	})
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("expected round-robin group")
+	}
+	if countFetchPartitions(rr) != 5 {
+		t.Fatalf("expected 5 partitions, got %d", countFetchPartitions(rr))
+	}
+	topicNames := make(map[string]int)
+	for _, topic := range rr.Topics {
+		topicNames[topic.Topic] = len(topic.Partitions)
+	}
+	if topicNames["orders"] != 2 || topicNames["events"] != 3 {
+		t.Fatalf("unexpected topic grouping: %v", topicNames)
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerFiltersCorrectly(t *testing.T) {
+	p := &proxy{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1, 2},
+		"events": {0, 1},
+	})
+	include := map[string]map[int32]bool{
+		"orders": {1: true},
+		"events": {0: true},
+	}
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, include)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (no router), got %d", len(groups))
+	}
+	rr := groups[""]
+	if rr == nil {
+		t.Fatalf("missing round-robin group")
+	}
+	if countFetchPartitions(rr) != 2 {
+		t.Fatalf("expected 2 filtered partitions, got %d", countFetchPartitions(rr))
+	}
+}
+
+func TestFindOrAddFetchTopicResponse(t *testing.T) {
+	resp := &kmsg.FetchResponse{}
+	topicID := [16]byte{1, 2, 3}
+
+	tr := findOrAddFetchTopicResponse(resp, "orders", topicID)
+	tr.Partitions = append(tr.Partitions, kmsg.FetchResponseTopicPartition{Partition: 0})
+
+	// Same topic should return the existing entry.
+	tr2 := findOrAddFetchTopicResponse(resp, "orders", topicID)
+	if len(tr2.Partitions) != 1 {
+		t.Fatalf("expected 1 partition in existing topic, got %d", len(tr2.Partitions))
+	}
+
+	// Different topic.
+	tr3 := findOrAddFetchTopicResponse(resp, "events", [16]byte{4, 5, 6})
+	if len(tr3.Partitions) != 0 {
+		t.Fatalf("expected 0 partitions in new topic, got %d", len(tr3.Partitions))
+	}
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics in response, got %d", len(resp.Topics))
+	}
+
+	// v12+: same topicID but different name should match on topicID alone.
+	tr4 := findOrAddFetchTopicResponse(resp, "", topicID)
+	tr4.Partitions = append(tr4.Partitions, kmsg.FetchResponseTopicPartition{Partition: 1})
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics after topicID-only match, got %d", len(resp.Topics))
+	}
+	// The entry found by topicID should now have 2 partitions (0 from before, 1 just added).
+	tr5 := findOrAddFetchTopicResponse(resp, "orders", topicID)
+	if len(tr5.Partitions) != 2 {
+		t.Fatalf("expected 2 partitions after topicID-only merge, got %d", len(tr5.Partitions))
+	}
+
+	// Name-only match (zero topicID) should work for pre-v12 topics.
+	tr6 := findOrAddFetchTopicResponse(resp, "logs", [16]byte{})
+	tr6.Partitions = append(tr6.Partitions, kmsg.FetchResponseTopicPartition{Partition: 0})
+	tr7 := findOrAddFetchTopicResponse(resp, "logs", [16]byte{})
+	if len(tr7.Partitions) != 1 {
+		t.Fatalf("expected 1 partition for name-only topic, got %d", len(tr7.Partitions))
+	}
+	if len(resp.Topics) != 3 {
+		t.Fatalf("expected 3 topics total, got %d", len(resp.Topics))
+	}
+}
+
+func TestAddFetchErrorForAllPartitions(t *testing.T) {
+	resp := &kmsg.FetchResponse{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+		"events": {0},
+	})
+	addFetchErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	if len(resp.Topics) != 2 {
+		t.Fatalf("expected 2 topics, got %d", len(resp.Topics))
+	}
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected error %d, got %d", protocol.REQUEST_TIMED_OUT, part.ErrorCode)
+			}
+			total++
+		}
+	}
+	if total != 3 {
+		t.Fatalf("expected 3 partition errors, got %d", total)
+	}
+}
+
+func TestFetchForwardTransportErrorRetry(t *testing.T) {
+	// Ensures the exhaust path for transport errors still produces
+	// REQUEST_TIMED_OUT (the new code only takes this on the final attempt).
+	resp := &kmsg.FetchResponse{}
+	req := makeFetchRequest(map[string][]int32{
+		"orders": {0, 1},
+	})
+	addFetchErrorForAllPartitions(resp, req, protocol.REQUEST_TIMED_OUT)
+
+	total := 0
+	for _, topic := range resp.Topics {
+		for _, part := range topic.Partitions {
+			if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+				t.Fatalf("expected REQUEST_TIMED_OUT, got %d", part.ErrorCode)
+			}
+			total++
+		}
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 errored partitions, got %d", total)
+	}
+}
+
+func TestUpdateTopicNames(t *testing.T) {
+	p := &proxy{topicNames: make(map[[16]byte]string)}
+	topicID1 := [16]byte{1, 2, 3}
+	topicID2 := [16]byte{4, 5, 6}
+	topics := []protocol.MetadataTopic{
+		{Topic: kmsg.StringPtr("orders"), TopicID: topicID1},
+		{Topic: kmsg.StringPtr("events"), TopicID: topicID2},
+		{Topic: kmsg.StringPtr(""), TopicID: [16]byte{}}, // should be skipped
+	}
+	p.updateTopicNames(topics)
+
+	ctx := context.Background()
+	if got := p.resolveTopicID(ctx, topicID1); got != "orders" {
+		t.Fatalf("resolveTopicID(1): got %q, want %q", got, "orders")
+	}
+	if got := p.resolveTopicID(ctx, topicID2); got != "events" {
+		t.Fatalf("resolveTopicID(2): got %q, want %q", got, "events")
+	}
+	if got := p.resolveTopicID(ctx, [16]byte{9, 9, 9}); got != "" {
+		t.Fatalf("resolveTopicID(unknown): got %q, want %q", got, "")
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerUnresolvedTopicIDs(t *testing.T) {
+	// When multiple topics have unresolved names (empty string) but different
+	// topic IDs, they must not be merged into a single FetchTopicRequest.
+	idA := [16]byte{1, 2, 3}
+	idB := [16]byte{4, 5, 6}
+	p := &proxy{}
+	req := &kmsg.FetchRequest{
+		ReplicaID:     -1,
+		MaxWaitMillis: 500,
+		MinBytes:      1,
+		MaxBytes:      1048576,
+		SessionEpoch:  -1,
+		Topics: []kmsg.FetchRequestTopic{
+			{TopicID: idA, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1048576}}},
+			{TopicID: idB, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1048576}}},
+		},
+	}
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, nil)
+	rr := groups[""]
+	if rr == nil {
+		t.Fatal("expected round-robin group")
+	}
+	if len(rr.Topics) != 2 {
+		t.Fatalf("expected 2 topics (separate entries for different IDs), got %d", len(rr.Topics))
+	}
+	if rr.Topics[0].TopicID != idA || rr.Topics[1].TopicID != idB {
+		t.Fatalf("topic IDs not preserved: got %x and %x", rr.Topics[0].TopicID, rr.Topics[1].TopicID)
+	}
+}
+
+func TestGroupFetchPartitionsByBrokerUnresolvedFilter(t *testing.T) {
+	// Verify that the include filter works correctly with fetchTopicKey for
+	// unresolved topic IDs.
+	idA := [16]byte{1, 2, 3}
+	idB := [16]byte{4, 5, 6}
+	p := &proxy{}
+	req := &kmsg.FetchRequest{
+		ReplicaID:     -1,
+		MaxWaitMillis: 500,
+		MinBytes:      1,
+		MaxBytes:      1048576,
+		SessionEpoch:  -1,
+		Topics: []kmsg.FetchRequestTopic{
+			{TopicID: idA, Partitions: []kmsg.FetchRequestTopicPartition{
+				{Partition: 0, PartitionMaxBytes: 1048576},
+				{Partition: 1, PartitionMaxBytes: 1048576},
+			}},
+			{TopicID: idB, Partitions: []kmsg.FetchRequestTopicPartition{
+				{Partition: 0, PartitionMaxBytes: 1048576},
+			}},
+		},
+	}
+	// Only retry partition 1 of topic A.
+	include := map[string]map[int32]bool{
+		fetchTopicKey("", idA): {1: true},
+	}
+	groups := p.groupFetchPartitionsByBroker(context.Background(), req, include)
+	rr := groups[""]
+	if rr == nil {
+		t.Fatal("expected round-robin group")
+	}
+	if len(rr.Topics) != 1 {
+		t.Fatalf("expected 1 topic after filter, got %d", len(rr.Topics))
+	}
+	if rr.Topics[0].TopicID != idA {
+		t.Fatalf("expected topic A, got %x", rr.Topics[0].TopicID)
+	}
+	if len(rr.Topics[0].Partitions) != 1 || rr.Topics[0].Partitions[0].Partition != 1 {
+		t.Fatalf("expected only partition 1, got %v", rr.Topics[0].Partitions)
+	}
+}
+
+func TestResolveFetchTopicNames(t *testing.T) {
+	topicID := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	p := &proxy{
+		topicNames: map[[16]byte]string{topicID: "orders"},
+	}
+	req := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{
+			{TopicID: topicID}, // name not set, should be resolved
+			{Topic: "events"},  // already has name, should be left alone
+		},
+	}
+	p.resolveFetchTopicNames(context.Background(), req)
+
+	if req.Topics[0].Topic != "orders" {
+		t.Fatalf("topic[0] name: got %q, want %q", req.Topics[0].Topic, "orders")
+	}
+	if req.Topics[1].Topic != "events" {
+		t.Fatalf("topic[1] name: got %q, want %q", req.Topics[1].Topic, "events")
+	}
+}
+
+// regression test for the fetch forward error retry fix (issue 155).
+// a backend that closes the conn on first fetch (triggering read EOF or decode error)
+// should cause retry on fresh conn instead of immediate REQUEST_TIMED_OUT to client.
+
+func buildGoodFetchResponse(version int16, topic string, partition int32) []byte {
+	resp := kmsg.NewPtrFetchResponse()
+	resp.SetVersion(version)
+	tr := kmsg.NewFetchResponseTopic()
+	tr.Topic = topic
+	pr := kmsg.NewFetchResponseTopicPartition()
+	pr.Partition = partition
+	pr.ErrorCode = 0
+	pr.HighWatermark = 100
+	pr.LastStableOffset = 100
+	tr.Partitions = append(tr.Partitions, pr)
+	resp.Topics = append(resp.Topics, tr)
+	return protocol.EncodeResponse(1, version, resp)
+}
+
+type failingFirstBackend struct {
+	ln       net.Listener
+	mu       sync.Mutex
+	attempts int
+	fail     int
+}
+
+func (b *failingFirstBackend) run() {
+	for {
+		c, err := b.ln.Accept()
+		if err != nil {
+			return
+		}
+		go func(conn net.Conn) {
+			defer conn.Close()
+			_, _ = protocol.ReadFrame(conn)
+			b.mu.Lock()
+			b.attempts++
+			att := b.attempts
+			b.mu.Unlock()
+			if att <= b.fail {
+				return
+			}
+			good := buildGoodFetchResponse(13, "orders", 0)
+			_ = protocol.WriteFrame(conn, good)
+		}(c)
+	}
+}
+
+func TestForwardFetchRetriesOnBackendError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	fb := &failingFirstBackend{ln: ln, fail: 1}
+	go fb.run()
+
+	p := &proxy{
+		backends:       []string{ln.Addr().String()},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		dialTimeout:    2 * time.Second,
+		backendRetries: 3,
+	}
+	p.setReady(true)
+
+	hdr := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyFetch,
+		APIVersion:    13,
+		CorrelationID: 99,
+		ClientID:      kmsg.StringPtr("regtest"),
+	}
+	fetchReq := makeFetchRequest(map[string][]int32{"orders": {0}})
+	fetchReq.Version = 13
+	groups := p.groupFetchPartitionsByBroker(context.Background(), fetchReq, nil)
+
+	pool := newConnPool(2 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	respBytes, err := p.forwardFetch(ctx, hdr, fetchReq, nil, groups, pool)
+	if err != nil {
+		t.Fatalf("forwardFetch: %v", err)
+	}
+
+	parsed, perr := parseFetchResponse(respBytes, 13)
+	if perr != nil {
+		t.Fatalf("parse: %v", perr)
+	}
+	if len(parsed.Topics) == 0 || len(parsed.Topics[0].Partitions) == 0 {
+		t.Fatal("no partition response")
+	}
+	ec := parsed.Topics[0].Partitions[0].ErrorCode
+	if ec == protocol.REQUEST_TIMED_OUT {
+		t.Fatal("got REQUEST_TIMED_OUT without retry (bug not fixed)")
+	}
+	if ec != 0 {
+		t.Fatalf("unexpected error code: %d", ec)
+	}
+	if fb.attempts < 2 {
+		t.Fatalf("expected >=2 backend attempts (error then retry success), got %d", fb.attempts)
+	}
+}
+
+func TestCheckReadyNotReadyWithEmptySnapshot(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	p := &proxy{
+		store:    store,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL: 60 * time.Second,
+	}
+
+	p.refreshMetadataCache(ctx)
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready with empty etcd snapshot")
+	}
+
+	// Simulate the old bug: touchHealthy without backends should not satisfy readiness.
+	p.touchHealthy()
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready when cache is fresh but no backends are cached")
+	}
+}
+
+func TestRefreshMetadataCacheRecoversAfterEtcdSlowStart(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+
+	p := &proxy{
+		store:    store,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL: 60 * time.Second,
+	}
+
+	p.refreshMetadataCache(ctx)
+	if p.checkReady(ctx) {
+		t.Fatal("expected not ready before operator publishes snapshot")
+	}
+
+	late := metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 0,
+		Topics: []protocol.MetadataTopic{
+			{
+				Topic: kmsg.StringPtr("events"),
+				Partitions: []protocol.MetadataPartition{
+					{Partition: 0, Leader: 0},
+				},
+			},
+		},
+	}
+	putProxyTestSnapshot(t, endpoints, late)
+
+	p.refreshMetadataCache(ctx)
+	if !p.checkReady(ctx) {
+		t.Fatal("expected ready after snapshot sync from etcd")
+	}
+	if cached := p.cachedBackendsSnapshot(); len(cached) != 1 || cached[0] != "broker-0:9092" {
+		t.Fatalf("unexpected cached backends: %#v", cached)
+	}
+}
+
+func TestCheckReadyWithStaticBackends(t *testing.T) {
+	p := &proxy{
+		backends: []string{"broker-0:9092"},
+		cacheTTL: 60 * time.Second,
+	}
+	if !p.checkReady(context.Background()) {
+		t.Fatal("expected ready when static backends are configured")
+	}
+}
+
+func putProxyTestSnapshot(t *testing.T, endpoints []string, snap metadata.ClusterMetadata) {
+	t.Helper()
+	cli, err := clientv3.New(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("new etcd client: %v", err)
+	}
+	defer func() { _ = cli.Close() }()
+
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	putCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Put(putCtx, "/kafscale/metadata/snapshot", string(payload)); err != nil {
+		t.Fatalf("put snapshot: %v", err)
+	}
+}
+
+// assertSinglePrefixFrame drives encoded bytes through the exact wire path
+// forwardToBackend uses: WriteFrame (which prepends a 4-byte big-endian size) ->
+// ReadFrame -> ParseRequest (the broker decode path). It asserts the
+// single-length-prefix invariant explicitly:
+//
+//  1. After WriteFrame, the first 4 bytes equal big-endian(len(rest)), AND
+//  2. rest (the frame payload the broker reads back) equals the encode output
+//     byte-for-byte. Together these prove there is EXACTLY ONE size prefix on the
+//     wire. If the encode funcs kept AppendRequest's own prefix, the wire frame
+//     would be [size][size][header][body]; the outer size would then be 4 larger
+//     than len(encoded) and the round-tripped payload would carry a spurious
+//     leading 4 bytes, so both asserts catch the regression.
+//
+// It returns the parsed header and request for the caller to assert on.
+func assertSinglePrefixFrame(t *testing.T, encoded []byte) (*protocol.RequestHeader, kmsg.Request) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := protocol.WriteFrame(&buf, encoded); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	wire := buf.Bytes()
+	if len(wire) < 4 {
+		t.Fatalf("framed bytes too short: %d", len(wire))
+	}
+
+	// Assert 1: the on-wire size prefix is exactly len(encoded), not len(encoded)+4.
+	gotSize := binary.BigEndian.Uint32(wire[:4])
+	if int(gotSize) != len(encoded) {
+		t.Fatalf("on-wire size prefix=%d, want %d (len of encode output); a value of %d would mean a double prefix",
+			gotSize, len(encoded), len(encoded)+4)
+	}
+	// Assert 2: the framed payload equals the encode output byte-for-byte. This is
+	// the strict single-prefix proof: WriteFrame adds exactly one prefix and the
+	// encode output carries none of its own.
+	rest := wire[4:]
+	if !bytes.Equal(rest, encoded) {
+		t.Fatalf("frame payload (len %d) does not equal encode output (len %d) byte-for-byte; double prefix?",
+			len(rest), len(encoded))
+	}
+
+	frame, err := protocol.ReadFrame(&buf)
+	if err != nil {
+		t.Fatalf("ReadFrame: %v", err)
+	}
+	if !bytes.Equal(frame.Payload, encoded) {
+		t.Fatalf("ReadFrame payload does not match encode output byte-for-byte; double prefix?")
+	}
+	gotHeader, parsedReq, err := protocol.ParseRequest(frame.Payload)
+	if err != nil {
+		t.Fatalf("broker-path ParseRequest failed (double prefix bug?): %v", err)
+	}
+	return gotHeader, parsedReq
+}
+
+// makeFetchRequestTyped builds a fetch v12 request (the last version that carries
+// the topic NAME on the wire; v13+ switches to TopicID UUIDs) with the given
+// topic -> partitions layout, so the name survives a round-trip and makes a
+// meaningful single-prefix assertion.
+func makeFetchRequestTyped(version int16, topics map[string][]int32) *kmsg.FetchRequest {
+	req := kmsg.NewPtrFetchRequest()
+	req.SetVersion(version)
+	req.ReplicaID = -1
+	req.MaxWaitMillis = 500
+	req.MinBytes = 1
+	req.MaxBytes = 1048576
+	req.SessionEpoch = -1
+	// Sort topic names so encode output is deterministic across runs.
+	names := make([]string, 0, len(topics))
+	for name := range topics {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ft := kmsg.NewFetchRequestTopic()
+		ft.Topic = name
+		for _, p := range topics[name] {
+			fp := kmsg.NewFetchRequestTopicPartition()
+			fp.Partition = p
+			fp.FetchOffset = int64(p) * 10
+			fp.PartitionMaxBytes = 524288
+			ft.Partitions = append(ft.Partitions, fp)
+		}
+		req.Topics = append(req.Topics, ft)
+	}
+	return req
+}
+
+// TestEncodeRequestNoDoubleLengthPrefix is a real round-trip regression for the
+// double-length-prefix bug on the REQUEST re-marshal path:
+// encodeFetchRequest/encodeProduceRequest produce the bytes forwardToBackend
+// writes via protocol.WriteFrame, which prepends a 4-byte size. If the encode
+// funcs also kept AppendRequest's own size prefix, the on-wire frame would be
+// [size][size][header][body]; a broker reading it via protocol.ParseRequest would
+// see the inner size's bytes as apiKey/apiVersion (the observed "decode Produce
+// v###: not enough data"). Every sub-test pushes the encoded bytes through
+// WriteFrame -> ReadFrame -> ParseRequest exactly as the broker would, and asserts
+// a SINGLE length prefix (see assertSinglePrefixFrame) plus that the header and
+// topics survive intact.
+func TestEncodeRequestNoDoubleLengthPrefix(t *testing.T) {
+	clientID := "proxy-test"
+	fetchHeader := func(corr int32) *protocol.RequestHeader {
+		return &protocol.RequestHeader{
+			APIKey:        protocol.APIKeyFetch,
+			APIVersion:    12,
+			CorrelationID: corr,
+			ClientID:      &clientID,
+		}
+	}
+
+	t.Run("fetch_single_partition", func(t *testing.T) {
+		req := makeFetchRequestTyped(12, map[string][]int32{"events.er1_items": {0}})
+		header := fetchHeader(1)
+
+		gotHeader, parsedReq := assertSinglePrefixFrame(t, encodeFetchRequest(header, req))
+
+		if gotHeader.APIKey != protocol.APIKeyFetch || gotHeader.APIVersion != 12 || gotHeader.CorrelationID != 1 {
+			t.Fatalf("header garbled: key=%d ver=%d corr=%d", gotHeader.APIKey, gotHeader.APIVersion, gotHeader.CorrelationID)
+		}
+		fr := parsedReq.(*kmsg.FetchRequest)
+		if len(fr.Topics) != 1 || fr.Topics[0].Topic != "events.er1_items" {
+			t.Fatalf("topics: %+v", fr.Topics)
+		}
+		if len(fr.Topics[0].Partitions) != 1 {
+			t.Fatalf("partitions: want 1 got %d", len(fr.Topics[0].Partitions))
+		}
+	})
+
+	t.Run("fetch_multi_partition", func(t *testing.T) {
+		req := makeFetchRequestTyped(12, map[string][]int32{
+			"events.er1_items":      {0, 1, 2},
+			"citizen.audit.queries": {0, 1, 2},
+		})
+		header := fetchHeader(4242)
+
+		gotHeader, parsedReq := assertSinglePrefixFrame(t, encodeFetchRequest(header, req))
+
+		if gotHeader.APIVersion != 12 {
+			t.Fatalf("apiVersion: want 12 got %d (double prefix garbles version)", gotHeader.APIVersion)
+		}
+		if gotHeader.CorrelationID != 4242 {
+			t.Fatalf("correlationID: want 4242 got %d", gotHeader.CorrelationID)
+		}
+		fr := parsedReq.(*kmsg.FetchRequest)
+		if len(fr.Topics) != 2 {
+			t.Fatalf("topics: want 2 got %d", len(fr.Topics))
+		}
+		for _, ft := range fr.Topics {
+			if len(ft.Partitions) != 3 {
+				t.Fatalf("topic %q partitions: want 3 got %d", ft.Topic, len(ft.Partitions))
+			}
+		}
+	})
+
+	t.Run("fetch_empty_partitions", func(t *testing.T) {
+		// An empty topic / no records still produces a well-formed fetch sub-request
+		// with zero partitions; it must frame singly too. This is the shape a fetch
+		// against an empty topic takes after groupFetchPartitionsByBroker filtering.
+		req := makeFetchRequestTyped(12, map[string][]int32{"events.er1_items": {}})
+		header := fetchHeader(7)
+
+		gotHeader, parsedReq := assertSinglePrefixFrame(t, encodeFetchRequest(header, req))
+
+		if gotHeader.APIVersion != 12 {
+			t.Fatalf("apiVersion: want 12 got %d", gotHeader.APIVersion)
+		}
+		fr := parsedReq.(*kmsg.FetchRequest)
+		if len(fr.Topics) != 1 || len(fr.Topics[0].Partitions) != 0 {
+			t.Fatalf("want 1 topic with 0 partitions, got %+v", fr.Topics)
+		}
+	})
+
+	t.Run("fetch_multi_broker_fanout", func(t *testing.T) {
+		// Reproduce the canUseOriginal == false hot path: groupFetchPartitionsByBroker
+		// splits a fetch into one sub-request per owning broker, each of which is
+		// independently encodeFetchRequest'd and WriteFrame'd. With no router every
+		// partition lands under the round-robin group, so to exercise a genuine
+		// multi-broker split we build the sub-requests the same way the grouper does
+		// (one *kmsg.FetchRequest per broker, settings copied from the parent) and
+		// assert EACH sub-request frames singly and round-trips.
+		full := makeFetchRequestTyped(12, map[string][]int32{
+			"events.er1_items":      {0, 1, 2, 3},
+			"citizen.audit.queries": {0, 1},
+		})
+		// Owner map mimicking three brokers owning disjoint partitions.
+		owner := func(topic string, part int32) string {
+			return []string{"broker-0", "broker-1", "broker-2"}[int(part)%3]
+		}
+		subReqs := splitFetchByOwnerForTest(full, owner)
+		if len(subReqs) != 3 {
+			t.Fatalf("expected 3 broker sub-requests, got %d", len(subReqs))
+		}
+
+		header := fetchHeader(31337)
+		encodings := make([][]byte, 0, len(subReqs))
+		for addr, sub := range subReqs {
+			enc := encodeFetchRequest(header, sub)
+			encodings = append(encodings, enc)
+			gotHeader, parsedReq := assertSinglePrefixFrame(t, enc)
+			if gotHeader.APIVersion != 12 {
+				t.Fatalf("broker %s sub-request apiVersion: want 12 got %d", addr, gotHeader.APIVersion)
+			}
+			fr, ok := parsedReq.(*kmsg.FetchRequest)
+			if !ok {
+				t.Fatalf("broker %s: parsed %T, not *kmsg.FetchRequest", addr, parsedReq)
+			}
+			if len(fr.Topics) == 0 {
+				t.Fatalf("broker %s sub-request has no topics", addr)
+			}
+		}
+
+		// No buffer aliasing on the fan-out hot path: each encodeFetchRequest calls
+		// AppendRequest(nil, ...) (a fresh allocation) and returns b[4:] (a sub-slice
+		// of that fresh buffer), so distinct sub-requests must not share backing
+		// storage. Distinct lengths or distinct backing arrays both prove this; we
+		// assert no two sub-request encodings alias the same backing array.
+		for i := 0; i < len(encodings); i++ {
+			for j := i + 1; j < len(encodings); j++ {
+				if len(encodings[i]) > 0 && len(encodings[j]) > 0 &&
+					&encodings[i][0] == &encodings[j][0] {
+					t.Fatalf("fan-out buffer aliasing: sub-request %d and %d share backing array", i, j)
+				}
+			}
+		}
+	})
+
+	t.Run("produce", func(t *testing.T) {
+		header := &protocol.RequestHeader{
+			APIKey:        protocol.APIKeyProduce,
+			APIVersion:    9,
+			CorrelationID: 99,
+			ClientID:      &clientID,
+		}
+		req := kmsg.NewPtrProduceRequest()
+		req.SetVersion(9)
+		req.TimeoutMillis = 1000
+		for _, topicName := range []string{"events.er1_items", "citizen.audit.queries"} {
+			pt := kmsg.NewProduceRequestTopic()
+			pt.Topic = topicName
+			for p := int32(0); p < 2; p++ {
+				pp := kmsg.NewProduceRequestTopicPartition()
+				pp.Partition = p
+				pp.Records = []byte{0x01, 0x02, 0x03}
+				pt.Partitions = append(pt.Partitions, pp)
+			}
+			req.Topics = append(req.Topics, pt)
+		}
+
+		gotHeader, parsedReq := assertSinglePrefixFrame(t, encodeProduceRequest(header, req))
+
+		if gotHeader.APIKey != protocol.APIKeyProduce {
+			t.Fatalf("apiKey: want %d got %d (double prefix)", protocol.APIKeyProduce, gotHeader.APIKey)
+		}
+		if gotHeader.APIVersion != 9 {
+			t.Fatalf("apiVersion: want 9 got %d (double prefix garbles version)", gotHeader.APIVersion)
+		}
+		pr := parsedReq.(*kmsg.ProduceRequest)
+		if len(pr.Topics) != 2 {
+			t.Fatalf("topics: want 2 got %d", len(pr.Topics))
+		}
+		if pr.Topics[1].Topic != "citizen.audit.queries" {
+			t.Fatalf("topic[1]: want citizen.audit.queries got %q", pr.Topics[1].Topic)
+		}
+	})
+}
+
+// splitFetchByOwnerForTest mirrors how groupFetchPartitionsByBroker builds one
+// *kmsg.FetchRequest per owning broker (settings copied from the parent, topics
+// and partitions distributed by owner). It is owner-map-driven so the test does
+// not need a live etcd-backed PartitionRouter to exercise a multi-broker fan-out.
+func splitFetchByOwnerForTest(req *kmsg.FetchRequest, owner func(topic string, part int32) string) map[string]*kmsg.FetchRequest {
+	groups := make(map[string]*kmsg.FetchRequest)
+	topicIdx := make(map[string]map[string]int)
+	for _, topic := range req.Topics {
+		for _, part := range topic.Partitions {
+			addr := owner(topic.Topic, part.Partition)
+			sub, ok := groups[addr]
+			if !ok {
+				sub = &kmsg.FetchRequest{
+					Version:        req.Version,
+					ReplicaID:      req.ReplicaID,
+					MaxWaitMillis:  req.MaxWaitMillis,
+					MinBytes:       req.MinBytes,
+					MaxBytes:       req.MaxBytes,
+					IsolationLevel: req.IsolationLevel,
+					SessionID:      req.SessionID,
+					SessionEpoch:   req.SessionEpoch,
+				}
+				groups[addr] = sub
+				topicIdx[addr] = make(map[string]int)
+			}
+			idx, ok := topicIdx[addr][topic.Topic]
+			if !ok {
+				idx = len(sub.Topics)
+				st := kmsg.NewFetchRequestTopic()
+				st.Topic = topic.Topic
+				sub.Topics = append(sub.Topics, st)
+				topicIdx[addr][topic.Topic] = idx
+			}
+			sub.Topics[idx].Partitions = append(sub.Topics[idx].Partitions, part)
+		}
+	}
+	return groups
 }
