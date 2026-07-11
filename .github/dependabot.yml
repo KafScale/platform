@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Nudge 2026-07-11: trivial edit to resume Dependabot after auto-pause (no PR interaction since 2026-02).
+
 version: 2
 updates:
   - package-ecosystem: "gomod"
@@ -32,3 +34,33 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+
+  - package-ecosystem: "gomod"
+    directory: "/addons/processors/iceberg-processor"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "gomod"
+    directory: "/addons/processors/sql-processor"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/lfs-client-sdk/js"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "npm"
+    directory: "/lfs-client-sdk/js-browser"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "maven"
+    directory: "/lfs-client-sdk/java"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
