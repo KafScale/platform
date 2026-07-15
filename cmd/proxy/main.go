@@ -450,7 +450,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		if !p.isReady() {
 			resp, ok, err := p.buildNotReadyResponse(header, body)
 			if err != nil {
-				p.logger.Warn("not-ready response build failed", "error", err)
+				p.logger.Warn("not-ready response build failed")
 				return
 			}
 			if ok {
@@ -465,7 +465,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		case protocol.APIKeyMetadata:
 			resp, err := p.handleMetadata(ctx, header, frame.Payload)
 			if err != nil {
-				p.logger.Warn("metadata handling failed", "error", err)
+				p.logger.Warn("metadata handling failed")
 				return
 			}
 			if err := protocol.WriteFrame(conn, resp); err != nil {

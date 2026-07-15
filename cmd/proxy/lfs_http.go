@@ -634,7 +634,7 @@ func (m *lfsModule) streamDownloadWithVerify(r *http.Request, w http.ResponseWri
 
 	if written > expectedSize {
 		m.logger.Error("LFS download size exceeded envelope — possible bucket compromise",
-			"bucket", bucket, "key", key, "expected_size", expectedSize, "read_at_least", written)
+			"bucket", logSafe(bucket), "key", logSafe(key), "expected_size", expectedSize, "read_at_least", written)
 		m.tracker.EmitDownloadIntegrityFailed(requestID, bucket, key, "stream", "sha256", expectedSHA, "", written, expectedSize)
 		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "integrity_failure",
 			"S3 object exceeds envelope-declared size; refusing to serve")
@@ -644,8 +644,8 @@ func (m *lfsModule) streamDownloadWithVerify(r *http.Request, w http.ResponseWri
 	actualSHA := hex.EncodeToString(hasher.Sum(nil))
 	if actualSHA != expectedSHA {
 		m.logger.Error("LFS download integrity check FAILED — S3 bytes do not match Kafka envelope checksum",
-			"bucket", bucket, "key", key,
-			"expected_sha256", expectedSHA, "actual_sha256", actualSHA,
+			"bucket", logSafe(bucket), "key", logSafe(key),
+			"expected_sha256", logSafe(expectedSHA), "actual_sha256", actualSHA,
 			"bytes_read", written)
 		m.tracker.EmitDownloadIntegrityFailed(requestID, bucket, key, "stream", "sha256", expectedSHA, actualSHA, written, expectedSize)
 		m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "integrity_failure",
@@ -761,7 +761,7 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
 		return
 	}
-	m.logger.Info("http chunked upload init", "requestId", requestID, "topic", req.Topic, "s3Key", objectKey, "uploadId", uploadID, "sizeBytes", req.SizeBytes, "partSize", m.chunkSize)
+	m.logger.Info("http chunked upload init", "requestId", logSafe(requestID), "topic", logSafe(req.Topic), "s3Key", logSafe(objectKey), "uploadId", logSafe(uploadID), "sizeBytes", req.SizeBytes, "partSize", m.chunkSize)
 
 	partSize := normalizeChunkSize(m.chunkSize)
 	session := &uploadSession{
@@ -869,7 +869,7 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 
 	if etag, exists := session.Parts[partNumber]; exists {
 		_, _ = io.Copy(io.Discard, r.Body)
-		m.logger.Info("http chunked upload part already received", "requestId", requestID, "uploadId", sessionID, "part", partNumber, "etag", etag)
+		m.logger.Info("http chunked upload part already received", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "part", partNumber, "etag", logSafe(etag))
 		resp := lfsUploadPartResponse{UploadID: sessionID, PartNumber: partNumber, ETag: etag}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -923,7 +923,7 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
 		return
 	}
-	m.logger.Info("http chunked upload part stored", "requestId", requestID, "uploadId", sessionID, "part", partNumber, "etag", etag, "bytes", len(body))
+	m.logger.Info("http chunked upload part stored", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "part", partNumber, "etag", logSafe(etag), "bytes", len(body))
 
 	session.Parts[partNumber] = etag
 	session.PartSizes[partNumber] = int64(len(body))
@@ -984,7 +984,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
 		return
 	}
-	m.logger.Info("http chunked upload completed", "requestId", requestID, "uploadId", sessionID, "parts", len(completed), "bytes", session.TotalUploaded)
+	m.logger.Info("http chunked upload completed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "parts", len(completed), "bytes", session.TotalUploaded)
 
 	shaHex := hex.EncodeToString(session.sha256Hasher.Sum(nil))
 	checksum := ""
@@ -1137,9 +1137,9 @@ func lfsStatusForUploadError(err error) (int, string) {
 
 func (m *lfsModule) lfsWriteHTTPError(w http.ResponseWriter, requestID, topic string, status int, code, message string) {
 	if topic != "" {
-		m.logger.Warn("lfs http failed", "status", status, "code", code, "requestId", requestID, "topic", topic, "error", message)
+		m.logger.Warn("lfs http failed", "status", status, "code", logSafe(code), "requestId", logSafe(requestID), "topic", logSafe(topic), "error", logSafe(message))
 	} else {
-		m.logger.Warn("lfs http failed", "status", status, "code", code, "requestId", requestID, "error", message)
+		m.logger.Warn("lfs http failed", "status", status, "code", logSafe(code), "requestId", logSafe(requestID), "error", logSafe(message))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

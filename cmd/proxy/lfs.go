@@ -464,7 +464,7 @@ func (m *lfsModule) trackOrphans(orphans []orphanInfo) {
 	}
 	m.metrics.IncOrphans(len(orphans))
 	for _, orphan := range orphans {
-		m.logger.Warn("lfs orphaned object", "topic", orphan.Topic, "key", orphan.Key, "reason", orphan.Reason)
+		m.logger.Warn("lfs orphaned object", "topic", logSafe(orphan.Topic), "key", logSafe(orphan.Key), "reason", logSafe(orphan.Reason))
 		reason := orphan.Reason
 		if reason == "" {
 			reason = "kafka_produce_failed"

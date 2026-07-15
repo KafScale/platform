@@ -103,7 +103,7 @@ type etcdAvailability interface {
 
 func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error) {
 	if h.traceKafka {
-		h.logger.Debug("received request", "api_key", header.APIKey, "api_version", header.APIVersion, "correlation", header.CorrelationID, "client_id", header.ClientID)
+		h.logger.Debug("received request", "api_version", header.APIVersion, "correlation", header.CorrelationID, "client_id", header.ClientID)
 	}
 	principal := principalFromContext(ctx, header)
 	switch req.(type) {
@@ -118,7 +118,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp.ErrorCode = errorCode
 		resp.ApiKeys = h.apiVersions
 		if h.traceKafka {
-			h.logger.Debug("api versions response", "versions", resp.ApiKeys)
+			h.logger.Debug("api versions response", "version_count", len(resp.ApiKeys))
 		}
 		return protocol.EncodeResponse(header.CorrelationID, responseVersion, resp), nil
 	case *kmsg.MetadataRequest:
