@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -1592,4 +1593,103 @@ func splitFetchByOwnerForTest(req *kmsg.FetchRequest, owner func(topic string, p
 		}
 	}
 	return groups
+}
+
+// TestBuildFetchProbePayloadIsSingleFramed is the regression guard for the
+// readiness probe's wire encoding.
+//
+// forwardToBackend prepends the frame length itself, and encodeFetchRequest
+// already strips the size prefix that kmsg's AppendRequest emits. The probe
+// payload must therefore be the bare request header plus body. Stripping a
+// second time removes the API key and version (four bytes), and the broker then
+// reads the correlation ID as the API key: the request is not a malformed
+// Fetch, it is a different API entirely. A broker that cannot parse a request
+// header closes the connection, so the probe reports EOF and the failure reads
+// like a broken broker rather than a broken probe.
+//
+// Parsing the payload back with the same decoder the broker uses catches that
+// without needing a backend.
+func TestBuildFetchProbePayloadIsSingleFramed(t *testing.T) {
+	payload := buildFetchProbePayload()
+
+	header, req, err := protocol.ParseRequest(payload)
+	if err != nil {
+		t.Fatalf("probe payload is not parseable as a request: %v", err)
+	}
+	if header.APIKey != protocol.APIKeyFetch {
+		t.Fatalf("api key = %d, want %d (Fetch); the payload is framed wrongly",
+			header.APIKey, protocol.APIKeyFetch)
+	}
+	if header.APIVersion != fetchProbeVersion {
+		t.Fatalf("api version = %d, want %d", header.APIVersion, fetchProbeVersion)
+	}
+	fetchReq, ok := req.(*kmsg.FetchRequest)
+	if !ok {
+		t.Fatalf("decoded request is %T, want *kmsg.FetchRequest", req)
+	}
+	if len(fetchReq.Topics) != 1 {
+		t.Fatalf("topics = %d, want 1", len(fetchReq.Topics))
+	}
+	if fetchReq.Topics[0].TopicID != fetchProbeTopicID {
+		t.Fatalf("topic id = %x, want %x", fetchReq.Topics[0].TopicID, fetchProbeTopicID)
+	}
+	if len(fetchReq.Topics[0].Partitions) != 1 {
+		t.Fatalf("partitions = %d, want 1", len(fetchReq.Topics[0].Partitions))
+	}
+	if fetchReq.ReplicaID != -1 {
+		t.Fatalf("replica id = %d, want -1 (ordinary consumer)", fetchReq.ReplicaID)
+	}
+}
+
+// TestBuildFetchProbePayloadRejectsDoubleStrip states the same invariant from
+// the other side: the four leading bytes carry the API key and version, so a
+// payload that has lost them must NOT parse as a Fetch request. Without this
+// the test above could pass against an encoder that happens to be tolerant.
+func TestBuildFetchProbePayloadRejectsDoubleStrip(t *testing.T) {
+	payload := buildFetchProbePayload()
+	if len(payload) < 4 {
+		t.Fatalf("probe payload too short: %d bytes", len(payload))
+	}
+	doubleStripped := payload[4:]
+
+	header, _, err := protocol.ParseRequest(doubleStripped)
+	if err == nil && header.APIKey == protocol.APIKeyFetch {
+		t.Fatal("a payload stripped of its header still parsed as Fetch; " +
+			"this test can no longer distinguish the framing bug")
+	}
+}
+
+func TestEnvBoolDefault(t *testing.T) {
+	const key = "KAFSCALE_TEST_ENV_BOOL"
+	cases := []struct {
+		val      string
+		set      bool
+		fallback bool
+		want     bool
+	}{
+		{set: false, fallback: true, want: true},
+		{set: false, fallback: false, want: false},
+		{val: "", set: true, fallback: true, want: true},
+		{val: "true", set: true, fallback: false, want: true},
+		{val: "TRUE", set: true, fallback: false, want: true},
+		{val: " on ", set: true, fallback: false, want: true},
+		{val: "1", set: true, fallback: false, want: true},
+		{val: "false", set: true, fallback: true, want: false},
+		{val: "off", set: true, fallback: true, want: false},
+		{val: "0", set: true, fallback: true, want: false},
+		// Unparseable must fall back rather than silently flip a gate.
+		{val: "maybe", set: true, fallback: true, want: true},
+		{val: "maybe", set: true, fallback: false, want: false},
+	}
+	for _, c := range cases {
+		if c.set {
+			t.Setenv(key, c.val)
+		} else {
+			os.Unsetenv(key)
+		}
+		if got := envBoolDefault(key, c.fallback); got != c.want {
+			t.Errorf("envBoolDefault(%q set=%v, fallback=%v) = %v, want %v",
+				c.val, c.set, c.fallback, got, c.want)
+		}
+	}
 }

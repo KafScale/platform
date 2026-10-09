@@ -65,7 +65,10 @@ type proxy struct {
 	metaFlight     singleflight.Group
 	backendRetries int
 	backendBackoff time.Duration
-	lfs            *lfsModule // nil when LFS disabled
+	// readyzFetchProbe gates /readyz on an actual Fetch round-trip to a
+	// backend, not merely on "a backend exists". See fetchProbe.
+	readyzFetchProbe bool
+	lfs              *lfsModule // nil when LFS disabled
 }
 
 func main() {
@@ -121,6 +124,10 @@ func main() {
 		topicNames:     make(map[[16]byte]string),
 		backendRetries: backendRetries,
 		backendBackoff: backendBackoff,
+		// Default on: readiness requires a decodable Fetch round-trip. Set
+		// KAFSCALE_PROXY_READYZ_FETCH_PROBE=false to fall back to the shallow
+		// "a backend exists" check.
+		readyzFetchProbe: envBoolDefault("KAFSCALE_PROXY_READYZ_FETCH_PROBE", true),
 	}
 
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
@@ -219,6 +226,23 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+// envBoolDefault parses a boolean environment variable, falling back when the
+// variable is unset or unparseable.
+func envBoolDefault(key string, fallback bool) bool {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		return fallback
+	}
+	switch strings.ToLower(val) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func portFromAddr(addr string, fallback int) int {
@@ -349,6 +373,30 @@ func (p *proxy) cacheFresh() bool {
 // fetch only when the cache TTL has expired (e.g. no traffic for >60s).
 // The fallback uses a short timeout to prevent health probes from blocking.
 func (p *proxy) checkReady(ctx context.Context) bool {
+	if !p.haveBackend(ctx) {
+		return false
+	}
+	// A known backend is necessary but not sufficient. The proxy is a full
+	// Fetch codec: it decodes, merges and re-encodes broker Fetch responses.
+	// A proxy<->broker Fetch (de)serialization or connection-state mismatch
+	// therefore breaks consume while Metadata and ListOffsets still answer
+	// normally, so the shallow check above passes and the proxy would serve
+	// traffic that silently returns zero records. Require a Fetch round-trip
+	// that actually decodes before reporting Ready.
+	if p.readyzFetchProbe {
+		if err := p.fetchProbe(ctx); err != nil {
+			p.logger.Warn("readyz fetch probe failed; staying NotReady", "error", err)
+			return false
+		}
+	}
+	return true
+}
+
+// haveBackend reports whether the proxy knows of at least one broker backend.
+// This is the shallow readiness check: cached state when fresh, falling back to
+// a live metadata fetch only when the cache TTL has expired (e.g. no traffic
+// for >60s). The fallback uses a short timeout so health probes do not block.
+func (p *proxy) haveBackend(ctx context.Context) bool {
 	if len(p.backends) > 0 {
 		return true
 	}
@@ -362,6 +410,84 @@ func (p *proxy) checkReady(ctx context.Context) bool {
 	defer cancel()
 	backends, err := p.currentBackends(checkCtx)
 	return err == nil && len(backends) > 0
+}
+
+// fetchProbeTopicID is a non-zero, almost-certainly-unknown topic ID. Fetch
+// v13 keys topics by ID rather than by name, so the broker resolves this ID,
+// finds no match and returns a decodable UNKNOWN_TOPIC_ID response. That
+// exercises the full v13 Fetch codec without depending on any real topic.
+var fetchProbeTopicID = [16]byte{
+	0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
+	0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89,
+}
+
+// fetchProbeVersion is the highest Fetch version the proxy speaks. Probing the
+// highest version is deliberate: it is the one real consumers negotiate and the
+// one whose codec is most likely to diverge between proxy and broker.
+const fetchProbeVersion int16 = 13
+
+// buildFetchProbePayload encodes the readiness probe's Fetch request as a bare
+// wire payload: request header plus body, with NO length prefix. forwardToBackend
+// adds the frame length itself.
+//
+// Split out from fetchProbe so the encoding can be unit-tested without a
+// backend. It is worth testing: a payload that is off by even the four header
+// bytes is not a malformed Fetch, it is a different API key, and the broker
+// answers that by closing the connection. The probe then reports EOF, which
+// reads like a broken broker rather than a broken probe.
+func buildFetchProbePayload() []byte {
+	clientID := "kafscale-proxy-readyz"
+	header := &protocol.RequestHeader{
+		APIKey:        protocol.APIKeyFetch,
+		APIVersion:    fetchProbeVersion,
+		CorrelationID: 0,
+		ClientID:      &clientID,
+	}
+	req := kmsg.NewPtrFetchRequest()
+	req.Version = fetchProbeVersion
+	req.ReplicaID = -1 // ordinary consumer
+	req.MaxWaitMillis = 0
+	req.MinBytes = 0
+	probePart := kmsg.NewFetchRequestTopicPartition()
+	probePart.Partition = 0
+	probePart.FetchOffset = 0
+	probePart.PartitionMaxBytes = 1
+	probeTopic := kmsg.NewFetchRequestTopic()
+	probeTopic.TopicID = fetchProbeTopicID
+	probeTopic.Partitions = []kmsg.FetchRequestTopicPartition{probePart}
+	req.Topics = []kmsg.FetchRequestTopic{probeTopic}
+	// encodeFetchRequest already strips the size prefix that kmsg's
+	// AppendRequest emits, so its result is exactly the bare payload
+	// forwardToBackend expects. Do not strip again.
+	return encodeFetchRequest(header, req)
+}
+
+// fetchProbe sends a minimal Fetch to a backend on a fresh connection and
+// confirms the proxy can forward it and decode the response. The fresh
+// connection matters: a stale or half-open pooled connection is detected too.
+//
+// Readiness therefore reflects "the broker actually serves Fetch" rather than
+// "a backend exists", which also enforces coordinated startup ordering.
+func (p *proxy) fetchProbe(ctx context.Context) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	conn, addr, err := p.connectBackendExcluding(probeCtx, nil)
+	if err != nil {
+		return fmt.Errorf("fetch probe: no backend: %w", err)
+	}
+	defer conn.Close()
+
+	respBytes, err := p.forwardToBackend(probeCtx, conn, addr, buildFetchProbePayload())
+	if err != nil {
+		return fmt.Errorf("fetch probe forward to %s: %w", addr, err)
+	}
+	// The same decode path the proxy uses for real fetches: strip the response
+	// header, then kmsg ReadFrom.
+	if _, err := parseFetchResponse(respBytes, fetchProbeVersion); err != nil {
+		return fmt.Errorf("fetch probe from %s: %w", addr, err)
+	}
+	return nil
 }
 
 func (p *proxy) initMetadataCache(ctx context.Context) {

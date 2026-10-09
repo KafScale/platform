@@ -283,6 +283,40 @@ Recommended operator alerting (when using Prometheus Operator):
 - `KafscaleSnapshotStale` – last successful snapshot older than the staleness threshold.
 - `KafscaleSnapshotNeverSucceeded` – no successful snapshots recorded.
 
+## Proxy readiness
+
+The proxy exposes `/readyz` and `/livez` on `KAFSCALE_PROXY_HEALTH_ADDR`
+(default `:9094`).
+
+`/readyz` answers two questions, not one:
+
+1. **Is a backend known?** Cached backend state when fresh, otherwise a live
+   metadata fetch from etcd.
+2. **Does that backend actually serve Fetch?** A Fetch round-trip on a fresh
+   connection that must decode cleanly.
+
+The second question exists because the proxy is a full Fetch codec: it decodes,
+merges and re-encodes broker Fetch responses. A proxy-to-broker Fetch
+serialization or connection-state mismatch therefore breaks consume while
+Metadata and ListOffsets keep answering normally. Readiness based on the first
+question alone reports `ready` while every consumer silently receives zero
+records, and Kubernetes keeps the pod in the Service.
+
+The probe asks for one partition of a deliberately unknown topic ID, so it needs
+no real topic and reads no data; a correct broker answers `UNKNOWN_TOPIC_ID`.
+The fresh connection is deliberate too: it detects a stale or half-open pooled
+connection, which a cached-state check cannot.
+
+Set `KAFSCALE_PROXY_READYZ_FETCH_PROBE=false` to fall back to the shallow
+"a backend exists" check. That is an escape hatch for a probe that reports a
+false negative in the field, not a recommended steady state: it removes the only
+readiness signal that distinguishes "serving" from "running".
+
+**Startup ordering.** With the probe enabled the proxy stays NotReady until a
+broker serves Fetch. An installer that waits for proxy readiness before creating
+the cluster resource that produces the broker will therefore deadlock. Create
+the broker first, or do not gate the install on proxy readiness.
+
 ## Environment Variable Index
 
 ### Operator
@@ -387,6 +421,7 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`).
 - `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
 - `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
+- `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
 - `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS HTTP API on the unified proxy (default `false`).
 
 ### Console
