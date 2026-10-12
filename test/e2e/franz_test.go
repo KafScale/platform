@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -104,6 +105,14 @@ func TestFranzGoProduceConsume(t *testing.T) {
 
 	t.Log("waiting for broker readiness")
 	waitForBroker(t, &brokerLogs, brokerAddr)
+	t.Run("ApiVersionsNegotiation", func(t *testing.T) {
+		conn, err := net.DialTimeout("tcp", brokerAddr, 5*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		testutil.AssertApiVersionsNegotiation(t, conn)
+	})
 	roundTripStart := time.Now()
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))

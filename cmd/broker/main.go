@@ -110,7 +110,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 	case *kmsg.ApiVersionsRequest:
 		errorCode := int16(protocol.NONE)
 		responseVersion := header.APIVersion
-		if responseVersion > 4 {
+		if responseVersion < 0 || responseVersion > protocol.ApiVersionsMaxVersion {
 			errorCode = int16(protocol.UNSUPPORTED_VERSION)
 			responseVersion = 0
 		}
@@ -2714,7 +2714,7 @@ type apiVersionSupport struct {
 
 func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 	supported := []apiVersionSupport{
-		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: protocol.ApiVersionsMaxVersion},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
 		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},

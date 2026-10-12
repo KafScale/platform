@@ -39,3 +39,6 @@ const (
 	APIKeyCreatePartitions     int16 = 37
 	APIKeyDeleteGroups         int16 = 42
 )
+
+// ApiVersionsMaxVersion is the highest ApiVersions schema supported by KafScale.
+const ApiVersionsMaxVersion int16 = 4

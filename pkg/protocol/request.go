@@ -91,6 +91,12 @@ func ParseRequestBody(header *RequestHeader, body []byte) (*RequestHeader, kmsg.
 	}
 	req.SetVersion(header.APIVersion)
 
+	// KIP-511: an unknown ApiVersions body must reach the handler for a v0
+	// UNSUPPORTED_VERSION response without decoding the unsupported schema.
+	if header.APIKey == APIKeyApiVersion && (header.APIVersion < 0 || header.APIVersion > ApiVersionsMaxVersion) {
+		return header, req, nil
+	}
+
 	if err := req.ReadFrom(body); err != nil {
 		return nil, nil, fmt.Errorf("decode %s v%d: %w",
 			kmsg.NameForKey(header.APIKey), header.APIVersion, err)

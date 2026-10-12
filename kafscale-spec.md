@@ -184,6 +184,10 @@ Sparse index for offset-to-position lookups:
 
 Versions reflect what the broker advertises in ApiVersions today.
 
+The broker and proxy answer unsupported ApiVersions requests with a v0 response
+containing `UNSUPPORTED_VERSION` and the supported version range. They skip
+decoding the unsupported body and keep the connection open for a client retry.
+
 | API Key | Name | Version | Status | Notes |
 |---------|------|---------|--------|-------|
 | 0 | Produce | 0-9 | ✅ Full | Core produce path |
@@ -200,7 +204,7 @@ Versions reflect what the broker advertises in ApiVersions today.
 | 15 | DescribeGroups | 5 | ✅ Full | Ops debugging - `kafka-consumer-groups.sh --describe` |
 | 16 | ListGroups | 5 | ✅ Full | Ops debugging - enumerate all consumer groups |
 | 23 | OffsetForLeaderEpoch | 3 | ✅ Full | Safe consumer recovery after broker failover |
-| 18 | ApiVersions | 0-3 | ✅ Full | Client capability negotiation |
+| 18 | ApiVersions | 0-4 | ✅ Full | Client capability negotiation |
 | 19 | CreateTopics | 0-2 | ✅ Full | Topic management |
 | 20 | DeleteTopics | 0-2 | ✅ Full | Topic management |
 | 32 | DescribeConfigs | 4 | ✅ Full | Read topic/broker config |

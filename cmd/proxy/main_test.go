@@ -1693,3 +1693,23 @@ func TestEnvBoolDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyApiVersionsNegotiation(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	p := &proxy{apiVersions: generateProxyApiVersions()}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.handleConnection(context.Background(), serverConn)
+	}()
+	defer func() {
+		clientConn.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("proxy did not close connection")
+		}
+	}()
+	testutil.AssertApiVersionsNegotiation(t, clientConn)
+}
