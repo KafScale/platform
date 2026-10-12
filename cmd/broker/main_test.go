@@ -38,6 +38,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"go.etcd.io/etcd/server/v3/embed"
 
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/broker"
 	controlpb "github.com/KafScale/platform/pkg/gen/control"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
@@ -1663,4 +1664,43 @@ func portAvailable(addr string) error {
 	}
 	_ = ln.Close()
 	return nil
+}
+
+func TestBrokerApiVersionsNegotiation(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	listener.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &broker.Server{Addr: addr, Handler: newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))}
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("server: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("server did not stop")
+		}
+		server.Wait()
+	}()
+	var conn net.Conn
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err = net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("dial broker: %v", err)
+	}
+	defer conn.Close()
+	testutil.AssertApiVersionsNegotiation(t, conn)
 }

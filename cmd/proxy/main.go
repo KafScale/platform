@@ -1107,8 +1107,13 @@ func (p *proxy) connectBackendExcluding(ctx context.Context, exclude map[string]
 func (p *proxy) handleApiVersions(header *protocol.RequestHeader) ([]byte, error) {
 	resp := kmsg.NewPtrApiVersionsResponse()
 	resp.ErrorCode = protocol.NONE
+	responseVersion := header.APIVersion
+	if responseVersion < 0 || responseVersion > protocol.ApiVersionsMaxVersion {
+		resp.ErrorCode = protocol.UNSUPPORTED_VERSION
+		responseVersion = 0
+	}
 	resp.ApiKeys = p.apiVersions
-	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+	return protocol.EncodeResponse(header.CorrelationID, responseVersion, resp), nil
 }
 
 func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeader, body []byte) {
@@ -1428,7 +1433,7 @@ func generateProxyApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		key      int16
 		min, max int16
 	}{
-		{key: protocol.APIKeyApiVersion, min: 0, max: 4},
+		{key: protocol.APIKeyApiVersion, min: 0, max: protocol.ApiVersionsMaxVersion},
 		{key: protocol.APIKeyMetadata, min: 0, max: 12},
 		{key: protocol.APIKeyProduce, min: 0, max: 9},
 		{key: protocol.APIKeyFetch, min: 11, max: 13},

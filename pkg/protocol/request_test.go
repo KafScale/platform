@@ -456,3 +456,30 @@ func TestParseHeartbeatFlexible(t *testing.T) {
 		t.Fatalf("unexpected instance id: %v", heartReq.InstanceID)
 	}
 }
+
+func TestParseRequestApiVersionsUnsupportedBody(t *testing.T) {
+	for _, version := range []int16{-1, 5, 32767} {
+		for _, body := range [][]byte{nil, {0xff}, {1, 2, 3, 4}} {
+			frame := buildRequestFrame(APIKeyApiVersion, version, 42, kmsg.StringPtr("client"), body)
+			header, req, err := ParseRequest(frame)
+			if err != nil {
+				t.Fatalf("v%d: %v", version, err)
+			}
+			if _, ok := req.(*kmsg.ApiVersionsRequest); !ok {
+				t.Fatalf("v%d: request type %T", version, req)
+			}
+			if header.APIVersion != version || req.GetVersion() != version || header.CorrelationID != 42 {
+				t.Fatalf("v%d: header or request changed", version)
+			}
+		}
+	}
+}
+
+func TestParseRequestApiVersionsSupportedMalformedBody(t *testing.T) {
+	for _, version := range []int16{3, 4} {
+		frame := buildRequestFrame(APIKeyApiVersion, version, 42, nil, nil)
+		if _, _, err := ParseRequest(frame); err == nil {
+			t.Fatalf("v%d: expected malformed body error", version)
+		}
+	}
+}
