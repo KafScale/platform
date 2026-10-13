@@ -345,17 +345,7 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 	}
 	batchBytes := lfsBuildRecordBatch([]kmsg.Record{record})
 
-	produceReq := &kmsg.ProduceRequest{
-		Acks:          1,
-		TimeoutMillis: 15000,
-		Topics: []kmsg.ProduceRequestTopic{{
-			Topic: topic,
-			Partitions: []kmsg.ProduceRequestTopicPartition{{
-				Partition: partition,
-				Records:   batchBytes,
-			}},
-		}},
-	}
+	produceReq := newLfsProduceRequest(topic, partition, batchBytes)
 
 	correlationID := int32(atomic.AddUint32(&m.corrID, 1))
 	reqHeader := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9, CorrelationID: correlationID}
@@ -1027,17 +1017,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	batchBytes := lfsBuildRecordBatch([]kmsg.Record{record})
 
-	produceReq := &kmsg.ProduceRequest{
-		Acks:          1,
-		TimeoutMillis: 15000,
-		Topics: []kmsg.ProduceRequestTopic{{
-			Topic: session.Topic,
-			Partitions: []kmsg.ProduceRequestTopicPartition{{
-				Partition: session.Partition,
-				Records:   batchBytes,
-			}},
-		}},
-	}
+	produceReq := newLfsProduceRequest(session.Topic, session.Partition, batchBytes)
 
 	correlationID := int32(atomic.AddUint32(&m.corrID, 1))
 	reqHeader := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9, CorrelationID: correlationID}
@@ -1206,4 +1186,19 @@ func lfsGetClientIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// newLfsProduceRequest returns the produce request for one LFS pointer record.
+func newLfsProduceRequest(topic string, partition int32, records []byte) *kmsg.ProduceRequest {
+	req := kmsg.NewPtrProduceRequest()
+	req.Acks = 1
+	req.TimeoutMillis = 15000
+	req.Topics = []kmsg.ProduceRequestTopic{{
+		Topic: topic,
+		Partitions: []kmsg.ProduceRequestTopicPartition{{
+			Partition: partition,
+			Records:   records,
+		}},
+	}}
+	return req
 }

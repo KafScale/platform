@@ -847,12 +847,7 @@ func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *kmsg.ProduceRe
 			}
 			subReq, ok := groups[addr]
 			if !ok {
-				subReq = &kmsg.ProduceRequest{
-					Version:       req.Version,
-					Acks:          req.Acks,
-					TimeoutMillis: req.TimeoutMillis,
-					TransactionID: req.TransactionID,
-				}
+				subReq = newProduceSubRequest(req)
 				groups[addr] = subReq
 				topicIndices[addr] = make(map[string]int)
 			}
@@ -936,11 +931,7 @@ func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHead
 		tr := findOrAddTopicResponse(merged, topic.Topic)
 		for _, part := range topic.Partitions {
 			if failedParts[part.Partition] {
-				tr.Partitions = append(tr.Partitions, kmsg.ProduceResponseTopicPartition{
-					Partition:  part.Partition,
-					ErrorCode:  protocol.NOT_LEADER_OR_FOLLOWER,
-					BaseOffset: -1,
-				})
+				tr.Partitions = append(tr.Partitions, newProduceErrorPartition(part.Partition, protocol.NOT_LEADER_OR_FOLLOWER))
 			}
 		}
 	}
@@ -1042,11 +1033,7 @@ func addErrorForAllPartitions(resp *kmsg.ProduceResponse, req *kmsg.ProduceReque
 	for _, topic := range req.Topics {
 		topicResp := findOrAddTopicResponse(resp, topic.Topic)
 		for _, part := range topic.Partitions {
-			topicResp.Partitions = append(topicResp.Partitions, kmsg.ProduceResponseTopicPartition{
-				Partition:  part.Partition,
-				ErrorCode:  errorCode,
-				BaseOffset: -1,
-			})
+			topicResp.Partitions = append(topicResp.Partitions, newProduceErrorPartition(part.Partition, errorCode))
 		}
 	}
 }
@@ -1800,16 +1787,7 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.Fetc
 			}
 			subReq, ok := groups[addr]
 			if !ok {
-				subReq = &kmsg.FetchRequest{
-					Version:        req.Version,
-					ReplicaID:      req.ReplicaID,
-					MaxWaitMillis:  req.MaxWaitMillis,
-					MinBytes:       req.MinBytes,
-					MaxBytes:       req.MaxBytes,
-					IsolationLevel: req.IsolationLevel,
-					SessionID:      req.SessionID,
-					SessionEpoch:   req.SessionEpoch,
-				}
+				subReq = newFetchSubRequest(req)
 				groups[addr] = subReq
 				topicIndices[addr] = make(map[string]int)
 			}
@@ -1932,10 +1910,7 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 		tr := findOrAddFetchTopicResponse(merged, topic.Topic, topic.TopicID)
 		for _, part := range topic.Partitions {
 			if failedParts[part.Partition] {
-				tr.Partitions = append(tr.Partitions, kmsg.FetchResponseTopicPartition{
-					Partition: part.Partition,
-					ErrorCode: protocol.NOT_LEADER_OR_FOLLOWER,
-				})
+				tr.Partitions = append(tr.Partitions, newFetchErrorPartition(part.Partition, protocol.NOT_LEADER_OR_FOLLOWER))
 			}
 		}
 	}
@@ -2016,14 +1991,57 @@ func findOrAddFetchTopicResponse(resp *kmsg.FetchResponse, name string, topicID 
 	return &resp.Topics[len(resp.Topics)-1]
 }
 
+// newProduceErrorPartition returns an error entry for one produce partition.
+// It must use the kmsg constructor: a struct literal skips Default(), leaves the
+// tagged CurrentLeader at {0, 0}, and kmsg then writes tag 0 into a v9 response,
+// which the Java client rejects.
+func newProduceErrorPartition(partition int32, errorCode int16) kmsg.ProduceResponseTopicPartition {
+	p := kmsg.NewProduceResponseTopicPartition()
+	p.Partition = partition
+	p.ErrorCode = errorCode
+	p.BaseOffset = -1
+	return p
+}
+
+// newFetchErrorPartition returns an error entry for one fetch partition with the
+// kmsg defaults: offsets and preferred replica at -1, no tagged fields.
+func newFetchErrorPartition(partition int32, errorCode int16) kmsg.FetchResponseTopicPartition {
+	p := kmsg.NewFetchResponseTopicPartition()
+	p.Partition = partition
+	p.ErrorCode = errorCode
+	return p
+}
+
+// newProduceSubRequest returns the per-broker part of a produce request.
+func newProduceSubRequest(req *kmsg.ProduceRequest) *kmsg.ProduceRequest {
+	sub := kmsg.NewPtrProduceRequest()
+	sub.Version = req.Version
+	sub.Acks = req.Acks
+	sub.TimeoutMillis = req.TimeoutMillis
+	sub.TransactionID = req.TransactionID
+	return sub
+}
+
+// newFetchSubRequest returns the per-broker part of a fetch request. The constructor
+// keeps ReplicaState at its default, so it is not sent as a tagged field.
+func newFetchSubRequest(req *kmsg.FetchRequest) *kmsg.FetchRequest {
+	sub := kmsg.NewPtrFetchRequest()
+	sub.Version = req.Version
+	sub.ReplicaID = req.ReplicaID
+	sub.MaxWaitMillis = req.MaxWaitMillis
+	sub.MinBytes = req.MinBytes
+	sub.MaxBytes = req.MaxBytes
+	sub.IsolationLevel = req.IsolationLevel
+	sub.SessionID = req.SessionID
+	sub.SessionEpoch = req.SessionEpoch
+	return sub
+}
+
 func addFetchErrorForAllPartitions(resp *kmsg.FetchResponse, req *kmsg.FetchRequest, errorCode int16) {
 	for _, topic := range req.Topics {
 		tr := findOrAddFetchTopicResponse(resp, topic.Topic, topic.TopicID)
 		for _, part := range topic.Partitions {
-			tr.Partitions = append(tr.Partitions, kmsg.FetchResponseTopicPartition{
-				Partition: part.Partition,
-				ErrorCode: errorCode,
-			})
+			tr.Partitions = append(tr.Partitions, newFetchErrorPartition(part.Partition, errorCode))
 		}
 	}
 }
