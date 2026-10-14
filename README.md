@@ -17,6 +17,8 @@ limitations under the License.
 
 # KafScale
 
+**Kafka-compatible streaming that keeps your log in S3. Stateless brokers, standard Kafka clients, Apache 2.0.**
+
 [![CI](https://github.com/KafScale/platform/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KafScale/platform/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/badge/codeql-enabled-2ea44f?logo=github)](https://github.com/KafScale/platform/security/code-scanning)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/KafScale/platform/badge)](https://securityscorecards.dev/viewer/?uri=github.com/KafScale/platform)
@@ -117,12 +119,90 @@ For the technical specification and data formats, see `kafscale-spec.md`.
 A detailed architecture overview and design rationale are available here:
 https://www.novatechflow.com/p/kafscale.html
 
+## Back up your Kafka to S3 in 10 minutes
+
+KafScale speaks the Kafka protocol and writes immutable segments to S3. Point
+[kaf-mirror](https://github.com/scalytics/kaf-mirror) at your existing cluster
+and KafScale as the target, and you get a separate, replayable copy of your
+topics in object storage. This walkthrough runs everything locally.
+
+Prerequisites: Go, Docker (for the local MinIO bucket), `make`, and a reachable
+source Kafka cluster.
+
+**1. Start KafScale with a local S3 bucket (MinIO)**
+
+```bash
+git clone https://github.com/KafScale/platform.git && cd platform
+make demo
+```
+
+This starts MinIO, a broker on `127.0.0.1:39092` and the console on
+`http://127.0.0.1:48080/ui/` (user `kafscaleadmin`, password `kafscale`).
+Segments land in the MinIO bucket `kafscale`.
+
+**2. Build and start kaf-mirror**
+
+In a second terminal:
+
+```bash
+git clone https://github.com/scalytics/kaf-mirror.git && cd kaf-mirror
+mkdir -p bin
+go build -o bin/kaf-mirror ./cmd/kaf-mirror
+go build -o bin/mirror-cli ./cmd/mirror-cli
+KAFMIRROR_DISABLE_IDEMPOTENT_WRITES=true ./bin/kaf-mirror
+```
+
+KafScale does not implement `InitProducerId`, so idempotent writes must be off
+when KafScale is the target. The environment variable above does that for the
+whole process. On first start kaf-mirror creates `admin@localhost` and prints a
+random password to its log (`logs/kaf-mirror.log`).
+
+**3. Add both clusters and start a job**
+
+```bash
+./bin/mirror-cli login admin@localhost --password <password-from-log>
+./bin/mirror-cli clusters add   # your source cluster
+./bin/mirror-cli clusters add   # target: brokers 127.0.0.1:39092
+./bin/mirror-cli jobs add       # pick source, target and topics
+./bin/mirror-cli jobs start
+./bin/mirror-cli jobs status full
+```
+
+`clusters add` and `jobs add` are interactive. Once the job runs, read the copy
+back with any Kafka consumer against `127.0.0.1:39092`, and look at the
+segments in the MinIO bucket.
+
+For a real deployment, install KafScale with the Helm chart and a real S3
+bucket (see `docs/quickstart.md`), and give the backup its own bucket,
+credentials and keys so production credentials cannot reach it.
+
+## Use Cases
+
+- **Backup, not just replication.** Replication copies deletes, bad writes and
+  compromised-credential damage to the standby. A copy on S3 with separate
+  credentials (and S3 Object Lock, if you enable it on the bucket) survives
+  them. See [Kafka backup vs replication](https://www.scalytics.io/kafka-backup-vs-replication).
+- **DORA and NIS2 evidence.** Regulated teams need backups kept apart from
+  production and restore tests they can show. See the
+  [Kafka DORA and NIS2 checklist](https://www.scalytics.io/kafka-dora-nis2-checklist).
+- **Long retention and replay.** Keep months of history at object storage
+  prices and replay it with standard Kafka consumers, without load on the
+  production cluster.
+
+More on the backup pattern: [KafShield, Kafka backup and disaster recovery on S3](https://www.scalytics.io/kafshield).
+
 ## Examples
 
 - Quickstart guide: `examples/101_kafscale-dev-guide/README.md`
 - Spring Boot app demo (E20): `examples/E20_spring-boot-kafscale-demo/README.md`
 - Flink demo (E30): `examples/E30_flink-kafscale-demo/README.md`
 - Spark demo (E40): `examples/E40_spark-kafscale-demo/README.md`
+
+## Need it managed or supported?
+
+KafScale is the open-source base of [Lascaris](https://www.scalytics.io/lascaris).
+Scalytics can run it for you in your own cloud, or support your team running it
+on-prem or air-gapped.
 
 ## Community
 
