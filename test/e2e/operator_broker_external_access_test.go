@@ -27,12 +27,14 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -109,6 +111,7 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 		},
 		Spec: kafscalev1alpha1.KafscaleClusterSpec{
 			Brokers: kafscalev1alpha1.BrokerSpec{
+				Image:          kafscalev1alpha1.BrokerImageSpec{Repository: "ghcr.io/kafscale/kafscale-broker", Tag: "v1.6.0"},
 				AdvertisedHost: "kafka.example.com",
 				AdvertisedPort: &advertisedPort,
 				Replicas:       ptr.To(int32(1)),
@@ -128,7 +131,7 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 				CredentialsSecretRef: "creds",
 			},
 			Etcd: kafscalev1alpha1.EtcdSpec{
-				Endpoints: []string{"http://etcd:2379"},
+				Endpoints: []string{env.ControlPlane.Etcd.URL.String()},
 			},
 		},
 	}
@@ -186,6 +189,45 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 		return true, nil
 	}); err != nil {
 		t.Fatalf("expected external access config to reconcile: %v", err)
+	}
+
+	apiClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatal(err)
+	}
+	brokerKey := client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name + "-broker"}
+	waitForImage := func(want string) *appsv1.StatefulSet {
+		t.Helper()
+		var sts appsv1.StatefulSet
+		if err := wait.PollUntilContextTimeout(ctx, 200*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+			if err := apiClient.Get(ctx, brokerKey, &sts); err != nil {
+				if apierrors.IsNotFound(err) {
+					return false, nil
+				}
+				return false, err
+			}
+			return len(sts.Spec.Template.Spec.Containers) == 1 && sts.Spec.Template.Spec.Containers[0].Image == want, nil
+		}); err != nil {
+			t.Fatalf("broker image %q: %v", want, err)
+		}
+		return &sts
+	}
+	original := waitForImage("ghcr.io/kafscale/kafscale-broker:v1.6.0")
+	var stored kafscalev1alpha1.KafscaleCluster
+	if err := apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Spec.Brokers.Image != cluster.Spec.Brokers.Image {
+		t.Fatalf("API server lost image override: %+v", stored.Spec.Brokers.Image)
+	}
+	before := stored.DeepCopy()
+	stored.Spec.Brokers.Image.Tag = "v1.6.1"
+	if err := apiClient.Patch(ctx, &stored, client.MergeFrom(before)); err != nil {
+		t.Fatal(err)
+	}
+	updated := waitForImage("ghcr.io/kafscale/kafscale-broker:v1.6.1")
+	if original.UID != updated.UID || updated.Generation <= original.Generation {
+		t.Fatalf("expected an updated pod template on the same StatefulSet: old=%s/%d new=%s/%d", original.UID, original.Generation, updated.UID, updated.Generation)
 	}
 }
 

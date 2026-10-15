@@ -41,6 +41,26 @@ The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator c
 
 By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.1.0`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
 
+### Per-cluster broker image
+
+`spec.brokers.image` overrides the operator's `BROKER_IMAGE` default for that cluster:
+
+```yaml
+spec:
+  brokers:
+    image:
+      repository: ghcr.io/kafscale/kafscale-broker
+      tag: v1.6.1
+```
+
+Omitting the image keeps the operator default. A repository without a tag is used
+as supplied, including a complete `repository@sha256:...` digest reference. A tag
+without a repository replaces the tag or digest in the operator default. When both
+are set, the tag replaces any tag or digest in the supplied repository reference.
+The operator's image pull policy still applies. Updating the image changes the
+broker StatefulSet pod template, triggering its normal rolling update; removing
+the override returns that cluster to the operator default.
+
 ### Values to pay attention to
 
 | Value | Purpose |
