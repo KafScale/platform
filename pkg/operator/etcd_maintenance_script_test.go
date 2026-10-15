@@ -92,7 +92,6 @@ case "$2 $3" in
  *) exit 99 ;;
 esac
 `)
-					write("sleep", "#!/bin/sh\nprintf 'sleep %s\\n' \"$*\" >> \"$CALL_LOG\"\n")
 					members := tc.members
 					if len(members) == 0 {
 						members = []string{"http://member1:2379", "http://member2:2379", "http://member3:2379"}
@@ -100,7 +99,9 @@ esac
 					callLog := filepath.Join(dir, "calls")
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					args := append(append([]string{}, shell.prefix...), "-c", etcdMaintenanceShellScript())
+					// BusyBox ash can run sleep as a built-in, bypassing PATH stubs.
+					script := "sleep() { printf 'sleep %s\\n' \"$*\" >> \"$CALL_LOG\"; }\n" + etcdMaintenanceShellScript()
+					args := append(append([]string{}, shell.prefix...), "-c", script)
 					cmd := exec.CommandContext(ctx, shell.path, args...)
 					cmd.Dir = dir
 					cmd.Env = append(os.Environ(),
