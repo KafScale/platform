@@ -759,11 +759,15 @@ func etcdMaintenanceLabels(cluster *kafscalev1alpha1.KafscaleCluster, task strin
 }
 
 func etcdMaintenanceShellScript() string {
-	return "set -euo pipefail\n" +
+	return "set -eu\n" +
 		"THRESHOLD_BYTES=$(( ETCD_QUOTA_BYTES * THRESHOLD_PCT / 100 ))\n" +
 		"needs_work=0\n" +
-		"IFS=',' read -ra MEMBERS <<< \"${ETCD_MEMBERS}\"\n" +
-		"for ep in \"${MEMBERS[@]}\"; do\n" +
+		"set -f\n" +
+		"saved_ifs=$IFS\n" +
+		"IFS=,\n" +
+		"set -- ${ETCD_MEMBERS}\n" +
+		"IFS=$saved_ifs\n" +
+		"for ep in \"$@\"; do\n" +
 		"  status_json=$(etcdctl --endpoints=\"${ep}\" endpoint status -w json 2>/dev/null || true)\n" +
 		"  if [ -z \"${status_json}\" ]; then\n" +
 		"    echo \"status unavailable for ${ep}\"\n" +
@@ -785,7 +789,7 @@ func etcdMaintenanceShellScript() string {
 		"  echo \"check: below threshold, skipping maintenance\"\n" +
 		"  exit 0\n" +
 		"fi\n" +
-		"for ep in \"${MEMBERS[@]}\"; do\n" +
+		"for ep in \"$@\"; do\n" +
 		"  echo \"defrag ${ep}\"\n" +
 		"  etcdctl --endpoints=\"${ep}\" endpoint defrag\n" +
 		"  echo \"disarm alarms on ${ep}\"\n" +
