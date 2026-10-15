@@ -221,7 +221,7 @@ Snapshot job defaults and operator env overrides:
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: `kafscale-etcd-<namespace>-<cluster>`, separate from broker segment storage)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` (default: `etcd-snapshots`)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` (default: `0 * * * *`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `kubesphere/etcd:3.6.4-0`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `ghcr.io/kafscale/kafscale-etcd-tools:dev`; this `:dev` tag is the code default, so pin a release tag in production)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` (default: `amazon/aws-cli:2.15.0`)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (optional, for MinIO or custom S3)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` (default: 7200)
@@ -337,13 +337,16 @@ the broker first, or do not gate the install on proxy readiness.
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` – Snapshot prefix (default `etcd-snapshots`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` – Cron schedule for snapshots (default `0 * * * *`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` – Etcdctl image for snapshots.
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` – Etcdctl image for snapshots, restore and maintenance jobs (default `ghcr.io/kafscale/kafscale-etcd-tools:dev`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` – AWS CLI image for uploads.
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` – S3 endpoint override (MinIO/custom).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` – Staleness threshold seconds (default `7200`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` – Auto-create the snapshot bucket (`1` to enable).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` – Enable versioning + public access block (`1` to enable).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` – Skip the S3 write preflight (`1` to enable).
+- `KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE` – Deprecated alias for `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE`. Used only when the new variable is unset.
+- `KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED` – Deprecated alias for `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED`. Setting either one to `0`/`false`/`no`/`off` disables maintenance.
+- `KAFSCALE_OPERATOR_ETCD_SILENCE_LOGS` – Suppress etcd client logs from the operator snapshot publisher (`true` to enable).
 - `KAFSCALE_OPERATOR_LEADER_KEY` – Override the operator leader election ID (default `kafscale-operator`).
 - `KAFSCALE_S3_NAMESPACE` – Prefix used for broker S3 object keys (defaults to the cluster namespace).
 - `KAFSCALE_SEGMENT_BYTES` – Broker segment flush threshold in bytes (default `4194304`).
@@ -353,7 +356,7 @@ the broker first, or do not gate the install on proxy readiness.
 
 - `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
 - `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
-- `KAFSCALE_BROKER_PORT` – Advertised port (default `9092`).
+- `KAFSCALE_BROKER_PORT` – Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
 - `KAFSCALE_BROKER_ID` – Broker node ID.
 - `KAFSCALE_METRICS_ADDR` – Metrics listen address.
 - `KAFSCALE_CONTROL_ADDR` – Control-plane listen address.
@@ -368,7 +371,7 @@ the broker first, or do not gate the install on proxy readiness.
 - `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
 - `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
 - `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
-- `KAFSCALE_S3_CONCURRENCY` – Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends.
+- `KAFSCALE_S3_CONCURRENCY` – Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends. The `kafscale-cli` tool reads the same variable with a default of `16`.
 
 Read replica example (multi-region reads):
 
@@ -378,7 +381,7 @@ export KAFSCALE_S3_REGION=us-east-1
 export KAFSCALE_S3_READ_BUCKET=prod-segments-replica
 export KAFSCALE_S3_READ_REGION=eu-west-1
 ```
-- `KAFSCALE_CACHE_BYTES` – Broker cache size in bytes.
+- `KAFSCALE_CACHE_BYTES` – Broker cache size in bytes. `KAFSCALE_CACHE_SIZE` is accepted as a legacy alias when `KAFSCALE_CACHE_BYTES` is unset or not positive.
 - `KAFSCALE_READAHEAD_SEGMENTS` – Segment readahead count.
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
 - `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
@@ -391,6 +394,8 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_S3_LATENCY_WARN_MS`, `KAFSCALE_S3_LATENCY_CRIT_MS` – Latency thresholds.
 - `KAFSCALE_S3_ERROR_RATE_WARN`, `KAFSCALE_S3_ERROR_RATE_CRIT` – Error-rate thresholds.
 - `KAFSCALE_STARTUP_TIMEOUT_SEC` – Broker startup timeout.
+- `KAFSCALE_LAG_SAMPLE_INTERVAL_SEC` – Consumer lag sampling interval in seconds (default `5`).
+- `KAFSCALE_ENV` – Set to `prod` to log a warning whenever a broker setting falls back to its default because the variable is unset or invalid.
 
 ### Produce Flush Policy (cost vs durability)
 
@@ -412,7 +417,7 @@ Cost-optimized (accepts a larger loss window after crash):
 ### Proxy
 
 - `KAFSCALE_PROXY_ADDR` – Proxy listen address (host:port).
-- `KAFSCALE_PROXY_HEALTH_ADDR` – Health/readiness listen address (default `:9094`; exposes `/readyz` and `/livez`).
+- `KAFSCALE_PROXY_HEALTH_ADDR` – Health/readiness listen address for `/readyz` and `/livez`. The proxy binary has no default: if unset, the health server does not start. The Helm chart sets `:9094` when `proxy.health.enabled` is true.
 - `KAFSCALE_PROXY_ADVERTISED_HOST` – Address Kafka clients should connect to.
 - `KAFSCALE_PROXY_ADVERTISED_PORT` – Advertised port (default `9092`).
 - `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
@@ -422,7 +427,7 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
 - `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
 - `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
-- `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS HTTP API on the unified proxy (default `false`).
+- `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS module on the unified proxy (default `false`). See [LFS proxy](#lfs-proxy) for its settings.
 
 ### Console
 
@@ -431,6 +436,90 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD` – Etcd auth for console.
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL` – Broker Prometheus endpoint.
 - `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD` – Console login credentials.
+- `KAFSCALE_CONSOLE_LFS_ENABLED` – Enable the LFS views and API (`true` to enable; any other value disables them).
+- `KAFSCALE_CONSOLE_KAFKA_BROKERS` – Comma-separated brokers used to consume the LFS tracker topic.
+- `KAFSCALE_LFS_TRACKER_TOPIC` – Tracker topic to read (default `__lfs_ops_state`).
+- `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_REGION`, `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT` – S3 location for browsing LFS objects. Path-style addressing is used when an endpoint is set.
+- `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY` – S3 credentials for the console.
+- `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL` – Presigned URL lifetime in seconds (default `300`).
+
+When LFS is enabled, the console serves these authenticated endpoints: `/ui/api/lfs/status`, `/ui/api/lfs/objects`, `/ui/api/lfs/topics`, `/ui/api/lfs/topics/{topic}`, `/ui/api/lfs/events`, `/ui/api/lfs/orphans`, `/ui/api/lfs/s3/browse` and `/ui/api/lfs/s3/presign`.
+
+### LFS proxy
+
+These settings apply when `KAFSCALE_PROXY_LFS_ENABLED=true`. Defaults come from `cmd/proxy/lfs.go` and `cmd/proxy/lfs_tracker.go`.
+
+S3 storage:
+
+- `KAFSCALE_LFS_PROXY_S3_BUCKET` – Required. The proxy refuses known example bucket names.
+- `KAFSCALE_LFS_PROXY_S3_REGION` – Required.
+- `KAFSCALE_LFS_PROXY_S3_ENDPOINT` – Endpoint override (MinIO or other S3-compatible stores).
+- `KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT` – Endpoint used in URLs handed to clients.
+- `KAFSCALE_LFS_PROXY_S3_ACCESS_KEY`, `KAFSCALE_LFS_PROXY_S3_SECRET_KEY`, `KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN` – S3 credentials.
+- `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE` – Path-style addressing (default `true` when an endpoint is set, otherwise `false`).
+- `KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET` – Create the bucket at startup (default `false`).
+- `KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC` – S3 health check interval (default `30`).
+- `KAFSCALE_S3_NAMESPACE` – Object key prefix (default `default` for the LFS module).
+
+Blobs and checksums:
+
+- `KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE` – Maximum blob size in bytes (default `5368709120`, 5 GiB).
+- `KAFSCALE_LFS_PROXY_CHUNK_SIZE` – Multipart chunk size in bytes (default `5242880`, 5 MiB).
+- `KAFSCALE_LFS_PROXY_CHECKSUM_ALGO` – Checksum algorithm (default `sha256`).
+- `KAFSCALE_LFS_PROXY_ID` – Proxy identifier recorded in tracker events (no default).
+- `KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH` – Maximum topic name length (default `249`).
+
+HTTP API:
+
+- `KAFSCALE_LFS_PROXY_HTTP_ADDR` – Listen address for the LFS HTTP API. No default: the API is off unless set.
+- `KAFSCALE_LFS_PROXY_METRICS_ADDR` – Listen address for LFS metrics (`/metrics`). No default.
+- `KAFSCALE_LFS_PROXY_HTTP_API_KEY` – API key required on HTTP requests (unset means no key check).
+- `KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC` (default `30`), `KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC` (default `300`), `KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC` (default `60`), `KAFSCALE_LFS_PROXY_HTTP_HEADER_TIMEOUT_SEC` (default `10`), `KAFSCALE_LFS_PROXY_HTTP_SHUTDOWN_TIMEOUT_SEC` (default `10`).
+- `KAFSCALE_LFS_PROXY_HTTP_MAX_HEADER_BYTES` – Default `1048576` (1 MiB).
+- `KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC` – Multipart upload session lifetime (default `3600`).
+- `KAFSCALE_LFS_PROXY_DOWNLOAD_TTL_SEC` – Maximum download URL lifetime (default `120`).
+- `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED` – Enable presigned URLs (default `false`).
+- `KAFSCALE_LFS_PROXY_HTTP_TLS_ENABLED` – Serve the HTTP API over TLS (default `false`). Requires `KAFSCALE_LFS_PROXY_HTTP_TLS_CERT_FILE` and `KAFSCALE_LFS_PROXY_HTTP_TLS_KEY_FILE`. Minimum TLS 1.2.
+- `KAFSCALE_LFS_PROXY_HTTP_TLS_CLIENT_CA_FILE` – CA for client certificates. Client certificates are verified if given.
+- `KAFSCALE_LFS_PROXY_HTTP_TLS_REQUIRE_CLIENT_CERT` – Require client certificates when a client CA is set (default `false`).
+
+HTTP endpoints (served on `KAFSCALE_LFS_PROXY_HTTP_ADDR`):
+
+- `POST /lfs/produce` – Upload a blob and produce its envelope to Kafka.
+- `POST /lfs/download` – Get a download for a stored blob.
+- `POST /lfs/uploads` – Start a multipart upload session.
+- `PUT /lfs/uploads/{id}/parts/{n}` – Upload a part.
+- `POST /lfs/uploads/{id}/complete` – Complete the upload.
+- `DELETE /lfs/uploads/{id}` – Abort the upload.
+- `GET /swagger` and `GET /api/openapi.yaml` – API docs and OpenAPI spec.
+
+Kafka backends:
+
+- `KAFSCALE_LFS_PROXY_BACKENDS` – Comma-separated broker list used by the LFS module and tracker.
+- `KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS` (default `5000`), `KAFSCALE_LFS_PROXY_BACKEND_RETRIES` (default `6`, minimum `1`), `KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS` (default `500`).
+- `KAFSCALE_LFS_PROXY_BACKEND_SASL_MECHANISM`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_USERNAME`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_PASSWORD` – SASL for backend connections.
+- `KAFSCALE_LFS_PROXY_BACKEND_TLS_ENABLED` (default `false`), `KAFSCALE_LFS_PROXY_BACKEND_TLS_CA_FILE`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_CERT_FILE`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_KEY_FILE` (cert and key must be set together), `KAFSCALE_LFS_PROXY_BACKEND_TLS_SERVER_NAME`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_INSECURE_SKIP_VERIFY` (default `false`).
+
+LFS tracker (writes LFS operation events to Kafka):
+
+- `KAFSCALE_LFS_TRACKER_ENABLED` (default `true`), `KAFSCALE_LFS_TRACKER_TOPIC` (default `__lfs_ops_state`), `KAFSCALE_LFS_TRACKER_BATCH_SIZE` (default `100`), `KAFSCALE_LFS_TRACKER_FLUSH_MS` (default `100`), `KAFSCALE_LFS_TRACKER_ENSURE_TOPIC` (default `true`), `KAFSCALE_LFS_TRACKER_PARTITIONS` (default `3`), `KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR` (default `1`).
+
+Operator note: for an LFS proxy deployment the operator also sets `KAFSCALE_LFS_PROXY_ADDR`, `KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_LFS_PROXY_ADVERTISED_HOST`, `KAFSCALE_LFS_PROXY_ADVERTISED_PORT`, `KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC` and `KAFSCALE_LFS_PROXY_HEALTH_ADDR` (pkg/operator/lfs_proxy_resources.go). The proxy binary does not read these; it reads `KAFSCALE_PROXY_ADDR`, `KAFSCALE_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_PROXY_ADVERTISED_HOST`, `KAFSCALE_PROXY_ADVERTISED_PORT`, `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` and `KAFSCALE_PROXY_HEALTH_ADDR` instead.
+
+### Iceberg processor LFS overrides
+
+The Iceberg processor addon has its own LFS environment overrides. See `addons/processors/iceberg-processor/README.md`.
+
+### idoc-explode
+
+`idoc-explode` (cmd/idoc-explode) reads SAP IDoc XML or JSONL envelopes and writes one file per topic. Flags: `-input` (file path; empty reads stdin) and `-out` (output directory).
+
+- `KAFSCALE_IDOC_OUTPUT_DIR` – Default for `-out` (default `idoc-output`).
+- `KAFSCALE_IDOC_ITEM_SEGMENTS` (default `E1EDP01,E1EDP19`), `KAFSCALE_IDOC_PARTNER_SEGMENTS` (default `E1EDKA1`), `KAFSCALE_IDOC_STATUS_SEGMENTS` (default `E1STATS`), `KAFSCALE_IDOC_DATE_SEGMENTS` (default `E1EDK03`).
+- `KAFSCALE_IDOC_TOPIC_HEADER` (default `idoc-headers`), `KAFSCALE_IDOC_TOPIC_SEGMENTS` (default `idoc-segments`), `KAFSCALE_IDOC_TOPIC_ITEMS` (default `idoc-items`), `KAFSCALE_IDOC_TOPIC_PARTNERS` (default `idoc-partners`), `KAFSCALE_IDOC_TOPIC_STATUS` (default `idoc-status`), `KAFSCALE_IDOC_TOPIC_DATES` (default `idoc-dates`).
+- `KAFSCALE_IDOC_MAX_BLOB_SIZE` – Maximum LFS blob size to resolve (default `0`, no limit).
+- `KAFSCALE_IDOC_VALIDATE_CHECKSUM` – Validate LFS checksums (default `true`).
+- LFS blobs are resolved from S3 using `KAFSCALE_LFS_PROXY_S3_BUCKET`, `KAFSCALE_LFS_PROXY_S3_REGION`, `KAFSCALE_LFS_PROXY_S3_ENDPOINT`, `KAFSCALE_LFS_PROXY_S3_ACCESS_KEY`, `KAFSCALE_LFS_PROXY_S3_SECRET_KEY`, `KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN` and `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE`. Without bucket and region, blobs are not fetched from S3.
 
 ## External Kafka Access
 

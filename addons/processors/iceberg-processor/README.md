@@ -71,3 +71,13 @@ mappings:
 ```
 
 For full configuration and operational guidance, use the user guide.
+
+## LFS Environment Overrides
+
+These override the `lfs` block of every mapping in the Iceberg processor config:
+
+- `KAFSCALE_ICEBERG_LFS_MODE` – LFS handling mode (config default `off`).
+- `KAFSCALE_ICEBERG_LFS_MAX_INLINE_SIZE` – Maximum size to inline, in bytes.
+- `KAFSCALE_ICEBERG_LFS_STORE_METADATA` – Store LFS metadata columns.
+- `KAFSCALE_ICEBERG_LFS_VALIDATE_CHECKSUM` – Validate checksums (config default `true`).
+- `KAFSCALE_ICEBERG_LFS_RESOLVE_CONCURRENCY` – Parallel blob resolves (config default `4`).

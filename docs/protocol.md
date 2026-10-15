@@ -35,7 +35,7 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | 13 | LeaveGroup | 4 | Graceful consumer shutdown (v4 only) |
 | 14 | SyncGroup | 4 | Partition assignment (v4 only) |
 | 15 | DescribeGroups | 5 | Ops visibility |
-| 16 | ListGroups | 5 | Ops visibility |
+| 16 | ListGroups | 0-5 | Ops visibility (wide range for older admin clients) |
 | 23 | OffsetForLeaderEpoch | 3 | Safe consumer recovery |
 | 18 | ApiVersions | 0-4 | Client capability negotiation |
 | 19 | CreateTopics | 0-2 | Topic management |
