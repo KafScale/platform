@@ -31,11 +31,18 @@ type KafscaleClusterSpec struct {
 }
 
 type BrokerSpec struct {
+	Image          BrokerImageSpec   `json:"image,omitempty"`
 	Replicas       *int32            `json:"replicas,omitempty"`
 	Resources      BrokerResources   `json:"resources,omitempty"`
 	AdvertisedHost string            `json:"advertisedHost,omitempty"`
 	AdvertisedPort *int32            `json:"advertisedPort,omitempty"`
 	Service        BrokerServiceSpec `json:"service,omitempty"`
+}
+
+// BrokerImageSpec overrides the operator's default broker image.
+type BrokerImageSpec struct {
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
 }
 
 type BrokerResources struct {

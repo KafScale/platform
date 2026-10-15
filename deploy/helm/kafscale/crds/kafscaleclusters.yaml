@@ -86,11 +86,14 @@ spec:
                           description: Optional node port for metrics listener.
                     image:
                       type: object
+                      description: Optional per-cluster override of the operator's broker image.
                       properties:
                         repository:
                           type: string
+                          description: Image repository or complete reference, including an optional digest. Defaults to BROKER_IMAGE when omitted.
                         tag:
                           type: string
+                          description: Optional tag replacing any tag or digest in the selected reference. When omitted, the reference is used as supplied.
                     resources:
                       type: object
                       description: Pod resource requests/limits applied to brokers.

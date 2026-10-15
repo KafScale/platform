@@ -198,7 +198,17 @@ func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cl
 }
 
 func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
-	image := brokerImage
+	image := strings.TrimSpace(cluster.Spec.Brokers.Image.Repository)
+	if image == "" {
+		image = brokerImage
+	}
+	if tag := strings.TrimSpace(cluster.Spec.Brokers.Image.Tag); tag != "" {
+		image, _, _ = strings.Cut(image, "@")
+		if colon := strings.LastIndex(image, ":"); colon > strings.LastIndex(image, "/") {
+			image = image[:colon]
+		}
+		image += ":" + tag
+	}
 	pullPolicy := parsePullPolicy(brokerImagePullPolicy)
 	replicas := int32(3)
 	if cluster.Spec.Brokers.Replicas != nil {
