@@ -155,3 +155,22 @@ func TestMakeKey(t *testing.T) {
 		t.Fatalf("unexpected key format: %s", key)
 	}
 }
+
+func TestSetSegmentPreservesActiveReader(t *testing.T) {
+	c := NewSegmentCache(1024)
+	c.SetSegment("orders", 0, 0, []byte("original"))
+	reader, ok := c.GetSegment("orders", 0, 0)
+	if !ok {
+		t.Fatal("cache miss")
+	}
+	replacement := []byte("replaced")
+	c.SetSegment("orders", 0, 0, replacement)
+	replacement[0] = 'X'
+	if string(reader) != "original" {
+		t.Fatalf("active reader changed: %q", reader)
+	}
+	current, ok := c.GetSegment("orders", 0, 0)
+	if !ok || string(current) != "replaced" {
+		t.Fatalf("replacement = %q, found=%t", current, ok)
+	}
+}

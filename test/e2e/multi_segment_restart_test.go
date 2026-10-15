@@ -75,7 +75,7 @@ func TestMultiSegmentRestartDurability(t *testing.T) {
 	waitForBroker(t, brokerLogs, brokerAddr)
 
 	topic := fmt.Sprintf("durability-%d", time.Now().UnixNano())
-	messageCount := 12
+	messageCount := 64
 	payload := strings.Repeat("x", 600)
 	expected := make([]string, 0, messageCount)
 
@@ -193,6 +193,9 @@ func TestMultiSegmentRestartDurability(t *testing.T) {
 	consumerClosed = true
 	time.Sleep(500 * time.Millisecond)
 	stopBroker(t, brokerCmd)
+	if !strings.Contains(brokerLogs.String(), "partition restore completed") {
+		t.Fatalf("missing restore completion log after restart:\n%s", brokerLogs.String())
+	}
 }
 
 func waitForEtcd(t *testing.T, endpoints []string) {

@@ -74,7 +74,7 @@ func (c *SegmentCache) SetSegment(topic string, partition int32, baseOffset int6
 	if elem, ok := c.items[key]; ok {
 		entry := elem.Value.(*cacheEntry)
 		c.size -= len(entry.data)
-		entry.data = append(entry.data[:0], data...)
+		entry.data = append([]byte(nil), data...)
 		c.size += len(entry.data)
 		c.ll.MoveToFront(elem)
 		c.evictIfNeeded()
