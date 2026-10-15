@@ -17,6 +17,7 @@ package operator
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -333,6 +334,11 @@ func TestEtcdMaintenanceCronJobs(t *testing.T) {
 	}
 	if got := envValue(check.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Env, "CHECK_ONLY"); got != "1" {
 		t.Fatalf("checker CHECK_ONLY = %q, want 1", got)
+	}
+	for _, container := range []corev1.Container{maintenance, check.Spec.JobTemplate.Spec.Template.Spec.Containers[0]} {
+		if !reflect.DeepEqual(container.Command, []string{"/bin/sh", "-c"}) || !reflect.DeepEqual(container.Args, []string{etcdMaintenanceShellScript()}) {
+			t.Fatalf("maintenance container command=%q args=%q", container.Command, container.Args)
+		}
 	}
 }
 
