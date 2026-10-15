@@ -44,6 +44,14 @@ jobs:
             image: kafscale-console
             context: .
             file: deploy/docker/console.Dockerfile
+          - name: proxy
+            image: kafscale-proxy
+            context: .
+            file: deploy/docker/proxy.Dockerfile
+          - name: mcp
+            image: kafscale-mcp
+            context: .
+            file: deploy/docker/mcp.Dockerfile
           - name: etcd-tools
             image: kafscale-etcd-tools
             context: .
