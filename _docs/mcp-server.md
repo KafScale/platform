@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: MCP Server
+title: "KafScale MCP Server: Deployment and Configuration"
 description: Deployment and configuration reference for the KafScale MCP service.
 permalink: /mcp-server/
 nav_title: MCP Server
@@ -9,7 +9,7 @@ nav_group: References
 ---
 
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -44,7 +44,7 @@ mcp:
     name: kafscale-mcp
     create: true
   image:
-    repository: ghcr.io/novatechflow/kafscale-mcp
+    repository: ghcr.io/KafScale/platform-mcp
     tag: v0.1.0
   auth:
     token: "<bearer-token>"

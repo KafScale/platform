@@ -28,6 +28,26 @@
       </details>
     {% endif %}
 
+    {% assign releases = items | where: "nav_group", "Releases" %}
+    {% if releases.size > 0 %}
+      {% assign releases_current = false %}
+      {% for item in releases %}
+        {% if page.url == item.url %}
+          {% assign releases_current = true %}
+        {% endif %}
+      {% endfor %}
+      <details class="doc-sidebar-group" {% if releases_current %}open{% endif %}>
+        <summary class="doc-sidebar-group-title">Releases</summary>
+        <div class="doc-sidebar-group-links">
+          {% for item in releases %}
+            {% if item.nav_title %}
+            <a href="{{ item.url }}" {% if page.url == item.url %}aria-current="page"{% endif %}>{{ item.nav_title }}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
     {% assign refs = items | where: "nav_group", "References" %}
     {% if refs.size > 0 %}
       {% assign refs_current = false %}

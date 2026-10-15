@@ -1,14 +1,15 @@
 ---
 layout: doc
-title: Development Guide
+title: "KafScale Development Guide: Build and Test Locally"
 description: How to build, test, and contribute to KafScale locally.
 permalink: /development/
 nav_title: Development
 nav_order: 10
 ---
 
+
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +34,7 @@ This document tracks the steps needed to work on Kafscale. It complements the ar
 ```bash
 make build
 make test
+make commit-check
 ```
 
 ## Prerequisites
@@ -50,7 +52,7 @@ make test
 - `pkg/gen/`: auto-generated protobuf + gRPC Go code (ignored until `buf generate` runs)
 - `docs/`: specs and this guide
 - `test/`: integration + e2e suites
-- `docs/storage.md`: deeper design notes for the storage subsystem, including S3 client expectations
+- [`docs/storage.md`](/storage/): deeper design notes for the storage subsystem, including S3 client expectations
 
 Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 
@@ -60,7 +62,8 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 |---------|---------|
 | `make build` | Compile all Go binaries. |
 | `make test` | Run unit tests (includes `go vet` and race detector). |
-| `make test-produce-consume` | MinIO + Franz produce/consume e2e suite. |
+| `make commit-check` | Run the standard pre-PR quality gate (`check`, `fmt`, `test`, `test-nested-modules`, `test-lfs-sdk-unit`, `test-fuzz`, `code-ql-gate`). |
+| `make test-produce-consume` | MinIO + Franz produce/consume e2e suite plus Kafka CLI producer smoke test (Docker image required). |
 | `make test-consumer-group` | Consumer group persistence e2e (embedded etcd + memory S3). |
 | `make test-ops-api` | Ops/admin API e2e (embedded etcd + memory S3). |
 | `make test-multi-segment-durability` | Multi-segment restart durability e2e (embedded etcd + MinIO). |
@@ -68,12 +71,49 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 | `make test-operator` | Operator envtest + optional kind-based integration. |
 | `make demo` | Local demo with broker + console + embedded etcd. |
 | `make demo-platform` | Kind-based demo (operator HA + managed etcd + console). |
-| `make docker-build` | Build broker/operator/console images locally. |
+| `make docker-build` | Build broker/operator/console/sql-processor images locally. |
 | `make docker-clean` | Remove dev images + Docker caches. |
 | `make stop-containers` | Stop leftover MinIO/kind containers. |
 | `make tidy` | Clean go.mod/go.sum. |
 | `make lint` | Run golangci-lint (requires installation). |
 | `make help` | List all Makefile targets. |
+
+## Local CodeQL Tuning
+
+`make code-ql` and `make commit-check` run a local CodeQL pass. On memory-constrained machines, the Go database finalize step can be killed by the OS.
+
+If that happens, rerun with lower Go CodeQL limits:
+
+```bash
+CODEQL_GO_RAM_MB=768 CODEQL_GO_CACHE_MB=256 CODEQL_GO_THREADS=1 make code-ql
+```
+
+The same environment variables also apply to `make commit-check`.
+
+## Local Limits (kind + e2e)
+
+Kind clusters and the operator e2e suite need a higher file descriptor limit. If `ulimit -n` is below `4096`, the control-plane may crash or time out (leader election failures, API timeouts). Raise it before running kind-based targets:
+
+```bash
+ulimit -n 4096
+```
+
+## Demo Platform Overrides
+
+`make demo-platform` defaults to two brokers and enables the Kafka proxy so the demo behaves like production access. To change broker count, set:
+
+```bash
+KAFSCALE_DEMO_BROKER_REPLICAS=3 make demo-platform
+```
+
+Note: with multiple brokers, the broker list contains per-pod DNS names (from the headless service). Host-based clients cannot resolve those cluster-local names, so use the proxy or keep replicas at `1` when running the demo workload on your machine.
+
+To disable the Kafka proxy in the demo platform, set the flag to `0`. The demo
+will port-forward the broker service instead of the proxy:
+
+```bash
+KAFSCALE_DEMO_PROXY=0 make demo-platform
+```
 
 ## Generating Protobuf Code
 
@@ -84,23 +124,28 @@ brew install buf      # or equivalent
 make proto            # runs `buf generate`
 ```
 
-The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit generated files manually—re-run `make proto` whenever the `.proto` sources change.
+The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit generated files manually. Re-run `make proto` whenever the `.proto` sources change.
 
 ## Release Workflow
 
 We publish container images and GitHub releases from tags. This keeps release artifacts reproducible and aligned with the Helm chart.
 
 - Tag format: `vX.Y.Z` for stable releases, `vX.Y.Z-rc.N` or `vX.Y.Z-dev.N` for prereleases.
-- Tag push triggers the Docker workflow to build and push `kafscale-broker`, `kafscale-operator`, and `kafscale-console` images to GHCR.
+- Tag push triggers the Docker workflow to build and push `kafscale-broker`, `kafscale-operator`, `kafscale-console`, and `kafscale-sql-processor` images to GHCR.
 - The workflow also creates a GitHub release with autogenerated notes.
 - The Helm chart defaults image tags to `appVersion`, so bump `deploy/helm/kafscale/Chart.yaml` `version` and `appVersion` for each release. Users can override `operator.image.tag`, `console.image.tag`, and `operator.brokerImage.tag` to pin a specific version, or set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` for dev/latest installs.
-- Release notes live in `docs/releases/` and should include a human-readable summary plus a "Security fixes" section listing any known CVEs addressed (or "None").
+- Also bump addon processor charts (`addons/processors/*/deploy/helm/*/Chart.yaml`) `version` and `appVersion` so release tags stay aligned across Helm deployments.
+- Update all release references to the new version, including addon module dependencies and docs that pin version strings.
+- Release notes live in [`docs/releases/`](/releases/) and should include a human-readable summary plus a "Security fixes" section listing any known CVEs addressed (or "None").
+- Optional: create a prep branch named `prep-vX.Y.Z` to stage release notes and Helm chart bumps before tagging.
+- `scripts/release.sh -tag vX.Y.Z` creates a `prep-vX.Y.Z` branch, bumps Helm/app versions (including addons), generates release notes from history, commits, and pushes the branch for review.
 
 ## Testing Expectations
 
 Pull requests must include strict test coverage for the changes they introduce. At a minimum:
 
 - Add or extend unit tests for all non-trivial logic.
+- Run `make commit-check` before opening or updating the PR.
 - Run the relevant e2e suite(s); changes to broker behavior should run `make test-produce-consume` and any related e2e tests.
 - Extend e2e coverage when you fix bugs so regressions are caught earlier.
 
@@ -124,7 +169,7 @@ Default MinIO settings (used when `KAFSCALE_USE_MEMORY_S3=1` is not set):
 To point at a different S3-compatible endpoint, set the `KAFSCALE_S3_*` variables listed under Environment Variables. To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
 
 Related targets:
-- `make test-produce-consume` runs the MinIO-backed produce/consume suite.
+- `make test-produce-consume` runs the MinIO-backed produce/consume suite plus a Kafka CLI producer smoke test (configure `KAFSCALE_KAFKA_CLI_IMAGE` / `KAFSCALE_KAFKA_CLI_CMD` if needed).
 - `make test-produce-consume-debug` adds Kafka trace logging (`KAFSCALE_LOG_LEVEL=debug`, `KAFSCALE_TRACE_KAFKA=true`).
 - `make test-consumer-group` and `make test-ops-api` use embedded etcd + in-memory S3.
 - `make test-multi-segment-durability` uses MinIO and restarts the broker across multiple segment flushes.
@@ -142,16 +187,16 @@ The broker exports live throughput gauges (`kafscale_produce_rps` / `kafscale_fe
 
 `TestOperatorManagedEtcdResources` uses controller-runtime envtest to validate operator reconciliation without spinning up kind. Install envtest assets with `setup-envtest` or set `KUBEBUILDER_ASSETS` to a directory containing `kube-apiserver` and `etcd` binaries.
 
-### Broker logging levels
-
-The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we operate in warning-and-above mode, which keeps regular e2e/test runs quiet. Set `KAFSCALE_LOG_LEVEL=info` or `debug` (optionally together with `KAFSCALE_TRACE_KAFKA=true`) when you need additional visibility; the `test-produce-consume-debug` target wires those env vars up for you.
-
 Recommended setup (using `setup-envtest`):
 
 ```bash
 go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.29.x)"
 ```
+
+### Broker logging levels
+
+The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we operate in warning-and-above mode, which keeps regular e2e/test runs quiet. Set `KAFSCALE_LOG_LEVEL=info` or `debug` (optionally together with `KAFSCALE_TRACE_KAFKA=true`) when you need additional visibility; the `test-produce-consume-debug` target wires those env vars up for you.
 
 ## Environment Variables
 
@@ -256,7 +301,7 @@ We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer 
 - Keep all new code documented in `kafscale-spec.md` or cross-link back to the spec
 - Favor context-rich structured logging (zerolog) and Prometheus metrics
 - Protobufs should remain backward compatible; prefer adding optional fields over rewriting existing ones
-- No stream processing primitives in the broker—hand those workloads off to Flink/Wayang or equivalent engines
+- No stream processing primitives in the broker. Hand those workloads off to Flink/Wayang or equivalent engines
 - Every change must land with unit tests, smoke/integration coverage, and regression tests where appropriate; skipping tests requires an explicit TODO anchored to a tracking issue.
 - Secrets live only in Kubernetes; never write S3 or etcd credentials into source control or etcd. Reference them via `credentialsSecretRef` and let the operator project them at runtime.
 - When testing against etcd locally, set `KAFSCALE_ETCD_ENDPOINTS` (comma-separated), plus `KAFSCALE_ETCD_USERNAME` / `KAFSCALE_ETCD_PASSWORD` if auth is enabled. The broker will fall back to the in-memory store when those vars are absent.

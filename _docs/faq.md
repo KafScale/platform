@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: FAQ
+title: "KafScale FAQ: Compatibility, Licensing, and S3"
 description: Common questions about KafScale, Kafka compatibility, and S3 durability.
 permalink: /faq/
 nav_title: FAQ
@@ -19,31 +19,37 @@ The short version: KafScale is the only S3-native, stateless Kafka-compatible pl
 
 ### Why would I use KafScale instead of Apache Kafka?
 
-KafScale trades latency for operational simplicity. If your workload can tolerate hundreds of milliseconds of latency (ETL pipelines, log aggregation, async event processing), KafScale eliminates the operational burden of managing stateful brokers, partition rebalancing, and disk capacity planning.
+KafScale trades latency for operational simplicity and storage-native processing. If your workload can tolerate hundreds of milliseconds of latency, KafScale eliminates stateful brokers, partition rebalancing, and disk capacity planning.
 
-<svg class="diagram" viewBox="0 0 700 200" role="img" aria-label="When to choose KafScale vs Kafka">
+**For AI agent infrastructure**: KafScale's architecture aligns with what agentic systems actually need. AI agents reasoning over business context require completeness and replay capability, not sub-millisecond latency. The immutable log in S3 becomes the system of record that agents query, replay, and reason over. Processors convert that log to tables without competing with streaming workloads for broker resources.
+
+Traditional stream processing optimizes for latency. Milliseconds matter for fraud detection or trading. But AI agents have different requirements: they need to understand what happened, in what order, and why the current state exists. Event sourcing research from the Apache Flink community (FLIP-531) and platforms like Akka confirms this pattern: agentic systems need reproducible state at any point in time.
+
+<svg class="diagram" viewBox="0 0 700 220" role="img" aria-label="When to choose KafScale vs Kafka">
   <style>
     .diagram-text { font-family: system-ui, sans-serif; font-size: 12px; fill: var(--diagram-text, #1e293b); }
     .diagram-title { font-family: system-ui, sans-serif; font-size: 14px; font-weight: 600; fill: var(--diagram-text, #1e293b); }
     .diagram-box { fill: var(--diagram-fill, #f8fafc); stroke: var(--diagram-stroke, #cbd5e1); stroke-width: 1.5; rx: 8; }
     .diagram-accent { fill: var(--diagram-accent, #0ea5e9); }
   </style>
-  <rect x="10" y="10" width="330" height="180" class="diagram-box"/>
+  <rect x="10" y="10" width="330" height="200" class="diagram-box"/>
   <text x="175" y="35" text-anchor="middle" class="diagram-title">Choose KafScale</text>
   <text x="30" y="60" class="diagram-text">✓ ETL and data pipelines</text>
   <text x="30" y="82" class="diagram-text">✓ Log aggregation</text>
   <text x="30" y="104" class="diagram-text">✓ Async event processing</text>
-  <text x="30" y="126" class="diagram-text">✓ Cost-sensitive workloads</text>
-  <text x="30" y="148" class="diagram-text">✓ Teams without Kafka expertise</text>
-  <text x="30" y="170" class="diagram-text">✓ Latency tolerance: 100-500ms</text>
-  <rect x="360" y="10" width="330" height="180" class="diagram-box"/>
+  <text x="30" y="126" class="diagram-text">✓ AI agent infrastructure</text>
+  <text x="30" y="148" class="diagram-text">✓ Event replay and audit</text>
+  <text x="30" y="170" class="diagram-text">✓ Teams without Kafka expertise</text>
+  <text x="30" y="192" class="diagram-text">✓ Latency tolerance: 100-500ms</text>
+  <rect x="360" y="10" width="330" height="200" class="diagram-box"/>
   <text x="525" y="35" text-anchor="middle" class="diagram-title">Choose Apache Kafka</text>
   <text x="380" y="60" class="diagram-text">✓ Real-time trading systems</text>
   <text x="380" y="82" class="diagram-text">✓ Interactive applications</text>
   <text x="380" y="104" class="diagram-text">✓ Exactly-once semantics (EOS)</text>
   <text x="380" y="126" class="diagram-text">✓ Compacted topics</text>
   <text x="380" y="148" class="diagram-text">✓ Complex stream processing</text>
-  <text x="380" y="170" class="diagram-text">✓ Latency requirement: &lt;10ms</text>
+  <text x="380" y="170" class="diagram-text">✓ Sub-10ms latency required</text>
+  <text x="380" y="192" class="diagram-text">✓ Stateful stream joins</text>
 </svg>
 
 ### Is KafScale production ready?
@@ -53,6 +59,55 @@ KafScale is designed for production use, but comes with no warranties or guarant
 ### What license is KafScale released under?
 
 Apache 2.0. You can use it commercially, modify it, distribute it, and offer it as a service without restrictions. No BSL conversion periods, no usage fees, no control plane dependencies.
+
+---
+
+## Architecture
+
+### Why does KafScale use native Kafka record format?
+
+KafScale stores data in `.kfs` segments containing native Kafka V2 record batches, the same binary format Kafka uses internally. This is a deliberate choice:
+
+**Format stability**: Kafka's on-disk format is one of the most stable interfaces in data infrastructure. In 15+ years, there have been exactly three message format versions:
+
+| Version | Introduced | Status |
+|---------|-----------|--------|
+| V0 | Original (2011) | Removed in Kafka 4.0 |
+| V1 | Kafka 0.10.0 (2016) | Removed in Kafka 4.0 |
+| V2 | Kafka 0.11.0 (June 2017) | Current standard |
+
+V2 has been the only supported format for 8+ years. The entire Kafka ecosystem (Confluent, Redpanda, every client library, Flink, Spark, Debezium, MirrorMaker) depends on this stability. Changing it would break everything.
+
+**If Kafka ever changes**: KafScale is fully open source under Apache 2.0. Any format updates can be implemented immediately by the community. Contrast this with proprietary alternatives where you'd wait for a vendor to prioritize the update.
+
+**No abstraction tax**: Using native format means zero conversion overhead. Producers write Kafka records; we store Kafka records; consumers read Kafka records.
+
+### What about coupling processors to the storage format?
+
+[Processors](/docs/#processors) read directly from S3, bypassing brokers entirely. This means they understand the `.kfs` segment format and coordinate via etcd.
+
+This is intentional coupling to a stable interface, not a liability:
+
+1. **The format won't change**: Kafka V2 record batches are a de facto standard
+2. **Read-replica brokers would have the same coupling**: they'd also need to parse segments and query etcd
+3. **The coupling is explicit and documented**: not hidden inside a proprietary broker
+4. **Open format means open tooling**: anyone can build processors, analyzers, or integrations
+
+The tradeoff: if KafScale's internal segment layout evolves, processors need updates. In practice, we version the segment format and maintain backward compatibility.
+
+### Does KafScale work with clouds other than AWS?
+
+Yes. KafScale works with any S3-compatible storage backend. See [Supported storage](/supported/) for configuration examples.
+
+| Provider | Compatibility | Notes |
+|----------|--------------|-------|
+| AWS S3 | ✅ Native | Full support including IRSA |
+| DigitalOcean Spaces | ✅ Native | Drop-in replacement |
+| Cloudflare R2 | ✅ Native | Zero egress fees |
+| Backblaze B2 | ✅ Native | S3-compatible API |
+| MinIO | ✅ Native | Self-hosted, any infrastructure |
+| Google Cloud Storage | ⚠️ Interop | Requires HMAC keys |
+| Azure Blob Storage | ❌ Proxy | Requires an S3-compatible proxy in front of Azure Blob (MinIO gateway mode is no longer available) |
 
 ---
 
@@ -80,6 +135,20 @@ Several factors affect latency:
 
 The fundamental tradeoff is S3 round-trip time. If you need sub-50ms latency, KafScale is not the right choice.
 
+### How large can messages be?
+
+There's no configured maximum in KafScale. The theoretical limit is the 32-bit Kafka frame length (~2 GB), but the practical limit is broker memory since messages are fully buffered in RAM before flushing to S3.
+
+**Rule of thumb**: max in-flight messages ≈ RAM / (2 × message size)
+
+| Broker RAM | 10 MB messages | 50 MB messages | 100 MB messages |
+|------------|----------------|----------------|-----------------|
+| 16 GB      | ~800 in-flight | ~160 in-flight | ~80 in-flight   |
+
+Large payloads (XML, JSON, binary blobs) work fine. They're stored as standard Kafka record batches inside `.kfs` segments. Multiple messages buffer until flush thresholds, then upload as a single segment object.
+
+**Scaling for large messages**: Since brokers are stateless, you can scale pods automatically based on memory pressure (e.g., HPA at 80% memory). One stable endpoint, automatic scaling behind the scenes.
+
 ### How does KafScale handle backpressure?
 
 When S3 latency exceeds thresholds, brokers enter `DEGRADED` state. If S3 becomes unavailable, brokers enter `UNAVAILABLE` state and reject produce requests while continuing to serve cached fetch requests. Clients should implement retry logic with exponential backoff.
@@ -102,7 +171,7 @@ Not supported: transactions (exactly-once semantics), compacted topics, and the 
 
 ### Can I migrate from Kafka to KafScale?
 
-Yes, but it requires replaying data. KafScale uses a different storage format (S3 segments) than Kafka (local log files). Migration options:
+Yes, but it requires replaying data. KafScale uses a different storage layout (S3 segments) than Kafka (local log files), though the record format is identical. Migration options:
 
 1. **Dual-write**: Produce to both systems during transition
 2. **MirrorMaker**: Use Kafka MirrorMaker to replicate topics to KafScale
@@ -111,6 +180,33 @@ Yes, but it requires replaying data. KafScale uses a different storage format (S
 ### Do consumer groups work?
 
 Yes. KafScale implements the full consumer group protocol including JoinGroup, SyncGroup, Heartbeat, LeaveGroup, and OffsetCommit/Fetch. Consumer offsets are stored in etcd.
+
+---
+
+## Processors
+
+### What are processors?
+
+Processors are components that read directly from S3, bypassing brokers entirely. They enable analytical workloads without adding load to your streaming infrastructure. See [Processors](/docs/#processors) for details.
+
+Available processors:
+
+- **[Iceberg Processor](/processors/iceberg/)**: Continuous export to Apache Iceberg tables
+- **[SQL Processor (KAFSQL)](/processors/sql/)**: Query KafScale segments with Postgres-compatible SQL
+
+### Why bypass brokers for analytics?
+
+Traditional Kafka Connect runs through brokers, competing with real-time consumers for broker resources. KafScale processors read segments directly from S3:
+
+- **No broker contention**: Analytical queries don't impact streaming latency
+- **Horizontal scale**: Add processors without broker capacity planning
+- **Cost efficiency**: S3 reads are cheap; broker CPU is expensive
+
+This architecture is ideal for AI/ML pipelines where you need to replay large volumes of historical data without impacting production consumers.
+
+### Can I build custom processors?
+
+Yes. The `.kfs` segment format is documented, and processors coordinate via etcd for offset tracking. See [Building Processors](https://github.com/KafScale/platform/tree/main/addons/processors/skeleton) for the SDK and examples.
 
 ---
 
@@ -213,6 +309,21 @@ spec:
       interval: 1h
 ```
 
+### Can I restore a topic to an earlier point in time?
+
+Yes, but the supported model is **DR-side restore into a new topic**, not in-place rollback on the primary cluster.
+
+KafScale can recover a topic by copying immutable `.kfs` segment/index pairs up to a chosen timestamp into a fresh target topic:
+
+```bash
+kafscale-cli restore \
+  --topic orders \
+  --target-topic orders-restore-20260513 \
+  --to 2026-05-13T14:23:00Z
+```
+
+This is segment-granular rather than record-exact PITR. The safer workflow is restore, validate, and then cut consumers over deliberately.
+
 ### How do I monitor KafScale?
 
 Brokers expose Prometheus metrics on port 9093. Key metrics:
@@ -296,12 +407,12 @@ Increase `session.timeout.ms` on clients if pods are slow to respond to heartbea
 
 ### How can I contribute?
 
-See [CONTRIBUTING.md](https://github.com/novatechflow/kafscale/blob/main/CONTRIBUTING.md) in the repository. We welcome bug reports, feature requests, documentation improvements, and code contributions.
+See [CONTRIBUTING.md](https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md) in the repository. We welcome bug reports, feature requests, documentation improvements, and code contributions.
 
 ### Where do I report bugs?
 
-Open an issue on [GitHub](https://github.com/novatechflow/kafscale/issues). Include KafScale version, Kubernetes version, and relevant logs.
+Open an issue on [GitHub](https://github.com/KafScale/platform/issues). Include KafScale version, Kubernetes version, and relevant logs.
 
 ### Is there a community?
 
-Join the discussion on [GitHub Discussions](https://github.com/novatechflow/kafscale/discussions) or the `#kafscale` channel on the Kubernetes Slack.
+Join the discussion on [GitHub Discussions](https://github.com/KafScale/platform/discussions) or the `#kafscale` channel on the Kubernetes Slack.

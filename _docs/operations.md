@@ -1,43 +1,497 @@
 ---
 layout: doc
-title: Operations Guide
+title: "KafScale Operations Guide: Production Clusters"
 description: "Production operations guidance: monitoring, scaling, backups, upgrades, and troubleshooting for KafScale."
 permalink: /operations/
 nav_title: Operations
 nav_order: 6
 ---
 
-# Operations Guide
+# Kafscale Production Operations Guide
 
-This guide covers day-to-day operations for KafScale clusters in production. For metrics details, see [Metrics Reference](/metrics/). For the admin API, see [Ops API](/ops-api/).
+This guide explains how to install the Kafscale control plane via Helm, configure S3 and etcd dependencies, and expose the operations console.  It assumes you already have a Kubernetes cluster and the prerequisites listed below.
 
 ## Prerequisites
 
-Before operating a production cluster:
+- Kubernetes 1.26+
+- Helm 3.12+
+- A reachable etcd cluster (the operator uses it for metadata + leader election)
+- An S3 bucket per environment plus IAM credentials with permission to list/create objects
+- Optional: an ingress controller for the console UI
 
-- etcd cluster (3+ nodes recommended, odd quorum)
-- S3 bucket with appropriate IAM permissions
-- Kubernetes cluster with the KafScale operator installed
-- `kubectl` and `helm` CLI tools
+## Installing with Helm
 
-## Security & hardening
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
+  --set operator.image.tag=v0.1.0 \
+  --set console.image.tag=v0.1.0
+```
 
-- **RBAC**: The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
-- **S3 credentials**: Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`.
-- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. In Helm, set `console.auth.username` and `console.auth.password`.
-- **TLS**: Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
+The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
+
+By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.1.0`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
+
+### Values to pay attention to
+
+| Value | Purpose |
+|-------|---------|
+| `operator.replicaCount` | Number of operator replicas (default `2`).  Operators use etcd to elect a leader and stay HA. |
+| `operator.leaderKey` | Kubernetes leader election lock name. Use a DNS-1123 compatible name. |
+| `console.service.*` | Type/port used to expose the UI.  Combine with `.console.ingress` to publish via an ingress controller. |
+| `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
+| `imagePullSecrets` | Provide if your container registry (e.g., GHCR) is private. |
+
+## Post-install Steps
+
+1. Apply a `KafscaleCluster` custom resource describing the S3 bucket, etcd endpoints, cache sizes, and credentials secret.
+2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
+3. Expose the console UI (optional) by enabling ingress in `values.yaml` or by creating a LoadBalancer service.
+
+## Security & Hardening
+
+- **RBAC** – The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
+- **S3 credentials** – Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into the AWS CLI env vars (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) automatically.
+- **Console auth** – The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, set `console.auth.username` and `console.auth.password`, for example:
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --set console.auth.username=kafscaleadmin \
+  --set console.auth.password='use-a-secret'
+```
+
+- **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
-- **Network policies**: Allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
-- **Health/metrics**: Prometheus can scrape `/metrics` on brokers and operator for early detection of S3 pressure or degraded nodes.
-- **Startup gating**: Broker pods exit if they cannot read metadata or write a probe object to S3, so Kubernetes restarts them instead of leaving a stuck listener in place.
-- **Leader IDs**: Each broker advertises a numeric NodeID in etcd. In a single-node demo you’ll always see `Leader=0` in the Console’s topic detail.
+- **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
+- **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
+- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default; broker/etcd affinity overrides via the CR are tracked separately ([#164](https://github.com/KafScale/platform/issues/164)).
+- **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
+  - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
+  - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
+  - **Trust boundary** – Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
+  - **Fail-closed** – When `KAFSCALE_PROXY_PROTOCOL=true`, brokers reject connections that do not include a valid PROXY header.
+  - **Header limits** – PROXY v1 headers are capped at 256 bytes; oversized headers are rejected.
+  - **Health checks** – PROXY v2 `LOCAL` connections are accepted (no identity); ensure LB health checks don’t rely on ACL-protected operations.
 
-## External Broker Access
+Example ACL values (Helm operator):
+```yaml
+operator:
+  acl:
+    enabled: true
+    configJson: |
+      {"default_policy":"deny","principals":[
+        {"name":"analytics","allow":[{"action":"fetch","resource":"topic","name":"orders-*"}]}
+      ]}
+  auth:
+    principalSource: "proxy_addr"
+    proxyProtocol: true
+```
+- **Health / metrics** – Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
+- **Startup gating** – Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
+- **Leader IDs** – Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
+
+### Proxy TLS via LoadBalancer (Recommended)
+
+The proxy is the external Kafka entrypoint. For TLS in v1.5, terminate TLS at
+the cloud LoadBalancer by supplying Service annotations in the Helm values.
+This keeps broker traffic plaintext inside the cluster while enabling HTTPS/TLS
+for clients.
+
+Example (provider-specific annotations omitted here):
+
+```yaml
+proxy:
+  enabled: true
+  service:
+    type: LoadBalancer
+    port: 9092
+    annotations:
+      # Add your cloud provider TLS annotations here (ACM / GCP / Azure, etc.)
+    loadBalancerSourceRanges:
+      - 203.0.113.0/24
+```
+
+If you need in-cluster ACME/Let’s Encrypt support, document it as an optional
+stack (Traefik or another TCP-capable gateway + cert-manager). Keep it off by
+default to avoid extra operational dependencies.
+
+#### Provider Examples (Verify with your cloud)
+
+These snippets show common patterns; annotation keys vary by provider and
+feature. Always validate against your cloud provider docs.
+
+AWS NLB TLS (example):
+```yaml
+proxy:
+  service:
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:REGION:ACCOUNT:certificate/ID"
+      service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "9092"
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+```
+
+GCP / Azure:
+- L4 LoadBalancers typically do TCP pass-through; TLS termination often requires
+  a provider gateway/ingress (or a TCP-capable ingress controller).
+- If you terminate TLS outside the Service, keep the proxy Service as plain TCP.
+
+## Ops API Examples
+
+Kafscale exposes Kafka admin APIs for operator workflows (consumer group visibility,
+config inspection, cleanup). The canonical plan and scope live in [`docs/ops-api.md`](/ops-api/).
+
+```bash
+# List consumer groups
+kafka-consumer-groups.sh --bootstrap-server <broker> --list
+
+# Describe a consumer group
+kafka-consumer-groups.sh --bootstrap-server <broker> --describe --group <group-id>
+
+# Delete a consumer group
+kafka-consumer-groups.sh --bootstrap-server <broker> --delete --group <group-id>
+
+# Read topic configs
+kafka-configs.sh --bootstrap-server <broker> --describe --entity-type topics --entity-name <topic>
+
+# Increase partition count for a topic (additive only)
+kafka-topics.sh --bootstrap-server <broker> --alter --topic <topic> --partitions <count>
+
+# Update topic retention (whitelist only)
+kafka-configs.sh --bootstrap-server <broker> --alter --entity-type topics --entity-name <topic> \
+  --add-config retention.ms=604800000
+```
+
+## etcd Availability & Storage
+
+Kafscale depends on etcd for metadata + offsets. Treat etcd as a production datastore:
+
+- Run a dedicated etcd cluster (do not share the Kubernetes control-plane etcd).
+- Use SSD-backed disks for data and WAL volumes; avoid networked storage when possible.
+- Deploy an odd number of members (3 for most clusters, 5 for higher fault tolerance).
+- Spread members across zones/racks to survive single-AZ failures.
+- Enable compaction/defragmentation and monitor fsync/proposal latency.
+- HA requires a stable client access layer: use a Kafka-aware proxy or per-broker endpoints so bootstrap addresses and leader routing survive broker churn.
+
+### Operator-managed etcd (default path)
+
+If no etcd endpoints are supplied, the operator will provision a 3-node etcd StatefulSet for you. Recommended settings:
+
+- Use an SSD-capable StorageClass for the etcd PVCs (`storageClassName`), with enough IOPS headroom.
+- Set a PodDisruptionBudget so only one etcd pod can be evicted at a time.
+- Pin etcd pods across zones with topology spread or anti-affinity.
+- Enable snapshot backups to a dedicated S3 bucket and retain at least 7 days of snapshots.
+- Monitor leader changes, fsync latency, and disk usage; alert on slow or flapping members.
+
+The operator tunes managed etcd automatically:
+
+- In-process periodic compaction (5m retention) and a 4 GiB backend quota on the etcd StatefulSet.
+- `{cluster}-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
+- `{cluster}-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
+
+Override schedules and thresholds via the operator etcd env vars listed below.
+
+### Etcd Endpoint Resolution
+
+The operator resolves etcd endpoints in this order:
+
+1. `KafscaleCluster.spec.etcd.endpoints`
+2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`
+3. Managed etcd (operator creates a 3-node StatefulSet)
+
+### Etcd Schema Direction
+
+Kafscale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
+
+### Etcd Availability Signals (clients)
+
+When etcd is unavailable, the broker rejects producer/admin/consumer-group operations with `REQUEST_TIMED_OUT`. Producers see per-partition errors in the Produce response; admin and group APIs return the same code in their response payloads.
+
+Snapshot job defaults and operator env overrides:
+
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: `kafscale-etcd-<namespace>-<cluster>`, separate from broker segment storage)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` (default: `etcd-snapshots`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` (default: `0 * * * *`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `kubesphere/etcd:3.6.4-0`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` (default: `amazon/aws-cli:2.15.0`)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (optional, for MinIO or custom S3)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` (default: 7200)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` (optional, set to `1` to auto-create the backup bucket)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` (optional, set to `1` to enable versioning + block public access)
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` (optional, set to `1` to skip the operator S3 write check)
+
+The operator performs an S3 write preflight before enabling snapshots. If the check fails, the `EtcdSnapshotAccess` condition is set to `False` and reconciliation returns an error until access is restored. Snapshots are uploaded as timestamped files plus a `.sha256` checksum for recovery validation.
+
+### Snapshot Restore (KafScale managed etcd)
+
+Snapshot restore refers to **etcd operational data** (cluster metadata/offsets). It is not the broker topic snapshot flow.
+
+When the KafScale operator manages etcd, each cluster pod runs ```restore init containers``` before etcd starts:
+
+- The snapshot download container pulls the latest `.db` snapshot from the configured bucket/prefix.
+- The restore container runs `etcdctl snapshot restore` if the data directory is empty and a snapshot file is present.
+- If no snapshot is available, etcd starts with a clean data directory.
+
+The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
+
+### Topic Recovery On The DR Spine
+
+For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
+
+Use `kafscale-cli restore` to create a fresh target topic, copy `.kfs` segment/index pairs up to a cutoff timestamp, and set the recovered topic's next offsets:
+
+```bash
+kafscale-cli restore \
+  --topic orders \
+  --target-topic orders-restore-20260513 \
+  --to 2026-05-13T14:23:00Z
+```
+
+Operational semantics:
+
+- Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
+- The target topic must be new. KafScale refuses to restore over an existing persisted topic.
+- Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
+- If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
+- Offsets are preserved inside the recovered topic so replay, validation, and downstream cutover can happen without rewriting the source topic.
+- The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
+
+### Consumer Offsets After Restore
+
+Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:
+
+- Ensure consumers commit offsets (default for most Kafka clients).
+- Set `auto.offset.reset=earliest` as a safety net for new or uncommitted consumers.
+
+Minimal env + spec checklist for a smooth run:
+- Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (optional override), `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
+- Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS). Optional read replica: `spec.s3.readBucket`, `spec.s3.readRegion`, `spec.s3.readEndpoint`.
+- Secret keys: `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`.
+- Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
+
+Recommended operator alerting (when using Prometheus Operator):
+- `KafscaleSnapshotAccessFailed` – S3 snapshot writes failing.
+- `KafscaleSnapshotStale` – last successful snapshot older than the staleness threshold.
+- `KafscaleSnapshotNeverSucceeded` – no successful snapshots recorded.
+
+## Proxy readiness
+
+The proxy exposes `/readyz` and `/livez` on `KAFSCALE_PROXY_HEALTH_ADDR`
+(default `:9094`).
+
+`/readyz` answers two questions, not one:
+
+1. **Is a backend known?** Cached backend state when fresh, otherwise a live
+   metadata fetch from etcd.
+2. **Does that backend actually serve Fetch?** A Fetch round-trip on a fresh
+   connection that must decode cleanly.
+
+The second question exists because the proxy is a full Fetch codec: it decodes,
+merges and re-encodes broker Fetch responses. A proxy-to-broker Fetch
+serialization or connection-state mismatch therefore breaks consume while
+Metadata and ListOffsets keep answering normally. Readiness based on the first
+question alone reports `ready` while every consumer silently receives zero
+records, and Kubernetes keeps the pod in the Service.
+
+The probe asks for one partition of a deliberately unknown topic ID, so it needs
+no real topic and reads no data; a correct broker answers `UNKNOWN_TOPIC_ID`.
+The fresh connection is deliberate too: it detects a stale or half-open pooled
+connection, which a cached-state check cannot.
+
+Set `KAFSCALE_PROXY_READYZ_FETCH_PROBE=false` to fall back to the shallow
+"a backend exists" check. That is an escape hatch for a probe that reports a
+false negative in the field, not a recommended steady state: it removes the only
+readiness signal that distinguishes "serving" from "running".
+
+**Startup ordering.** With the probe enabled the proxy stays NotReady until a
+broker serves Fetch. An installer that waits for proxy readiness before creating
+the cluster resource that produces the broker will therefore deadlock. Create
+the broker first, or do not gate the install on proxy readiness.
+
+## Environment Variable Index
+
+### Operator
+
+- `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` – Comma-separated etcd endpoints to use instead of managed etcd.
+- `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `kubesphere/etcd:3.6.4-0`).
+- `KAFSCALE_OPERATOR_ETCD_REPLICAS` – Managed etcd replica count (default `3`).
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` – PVC size for managed etcd (default `10Gi`).
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` – StorageClass for managed etcd PVCs.
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY` – Use in-memory `emptyDir` for etcd data (`1` to enable, test/dev only).
+- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_MODE` – Managed etcd compaction mode (`periodic` or `revision`; default `periodic`).
+- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_RETENTION` – Compaction retention (`5m` for periodic mode; default `5m`).
+- `KAFSCALE_OPERATOR_ETCD_QUOTA_BACKEND_BYTES` – Managed etcd backend quota in bytes (default `4294967296`, 4 GiB).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE` – Baseline maintenance CronJob schedule (default `0 */6 * * *`).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_CHECK_SCHEDULE` – Reactive size-check CronJob schedule (default `*/15 * * * *`).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED` – Enable maintenance CronJobs (`0`/`false` to disable; enabled by default).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SIZE_THRESHOLD_PCT` – Backend size threshold percent of quota before reactive maintenance runs (default `75`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` – Snapshot prefix (default `etcd-snapshots`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` – Cron schedule for snapshots (default `0 * * * *`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` – Etcdctl image for snapshots.
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` – AWS CLI image for uploads.
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` – S3 endpoint override (MinIO/custom).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` – Staleness threshold seconds (default `7200`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` – Auto-create the snapshot bucket (`1` to enable).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` – Enable versioning + public access block (`1` to enable).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` – Skip the S3 write preflight (`1` to enable).
+- `KAFSCALE_OPERATOR_LEADER_KEY` – Override the operator leader election ID (default `kafscale-operator`).
+- `KAFSCALE_S3_NAMESPACE` – Prefix used for broker S3 object keys (defaults to the cluster namespace).
+- `KAFSCALE_SEGMENT_BYTES` – Broker segment flush threshold in bytes (default `4194304`).
+- `KAFSCALE_FLUSH_INTERVAL_MS` – Broker flush interval in milliseconds (default `500`).
+
+### Broker
+
+- `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
+- `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
+- `KAFSCALE_BROKER_PORT` – Advertised port (default `9092`).
+- `KAFSCALE_BROKER_ID` – Broker node ID.
+- `KAFSCALE_METRICS_ADDR` – Metrics listen address.
+- `KAFSCALE_CONTROL_ADDR` – Control-plane listen address.
+- `KAFSCALE_ETCD_ENDPOINTS` – Etcd endpoints for metadata/offsets.
+- `KAFSCALE_ETCD_USERNAME`, `KAFSCALE_ETCD_PASSWORD` – Etcd basic auth.
+- `KAFSCALE_S3_BUCKET` – S3 bucket for segments/snapshots.
+- `KAFSCALE_S3_REGION` – S3 region.
+- `KAFSCALE_S3_ENDPOINT` – S3 endpoint override.
+- `KAFSCALE_S3_READ_BUCKET` – Optional read replica bucket (CRR/MRAP).
+- `KAFSCALE_S3_READ_REGION` – Optional read replica region.
+- `KAFSCALE_S3_READ_ENDPOINT` – Optional read replica endpoint override.
+- `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
+- `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
+- `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
+- `KAFSCALE_S3_CONCURRENCY` – Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends.
+
+Read replica example (multi-region reads):
+
+```bash
+export KAFSCALE_S3_BUCKET=prod-segments
+export KAFSCALE_S3_REGION=us-east-1
+export KAFSCALE_S3_READ_BUCKET=prod-segments-replica
+export KAFSCALE_S3_READ_REGION=eu-west-1
+```
+- `KAFSCALE_CACHE_BYTES` – Broker cache size in bytes.
+- `KAFSCALE_READAHEAD_SEGMENTS` – Segment readahead count.
+- `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
+- `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
+- `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
+- `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
+- `KAFSCALE_LOG_LEVEL` – Log level (`debug`, `info`, `warn`, `error`).
+- `KAFSCALE_TRACE_KAFKA` – Enable protocol tracing (`true/false`).
+- `KAFSCALE_THROUGHPUT_WINDOW_SEC` – Throughput window size seconds.
+- `KAFSCALE_S3_HEALTH_WINDOW_SEC` – S3 health sampling window seconds.
+- `KAFSCALE_S3_LATENCY_WARN_MS`, `KAFSCALE_S3_LATENCY_CRIT_MS` – Latency thresholds.
+- `KAFSCALE_S3_ERROR_RATE_WARN`, `KAFSCALE_S3_ERROR_RATE_CRIT` – Error-rate thresholds.
+- `KAFSCALE_STARTUP_TIMEOUT_SEC` – Broker startup timeout.
+
+### Produce Flush Policy (cost vs durability)
+
+By default, the broker flushes to S3 for every Produce request with `acks != 0`
+to minimize the loss window after a broker crash. You can relax this for lower
+S3 write costs by disabling sync flush and relying on the background flush
+interval/segment size.
+
+Durability-optimized (default):
+- `KAFSCALE_PRODUCE_SYNC_FLUSH=true`
+- `KAFSCALE_FLUSH_INTERVAL_MS=500`
+- `KAFSCALE_SEGMENT_BYTES=4194304`
+
+Cost-optimized (accepts a larger loss window after crash):
+- `KAFSCALE_PRODUCE_SYNC_FLUSH=false`
+- `KAFSCALE_FLUSH_INTERVAL_MS=2000` (or higher)
+- `KAFSCALE_SEGMENT_BYTES=33554432` (or higher)
+
+### Proxy
+
+- `KAFSCALE_PROXY_ADDR` – Proxy listen address (host:port).
+- `KAFSCALE_PROXY_HEALTH_ADDR` – Health/readiness listen address (default `:9094`; exposes `/readyz` and `/livez`).
+- `KAFSCALE_PROXY_ADVERTISED_HOST` – Address Kafka clients should connect to.
+- `KAFSCALE_PROXY_ADVERTISED_PORT` – Advertised port (default `9092`).
+- `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
+- `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
+- `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
+- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`).
+- `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
+- `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
+- `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
+- `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS HTTP API on the unified proxy (default `false`).
+
+### Console
+
+- `KAFSCALE_CONSOLE_HTTP_ADDR` – Console listen address.
+- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` – Etcd endpoints for metadata read-only access.
+- `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD` – Etcd auth for console.
+- `KAFSCALE_CONSOLE_BROKER_METRICS_URL` – Broker Prometheus endpoint.
+- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD` – Console login credentials.
+
+## External Kafka Access
 
 By default, brokers advertise the in-cluster service DNS name. That works for
-clients running inside Kubernetes, but external clients must connect to a
-reachable address. Configure both the broker Service exposure and the advertised
-address so clients learn the external endpoint from metadata responses.
+clients running inside Kubernetes. External clients need a reachable address in
+Metadata responses.
+
+**Recommended:** deploy the Kafka-aware proxy (`proxy.enabled=true`). When the
+proxy is enabled, clients connect to the **proxy Service**, not individual broker
+pods. The proxy answers Metadata/FindCoordinator with a single stable endpoint,
+then forwards all other Kafka requests to brokers. This keeps clients connected as
+broker pods scale or rotate.
+
+**Optional:** expose brokers directly via `KafscaleCluster` `spec.brokers` Service
+settings (LoadBalancer or NodePort). Use this only when you intentionally bypass
+the proxy (traffic isolation, pinned producers, or legacy integrations). Broker
+NodePort does not replace the proxy entrypoint in scaled deployments.
+
+The Helm chart does **not** ship a Kafka Ingress resource. External TLS uses
+LoadBalancer annotations or an external TCP gateway (see
+[Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer-recommended)).
+
+### Kafka Proxy (recommended)
+
+Recommended settings:
+- Run 2+ proxy replicas behind a LoadBalancer service.
+- Point the proxy at etcd via `KAFSCALE_PROXY_ETCD_ENDPOINTS` so it can read the cluster snapshot.
+- Set `KAFSCALE_PROXY_ADVERTISED_HOST`/`KAFSCALE_PROXY_ADVERTISED_PORT` to the public DNS + port clients should use.
+
+Helm values to enable:
+- `proxy.enabled=true`
+- `proxy.etcdEndpoints[0]=http://kafscale-etcd-client.<namespace>.svc.cluster.local:2379`
+- `proxy.advertisedHost=<public DNS>`
+
+Example (HA proxy + external access):
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set proxy.enabled=true \
+  --set proxy.replicaCount=2 \
+  --set proxy.service.type=LoadBalancer \
+  --set proxy.service.port=9092 \
+  --set proxy.advertisedHost=kafka.example.com \
+  --set proxy.advertisedPort=9092 \
+  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+```
+
+For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
+stay stable. Set `proxy.service.type=NodePort` and `proxy.service.nodePort` to a
+value in `30000–32767`, then set `proxy.advertisedHost` to the node IP (or the
+mapped host address). See `deploy/helm/kafscale/README.md` for details.
+
+Example (kind / local dev):
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set proxy.enabled=true \
+  --set proxy.service.type=NodePort \
+  --set proxy.service.nodePort=30092 \
+  --set proxy.advertisedHost=127.0.0.1 \
+  --set proxy.advertisedPort=30092 \
+  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+```
+
+Helm chart docs: `deploy/helm/kafscale/README.md`.
+
+### Direct broker exposure (optional)
 
 Broker exposure settings (KafscaleCluster `spec.brokers`):
 - `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
@@ -46,8 +500,6 @@ Broker exposure settings (KafscaleCluster `spec.brokers`):
 - `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
 - `service.externalTrafficPolicy` – `Cluster` or `Local`.
 - `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
-
-Helm chart docs: `deploy/helm/README.md`.
 
 Example (GKE/AWS/Azure load balancer):
 
@@ -74,9 +526,10 @@ spec:
   etcd:
     endpoints: []
 ```
+
 TLS note: brokers speak plaintext today. If you need TLS for Kafka traffic,
 terminate TLS at your load balancer, ingress TCP proxy, or service mesh and
-advertise that endpoint in `advertisedHost`/`advertisedPort`. See `docs/security.md`
+advertise that endpoint in `advertisedHost`/`advertisedPort`. See [`docs/security.md`](/security/)
 for the current transport security posture.
 
 Example certificate (cert-manager) for a TCP proxy or load balancer that uses a
@@ -97,436 +550,13 @@ spec:
     kind: ClusterIssuer
 ```
 
-For full Helm values and deployment notes, see [Helm](/helm/).
+## Upgrades & Rollbacks
 
-## Monitoring
+- Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.
+- CRD schema changes follow Kubernetes best practices; run `helm upgrade` to pick them up.
+- Rollbacks can be performed with `helm rollback kafscale <REVISION>` which restores the previous deployment and service versions.  Brokers are stateless so the recovery window is short.
 
-### Prometheus endpoints
-
-KafScale exposes Prometheus metrics on `/metrics`:
-
-| Component | Endpoint | Default Port |
-|-----------|----------|--------------|
-| Broker | `http://<broker-host>:9093/metrics` | 9093 |
-| Operator | `http://<operator-host>:8080/metrics` | 8080 |
-
-### Grafana dashboards
-
-For the full metrics catalog and dashboard context, see [Metrics](/metrics/).
-
-Import the pre-built dashboards from the repository:
-
-```bash
-# Broker dashboard
-kubectl apply -f https://raw.githubusercontent.com/novatechflow/kafscale/main/docs/grafana/broker-dashboard.json
-
-# Operator dashboard  
-kubectl apply -f https://raw.githubusercontent.com/novatechflow/kafscale/main/docs/grafana/operator-dashboard.json
-```
-
-Or import directly into Grafana from `docs/grafana/` in the main branch.
-
-## Ops API examples
-
-KafScale exposes Kafka admin APIs for operator workflows (consumer group visibility, config inspection, cleanup). The canonical plan and scope live in [Ops API](/ops-api/).
-
-```bash
-# List consumer groups
-kafka-consumer-groups.sh --bootstrap-server <broker> --list
-
-# Describe a consumer group
-kafka-consumer-groups.sh --bootstrap-server <broker> --describe --group <group-id>
-
-# Delete a consumer group
-kafka-consumer-groups.sh --bootstrap-server <broker> --delete --group <group-id>
-
-# Read topic configs
-kafka-configs.sh --bootstrap-server <broker> --describe --entity-type topics --entity-name <topic>
-```
-
-## Scaling
-
-### Horizontal scaling with HPA
-
-Brokers are stateless and scale horizontally with Kubernetes HPA. No partition rebalancing is required—S3 is the source of truth.
-
-**CPU-based HPA (recommended starting point):**
-
-```bash
-kubectl autoscale deployment kafscale-broker \
-  --cpu-percent=70 \
-  --min=3 \
-  --max=12
-```
-
-**Custom metrics HPA (advanced):**
-
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: kafscale-broker-hpa
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: kafscale-broker
-  minReplicas: 3
-  maxReplicas: 20
-  metrics:
-  - type: Pods
-    pods:
-      metric:
-        name: kafscale_produce_rps
-      target:
-        type: AverageValue
-        averageValue: "1000"
-```
-
-### Scaling etcd
-
-etcd should maintain an odd number of nodes (3, 5, 7). For scaling:
-
-1. Add new etcd member to the cluster
-2. Update `KAFSCALE_ETCD_ENDPOINTS` in broker configuration
-3. Perform rolling restart of brokers
-
-**Do not scale etcd down during active traffic.** Always ensure quorum (n/2 + 1 nodes).
-
-## etcd availability & storage
-
-KafScale depends on etcd for metadata + offsets. Treat etcd as a production datastore:
-
-- Run a dedicated etcd cluster (do not share the Kubernetes control-plane etcd).
-- Use SSD-backed disks for data and WAL volumes; avoid networked storage when possible.
-- Deploy an odd number of members (3 for most clusters, 5 for higher fault tolerance).
-- Spread members across zones/racks to survive single-AZ failures.
-- Enable compaction/defragmentation and monitor fsync/proposal latency.
-
-### Operator-managed etcd (default path)
-
-If no etcd endpoints are supplied, the operator provisions a 3-node etcd StatefulSet. Recommended settings:
-
-- Use an SSD-capable StorageClass for the etcd PVCs (`storageClassName`) with enough IOPS headroom.
-- Set a PodDisruptionBudget so only one etcd pod can be evicted at a time.
-- Pin etcd pods across zones with topology spread or anti-affinity.
-- Enable snapshot backups to a dedicated S3 bucket and retain at least 7 days of snapshots.
-- Monitor leader changes, fsync latency, and disk usage; alert on slow or flapping members.
-
-### Etcd endpoint resolution
-
-The operator resolves etcd endpoints in this order:
-
-1. `KafscaleCluster.spec.etcd.endpoints`
-2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`
-3. Managed etcd (operator creates a 3-node StatefulSet)
-
-### Etcd schema direction
-
-KafScale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
-
-## S3 Health Gating
-
-Brokers monitor S3 health and reject requests when S3 is degraded. This prevents data loss during S3 outages.
-
-### Health states
-
-| State | Value | Behavior |
-|-------|-------|----------|
-| `healthy` | 0 | Normal operation |
-| `degraded` | 1 | Elevated latency, reduced throughput |
-| `unavailable` | 2 | Rejects produce requests, serves cached fetches only |
-
-### Monitoring health transitions
-
-```bash
-# Check current state via metrics
-curl -s http://broker:9093/metrics | grep kafscale_s3_health_state
-
-# Check via ops API
-curl http://broker:9093/api/v1/health
-```
-
-When S3 is unavailable:
-- Produce requests return `KAFKA_STORAGE_ERROR`
-- Fetch requests serve from cache if available
-- Brokers automatically recover when S3 returns
-
-## Backup and Disaster Recovery
-
-Use this section to configure snapshots and practice restore procedures.
-
-### etcd snapshots to S3
-
-Snapshot job defaults and operator env overrides:
-
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: cluster S3 bucket)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` (default: `etcd-snapshots`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` (default: `0 * * * *`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `quay.io/coreos/etcd:v3.5.12`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` (default: `amazon/aws-cli:2.15.0`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (optional, for MinIO or custom S3)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` (default: 7200)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` (optional, set to `1` to auto-create the backup bucket)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` (optional, set to `1` to enable versioning + block public access)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` (optional, set to `1` to skip the operator S3 write check)
-
-The operator performs an S3 write preflight before enabling snapshots. If the check fails, the `EtcdSnapshotAccess` condition is set to `False` and reconciliation returns an error until access is restored.
-
-Minimal env + spec checklist for a smooth run:
-
-- Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET`, `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
-- Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS). Optional read replica: `spec.s3.readBucket`, `spec.s3.readRegion`, `spec.s3.readEndpoint`.
-- Secret keys: `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`.
-- Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
-
-### Snapshot alerts
-
-Configure these alerts in your monitoring system:
-
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| `KafScaleSnapshotAccessFailed` | Snapshot writes failing | Critical |
-| `KafScaleSnapshotStale` | Last successful snapshot > threshold | Warning |
-| `KafScaleSnapshotNeverSucceeded` | No successful snapshots recorded | Critical |
-
-### Manual snapshot
-
-```bash
-# Trigger manual snapshot via ops API
-curl -X POST http://operator:8080/api/v1/etcd/snapshot
-
-# Or use etcdctl directly
-ETCDCTL_API=3 etcdctl snapshot save /tmp/kafscale-snapshot.db \
-  --endpoints=$ETCD_ENDPOINTS \
-  --cacert=/path/to/ca.crt \
-  --cert=/path/to/client.crt \
-  --key=/path/to/client.key
-```
-
-### Restore from snapshot
-
-1. Stop all broker pods
-2. Restore etcd from snapshot
-3. Restart operator
-4. Operator will reconcile broker deployments
-
-```bash
-# Scale down brokers
-kubectl scale deployment kafscale-broker --replicas=0
-
-# Restore etcd (example for single-node)
-ETCDCTL_API=3 etcdctl snapshot restore /tmp/kafscale-snapshot.db \
-  --data-dir=/var/lib/etcd-restore
-
-# Restart operator
-kubectl rollout restart deployment kafscale-operator
-
-# Scale up brokers
-kubectl scale deployment kafscale-broker --replicas=3
-```
-
-### S3 data durability
-
-S3 segment data does not need backup—S3 provides 11 9's durability. However, ensure:
-
-- S3 bucket versioning is enabled (protects against accidental deletion)
-- Cross-region replication if required for DR
-- Lifecycle policies match your retention requirements
-
-## Multi-region S3 (CRR) for global reads
-
-KafScale writes to a primary bucket and can optionally read from a replica bucket in the broker's region. With S3 Cross-Region Replication (CRR), objects written to the primary are asynchronously copied to replica buckets. Brokers attempt reads from their local replica and fall back to the primary if the object is missing (for example, due to CRR lag).
-
-### Kubernetes deployment options
-
-You have two choices for multi-region deployments:
-
-1. **Separate K8s cluster per region** (recommended)  
-   Deploy an independent Kubernetes cluster and KafScale operator in each region. Each operator manages only the brokers in its own cluster. This is simpler to operate and avoids cross-region Kubernetes networking.
-
-2. **Single multi-region K8s cluster**  
-   Run one Kubernetes cluster spanning multiple regions with node affinity rules to place broker pods in specific regions. The operator still runs once, but brokers are scheduled to nodes near their S3 replica.
-
-The operator does not orchestrate cross-region scaling—it only manages brokers within its own cluster.
-
-### CRR setup (AWS)
-
-1. Create buckets in each region and enable versioning on all of them (required for CRR).
-2. Configure CRR rules from the primary bucket to each replica bucket.
-3. Update the cluster spec to include the replica details:
-```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafscaleCluster
-metadata:
-  name: prod
-spec:
-  s3:
-    bucket: kafscale-prod-us-east-1
-    region: us-east-1
-    readBucket: kafscale-prod-eu-west-1
-    readRegion: eu-west-1
-```
-
-> **Note:** Versioning is required for CRR but increases storage costs (retains delete markers and old versions). Configure lifecycle rules to expire non-current versions after a retention period.
-
-### Configure read access for satellite clusters
-
-Use IAM and bucket policies to make replica buckets read-only from regional clusters.
-
-**Practical approach:**
-
-- **Primary bucket:** allow `PutObject`, `DeleteObject`, and `ListBucket` from the writer cluster's IAM role.
-- **Replica buckets:** allow only `GetObject` and `ListBucket` for regional cluster roles, and explicitly deny writes.
-
-**Example replica bucket policy:**
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowReadOnlyFromRegionalCluster",
-      "Effect": "Allow",
-      "Principal": {"AWS": "arn:aws:iam::<acct>:role/kafscale-broker-eu"},
-      "Action": ["s3:GetObject", "s3:ListBucket"],
-      "Resource": [
-        "arn:aws:s3:::kafscale-prod-eu-west-1",
-        "arn:aws:s3:::kafscale-prod-eu-west-1/*"
-      ]
-    },
-    {
-      "Sid": "DenyWritesFromAllClusters",
-      "Effect": "Deny",
-      "Principal": "*",
-      "Action": ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
-      "Resource": "arn:aws:s3:::kafscale-prod-eu-west-1/*"
-    }
-  ]
-}
-```
-
-**KafScale configuration:**
-
-- Configure all regions with `spec.s3.bucket` pointing to the primary (write) bucket.
-- Configure `spec.s3.readBucket` to the local replica.
-- Give regional broker pods read-only credentials for replica buckets; only the primary writer role can write to the primary bucket.
-- This prevents accidental writes if a read bucket is misconfigured as a write target.
-
-### Verify CRR before go-live
-```bash
-# Write a test object to primary
-aws s3 cp test.txt s3://kafscale-prod-us-east-1/crr-test/
-
-# Check replication status (should be COMPLETED within seconds)
-aws s3api head-object \
-  --bucket kafscale-prod-us-east-1 \
-  --key crr-test/test.txt \
-  --query 'ReplicationStatus'
-
-# Confirm object exists in replica
-aws s3 ls s3://kafscale-prod-eu-west-1/crr-test/
-```
-
-### Monitor CRR and fallback
-
-**Key metrics:**
-
-| Metric | Description | Alert threshold |
-|--------|-------------|-----------------|
-| `kafscale_s3_replica_fallback_total` | Reads that fell back to primary | Rate > 0.1/s for 10m |
-| `kafscale_s3_read_latency_ms` | Read latency (high = cross-region) | p99 > 200ms |
-| `kafscale_s3_replica_miss_ratio` | Ratio of replica misses to total reads | > 5% sustained |
-
-**Prometheus alerts:**
-{% raw %}
-```yaml
-groups:
-  - name: kafscale-crr
-    rules:
-      - alert: S3ReplicaFallbackHigh
-        expr: rate(kafscale_s3_replica_fallback_total[5m]) > 0.1
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High replica fallback rate in {{ $labels.region }}"
-          description: "Brokers falling back to primary bucket - check CRR lag"
-
-      - alert: S3CrossRegionLatency
-        expr: histogram_quantile(0.99, kafscale_s3_read_latency_ms_bucket) > 200
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High S3 read latency - possible CRR issues"
-```
-{% endraw %}
-
-**AWS-side CRR monitoring:**
-```bash
-# Check replication status on recent segments
-aws s3api head-object \
-  --bucket kafscale-prod-us-east-1 \
-  --key production/orders/0/segment-00000000000000000042.kfs \
-  --query 'ReplicationStatus'
-# Expected: "COMPLETED", "PENDING", or "FAILED"
-```
-
-Enable S3 Replication Metrics in AWS for CloudWatch visibility into replication lag and failure rates.
-
-### Notes
-
-- CRR lag means the newest segments may not appear immediately in the replica (typically seconds, up to minutes under heavy load). The broker falls back to the primary for those reads.
-- Extra cross-region traffic occurs only on replica misses; steady-state reads stay in-region once replication catches up.
-- For non-AWS S3-compatible endpoints, set `spec.s3.readEndpoint` and/or `KAFSCALE_S3_READ_ENDPOINT`.
-
-## Upgrades
-
-Use these steps for safe rollouts and rollbacks.
-
-### Helm upgrade (recommended)
-
-```bash
-# Check current version
-helm list -n kafscale
-
-# Upgrade with pinned image tag
-helm upgrade kafscale novatechflow/kafscale \
-  --namespace kafscale \
-  --set broker.image.tag=v1.1.0 \
-  --set operator.image.tag=v1.1.0
-
-# Watch rollout
-kubectl rollout status deployment/kafscale-broker -n kafscale
-```
-
-### Rolling restart
-
-The operator drains brokers through the gRPC control plane before restarting pods. Active connections are gracefully closed.
-
-```bash
-# Trigger rolling restart
-kubectl rollout restart deployment kafscale-broker -n kafscale
-```
-
-### Rollback
-
-```bash
-# View history
-helm history kafscale -n kafscale
-
-# Rollback to previous
-helm rollback kafscale -n kafscale
-
-# Rollback to specific revision
-helm rollback kafscale 3 -n kafscale
-```
-
-## Capacity & cost {#capacity-cost}
-
-Once retention and traffic are known, estimate S3 footprint and request cost.
-
-### S3 cost estimation (example)
+## S3 Cost Estimation (Example)
 
 Assumptions:
 
@@ -535,7 +565,7 @@ Assumptions:
 - 4 MB average segment size
 - 3 broker pods
 
-Monthly costs (us-east-1):
+Monthly costs (US-East-1):
 
 | Item | Calculation | Cost |
 |------|-------------|------|
@@ -545,105 +575,66 @@ Monthly costs (us-east-1):
 | Data transfer (in-region) | Free | $0 |
 | **Total S3** | | **~$21/month** |
 
-## Troubleshooting
+## Multi-Region S3 (CRR) for Global Reads
 
-### Common issues
+Kafscale writes to a primary bucket and can optionally read from a replica bucket in the broker region. With S3 Cross-Region Replication (CRR), objects written to the primary are asynchronously copied to replica buckets in other regions. Brokers attempt reads from their local replica and fall back to the primary if the replica is missing an object (for example, due to CRR lag).
 
-**Brokers not starting**
+### CRR Setup (AWS)
 
-```bash
-# Check pod status
-kubectl get pods -l app=kafscale-broker
+1. **Create buckets in each region**:
+   - Primary: `kafscale-prod-us-east-1`
+   - Replica: `kafscale-prod-eu-west-1`
+   - Replica: `kafscale-prod-ap-southeast-1`
 
-# Check logs
-kubectl logs -l app=kafscale-broker --tail=100
+2. **Enable versioning on all buckets** (required for CRR).
 
-# Common causes:
-# - etcd endpoints unreachable
-# - S3 credentials invalid
-# - Insufficient memory/CPU
-```
+3. **Create a replication rule** on the primary bucket:
+   - Replicate all objects (or the Kafscale prefix) to both replica buckets.
+   - Use an IAM role that can write to the replica buckets.
 
-**High produce latency**
+4. **Optional**: Enable encryption (SSE-KMS) on all buckets with compatible keys.
 
-1. Check `kafscale_s3_latency_ms_avg` metric
-2. Verify S3 bucket is in same region as brokers
-3. Check broker CPU/memory utilization
-4. Consider increasing `KAFSCALE_SEGMENT_BYTES` for larger batches
+### Kafscale Configuration (Per Region)
 
-**Consumer group rebalancing frequently**
-
-1. Check `kafscale_consumer_group_members` for instability
-2. Verify consumer `session.timeout.ms` is appropriate
-3. Check network connectivity between consumers and brokers
-
-**etcd connection errors**
-
-```bash
-# Verify etcd endpoints
-ETCDCTL_API=3 etcdctl endpoint health --endpoints=$ETCD_ENDPOINTS
-
-# Check broker environment
-kubectl exec -it kafscale-broker-0 -- env | grep ETCD
-
-# Common causes:
-# - Incorrect endpoints
-# - Certificate issues
-# - etcd quorum lost
-```
-
-### Debug mode
-
-Enable debug logging for troubleshooting:
-
+Primary region (writers and primary readers):
 ```yaml
 spec:
-  broker:
-    env:
-    - name: KAFSCALE_LOG_LEVEL
-      value: debug
+  s3:
+    bucket: kafscale-prod-us-east-1
+    region: us-east-1
+    credentialsSecretRef: kafscale-s3-creds
 ```
 
-Or via Helm:
-
-```bash
-helm upgrade kafscale novatechflow/kafscale \
-  --set broker.logLevel=debug
+EU read replica:
+```yaml
+spec:
+  s3:
+    bucket: kafscale-prod-us-east-1
+    region: us-east-1
+    readBucket: kafscale-prod-eu-west-1
+    readRegion: eu-west-1
+    credentialsSecretRef: kafscale-s3-creds
 ```
 
-## Runtime Settings Reference
+Asia read replica:
+```yaml
+spec:
+  s3:
+    bucket: kafscale-prod-us-east-1
+    region: us-east-1
+    readBucket: kafscale-prod-ap-southeast-1
+    readRegion: ap-southeast-1
+    credentialsSecretRef: kafscale-s3-creds
+```
 
-For the full environment variable index, see [Runtime Settings](/configuration/).
+### How Reads and Writes Work
 
-### Environment variables
+- **Writes** always go to the primary bucket.
+- **Reads** go to the local `readBucket` first; on miss or error, the broker retries against the primary bucket.
+- **List/restore** operations use the primary bucket to avoid missing newly written segments.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `KAFSCALE_ETCD_ENDPOINTS` | etcd endpoint(s), comma-separated | `localhost:2379` |
-| `KAFSCALE_S3_BUCKET` | S3 bucket for segments | — (required) |
-| `KAFSCALE_S3_REGION` | S3 region | `us-east-1` |
-| `KAFSCALE_S3_READ_BUCKET` | Optional read replica bucket | — |
-| `KAFSCALE_S3_READ_REGION` | Optional read replica region | — |
-| `KAFSCALE_S3_READ_ENDPOINT` | Optional read replica endpoint | — |
-| `KAFSCALE_SEGMENT_BYTES` | Segment size threshold | `4194304` (4MB) |
-| `KAFSCALE_FLUSH_INTERVAL_MS` | Flush interval | `500` |
-| `KAFSCALE_CACHE_SIZE` | L1 cache size | `1073741824` (1GB) |
-| `KAFSCALE_LOG_LEVEL` | Log level | `info` |
+### Latency and Consistency Impact
 
-### etcd requirements
-
-| Requirement | Recommendation |
-|-------------|----------------|
-| Nodes | 3, 5, or 7 (odd quorum) |
-| Storage | SSD with low latency |
-| Memory | 2GB+ per node |
-| Network | Low latency to brokers |
-
-### S3 requirements
-
-| Requirement | Recommendation |
-|-------------|----------------|
-| Storage class | Standard (or S3 Express for low latency) |
-| Region | Same region as brokers |
-| IAM permissions | `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:ListBucket` |
-| Versioning | Enabled (recommended) |
+- **Lower read latency** for consumers in EU/Asia when objects are already replicated.
+- **CRR lag** means the newest segments may not appear immediately in the replica; the broker will fall back to the primary for those reads.
+- **Extra cross-region traffic** occurs only on replica misses; steady-state reads stay in-region once replication catches up.

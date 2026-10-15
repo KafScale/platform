@@ -1,16 +1,13 @@
 ---
 layout: doc
-title: Rationale
+title: "KafScale Rationale: Why Stateless Brokers on S3"
 description: Why KafScale uses stateless brokers and object storage instead of traditional Kafka clusters.
 permalink: /rationale/
-
 ---
 
 # Rationale
 
 KafScale exists because the original assumptions behind Kafka brokers no longer hold for a large class of modern workloads. This page explains those assumptions, what changed, and why KafScale is designed the way it is.
-
-This is not a comparison page and not a feature list. It documents the architectural reasoning behind the system.
 
 ---
 
@@ -43,161 +40,148 @@ With object storage:
 
 This enables a different design space where brokers no longer need to be stateful.
 
-<div class="diagram">
-  <div class="diagram-label">What changed</div>
-  <svg viewBox="0 0 750 280" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Traditional vs stateless broker model comparison">
-    <defs>
-      <marker id="ar-rat" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--diagram-stroke)"/></marker>
-    </defs>
-
-    <!-- Traditional model -->
-    <rect x="20" y="20" width="340" height="200" rx="12" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
-    <text x="190" y="48" font-size="13" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Traditional Kafka</text>
-    
-    <text x="40" y="80" font-size="11" fill="var(--diagram-text)">• Brokers own durable data</text>
-    <text x="40" y="102" font-size="11" fill="var(--diagram-text)">• Replication required for durability</text>
-    <text x="40" y="124" font-size="11" fill="var(--diagram-text)">• Scaling moves data</text>
-    <text x="40" y="146" font-size="11" fill="var(--diagram-text)">• Failures require repair</text>
-    <text x="40" y="168" font-size="11" fill="var(--diagram-text)">• Disk management is critical</text>
-    
-    <rect x="40" y="185" width="300" height="24" rx="6" fill="rgba(248, 113, 113, 0.15)" stroke="#f87171" stroke-width="1"/>
-    <text x="190" y="202" font-size="10" fill="#f87171" text-anchor="middle">Stateful brokers = operational complexity</text>
-
-    <!-- Arrow -->
-    <path d="M375,120 L405,120" stroke="var(--diagram-stroke)" stroke-width="2" fill="none" marker-end="url(#ar-rat)"/>
-
-    <!-- Stateless model -->
-    <rect x="420" y="20" width="310" height="200" rx="12" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
-    <text x="575" y="48" font-size="13" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Stateless Brokers (KafScale)</text>
-    
-    <text x="440" y="80" font-size="11" fill="var(--diagram-text)">• Object storage owns durability</text>
-    <text x="440" y="102" font-size="11" fill="var(--diagram-text)">• Replication is implicit in S3</text>
-    <text x="440" y="124" font-size="11" fill="var(--diagram-text)">• Scaling adds compute only</text>
-    <text x="440" y="146" font-size="11" fill="var(--diagram-text)">• Failures handled by replacement</text>
-    <text x="440" y="168" font-size="11" fill="var(--diagram-text)">• Disk management disappears</text>
-    
-    <rect x="440" y="185" width="270" height="24" rx="6" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1"/>
-    <text x="575" y="202" font-size="10" fill="#34d399" text-anchor="middle">Stateless brokers = simpler operations</text>
-
-    <!-- Bottom caption -->
-    <text x="375" y="260" font-size="11" fill="var(--diagram-label)" text-anchor="middle" font-style="italic">
-      When durability moves out of the broker, the operational model changes with it.
-    </text>
-  </svg>
-</div>
+Storing Kafka data in S3 is not new. Multiple systems do this. What matters is what you do with that foundation.
 
 ---
 
-## Why brokers should be ephemeral
+## What KafScale actually changes
 
-In KafScale, brokers are treated as ephemeral compute.
+S3-native storage is table stakes. The real question is: how much operational complexity remains?
 
-They serve the Kafka protocol, buffer and batch data, and flush immutable segments to object storage. They do not own durable state. Any broker can serve any partition.
+The same architectural shift already transformed data warehouses. Separating compute from storage did not just reduce costs. It simplified operations, enabled independent scaling, and changed what was possible. Streaming is following the same path.
 
-This has several consequences:
+KafScale removes four categories of coupling that other systems preserve:
 
-- Scaling is a scheduling problem, not a data movement problem
-- Broker restarts are cheap and predictable
-- Failures are handled by replacement, not repair
-- Kubernetes can manage brokers like any other stateless workload
+<style>
+  .decouple-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 2rem auto;
+    max-width: 600px;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 2px solid var(--diagram-stroke);
+  }
+  .decouple-layer {
+    display: flex;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    background: var(--diagram-fill);
+    border-bottom: 1px solid var(--diagram-stroke);
+  }
+  .decouple-layer:last-child {
+    border-bottom: none;
+  }
+  .decouple-layer-num {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 1.25rem;
+    flex-shrink: 0;
+  }
+  .decouple-layer-content h4 {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--diagram-text);
+  }
+  .decouple-layer-content p {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.875rem;
+    color: var(--diagram-label);
+  }
+  .decouple-1 .decouple-layer-num { background: #ffb347; }
+  .decouple-2 .decouple-layer-num { background: #6aa7ff; }
+  .decouple-3 .decouple-layer-num { background: #34d399; }
+  .decouple-4 .decouple-layer-num { background: #a78bfa; }
+  @media (max-width: 600px) {
+    .decouple-layer {
+      flex-direction: column;
+      text-align: center;
+    }
+    .decouple-layer-num {
+      margin-right: 0;
+      margin-bottom: 0.75rem;
+    }
+  }
+</style>
 
-This model matches how modern infrastructure platforms already operate.
-
-<div class="diagram">
-  <div class="diagram-label">Design flow</div>
-  <svg viewBox="0 0 700 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="KafScale design flow">
-    <defs>
-      <marker id="af-rat" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ffb347"/></marker>
-    </defs>
-
-    <!-- Durable storage -->
-    <rect x="30" y="25" width="180" height="50" rx="10" fill="rgba(255, 179, 71, 0.12)" stroke="#ffb347" stroke-width="1.5"/>
-    <text x="120" y="55" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Durable storage (S3)</text>
-
-    <path d="M215,50 L265,50" stroke="#ffb347" stroke-width="2" fill="none" marker-end="url(#af-rat)"/>
-
-    <!-- Ephemeral compute -->
-    <rect x="270" y="25" width="180" height="50" rx="10" fill="rgba(106, 167, 255, 0.2)" stroke="#6aa7ff" stroke-width="1.5"/>
-    <text x="360" y="55" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Ephemeral compute</text>
-
-    <path d="M455,50 L505,50" stroke="#ffb347" stroke-width="2" fill="none" marker-end="url(#af-rat)"/>
-
-    <!-- Simpler operations -->
-    <rect x="510" y="25" width="180" height="50" rx="10" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1.5"/>
-    <text x="600" y="55" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Simpler operations</text>
-  </svg>
+<div class="decouple-stack">
+  <div class="decouple-layer decouple-1">
+    <span class="decouple-layer-num">1</span>
+    <div class="decouple-layer-content">
+      <h4>Clients from topology</h4>
+      <p>Proxy rewrites metadata. One endpoint, infinite brokers behind it. Clients never see scaling events.</p>
+    </div>
+  </div>
+  <div class="decouple-layer decouple-2">
+    <span class="decouple-layer-num">2</span>
+    <div class="decouple-layer-content">
+      <h4>Compute from storage</h4>
+      <p>Brokers hold no durable state. S3 is the source of truth. Add or remove pods without moving data.</p>
+    </div>
+  </div>
+  <div class="decouple-layer decouple-3">
+    <span class="decouple-layer-num">3</span>
+    <div class="decouple-layer-content">
+      <h4>Streaming from analytics</h4>
+      <p>Processors read S3 directly. Batch replay and AI workloads never compete with real-time consumers.</p>
+    </div>
+  </div>
+  <div class="decouple-layer decouple-4">
+    <span class="decouple-layer-num">4</span>
+    <div class="decouple-layer-content">
+      <h4>Format from implementation</h4>
+      <p>The .kfs segment format is documented and open. Build processors without vendor dependency.</p>
+    </div>
+  </div>
 </div>
+
+Each layer removes a category of operational problems. Together, they enable minimal ops and unlimited scale.
 
 ---
 
-## Why the storage format is open
+## Why the Kafka protocol leaks topology
 
-Most streaming platforms treat their storage format as an internal implementation detail. KafScale takes a different approach: the .kfs segment format is documented as part of the public specification.
+Traditional Kafka clients do not just connect to a cluster. They discover it.
 
-This is a deliberate architectural choice with specific consequences:
+When a client connects, it sends a Metadata request. The broker responds with a list of all brokers in the cluster and which broker leads each partition. The client then opens direct connections to each broker it needs.
 
-- Any processor that understands the format can read directly from S3 without connecting to a broker
-- The streaming path and the analytical path can share the same data without competing for the same resources
-- Users can build custom processors without waiting for vendors to ship features
-- The format outlives any particular implementation
+This design made sense when brokers were stable, long-lived servers. It becomes a liability when brokers are ephemeral pods.
 
-When the storage format is open, the platform becomes a building block rather than a boundary.
+Every broker restart can break client connections. Every scaling event requires clients to rediscover the cluster. DNS and load balancers cannot fully abstract the topology because the protocol itself exposes it.
+
+KafScale's proxy solves this by intercepting Metadata and FindCoordinator responses, substituting its own address. Clients believe they are talking to a single broker. The proxy routes requests to the actual brokers internally.
+
+The result:
+
+- Add brokers without client awareness
+- Rotate brokers during deployments without connection drops
+- Use standard Kubernetes networking patterns
+- One ingress, one DNS name, standard TLS termination
+
+One endpoint. Infinite scale behind it.
 
 ---
 
 ## Why processors should bypass brokers
 
-Traditional Kafka architectures force all reads through brokers. Streaming consumers and batch analytics compete for the same resources. Backfills spike broker CPU. AI training jobs block production consumers.
+Traditional Kafka architectures force all reads through brokers. Streaming consumers and batch analytics compete for the same resources. Backfills spike broker CPU. Training jobs block production consumers.
 
 KafScale separates these concerns by design.
 
 Brokers handle the Kafka protocol: accepting writes from producers, serving reads to streaming consumers, managing consumer groups. Processors read completed segments directly from S3, bypassing brokers entirely.
 
-<div class="diagram">
-  <div class="diagram-label">Two read paths, one data source</div>
-  <svg viewBox="0 0 700 160" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Streaming vs analytical read paths">
-    <defs>
-      <marker id="ar-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-        <path d="M0,0 L10,5 L0,10 z" fill="#6aa7ff"/>
-      </marker>
-      <marker id="ar-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
-        <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/>
-      </marker>
-    </defs>
-
-    <!-- S3 (center) -->
-    <rect x="270" y="55" width="160" height="50" rx="10" fill="rgba(255, 179, 71, 0.12)" stroke="#ffb347" stroke-width="2"/>
-    <text x="350" y="85" font-size="12" font-weight="600" fill="#ffb347" text-anchor="middle">S3 (.kfs segments)</text>
-
-    <!-- Streaming path (top) -->
-    <rect x="40" y="20" width="140" height="40" rx="8" fill="rgba(106, 167, 255, 0.2)" stroke="#6aa7ff" stroke-width="1.5"/>
-    <text x="110" y="45" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Brokers</text>
-
-    <rect x="520" y="20" width="140" height="40" rx="8" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
-    <text x="590" y="45" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Consumers</text>
-
-    <path d="M180,40 L265,70" stroke="#6aa7ff" stroke-width="2" fill="none" marker-end="url(#ar-blue)"/>
-    <path d="M430,70 L515,40" stroke="#6aa7ff" stroke-width="2" fill="none" marker-end="url(#ar-blue)"/>
-    <text x="350" y="28" font-size="10" font-weight="600" fill="#6aa7ff" text-anchor="middle">STREAMING</text>
-
-    <!-- Analytical path (bottom) -->
-    <rect x="40" y="100" width="140" height="40" rx="8" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1.5"/>
-    <text x="110" y="125" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Processors</text>
-
-    <rect x="520" y="100" width="140" height="40" rx="8" fill="var(--diagram-fill)" stroke="var(--diagram-stroke)" stroke-width="1.5"/>
-    <text x="590" y="120" font-size="11" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Iceberg / Analytics</text>
-    <text x="590" y="132" font-size="9" fill="var(--diagram-label)" text-anchor="middle">AI agents</text>
-
-    <path d="M180,120 L265,95" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#ar-green)"/>
-    <path d="M430,95 L515,120" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#ar-green)"/>
-    <text x="350" y="148" font-size="10" font-weight="600" fill="#34d399" text-anchor="middle">ANALYTICAL</text>
-  </svg>
-</div>
-
 This separation has practical consequences:
 
 - Historical replays do not affect streaming latency
-- AI agents get complete context without degrading production workloads
+- AI workloads get complete context without degrading production
 - Iceberg materialization scales independently from Kafka consumers
 - Processor development does not require broker changes
 
@@ -211,30 +195,9 @@ AI agents making decisions need context. That context comes from historical even
 
 Traditional stream processing optimizes for latency. Milliseconds matter for fraud detection or trading systems. But AI agents reasoning over business context have different requirements. They need completeness. They need replay capability. They need to reconcile current state with historical actions.
 
-Storage-native streaming makes this practical:
-
-- The immutable log in S3 becomes the source of truth that agents query, replay, and reason over
-- Processors convert that log to tables that analytical tools understand
-- Agents get complete historical context without competing with streaming workloads for broker resources
+Storage-native streaming makes this practical. The immutable log in S3 becomes the source of truth that agents query, replay, and reason over. Processors convert that log to tables that analytical tools understand. Agents get complete historical context without competing with streaming workloads for broker resources.
 
 Two-second latency for analytical access is acceptable when the alternative is incomplete context or degraded streaming performance. AI agents do not need sub-millisecond reads. They need the full picture.
-
----
-
-## Why self-hosted control planes still matter
-
-Some systems that adopt stateless brokers rely on vendor-managed control planes for metadata and coordination. That can be a good tradeoff for teams that want a fully managed service.
-
-KafScale makes a different choice.
-
-By keeping metadata, offsets, and consumer group state in a self-hosted store, KafScale can run entirely within your own infrastructure boundary. This matters for:
-
-- Regulated and sovereign environments
-- Private and air-gapped deployments
-- Teams that require open licensing and forkability
-- Platforms that want to avoid external control plane dependencies
-
-The goal is not to reject managed services, but to make the architecture usable under stricter constraints.
 
 ---
 
@@ -245,7 +208,7 @@ KafScale is not trying to replace every Kafka deployment.
 It deliberately does not target:
 
 - Sub-10ms end-to-end latency workloads
-- Exactly-once transactions
+- Exactly-once transactions across topics
 - Compacted topics
 - Embedded stream processing inside the broker
 
@@ -257,15 +220,15 @@ KafScale focuses on the common case: durable message transport, replayability, p
 
 ## Summary
 
-Stateless brokers backed by object storage are not a trend. They are a correction.
+Storing Kafka data in S3 is not the innovation. What matters is how much complexity remains after you do it.
 
-Once durability moves out of the broker, the system can be simpler, cheaper to operate, and easier to scale. When the storage format is open, processors can bypass brokers entirely, separating streaming and analytical workloads by design.
+KafScale removes the topology coupling that breaks clients during scaling. It removes the compute/storage coupling that makes recovery slow. It removes the streaming/analytics coupling that forces workloads to compete. It removes the format/vendor coupling that creates dependency.
 
-KafScale is built on these assumptions, while preserving Kafka protocol compatibility and self-hosted operation.
+The result is minimal ops and unlimited scale. That is the point.
 
-The architecture is inevitable. The design choices are deliberate.
+---
 
 ## Further reading
 
-- [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) explores the broader industry shift and why AI agents need this architecture.
-- [Data Processing Does Not Belong in the Message Broker](https://www.novatechflow.com/2025/12/data-processing-does-not-belong-in.html) explains why KafScale keeps processing separate from the broker layer.
+- [Architecture](/architecture/) for detailed component diagrams and data flows
+- [Comparison](/comparison/) for how KafScale compares to alternatives

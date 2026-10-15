@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: S3 Health States
+title: "KafScale S3 Health States: Metrics and Alerts"
 description: Definitions, metrics, and alert thresholds for KafScale S3 health state transitions.
 permalink: /s3-health/
 nav_title: S3 Health

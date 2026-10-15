@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Metrics and Dashboards
+title: "KafScale Metrics and Dashboards: Prometheus and Grafana"
 description: Prometheus metrics and Grafana dashboards for KafScale.
 permalink: /metrics/
 nav_title: Metrics
@@ -8,8 +8,9 @@ nav_order: 4
 nav_group: References
 ---
 
+
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,7 +28,7 @@ limitations under the License.
 
 # Metrics and Dashboards
 
-KafScale exposes Prometheus metrics on `/metrics` from both brokers and the operator.
+Kafscale exposes Prometheus metrics on `/metrics` from both brokers and the operator.
 The console UI and Grafana dashboard templates are built on the same metrics.
 
 ## Endpoints
@@ -36,12 +37,13 @@ The console UI and Grafana dashboard templates are built on the same metrics.
 - **Operator metrics** – `http://<operator-host>:8080/metrics`
 
 In local development, the console can scrape broker metrics if you set
-`KAFSCALE_CONSOLE_BROKER_METRICS_URL`.
+`KAFSCALE_CONSOLE_BROKER_METRICS_URL`. Operator metrics can be wired into the
+console via `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`.
 
 ## ISR Terminology
 
 The broker advertises ISR (in-sync replica) values as part of metadata responses
-and exposes related counts in metrics/UI. This reflects KafScale's **logical**
+and exposes related counts in metrics/UI. This reflects Kafscale's **logical**
 replica set in etcd metadata, not Kafka's internal `LeaderAndIsr` protocol. We
 do not implement Kafka ISR management or any internal replication APIs; ISR here
 is a metadata indicator used for client compatibility and visibility.
@@ -61,6 +63,16 @@ Broker metrics are emitted directly by the broker process.
 | `kafscale_admin_requests_total` | Counter | `api` | Count of admin API requests by API name. |
 | `kafscale_admin_request_errors_total` | Counter | `api` | Count of admin API errors by API name. |
 | `kafscale_admin_request_latency_ms_avg` | Gauge | `api` | Average admin API latency (ms). |
+| `kafscale_authz_denied_total` | Counter | `action`, `resource` | Count of authorization denials by action/resource. |
+| `kafscale_produce_latency_ms` | Histogram | - | Produce request latency distribution (use p95 in PromQL). |
+| `kafscale_consumer_lag` | Histogram | - | Consumer lag distribution (use p95 in PromQL). |
+| `kafscale_consumer_lag_max` | Gauge | - | Maximum observed consumer lag. |
+| `kafscale_broker_uptime_seconds` | Gauge | - | Seconds since broker start. |
+| `kafscale_broker_cpu_percent` | Gauge | - | Process CPU usage percent between scrapes. |
+| `kafscale_broker_mem_alloc_bytes` | Gauge | - | Allocated heap bytes. |
+| `kafscale_broker_mem_sys_bytes` | Gauge | - | Memory obtained from the OS. |
+| `kafscale_broker_heap_inuse_bytes` | Gauge | - | Heap in-use bytes. |
+| `kafscale_broker_goroutines` | Gauge | - | Number of goroutines. |
 
 Admin API label values are human-readable for common ops APIs
 (`DescribeGroups`, `ListGroups`, `OffsetForLeaderEpoch`, `DescribeConfigs`,
@@ -73,7 +85,7 @@ Operator metrics are exported by the controller runtime metrics server.
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `kafscale_operator_clusters` | Gauge | - | Count of managed `KafScaleCluster` resources. |
+| `kafscale_operator_clusters` | Gauge | - | Count of managed `KafscaleCluster` resources. |
 | `kafscale_operator_snapshot_publish_total` | Counter | `result` | Snapshot publish attempts (`success` or `error`). |
 | `kafscale_operator_etcd_snapshot_age_seconds` | Gauge | `cluster` | Seconds since last successful etcd snapshot upload. |
 | `kafscale_operator_etcd_snapshot_last_success_timestamp` | Gauge | `cluster` | Unix timestamp of last successful snapshot upload. |
@@ -81,8 +93,14 @@ Operator metrics are exported by the controller runtime metrics server.
 | `kafscale_operator_etcd_snapshot_stale` | Gauge | `cluster` | 1 when the snapshot age exceeds the staleness threshold. |
 | `kafscale_operator_etcd_snapshot_success` | Gauge | `cluster` | 1 if at least one successful snapshot was recorded. |
 | `kafscale_operator_etcd_snapshot_access_ok` | Gauge | `cluster` | 1 if the snapshot bucket preflight succeeds. |
+| `kafscale_operator_etcd_db_total_size_bytes` | Gauge | `cluster`, `member` | Physical etcd backend size per managed member. |
+| `kafscale_operator_etcd_db_in_use_bytes` | Gauge | `cluster`, `member` | Logical in-use etcd backend size per managed member. |
+| `kafscale_operator_etcd_db_size_high` | Gauge | `cluster` | 1 when any member exceeds the maintenance size threshold. |
+| `kafscale_operator_etcd_nospace_alarm` | Gauge | `cluster` | 1 when managed etcd has an active NOSPACE alarm. |
 
 The `cluster` label uses `namespace/name`.
+
+Helm can emit `KafscaleEtcdBackendSizeHigh` and `KafscaleEtcdNOSPACE` PrometheusRule alerts when `operator.metrics.prometheusRule.enabled=true`.
 
 ## Grafana Dashboard
 

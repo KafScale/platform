@@ -1,14 +1,15 @@
 ---
 layout: doc
-title: MCP
+title: "KafScale MCP: Model Context Protocol Service"
 description: Model Context Protocol service overview and usage for KafScale.
 permalink: /mcp/
 nav_title: MCP
 nav_order: 5
 ---
 
+
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,13 +25,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# MCP
+# MCP Service
 
-This document sketches a Model Context Protocol (MCP) service for KafScale.
+This document sketches a Model Context Protocol (MCP) service for Kafscale.
 The goal is to enable safe, structured, agent-friendly operations without
 embedding MCP into brokers or widening the broker attack surface.
 
-For deployment details and configuration options, see [MCP Server](/mcp-server/).
+For an ops-focused guide and integration examples, see [`docs/ops-mcp.md`](/ops-mcp/).
 
 ## Goals
 
@@ -46,8 +47,8 @@ For deployment details and configuration options, see [MCP Server](/mcp-server/)
 
 ## Architecture
 
-- Standalone MCP service deployed alongside KafScale.
-- Talks to KafScale via:
+- Standalone MCP service deployed alongside Kafscale.
+- Talks to Kafscale via:
   - Metadata store access (read-only).
   - Prometheus metrics scraping.
   - Optional gRPC control plane (future, gated).
@@ -60,29 +61,15 @@ For deployment details and configuration options, see [MCP Server](/mcp-server/)
 - Health check: `/healthz`.
 - Read-only tools only; mutation tools are not registered.
 
-For configuration and environment variables, see [MCP Server](/mcp-server/).
+Environment variables:
 
-## Enable MCP
-
-Enable the service via Helm, then configure auth and endpoints:
-
-```yaml
-mcp:
-  enabled: true
-  auth:
-    token: "<bearer-token>"
-  etcdEndpoints:
-    - "http://etcd.kafscale.svc:2379"
-  metrics:
-    brokerMetricsURL: "http://kafscale-broker.kafscale.svc:9093/metrics"
-```
-
-For the full values and environment variable reference, see [MCP Server](/mcp-server/).
-
-## Connect a client
-
-Point your MCP-capable client at the `/mcp` endpoint and include the bearer token
-if auth is enabled. See [MCP Server](/mcp-server/) for examples.
+- `KAFSCALE_MCP_HTTP_ADDR` (default `:8090`)
+- `KAFSCALE_MCP_ETCD_ENDPOINTS` (comma-separated)
+- `KAFSCALE_MCP_ETCD_USERNAME`
+- `KAFSCALE_MCP_ETCD_PASSWORD`
+- `KAFSCALE_MCP_BROKER_METRICS_URL` (Prometheus metrics endpoint)
+- `KAFSCALE_MCP_SESSION_TIMEOUT` (optional, duration string)
+- `KAFSCALE_MCP_AUTH_TOKEN` (optional bearer token; if unset, server is open)
 
 ## v1 Tool Surface
 
@@ -105,8 +92,8 @@ Mutation tools (future, gated by auth + RBAC):
 
 ## Security and Guardrails
 
-KafScale currently does not enforce auth on broker/admin APIs. For MCP, we
-must ship secure-by-default to avoid "one prompt away from prod changes".
+Kafscale v1.5 introduces basic broker ACLs, but MCP remains read-only for security reasons.
+For MCP, we ship secure-by-default to avoid "one prompt away from prod changes".
 
 Requirements:
 
@@ -116,5 +103,21 @@ Requirements:
 - Dry-run mode for all mutations.
 - Environment fences (production requires explicit break-glass or approval).
 
-See [Security](/security/) for the current security posture and roadmap; MCP should
+See [`docs/security.md`](/security/) for the current security posture and roadmap; MCP should
 not enable any operations that bypass the auth/authorization roadmap there.
+
+## Rollout Plan
+
+- Phase 1: Read-only MCP server with auth and audit logging.
+- Phase 2: Mutations behind RBAC + dry-run + approval workflows.
+
+Current status:
+
+- Read-only MCP server is implemented.
+- Optional bearer token auth is supported; stronger auth and audit logging remain pending.
+
+## Open Questions
+
+- Which auth provider(s) to standardize (OIDC provider and token format).
+- Where to store audit logs (stdout, file, or external sink).
+- Whether to expose broker control actions in v1 or v2.

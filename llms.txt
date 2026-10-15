@@ -1,0 +1,19 @@
+# KafScale
+
+> Kafka-compatible streaming platform. Scale streaming and analytics cloud-native on S3. Automated.
+
+KafScale is an open source streaming platform. Brokers are stateless, S3 is the source of truth, and the license is Apache 2.0.
+
+## Docs
+
+- [Documentation](https://kafscale.io/docs/): Guides and reference for running KafScale
+- [Quickstart](https://kafscale.io/quickstart/): Install the operator, create a topic, and stream messages
+- [User guide](https://kafscale.io/user-guide/): How to use KafScale after it is deployed
+- [Architecture](https://kafscale.io/architecture/): How brokers, S3, etcd, and the operator fit together
+- [Rationale](https://kafscale.io/rationale/): Why KafScale uses stateless brokers and object storage
+- [Supported storage](https://kafscale.io/supported/): S3-compatible backends and what each one requires
+- [Operations](https://kafscale.io/operations/): Production install, hardening, and day-to-day operations
+- [Security](https://kafscale.io/security/): Current security posture and how to report a vulnerability
+- [Protocol compatibility](https://kafscale.io/protocol/): Kafka APIs the broker advertises
+- [Comparison](https://kafscale.io/comparison/): How KafScale compares with other Kafka-compatible platforms
+- [Project overview](https://kafscale.io/overview/): What KafScale optimizes for, and what it leaves out

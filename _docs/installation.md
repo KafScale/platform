@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Installation
+title: "KafScale Installation: Helm, CRDs, and Local Tooling"
 description: Install KafScale with Helm, review CRD examples, and prepare local dev tooling.
 permalink: /installation/
 nav_title: Installation
@@ -49,7 +49,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 For local development without Kubernetes:
 
 ```bash
-git clone https://github.com/novatechflow/kafscale.git
+git clone https://github.com/KafScale/platform.git
 cd kafscale
 docker-compose up -d
 ```

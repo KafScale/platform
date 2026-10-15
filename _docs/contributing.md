@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Contributing
+title: "KafScale Contributing: Setup, Tests, and Pull Requests"
 description: Development setup, testing, and PR process for KafScale.
 permalink: /contributing/
 nav_title: Contributing

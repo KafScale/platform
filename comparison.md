@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Comparison
+title: "KafScale Comparison: Kafka-Compatible Platforms"
 description: Compare KafScale with Kafka-compatible alternatives across architecture, performance, licensing, and cost.
 
 ---
@@ -23,23 +23,23 @@ Licensing determines your long-term flexibility. This matters more than most ven
   <div class="format-row" style="background: rgba(14, 165, 233, 0.08);">
     <span><strong>KafScale</strong></span>
     <span><span class="badge badge-success">Apache 2.0</span></span>
-    <span>Use, modify, redistribute freely. No restrictions ever.</span>
+    <span>Use, modify, redistribute freely. No restrictions ever. Open source from the beginning</span>
   </div>
   <div class="format-row">
     <span>Apache Kafka</span>
     <span><span class="badge badge-success">Apache 2.0</span></span>
-    <span>Fully open source. No restrictions.</span>
+    <span>Fully open source. No restrictions. Open source from the beginning.</span>
   </div>
   <div class="format-row">
     <span>Redpanda</span>
     <span><span class="badge badge-warning">BSL 1.1</span></span>
     <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
   </div>
-  <div class="format-row">
-    <span>AutoMQ</span>
-    <span><span class="badge badge-warning">BSL</span></span>
-    <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
-  </div>
+ <div class="format-row">
+  <span>AutoMQ</span>
+  <span><span class="badge badge-warning">Apache 2.0*</span></span>
+  <span>Was BSL until May 2025. Changed for Strimzi compatibility to support K8s rollouts.</span>
+</div>
   <div class="format-row">
     <span>WarpStream</span>
     <span><span class="badge badge-danger">Proprietary</span></span>
@@ -128,7 +128,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Typical latency</span><span>~10ms p99 (with EBS WAL)</span></div>
     <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
-    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">BSL</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">Apache 2.0*</span></div>
     <div class="spec-row"><span class="spec-label">Best for</span><span>Kafka migration, low latency + S3</span></div>
   </section>
 
@@ -513,4 +513,4 @@ The Confluent acquisition of WarpStream in late 2024 highlighted the risk of dep
 
 KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. The documented .kfs segment format means you can build processors that read directly from S3 without going through brokers. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
 
-For deeper analysis, see [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) and [Data Processing Does Not Belong in the Message Broker](https://www.novatechflow.com/2025/12/data-processing-does-not-belong-in.html).
+For deeper analysis, see [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) and the [architecture decision rationale](/rationale/).

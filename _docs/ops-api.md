@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Ops API v1
+title: "KafScale Ops API v1: Admin Operations"
 description: Kafka admin APIs exposed by KafScale to support operator workflows.
 permalink: /ops-api/
 nav_title: Ops API
@@ -8,8 +8,9 @@ nav_order: 3
 nav_group: References
 ---
 
+
 <!--
-Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,10 +26,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# KafScale Ops API v1
+# Kafscale Ops API v1
 
-This document defines the Kafka admin APIs KafScale exposes to support operator
-workflows. The scope stays within KafScale’s architecture: stateless brokers,
+This document defines the Kafka admin APIs Kafscale exposes to support operator
+workflows. The scope stays within Kafscale’s architecture: stateless brokers,
 S3 durability, and etcd-backed metadata. Transactions, compaction, and KRaft APIs remain
 out of scope.
 
@@ -74,13 +75,13 @@ Implemented versions:
 
 ## ApiVersions Advertising
 
-KafScale advertises supported ops APIs via ApiVersions so clients can select the
+Kafscale advertises supported ops APIs via ApiVersions so clients can select the
 correct versions. Unsupported ops APIs are listed with `MinVersion = -1` and
 `MaxVersion = -1` for clarity.
 
 ## Config Surface (Describe/AlterConfigs)
 
-KafScale will only expose topic/broker configs that map cleanly to existing metadata
+Kafscale will only expose topic/broker configs that map cleanly to existing metadata
 and runtime behavior. Everything else returns `INVALID_CONFIG` (or the closest Kafka
 error code supported by the request version).
 
@@ -97,7 +98,7 @@ scope for v1.
 
 ### Broker Config Whitelist (Read-Only)
 
-Broker-level configs are read-only in v1 and are exposed under a KafScale-specific
+Broker-level configs are read-only in v1 and are exposed under a Kafscale-specific
 namespace so they do not conflict with upstream Kafka defaults.
 
 | Config Key | Source |
@@ -124,7 +125,7 @@ schema (`kafscale.metadata.TopicConfig`). The operator remains the source of tru
 
 ## Topic/Partition Management in Etcd
 
-KafScale persists topic configuration and partition counts in etcd via the operator’s
+Kafscale persists topic configuration and partition counts in etcd via the operator’s
 metadata snapshot. The Kafka admin APIs will map to the same storage rules:
 
 - CreateTopics writes a new `TopicConfig` entry and seeds partition metadata.

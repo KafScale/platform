@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Storage Format
+title: "KafScale Storage Format: Segments, Indexes, and Cache"
 description: Segment file format, index layout, cache architecture, and S3 key structure for KafScale storage.
 permalink: /storage-format/
 nav_title: Storage Format
@@ -204,7 +204,7 @@ Segments are sealed and flushed to S3 when **any** condition is met:
   </div>
   <div class="format-row">
     <span>Explicit flush request</span>
-    <span>—</span>
+    <span>none</span>
     <span>Admin API or graceful shutdown</span>
   </div>
 </div>
@@ -309,7 +309,7 @@ KafScale supports batch-level compression using Kafka-compatible codecs.
 | Codec | ID | Notes |
 |-------|-----|-------|
 | None | 0 | No compression |
-| Snappy | 1 | **Default** — fast, moderate ratio |
+| Snappy | 1 | **Default**: fast, moderate ratio |
 | LZ4 | 3 | Faster decompression |
 | ZSTD | 4 | Best ratio, slower |
 
