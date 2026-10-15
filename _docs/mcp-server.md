@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: MCP Server
+title: "KafScale MCP Server: Deployment and Configuration"
 description: Deployment and configuration reference for the KafScale MCP service.
 permalink: /mcp-server/
 nav_title: MCP Server

@@ -1,6 +1,6 @@
 ---
 layout: default
-title: KafScale - Stateless Kafka on S3
+title: "KafScale: Stateless Kafka on S3"
 description: Kafka-compatible streaming with stateless brokers, S3-native storage, and Kubernetes-first operations. Apache 2.0 licensed.
 ---
 
@@ -22,24 +22,6 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   <div class="hero-actions">
     <a class="button" href="/quickstart/">Get started</a>
     <a class="button secondary" href="https://github.com/KafScale/platform" target="_blank" rel="noreferrer">View on GitHub</a>
-  </div>
-</section>
-
-<section class="section">
-  <h2>What teams are saying</h2>
-  <div class="grid">
-    <div class="card">
-      <p>"After WarpStream got acquired, KafScale became our go-to. Better S3 integration, lower latency than we expected, fully scalable, and minimal ops burden."</p>
-      <p><strong>— Platform team, Series B fintech</strong></p>
-    </div>
-    <div class="card">
-      <p>"We moved 50 topics off Kafka in a weekend. No more disk alerts, no more partition rebalancing. Our on-call rotation got a lot quieter."</p>
-      <p><strong>— SRE lead, e-commerce platform</strong></p>
-    </div>
-    <div class="card">
-      <p>"The Apache 2.0 license was the deciding factor. We can't build on BSL projects, and we won't depend on a vendor's control plane."</p>
-      <p><strong>— CTO, healthcare data startup</strong></p>
-    </div>
   </div>
 </section>
 
@@ -250,6 +232,6 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 
 <section class="section backers">
   <h2>Backed by</h2>
-  <p>KafScale is developed and maintained with support from <a href="https://www.scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a> and <a href="https://www.novatechflow.com" target="_blank" rel="noreferrer">NovaTechflow</a>.</p>
+  <p>Sponsored by <a href="https://www.scalytics.io" target="_blank" rel="noreferrer">Scalytics, Inc.</a></p>
   <p>Apache 2.0 licensed. No CLA required. <a href="https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md">Contributions welcome</a>.</p>
 </section>

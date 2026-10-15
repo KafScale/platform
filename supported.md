@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Supported
+title: "KafScale Supported Storage: S3-Compatible Backends"
 description: Supported storage backends, Kubernetes versions, and requirements for KafScale.
 permalink: /supported/
 ---
@@ -24,7 +24,7 @@ KafScale uses S3-compatible object storage as its source of truth. While designe
 | Google Cloud Storage | ⚠️ Interop | Requires HMAC keys, XML API |
 | Oracle Cloud | ⚠️ Interop | S3 Compatibility API |
 | IBM Cloud Object Storage | ⚠️ Interop | S3-compatible API |
-| Azure Blob Storage | ❌ Proxy | Requires MinIO Gateway |
+| Azure Blob Storage | ❌ Proxy | Requires an S3-compatible proxy in front of Azure Blob (MinIO gateway mode is no longer available) |
 
 **Legend:**
 - ✅ Native: Standard S3 SDK works with endpoint change
@@ -300,126 +300,26 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ---
 
+
 ## Azure Blob Storage
 
-Azure Blob Storage is **not** S3-compatible. Use MinIO as a gateway proxy.
+Azure Blob Storage is not S3-compatible. KafScale needs an S3-compatible proxy in front of Azure Blob. MinIO gateway mode is no longer available, so do not deploy MinIO with `gateway azure`.
 
-### Architecture
-
-```
-KafScale Brokers → MinIO Gateway → Azure Blob Storage
-```
-
-### Deploy MinIO Gateway
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: minio-azure-gateway
-  namespace: kafscale
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: minio-gateway
-  template:
-    metadata:
-      labels:
-        app: minio-gateway
-    spec:
-      containers:
-      - name: minio
-        image: minio/minio:latest
-        args:
-          - gateway
-          - azure
-        env:
-          - name: MINIO_ROOT_USER
-            valueFrom:
-              secretKeyRef:
-                name: minio-gateway-creds
-                key: accessKey
-          - name: MINIO_ROOT_PASSWORD
-            valueFrom:
-              secretKeyRef:
-                name: minio-gateway-creds
-                key: secretKey
-          - name: AZURE_STORAGE_ACCOUNT
-            valueFrom:
-              secretKeyRef:
-                name: azure-storage-creds
-                key: accountName
-          - name: AZURE_STORAGE_KEY
-            valueFrom:
-              secretKeyRef:
-                name: azure-storage-creds
-                key: accountKey
-        ports:
-          - containerPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: minio-gateway
-  namespace: kafscale
-spec:
-  selector:
-    app: minio-gateway
-  ports:
-    - port: 9000
-      targetPort: 9000
-```
-
-### KafScaleCluster
-
-Point KafScale at the MinIO gateway:
-
-```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
-metadata:
-  name: production
-  namespace: kafscale
-spec:
-  brokers:
-    replicas: 3
-  s3:
-    bucket: kafscale-production
-    endpoint: http://minio-gateway.kafscale.svc:9000
-    credentialsSecretRef: minio-gateway-creds
-  etcd:
-    endpoints: []
-```
-
-### Secrets
-
-```bash
-# MinIO gateway credentials (what KafScale uses)
-kubectl -n kafscale create secret generic minio-gateway-creds \
-  --from-literal=accessKey=kafscale-access \
-  --from-literal=secretKey=kafscale-secret-key
-
-# Azure storage credentials (what MinIO uses)
-kubectl -n kafscale create secret generic azure-storage-creds \
-  --from-literal=accountName=<storage-account-name> \
-  --from-literal=accountKey=<storage-account-key>
-```
+Point the cluster at your proxy the same way you point it at any other S3-compatible endpoint. Set `s3.endpoint` to the proxy URL, and store the proxy credentials in `credentialsSecretRef`.
 
 ### Trade-offs
 
-- **Added latency:** Extra network hop through gateway
-- **Operational overhead:** Another component to manage and monitor
-- **Single point of failure:** Gateway needs HA configuration
-- **Cost:** Compute for gateway instances
+- **Added latency:** an extra network hop through the proxy
+- **Operational overhead:** another component to run and monitor
+- **Availability:** the proxy needs a high-availability setup, or it becomes a single point of failure
+- **Cost:** compute for the proxy
 
-Consider native S3-compatible providers if Azure isn't a hard requirement.
+Consider a native S3-compatible provider if Azure is not a hard requirement.
 
----
 
 ## MinIO (Self-Hosted)
 
-Run your own S3-compatible storage on any infrastructure—on-prem, edge, or any cloud.
+Run your own S3-compatible storage on any infrastructure: on-prem, edge, or any cloud.
 
 ### Docker Compose (Development)
 
@@ -481,7 +381,7 @@ Place your storage in the same region as your Kubernetes cluster. KafScale's ~50
 
 ### Bucket Lifecycle
 
-KafScale manages segment files in `.kfs` format. Configure bucket lifecycle policies carefully—avoid auto-deletion rules that could remove active segments.
+KafScale manages segment files in `.kfs` format. Configure bucket lifecycle policies carefully. Avoid auto-deletion rules that could remove active segments.
 
 ### Testing Your Backend
 

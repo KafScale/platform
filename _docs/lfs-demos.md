@@ -1,7 +1,7 @@
 ---
 layout: doc
-title: LFS Demos
-description: Runnable demos for the KafScale Large File Support system — from local IDoc processing to full Kubernetes pipelines.
+title: "KafScale LFS Demos: Large File Examples"
+description: Runnable demos for the KafScale Large File Support system, from local IDoc processing to full Kubernetes pipelines.
 permalink: /lfs-demos/
 nav_title: LFS Demos
 nav_order: 4
@@ -40,7 +40,7 @@ KafScale ships with a set of runnable demos that exercise the LFS pipeline end-t
 | `make lfs-demo-industrial` | Industrial IoT mixed payloads (E62) | Yes (kind) |
 | `make e72-browser-demo` | Browser SPA uploads (E72) | Yes (kind) |
 
-All demos are environment-driven — override any setting via env vars without touching code.
+All demos are environment-driven. Override any setting via env vars without touching code.
 
 ---
 
@@ -72,13 +72,13 @@ The baseline demo bootstraps a kind cluster, deploys MinIO and the LFS proxy, th
 make lfs-demo-idoc
 ```
 
-This is the fastest way to see the LFS pipeline in action. It only needs a local MinIO container — no Kubernetes cluster required.
+This is the fastest way to see the LFS pipeline in action. It only needs a local MinIO container. No Kubernetes cluster is required.
 
 The demo walks through the complete data flow that the [LFS Proxy](/lfs-proxy/) performs in production:
 
-**Step 1 — Blob upload.** The demo uploads a realistic SAP ORDERS05 IDoc XML (a purchase order with 3 line items, 3 business partners, 3 dates, and 2 status records) to MinIO, simulating what the LFS proxy does when it receives a large payload.
+**Step 1: Blob upload.** The demo uploads a realistic SAP ORDERS05 IDoc XML (a purchase order with 3 line items, 3 business partners, 3 dates, and 2 status records) to MinIO, simulating what the LFS proxy does when it receives a large payload.
 
-**Step 2 — Envelope creation.** A KafScale LFS envelope is generated — the compact JSON pointer record that Kafka consumers receive instead of the raw blob:
+**Step 2: Envelope creation.** A KafScale LFS envelope is generated. This is the compact JSON pointer record that Kafka consumers receive instead of the raw blob:
 
 ```json
 {
@@ -91,7 +91,7 @@ The demo walks through the complete data flow that the [LFS Proxy](/lfs-proxy/) 
 }
 ```
 
-**Step 3 — Resolve and explode.** The `idoc-explode` processor reads the envelope, resolves the blob from S3 via `pkg/lfs.Resolver`, validates the SHA-256 checksum, then parses the XML and routes segments to topic-specific streams:
+**Step 3: Resolve and explode.** The `idoc-explode` processor reads the envelope, resolves the blob from S3 via `pkg/lfs.Resolver`, validates the SHA-256 checksum, then parses the XML and routes segments to topic-specific streams:
 
 ```
 Segment routing:
@@ -103,7 +103,7 @@ Segment routing:
   (root)            ->  idoc-headers    (IDoc metadata)
 ```
 
-**Step 4 — Topic streams.** Each output file maps to a Kafka topic. Routed records carry their child fields as a self-contained JSON object:
+**Step 4: Topic streams.** Each output file maps to a Kafka topic. Routed records carry their child fields as a self-contained JSON object:
 
 ```json
 {"name":"E1EDP01","path":"IDOC/E1EDP01","fields":{
@@ -125,7 +125,7 @@ The sample IDoc produces 94 records across 6 topics.
 
 ## Industry demos
 
-The three industry demos build on the baseline flow and demonstrate the **content explosion pattern** — a single large upload that produces multiple derived topic streams for downstream analytics.
+The three industry demos build on the baseline flow and demonstrate the **content explosion pattern**: a single large upload that produces multiple derived topic streams for downstream analytics.
 
 ### Medical imaging (E60)
 
@@ -166,7 +166,7 @@ Uses HTTP streaming upload for memory-efficient transfer of multi-gigabyte files
 make lfs-demo-industrial
 ```
 
-Simulates a factory floor with **mixed payload sizes** flowing through the same Kafka interface — small telemetry readings alongside large thermal/visual inspection images:
+Simulates a factory floor with **mixed payload sizes** flowing through the same Kafka interface: small telemetry readings alongside large thermal/visual inspection images:
 
 | Topic | Content | LFS blob? | Typical size |
 |---|---|---|---|
@@ -175,13 +175,13 @@ Simulates a factory floor with **mixed payload sizes** flowing through the same 
 | `defect-events` | Anomaly detection alerts | No | ~2 KB |
 | `quality-reports` | Aggregated quality metrics | No | ~10 KB |
 
-Demonstrates automatic routing based on the `LFS_BLOB` header — small payloads flow through Kafka directly, large payloads are offloaded to S3.
+Demonstrates automatic routing based on the `LFS_BLOB` header. Small payloads flow through Kafka directly, and large payloads are offloaded to S3.
 
 ---
 
 ## SDK demo applications
 
-### E70 — Java SDK
+### E70: Java SDK
 
 Located in `examples/E70_java-lfs-sdk-demo/`. Demonstrates the Java LFS producer SDK uploading files via the HTTP API, consuming pointer records from Kafka, and resolving blobs from S3.
 
@@ -192,7 +192,7 @@ make run-all   # builds SDK, starts port-forwards, runs demo
 
 Key env vars: `LFS_HTTP_ENDPOINT`, `LFS_TOPIC`, `KAFKA_BOOTSTRAP`, `LFS_PAYLOAD_SIZE`.
 
-### E71 — Python SDK
+### E71: Python SDK
 
 Located in `examples/E71_python-lfs-sdk-demo/`. Demonstrates the Python LFS SDK with three payload size presets for video upload testing:
 
@@ -205,9 +205,9 @@ make run-large    # 200 MB
 
 Requires `pip install -e lfs-client-sdk/python` for the SDK.
 
-### E72 — Browser SDK
+### E72: Browser SDK
 
-Located in `examples/E72_browser-lfs-sdk-demo/`. A single-page application that uploads files directly from the browser to the LFS proxy — no backend server required.
+Located in `examples/E72_browser-lfs-sdk-demo/`. A single-page application that uploads files directly from the browser to the LFS proxy. No backend server is required.
 
 ```bash
 make e72-browser-demo       # local with port-forward
@@ -233,6 +233,6 @@ All demos share these defaults:
 
 ## Related docs
 
-- [LFS Proxy](/lfs-proxy/) — Architecture and configuration
-- [LFS Helm Deployment](/lfs-helm/) — Kubernetes deployment guide
-- [LFS Client SDKs](/lfs-sdks/) — SDK API reference for Go, Java, Python, JS
+- [LFS Proxy](/lfs-proxy/): architecture and configuration
+- [LFS Helm Deployment](/lfs-helm/): Kubernetes deployment guide
+- [LFS Client SDKs](/lfs-sdks/): SDK API reference for Go, Java, Python, JS

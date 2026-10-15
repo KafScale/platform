@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: SQL Processor
+title: "KafScale SQL Processor: KAFSQL Addon"
 description: Deploy and operate the KAFSQL processor addon.
 permalink: /processors/sql/
 nav_title: SQL

@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: LFS Client SDKs
+title: "KafScale LFS Client SDKs: Java, Python, and JavaScript"
 description: Multi-language SDKs for producing and consuming large files via KafScale LFS.
 permalink: /lfs-sdks/
 nav_title: LFS SDKs
@@ -147,9 +147,9 @@ See the E72 browser demo (`examples/E72_browser-lfs-sdk-demo/`) for a complete s
 
 | Demo | Language | Description |
 |---|---|---|
-| E60 | — | Medical imaging LFS design |
-| E61 | — | Video streaming LFS design |
-| E62 | — | Industrial IoT LFS design |
+| E60 | n/a | Medical imaging LFS design |
+| E61 | n/a | Video streaming LFS design |
+| E62 | n/a | Industrial IoT LFS design |
 | E70 | Java | Java SDK producer with video upload |
 | E71 | Python | Python SDK video upload |
 | E72 | Browser | Browser-native SPA file manager |
@@ -164,6 +164,6 @@ make lfs-demo-video    # E61 video demo
 
 ## Related docs
 
-- [LFS Demos](/lfs-demos/) — Runnable demos for each SDK and industry scenario
-- [LFS Proxy](/lfs-proxy/) — Proxy architecture and configuration
-- [LFS Helm deployment](/lfs-helm/) — Kubernetes deployment guide
+- [LFS Demos](/lfs-demos/): runnable demos for each SDK and industry scenario
+- [LFS Proxy](/lfs-proxy/): proxy architecture and configuration
+- [LFS Helm deployment](/lfs-helm/): Kubernetes deployment guide

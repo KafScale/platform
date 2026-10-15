@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Onboarding Guide
+title: "KafScale Onboarding Guide: Clients to Stream Processing"
 description: Progressive tutorial from basic Kafka clients to stream processing with KafScale.
 permalink: /onboarding-guide/
 nav_title: Onboarding Guide
@@ -64,8 +64,8 @@ Total time: ~2 hours for the full path, or ~35 minutes for the minimal path (E10
 The starting point. Uses the standard `kafka-clients` library to list topics, create a topic, produce 25 messages, and consume 5 messages.
 
 **Key KafScale configuration:**
-- `acks=0` — KafScale brokers are stateless; acknowledgement semantics differ from traditional Kafka
-- `enable.idempotence=false` — KafScale does not support idempotent producers
+- `acks=0`. KafScale brokers are stateless; acknowledgement semantics differ from traditional Kafka
+- `enable.idempotence=false`. KafScale does not support idempotent producers
 - Bootstrap server: `127.0.0.1:39092` (default local dev port)
 
 ```bash
@@ -113,9 +113,9 @@ A Flink streaming job that performs word counts across message headers, keys, an
 
 **Three deployment modes:**
 
-1. **Standalone Java** — runs locally with embedded Flink mini-cluster (Web UI at `localhost:8091`)
-2. **Docker standalone cluster** — Flink JobManager + TaskManager containers (Web UI at `localhost:8081`)
-3. **Kubernetes/kind cluster** — full K8s deployment
+1. **Standalone Java**: runs locally with embedded Flink mini-cluster (Web UI at `localhost:8091`)
+2. **Docker standalone cluster**: Flink JobManager + TaskManager containers (Web UI at `localhost:8081`)
+3. **Kubernetes/kind cluster**: full K8s deployment
 
 ```bash
 cd examples/E30_flink-kafscale-demo
@@ -155,7 +155,7 @@ make run
 
 A Node.js application using KafkaJS with an interactive Kanban board UI (drag-and-drop task management) and real-time WebSocket monitoring.
 
-**Agent architecture:** queue-driven with Kafka topics for orchestration — requests flow through `agent.requests` to the agent service, responses return on `agent.responses`.
+**Agent architecture:** queue-driven with Kafka topics for orchestration. Requests flow through `agent.requests` to the agent service, and responses return on `agent.responses`.
 
 ```bash
 cd examples/E50_JS-kafscale-demo
@@ -191,19 +191,19 @@ Environment variables common across examples:
 
 The [`101_kafscale-dev-guide/`](https://github.com/KafScale/platform/tree/main/examples/101_kafscale-dev-guide) contains an 8-chapter written guide covering:
 
-1. **Introduction** — what KafScale is, architecture overview, limitations
-2. **Quick Start** — run the local demo with `make demo`
-3. **Spring Boot Configuration** — configure your application for KafScale
-4. **Running Your Application** — platform demo walkthrough
-5. **Troubleshooting** — common issues and fixes
-6. **Next Steps** — production deployment guidance
-7. **Flink Word Count Demo** — stream processing with Flink (E30)
-8. **Spark Word Count Demo** — stream processing with Spark (E40)
+1. **Introduction**: what KafScale is, architecture overview, limitations
+2. **Quick Start**: run the local demo with `make demo`
+3. **Spring Boot Configuration**: configure your application for KafScale
+4. **Running Your Application**: platform demo walkthrough
+5. **Troubleshooting**: common issues and fixes
+6. **Next Steps**: production deployment guidance
+7. **Flink Word Count Demo**: stream processing with Flink (E30)
+8. **Spark Word Count Demo**: stream processing with Spark (E40)
 
 Core path (chapters 1–6): ~45–60 minutes. Each stream processing chapter adds 20–30 minutes.
 
 ## Next steps
 
-- [Quickstart](/quickstart/) — install the KafScale operator and create your first topic
-- [User Guide](/user-guide/) — full reference for operating KafScale
-- [Architecture](/architecture/) — how stateless brokers and S3 storage work together
+- [Quickstart](/quickstart/): install the KafScale operator and create your first topic
+- [User Guide](/user-guide/): full reference for operating KafScale
+- [Architecture](/architecture/): how stateless brokers and S3 storage work together

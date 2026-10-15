@@ -1,6 +1,6 @@
 ---
 layout: default
-title: API Documentation
+title: "KafScale API: Kafka Protocol Compatibility"
 description: Redirects to the protocol compatibility page.
 permalink: /api/
 sidebar: false

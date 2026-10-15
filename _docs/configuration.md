@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Runtime Settings
+title: "KafScale Runtime Settings: Broker, S3, and etcd"
 description: Complete reference for broker, S3, etcd, proxy, console, and operator configuration in KafScale.
 permalink: /configuration/
 nav_title: Runtime Settings
@@ -174,7 +174,7 @@ KafScale works with any S3-compatible storage. Set `KAFSCALE_S3_ENDPOINT` and cr
 | Wasabi | `https://s3.us-east-1.wasabisys.com` | |
 | Google Cloud Storage | `https://storage.googleapis.com` | Requires HMAC keys |
 
-See [Storage Compatibility](/docs/deployment/compatibility/) for detailed configuration examples.
+See [Supported storage](/supported/) for detailed configuration examples.
 
 **MinIO example:**
 
@@ -216,7 +216,7 @@ The operator resolves etcd endpoints in this order:
 
 When etcd is unavailable, brokers reject producer/admin/consumer-group operations with `REQUEST_TIMED_OUT`. Producers see per-partition errors in the Produce response; admin and group APIs return the same code in their response payloads.
 
-Fetch requests for cached segments continue to work—brokers serve reads from their local cache even during etcd outages.
+Fetch requests for cached segments continue to work. Brokers serve reads from their local cache even during etcd outages.
 
 ### Connection Settings
 
@@ -422,7 +422,7 @@ broker pods. The chart does not ship a Kafka Ingress resource.
 | `proxy.service.type` | `LoadBalancer` | `LoadBalancer`, `NodePort`, or `ClusterIP` |
 | `proxy.service.nodePort` | | Pin NodePort when `type=NodePort` |
 
-### CRD Settings (`spec.brokers`) — direct broker exposure
+### CRD Settings (`spec.brokers`): direct broker exposure
 
 | Field | Description |
 |-------|-------------|
@@ -591,6 +591,6 @@ spec:
 ## Next Steps
 
 - [Installation](/installation/) for Helm and CRD setup
-- [Storage Compatibility](/docs/deployment/compatibility/) for non-AWS backends
+- [Supported storage](/supported/) for non-AWS backends
 - [Operations](/operations/) for monitoring and scaling
 - [Security](/security/) for TLS and authentication

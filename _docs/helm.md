@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Helm
+title: "KafScale Helm: Chart Installation and Values"
 description: Helm chart installation and configuration for KafScale.
 permalink: /helm/
 nav_title: Helm

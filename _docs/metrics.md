@@ -1,12 +1,13 @@
 ---
 layout: doc
-title: Metrics and Dashboards
+title: "KafScale Metrics and Dashboards: Prometheus and Grafana"
 description: Prometheus metrics and Grafana dashboards for KafScale.
 permalink: /metrics/
 nav_title: Metrics
 nav_order: 4
 nav_group: References
 ---
+
 
 <!--
 Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
@@ -27,7 +28,7 @@ limitations under the License.
 
 # Metrics and Dashboards
 
-KafScale exposes Prometheus metrics on `/metrics` from both brokers and the operator.
+Kafscale exposes Prometheus metrics on `/metrics` from both brokers and the operator.
 The console UI and Grafana dashboard templates are built on the same metrics.
 
 ## Endpoints
@@ -42,7 +43,7 @@ console via `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`.
 ## ISR Terminology
 
 The broker advertises ISR (in-sync replica) values as part of metadata responses
-and exposes related counts in metrics/UI. This reflects KafScale's **logical**
+and exposes related counts in metrics/UI. This reflects Kafscale's **logical**
 replica set in etcd metadata, not Kafka's internal `LeaderAndIsr` protocol. We
 do not implement Kafka ISR management or any internal replication APIs; ISR here
 is a metadata indicator used for client compatibility and visibility.
@@ -59,6 +60,10 @@ Broker metrics are emitted directly by the broker process.
 | `kafscale_s3_state_duration_seconds` | Gauge | - | Seconds spent in the current S3 health state. |
 | `kafscale_produce_rps` | Gauge | - | Produce requests per second (sliding window). |
 | `kafscale_fetch_rps` | Gauge | - | Fetch requests per second (sliding window). |
+| `kafscale_admin_requests_total` | Counter | `api` | Count of admin API requests by API name. |
+| `kafscale_admin_request_errors_total` | Counter | `api` | Count of admin API errors by API name. |
+| `kafscale_admin_request_latency_ms_avg` | Gauge | `api` | Average admin API latency (ms). |
+| `kafscale_authz_denied_total` | Counter | `action`, `resource` | Count of authorization denials by action/resource. |
 | `kafscale_produce_latency_ms` | Histogram | - | Produce request latency distribution (use p95 in PromQL). |
 | `kafscale_consumer_lag` | Histogram | - | Consumer lag distribution (use p95 in PromQL). |
 | `kafscale_consumer_lag_max` | Gauge | - | Maximum observed consumer lag. |
@@ -68,10 +73,6 @@ Broker metrics are emitted directly by the broker process.
 | `kafscale_broker_mem_sys_bytes` | Gauge | - | Memory obtained from the OS. |
 | `kafscale_broker_heap_inuse_bytes` | Gauge | - | Heap in-use bytes. |
 | `kafscale_broker_goroutines` | Gauge | - | Number of goroutines. |
-| `kafscale_admin_requests_total` | Counter | `api` | Count of admin API requests by API name. |
-| `kafscale_admin_request_errors_total` | Counter | `api` | Count of admin API errors by API name. |
-| `kafscale_admin_request_latency_ms_avg` | Gauge | `api` | Average admin API latency (ms). |
-| `kafscale_authz_denied_total` | Counter | `action`, `resource` | Count of authorization denials by action/resource. |
 
 Admin API label values are human-readable for common ops APIs
 (`DescribeGroups`, `ListGroups`, `OffsetForLeaderEpoch`, `DescribeConfigs`,
@@ -84,7 +85,7 @@ Operator metrics are exported by the controller runtime metrics server.
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `kafscale_operator_clusters` | Gauge | - | Count of managed `KafScaleCluster` resources. |
+| `kafscale_operator_clusters` | Gauge | - | Count of managed `KafscaleCluster` resources. |
 | `kafscale_operator_snapshot_publish_total` | Counter | `result` | Snapshot publish attempts (`success` or `error`). |
 | `kafscale_operator_etcd_snapshot_age_seconds` | Gauge | `cluster` | Seconds since last successful etcd snapshot upload. |
 | `kafscale_operator_etcd_snapshot_last_success_timestamp` | Gauge | `cluster` | Unix timestamp of last successful snapshot upload. |
@@ -92,133 +93,19 @@ Operator metrics are exported by the controller runtime metrics server.
 | `kafscale_operator_etcd_snapshot_stale` | Gauge | `cluster` | 1 when the snapshot age exceeds the staleness threshold. |
 | `kafscale_operator_etcd_snapshot_success` | Gauge | `cluster` | 1 if at least one successful snapshot was recorded. |
 | `kafscale_operator_etcd_snapshot_access_ok` | Gauge | `cluster` | 1 if the snapshot bucket preflight succeeds. |
+| `kafscale_operator_etcd_db_total_size_bytes` | Gauge | `cluster`, `member` | Physical etcd backend size per managed member. |
+| `kafscale_operator_etcd_db_in_use_bytes` | Gauge | `cluster`, `member` | Logical in-use etcd backend size per managed member. |
+| `kafscale_operator_etcd_db_size_high` | Gauge | `cluster` | 1 when any member exceeds the maintenance size threshold. |
+| `kafscale_operator_etcd_nospace_alarm` | Gauge | `cluster` | 1 when managed etcd has an active NOSPACE alarm. |
 
 The `cluster` label uses `namespace/name`.
 
-## Kubernetes ServiceMonitor
-
-If you're using the Prometheus Operator, create a `ServiceMonitor` to scrape KafScale:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: kafscale-brokers
-  labels:
-    app: kafscale
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: kafscale
-      app.kubernetes.io/component: broker
-  endpoints:
-    - port: metrics
-      interval: 15s
-      path: /metrics
----
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: kafscale-operator
-  labels:
-    app: kafscale
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: kafscale
-      app.kubernetes.io/component: operator
-  endpoints:
-    - port: metrics
-      interval: 30s
-      path: /metrics
-```
-
-## Recommended Alert Rules
-
-Example Prometheus alerting rules for production deployments:
-
-{% raw %}
-```yaml
-groups:
-  - name: kafscale
-    rules:
-      - alert: KafScaleS3Unhealthy
-        expr: kafscale_s3_health_state{state="healthy"} != 1
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "KafScale S3 connection unhealthy"
-          description: "Broker {{ $labels.instance }} has been in non-healthy S3 state for 2+ minutes."
-
-      - alert: KafScaleHighProduceLatency
-        expr: histogram_quantile(0.95, rate(kafscale_produce_latency_ms_bucket[5m])) > 500
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "KafScale produce latency elevated"
-          description: "P95 produce latency on {{ $labels.instance }} exceeds 500ms."
-
-      - alert: KafScaleConsumerLagHigh
-        expr: kafscale_consumer_lag_max > 100000
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "KafScale consumer lag high"
-          description: "Consumer lag on {{ $labels.instance }} exceeds 100k messages."
-
-      - alert: KafScaleEtcdSnapshotStale
-        expr: kafscale_operator_etcd_snapshot_stale == 1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "KafScale etcd snapshot stale"
-          description: "Cluster {{ $labels.cluster }} has not had a successful snapshot recently."
-
-      - alert: KafScaleS3ErrorRateHigh
-        expr: kafscale_s3_error_rate > 0.05
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "KafScale S3 error rate elevated"
-          description: "S3 error rate on {{ $labels.instance }} exceeds 5%."
-
-      - alert: KafScaleBrokerDown
-        expr: up{job="kafscale-brokers"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "KafScale broker unreachable"
-          description: "Broker {{ $labels.instance }} is not responding to scrapes."
-```
-{% endraw %}
-
-Tune thresholds based on your workload. KafScale's S3-native architecture means
-produce latencies are inherently higher than traditional Kafka (expect 200-400ms
-typical), so adjust `KafScaleHighProduceLatency` accordingly.
+Helm can emit `KafscaleEtcdBackendSizeHigh` and `KafscaleEtcdNOSPACE` PrometheusRule alerts when `operator.metrics.prometheusRule.enabled=true`.
 
 ## Grafana Dashboard
 
 The Grafana template lives in `docs/grafana/broker-dashboard.json`. It expects
 Prometheus to scrape both broker and operator metrics endpoints.
-
-Import the dashboard via Grafana UI or provision it in your Grafana deployment:
-
-```yaml
-# Example provisioning config
-apiVersion: 1
-providers:
-  - name: KafScale
-    folder: KafScale
-    type: file
-    options:
-      path: /var/lib/grafana/dashboards/kafscale
-```
 
 ## Metric Coverage
 

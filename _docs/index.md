@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Docs
+title: "KafScale Documentation: Stateless Kafka on S3"
 description: Guides, reference, and architecture docs for KafScale.
 permalink: /docs/
 nav_title: Overview
@@ -15,9 +15,10 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 
 ## Get started
 
+- [Project overview](/overview/)
 - [Quickstart](/quickstart/)
 - [User guide](/user-guide/)
-- [Onboarding Guide](/onboarding-guide/) — E10–E50 progressive tutorial
+- [Onboarding Guide](/onboarding-guide/): E10–E50 progressive tutorial
 - [Installation](/installation/)
 - [Architecture](/architecture/)
 
@@ -25,6 +26,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 
 - [Runtime Settings](/configuration/)
 - [MCP](/mcp/)
+- [Ops MCP](/ops-mcp/)
 - [Operations](/operations/)
 - [Security](/security/)
 
@@ -33,18 +35,21 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Protocol](/protocol/)
 - [Ops API](/ops-api/)
 - [Metrics](/metrics/)
+- [Grafana](/grafana/)
 - [Benchmarks](/benchmarks/)
 - [Helm](/helm/)
 - [MCP Server](/mcp-server/)
 - [Storage format](/storage-format/)
+- [Storage layer](/storage/)
 - [S3 health](/s3-health/)
+- [Release notes](/releases/)
 
 ## Large File Support (LFS)
 
-- [LFS Proxy](/lfs-proxy/) — Claim-check proxy for large binary payloads via S3 + Kafka
-- [LFS Helm Deployment](/lfs-helm/) — Kubernetes deployment and configuration
-- [LFS Client SDKs](/lfs-sdks/) — Java, Python, JS, and browser SDKs
-- [LFS Demos](/lfs-demos/) — Runnable demos from local IDoc processing to full Kubernetes pipelines
+- [LFS Proxy](/lfs-proxy/): claim-check proxy for large binary payloads via S3 and Kafka
+- [LFS Helm Deployment](/lfs-helm/): Kubernetes deployment and configuration
+- [LFS Client SDKs](/lfs-sdks/): Java, Python, JS, and browser SDKs
+- [LFS Demos](/lfs-demos/): runnable demos from local IDoc processing to full Kubernetes pipelines
 
 ## Processors
 
@@ -56,5 +61,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Roadmap](/roadmap/)
 - [FAQ](/faq/)
 - [Comparison](/comparison/)
+- [Rationale](/rationale/)
+- [Supported storage](/supported/)
 - [Development](/development/)
 - [Contributing](/contributing/)

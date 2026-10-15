@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Comparison
+title: "KafScale Comparison: Kafka-Compatible Platforms"
 description: Compare KafScale with Kafka-compatible alternatives across architecture, performance, licensing, and cost.
 
 ---
@@ -513,4 +513,4 @@ The Confluent acquisition of WarpStream in late 2024 highlighted the risk of dep
 
 KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. The documented .kfs segment format means you can build processors that read directly from S3 without going through brokers. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
 
-For deeper analysis, see [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) and [Data Processing Does Not Belong in the Message Broker](https://www.novatechflow.com/2025/12/data-processing-does-not-belong-in.html).
+For deeper analysis, see [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) and the [architecture decision rationale](/rationale/).

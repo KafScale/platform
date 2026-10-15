@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Rationale
+title: "KafScale Rationale: Why Stateless Brokers on S3"
 description: Why KafScale uses stateless brokers and object storage instead of traditional Kafka clusters.
 permalink: /rationale/
 ---

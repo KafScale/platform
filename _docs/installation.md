@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Installation
+title: "KafScale Installation: Helm, CRDs, and Local Tooling"
 description: Install KafScale with Helm, review CRD examples, and prepare local dev tooling.
 permalink: /installation/
 nav_title: Installation

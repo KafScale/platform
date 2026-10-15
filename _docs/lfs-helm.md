@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: LFS Helm Deployment
+title: "KafScale LFS Helm: Kubernetes Deployment"
 description: Deploy and configure LFS via the KafscaleCluster CRD and Helm chart.
 permalink: /lfs-helm/
 nav_title: LFS Helm
@@ -75,7 +75,7 @@ spec:
 ```
 
 `spec.lfsProxy.s3.bucket` and `region` are required. The bucket name
-`kafscale-lfs` is permanently blocklisted at startup — use your own name.
+`kafscale-lfs` is permanently blocklisted at startup. Use your own name.
 
 ## LFS demo UI (optional)
 

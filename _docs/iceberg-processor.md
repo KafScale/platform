@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: Iceberg Processor
+title: "KafScale Iceberg Processor: Table Sink Addon"
 description: Deploy and operate the Iceberg processor addon.
 permalink: /processors/iceberg/
 nav_title: Iceberg

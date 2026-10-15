@@ -1,6 +1,6 @@
 ---
 layout: doc
-title: FAQ
+title: "KafScale FAQ: Compatibility, Licensing, and S3"
 description: Common questions about KafScale, Kafka compatibility, and S3 durability.
 permalink: /faq/
 nav_title: FAQ
@@ -84,7 +84,7 @@ V2 has been the only supported format for 8+ years. The entire Kafka ecosystem (
 
 ### What about coupling processors to the storage format?
 
-[Processors](/processors/) read directly from S3, bypassing brokers entirely. This means they understand the `.kfs` segment format and coordinate via etcd.
+[Processors](/docs/#processors) read directly from S3, bypassing brokers entirely. This means they understand the `.kfs` segment format and coordinate via etcd.
 
 This is intentional coupling to a stable interface, not a liability:
 
@@ -97,7 +97,7 @@ The tradeoff: if KafScale's internal segment layout evolves, processors need upd
 
 ### Does KafScale work with clouds other than AWS?
 
-Yes. KafScale works with any S3-compatible storage backend. See [Storage Compatibility](/docs/deployment/compatibility/) for configuration examples.
+Yes. KafScale works with any S3-compatible storage backend. See [Supported storage](/supported/) for configuration examples.
 
 | Provider | Compatibility | Notes |
 |----------|--------------|-------|
@@ -107,7 +107,7 @@ Yes. KafScale works with any S3-compatible storage backend. See [Storage Compati
 | Backblaze B2 | ✅ Native | S3-compatible API |
 | MinIO | ✅ Native | Self-hosted, any infrastructure |
 | Google Cloud Storage | ⚠️ Interop | Requires HMAC keys |
-| Azure Blob Storage | ❌ Proxy | Requires MinIO Gateway |
+| Azure Blob Storage | ❌ Proxy | Requires an S3-compatible proxy in front of Azure Blob (MinIO gateway mode is no longer available) |
 
 ---
 
@@ -187,7 +187,7 @@ Yes. KafScale implements the full consumer group protocol including JoinGroup, S
 
 ### What are processors?
 
-Processors are components that read directly from S3, bypassing brokers entirely. They enable analytical workloads without adding load to your streaming infrastructure. See [Processors](/processors/) for details.
+Processors are components that read directly from S3, bypassing brokers entirely. They enable analytical workloads without adding load to your streaming infrastructure. See [Processors](/docs/#processors) for details.
 
 Available processors:
 
