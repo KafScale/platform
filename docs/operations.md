@@ -57,6 +57,22 @@ By default, image tags follow the chart `appVersion`. Override `operator.image.t
 2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
 3. Expose the console UI (optional) by enabling ingress in `values.yaml` or by creating a LoadBalancer service.
 
+## Broker partition restore
+
+On first access after a broker restart, a partition rebuilds its in-memory segment
+catalog from S3 before serving requests for that partition. Restore uses up to 16
+workers per partition to read segment footers and indexes. These requests also
+share the broker-wide `KAFSCALE_S3_CONCURRENCY` limit with other S3 operations.
+
+Broker logs report restore start, the listed segment count, progress every five
+seconds during downloads, and completion with restored/skipped counts, last offset,
+and duration. Failures include processed counts and the error. A failed restore
+cancels the remaining workers and does not install a partial catalog.
+
+Restore still lists all objects and reads a footer and index per eligible segment;
+large partitions can still take time. This change does not merge small segments or
+add a persistent manifest. Requests for the restoring partition wait for completion.
+
 ## Security & Hardening
 
 - **RBAC** – The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.

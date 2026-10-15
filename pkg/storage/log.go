@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/KafScale/platform/pkg/cache"
@@ -131,106 +132,163 @@ func (l *PartitionLog) releaseS3() {
 	}
 }
 
+const (
+	restoreConcurrency      = 16
+	restoreProgressInterval = 5 * time.Second
+)
+
+type restoredSegment struct {
+	segment segmentRange
+	entries []*IndexEntry
+}
+
 // RestoreFromS3 rebuilds segment ranges from objects already stored in S3.
-func (l *PartitionLog) RestoreFromS3(ctx context.Context) (int64, error) {
-	prefix := l.segmentPrefix()
+func (l *PartitionLog) RestoreFromS3(ctx context.Context) (lastOffset int64, restoreErr error) {
+	started := time.Now()
+	logger := l.logger().With("topic", l.topic, "partition", l.partition)
+	logger.Info("partition restore started")
+	var completed atomic.Int64
+	total := 0
+	defer func() {
+		if restoreErr != nil {
+			logger.Error("partition restore failed", "segments", total, "processed", completed.Load(), "duration", time.Since(started), "error", restoreErr)
+		}
+	}()
 	if err := l.acquireS3(ctx); err != nil {
 		return -1, err
 	}
-	objects, err := l.s3.ListSegments(ctx, prefix)
+	objects, err := l.s3.ListSegments(ctx, l.segmentPrefix())
 	l.releaseS3()
 	if err != nil {
 		return -1, err
 	}
-	found := make([]segmentRange, 0, len(objects))
+	candidates := make([]S3Object, 0, len(objects))
 	for _, obj := range objects {
-		if !strings.HasSuffix(obj.Key, ".kfs") {
-			continue
+		if _, ok := parseSegmentBaseOffset(obj.Key); ok && obj.Size >= segmentFooterLen {
+			candidates = append(candidates, obj)
 		}
-		base, ok := parseSegmentBaseOffset(obj.Key)
-		if !ok {
-			continue
-		}
-		if obj.Size < segmentFooterLen {
-			continue
-		}
-		start := obj.Size - segmentFooterLen
-		rng := &ByteRange{Start: start, End: obj.Size - 1}
-		if err := l.acquireS3(ctx); err != nil {
-			return -1, err
-		}
-		startTime := time.Now()
-		footerBytes, err := l.s3.DownloadSegment(ctx, obj.Key, rng)
-		l.releaseS3()
-		if l.onS3Op != nil {
-			l.onS3Op("download_segment_footer", time.Since(startTime), err)
-		}
-		if err != nil {
-			return -1, err
-		}
-		lastOffset, err := parseSegmentFooter(footerBytes)
-		if err != nil {
-			return -1, err
-		}
-		found = append(found, segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size})
 	}
-	if len(found) == 0 {
-		return -1, nil
-	}
-	sort.Slice(found, func(i, j int) bool {
-		return found[i].baseOffset < found[j].baseOffset
-	})
-	segments := make([]segmentRange, 0, len(found))
-	indexByBase := make(map[int64][]*IndexEntry, len(found))
-	for _, seg := range found {
-		indexKey := l.indexKey(seg.baseOffset)
-		if err := l.acquireS3(ctx); err != nil {
-			return -1, err
-		}
-		startTime := time.Now()
-		indexBytes, err := l.s3.DownloadIndex(ctx, indexKey)
-		l.releaseS3()
-		if l.onS3Op != nil {
-			l.onS3Op("download_index", time.Since(startTime), err)
-		}
-		if err != nil {
-			if errors.Is(err, ErrNotFound) && seg.baseOffset >= l.nextOffset {
-				l.logger().Warn("skipping orphaned segment: missing .index",
-					"topic", l.topic, "partition", l.partition,
-					"segment_base", seg.baseOffset, "next_offset", l.nextOffset,
-					"index_key", indexKey, "error", err)
-				continue
-			}
-			return -1, err
-		}
-		parsedEntries, err := ParseIndex(indexBytes)
-		if err != nil {
-			if seg.baseOffset >= l.nextOffset {
-				l.logger().Warn("skipping orphaned segment: corrupt .index",
-					"topic", l.topic, "partition", l.partition,
-					"segment_base", seg.baseOffset, "next_offset", l.nextOffset,
-					"index_key", indexKey, "error", err)
-				continue
-			}
-			return -1, fmt.Errorf("parse index %s: %w", indexKey, err)
-		}
-		segments = append(segments, seg)
-		indexByBase[seg.baseOffset] = parsedEntries
-	}
-	if len(segments) == 0 {
-		return -1, nil
-	}
-	last := segments[len(segments)-1].lastOffset
-
+	total = len(candidates)
+	logger.Info("partition restore listed segments", "segments", total)
 	l.mu.Lock()
-	l.segments = segments
-	l.indexEntries = indexByBase
-	if last >= l.nextOffset {
-		l.nextOffset = last + 1
-	}
+	nextOffset := l.nextOffset
 	l.mu.Unlock()
 
+	results := make([]*restoredSegment, total)
+	group, groupCtx := errgroup.WithContext(ctx)
+	workers := min(restoreConcurrency, total)
+	for worker := 0; worker < workers; worker++ {
+		group.Go(func() error {
+			for i := worker; i < total; i += workers {
+				if err := groupCtx.Err(); err != nil {
+					return err
+				}
+				result, err := l.restoreSegment(groupCtx, candidates[i], nextOffset)
+				if err != nil {
+					return fmt.Errorf("restore segment %s: %w", candidates[i].Key, err)
+				}
+				results[i] = result
+				completed.Add(1)
+			}
+			return nil
+		})
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- group.Wait() }()
+	ticker := time.NewTicker(restoreProgressInterval)
+	defer ticker.Stop()
+waiting:
+	for {
+		select {
+		case err := <-finished:
+			if err != nil {
+				return -1, err
+			}
+			break waiting
+		case <-ticker.C:
+			logger.Info("partition restore progress", "segments", total, "processed", completed.Load(), "duration", time.Since(started))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return -1, err
+	}
+	segments := make([]segmentRange, 0, total)
+	indexByBase := make(map[int64][]*IndexEntry, total)
+	for _, result := range results {
+		if result != nil {
+			segments = append(segments, result.segment)
+			indexByBase[result.segment.baseOffset] = result.entries
+		}
+	}
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].baseOffset < segments[j].baseOffset
+	})
+	last := int64(-1)
+	if len(segments) > 0 {
+		last = segments[len(segments)-1].lastOffset
+		l.mu.Lock()
+		l.segments = segments
+		l.indexEntries = indexByBase
+		if last >= l.nextOffset {
+			l.nextOffset = last + 1
+		}
+		l.mu.Unlock()
+	}
+	logger.Info("partition restore completed", "segments", total, "restored", len(segments), "skipped", total-len(segments), "last_offset", last, "duration", time.Since(started))
 	return last, nil
+}
+
+func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object, nextOffset int64) (*restoredSegment, error) {
+	base, _ := parseSegmentBaseOffset(obj.Key)
+	rng := &ByteRange{Start: obj.Size - segmentFooterLen, End: obj.Size - 1}
+	if err := l.acquireS3(ctx); err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	footerBytes, err := l.s3.DownloadSegment(ctx, obj.Key, rng)
+	l.releaseS3()
+	if l.onS3Op != nil {
+		l.onS3Op("download_segment_footer", time.Since(started), err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	lastOffset, err := parseSegmentFooter(footerBytes)
+	if err != nil {
+		return nil, err
+	}
+	indexKey := l.indexKey(base)
+	if err := l.acquireS3(ctx); err != nil {
+		return nil, err
+	}
+	started = time.Now()
+	indexBytes, err := l.s3.DownloadIndex(ctx, indexKey)
+	l.releaseS3()
+	if l.onS3Op != nil {
+		l.onS3Op("download_index", time.Since(started), err)
+	}
+	if err != nil {
+		if errors.Is(err, ErrNotFound) && base >= nextOffset {
+			l.logger().Warn("skipping orphaned segment: missing .index",
+				"topic", l.topic, "partition", l.partition,
+				"segment_base", base, "next_offset", nextOffset,
+				"index_key", indexKey, "error", err)
+			return nil, nil
+		}
+		return nil, err
+	}
+	entries, err := ParseIndex(indexBytes)
+	if err != nil {
+		if base >= nextOffset {
+			l.logger().Warn("skipping orphaned segment: corrupt .index",
+				"topic", l.topic, "partition", l.partition,
+				"segment_base", base, "next_offset", nextOffset,
+				"index_key", indexKey, "error", err)
+			return nil, nil
+		}
+		return nil, fmt.Errorf("parse index %s: %w", indexKey, err)
+	}
+	return &restoredSegment{segment: segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size}, entries: entries}, nil
 }
 
 // AppendBatch writes a record batch to the log, updating offsets and flushing as needed.
