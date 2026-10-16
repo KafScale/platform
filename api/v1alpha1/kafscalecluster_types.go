@@ -31,6 +31,10 @@ type KafscaleClusterSpec struct {
 }
 
 type BrokerSpec struct {
+	// Affinity replaces the default soft pod anti-affinity. Omit to use the
+	// default; set to an empty object to disable affinity.
+	// +optional
+	Affinity       *corev1.Affinity  `json:"affinity,omitempty"`
 	Image          BrokerImageSpec   `json:"image,omitempty"`
 	Replicas       *int32            `json:"replicas,omitempty"`
 	Resources      BrokerResources   `json:"resources,omitempty"`
@@ -73,6 +77,11 @@ type S3Spec struct {
 
 type EtcdSpec struct {
 	Endpoints []string `json:"endpoints"`
+	// Affinity replaces the default soft pod anti-affinity for managed etcd.
+	// Omit to use the default; set to an empty object to disable affinity.
+	// Ignored when external endpoints are configured.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
 }
 
 type ClusterConfigSpec struct {
@@ -340,6 +349,7 @@ func (in *BrokerResources) DeepCopy() *BrokerResources {
 
 func (in *BrokerSpec) DeepCopyInto(out *BrokerSpec) {
 	*out = *in
+	out.Affinity = in.Affinity.DeepCopy()
 	if in.Replicas != nil {
 		out.Replicas = new(int32)
 		*out.Replicas = *in.Replicas
@@ -357,6 +367,23 @@ func (in *BrokerSpec) DeepCopy() *BrokerSpec {
 		return nil
 	}
 	out := new(BrokerSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *EtcdSpec) DeepCopyInto(out *EtcdSpec) {
+	*out = *in
+	if in.Endpoints != nil {
+		out.Endpoints = append([]string{}, in.Endpoints...)
+	}
+	out.Affinity = in.Affinity.DeepCopy()
+}
+
+func (in *EtcdSpec) DeepCopy() *EtcdSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(EtcdSpec)
 	in.DeepCopyInto(out)
 	return out
 }
@@ -409,7 +436,7 @@ func (in *KafscaleClusterSpec) DeepCopyInto(out *KafscaleClusterSpec) {
 	*out = *in
 	in.Brokers.DeepCopyInto(&out.Brokers)
 	out.S3 = in.S3
-	out.Etcd = in.Etcd
+	in.Etcd.DeepCopyInto(&out.Etcd)
 	out.Config = in.Config
 	in.LfsProxy.DeepCopyInto(&out.LfsProxy)
 }

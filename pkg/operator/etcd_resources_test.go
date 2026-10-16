@@ -36,6 +36,7 @@ import (
 func TestEnsureEtcdUsesSpecEndpoints(t *testing.T) {
 	t.Setenv(operatorEtcdEndpointsEnv, "http://env-etcd:2379")
 	cluster := testCluster("spec-endpoints", []string{"http://spec-etcd:2379"})
+	cluster.Spec.Etcd.Affinity = testAffinityOverride()
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
 

@@ -16,6 +16,8 @@
 package v1alpha1
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -93,5 +95,68 @@ func TestKafscaleTopicDeepCopy(t *testing.T) {
 	copy.Status.Partitions[0].Leader = "broker-1"
 	if orig.Status.Partitions[0].Leader == copy.Status.Partitions[0].Leader {
 		t.Fatalf("expected deep copy of Partitions")
+	}
+}
+
+func TestAffinityDeepCopyIsolation(t *testing.T) {
+	affinity := &corev1.Affinity{
+		NodeAffinity:    &corev1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "pool", Operator: corev1.NodeSelectorOpIn, Values: []string{"storage"}}}}}}},
+		PodAntiAffinity: &corev1.PodAntiAffinity{RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{TopologyKey: "kubernetes.io/hostname", LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "broker"}}}}},
+	}
+	original := &KafscaleCluster{Spec: KafscaleClusterSpec{Brokers: BrokerSpec{Affinity: affinity.DeepCopy()}, Etcd: EtcdSpec{Endpoints: []string{"http://etcd:2379"}, Affinity: affinity.DeepCopy()}}}
+	snapshot, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := original.DeepCopy()
+	for _, a := range []*corev1.Affinity{copied.Spec.Brokers.Affinity, copied.Spec.Etcd.Affinity} {
+		a.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] = "changed"
+		a.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0].LabelSelector.MatchLabels["app"] = "changed"
+	}
+	copied.Spec.Etcd.Endpoints[0] = "http://changed:2379"
+	after, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(snapshot) != string(after) {
+		t.Fatal("deep copy shares affinity or endpoint storage")
+	}
+	for _, affinity := range []*corev1.Affinity{nil, {}} {
+		spec := &KafscaleClusterSpec{Brokers: BrokerSpec{Affinity: affinity}, Etcd: EtcdSpec{Affinity: affinity}}
+		if !reflect.DeepEqual(spec, spec.DeepCopy()) {
+			t.Fatal("deep copy lost nil/empty affinity distinction")
+		}
+	}
+}
+
+func TestAffinityJSONPresence(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		present       bool
+	}{
+		{"omitted", `{"brokers":{},"etcd":{}}`, false},
+		{"null", `{"brokers":{"affinity":null},"etcd":{"affinity":null}}`, false},
+		{"empty", `{"brokers":{"affinity":{}},"etcd":{"affinity":{}}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var spec KafscaleClusterSpec
+			if err := json.Unmarshal([]byte(tc.payload), &spec); err != nil {
+				t.Fatal(err)
+			}
+			if (spec.Brokers.Affinity != nil) != tc.present || (spec.Etcd.Affinity != nil) != tc.present {
+				t.Fatal("lost affinity presence")
+			}
+			encoded, err := json.Marshal(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var roundTrip KafscaleClusterSpec
+			if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(spec, roundTrip) {
+				t.Fatal("JSON round-trip lost nil/empty distinction")
+			}
+		})
 	}
 }
