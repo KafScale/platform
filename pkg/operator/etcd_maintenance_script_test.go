@@ -57,7 +57,7 @@ func TestEtcdMaintenanceShellScriptPOSIX(t *testing.T) {
 				{name: "check_nospace", checkOnly: "1", dbSize: "1", alarm: "http://member2:2379", maintenance: true},
 				{name: "check_status_unavailable", checkOnly: "1", dbSize: "1", unavailable: "http://member1:2379", maintenance: true},
 				{name: "scheduled_below_threshold", checkOnly: "0", dbSize: "1", maintenance: true},
-				{name: "defrag_failure", checkOnly: "0", dbSize: "1", failCommand: "--endpoints=http://member2:2379 endpoint defrag", maintenance: true},
+				{name: "defrag_failure", checkOnly: "0", dbSize: "1", failCommand: "--endpoints=http://member2:2379 defrag", maintenance: true},
 				{name: "disarm_failure", checkOnly: "0", dbSize: "1", failCommand: "--endpoints=http://member1:2379 alarm disarm", maintenance: true},
 				{name: "single_ipv6_member", checkOnly: "0", dbSize: "1", members: []string{"http://[fd00::1]:2379"}, maintenance: true},
 			} {
@@ -80,6 +80,7 @@ func TestEtcdMaintenanceShellScriptPOSIX(t *testing.T) {
 set -eu
 printf '%s\n' "$*" >> "$CALL_LOG"
 if [ "$*" = "$FAIL_COMMAND" ]; then exit 17; fi
+if [ "$2" = "defrag" ] && [ "$#" -eq 2 ]; then exit 0; fi
 case "$2 $3" in
  "endpoint status")
   if [ "$1" = "--endpoints=$UNAVAILABLE_ENDPOINT" ]; then exit 1; fi
@@ -88,7 +89,7 @@ case "$2 $3" in
  "alarm list")
   if [ "$1" = "--endpoints=$ALARM_ENDPOINT" ]; then printf 'memberID:1 alarm:NOSPACE\n'; fi
   ;;
- "endpoint defrag"|"alarm disarm") ;;
+ "alarm disarm") ;;
  *) exit 99 ;;
 esac
 `)
@@ -136,7 +137,7 @@ esac
 					if tc.maintenance {
 					maintenance:
 						for _, ep := range members {
-							for _, operation := range []string{"endpoint defrag", "alarm disarm", "sleep 2"} {
+							for _, operation := range []string{"defrag", "alarm disarm", "sleep 2"} {
 								call := operation
 								if operation != "sleep 2" {
 									call = "--endpoints=" + ep + " " + operation

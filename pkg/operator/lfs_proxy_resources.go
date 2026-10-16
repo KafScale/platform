@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	defaultLfsProxyImage           = "ghcr.io/kafscale/kafscale-lfs-proxy:latest"
+	defaultLfsProxyImage           = "ghcr.io/kafscale/kafscale-proxy:dev"
 	defaultLfsProxyImagePullPolicy = string(corev1.PullIfNotPresent)
 	defaultLfsProxyPort            = int32(9092)
 	defaultLfsProxyHTTPPort        = int32(8080)
@@ -76,6 +76,8 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		deploy.Spec.Replicas = &replicas
 		deploy.Spec.Template.Labels = labels
+		deploy.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
+		deploy.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{
 			r.lfsProxyContainer(cluster, endpoints),
 		}
@@ -251,6 +253,20 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LFS_PROXY_CHUNK_SIZE", Value: fmt.Sprintf("%d", *cluster.Spec.LfsProxy.S3.ChunkSize)})
 	}
 
+	// The shipped proxy combines the Kafka proxy and LFS module. Core settings
+	// use KAFSCALE_PROXY_*; retain the legacy names for custom LFS proxy images.
+	for _, e := range append([]corev1.EnvVar(nil), env...) {
+		switch e.Name {
+		case "KAFSCALE_LFS_PROXY_ADDR", "KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS",
+			"KAFSCALE_LFS_PROXY_ADVERTISED_HOST", "KAFSCALE_LFS_PROXY_ADVERTISED_PORT",
+			"KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC", "KAFSCALE_LFS_PROXY_BACKENDS",
+			"KAFSCALE_LFS_PROXY_HEALTH_ADDR":
+			e.Name = strings.Replace(e.Name, "KAFSCALE_LFS_PROXY_", "KAFSCALE_PROXY_", 1)
+			env = append(env, e)
+		}
+	}
+	env = append(env, corev1.EnvVar{Name: "KAFSCALE_PROXY_LFS_ENABLED", Value: "true"})
+
 	ports := []corev1.ContainerPort{{Name: "kafka", ContainerPort: portKafka}}
 	if lfsProxyHTTPEnabled(cluster.Spec.LfsProxy) {
 		ports = append(ports, corev1.ContainerPort{Name: "http", ContainerPort: portHTTP})
@@ -264,6 +280,8 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 
 	container := corev1.Container{
 		Name:            "lfs-proxy",
+		SecurityContext: restrictedContainerSecurityContext(),
+		VolumeMounts:    []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
 		Image:           image,
 		ImagePullPolicy: pullPolicy,
 		Ports:           ports,

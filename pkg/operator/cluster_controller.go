@@ -154,6 +154,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Template.Labels = labels
 		sts.Spec.Template.Spec.Affinity = softPodAntiAffinity(labels)
+		sts.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(false)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
 		}
@@ -309,6 +310,7 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 
 	return corev1.Container{
 		Name:            "broker",
+		SecurityContext: restrictedContainerSecurityContext(),
 		Image:           image,
 		ImagePullPolicy: pullPolicy,
 		Ports: []corev1.ContainerPort{

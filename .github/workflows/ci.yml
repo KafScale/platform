@@ -101,3 +101,38 @@ jobs:
           make test-chart-proxy-nodeport
           make test-chart-psa
           make test-chart-antiaffinity
+
+  operator-restricted:
+    name: Operator Restricted Workloads
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build runtime images
+        run: |
+          make docker-build-broker docker-build-etcd-tools docker-build-e2e-client docker-build-proxy \
+            BROKER_IMAGE=kafscale-broker:security \
+            ETCD_TOOLS_IMAGE=kafscale-etcd-tools:security \
+            E2E_CLIENT_IMAGE=kafscale-e2e-client:security \
+            PROXY_IMAGE=kafscale-proxy:security
+      - name: Build pinned MinIO test fixture
+        run: docker build -t kafscale-minio:security -f test/e2e/minio.Dockerfile .
+      - name: Create Kubernetes 1.35 test cluster
+        run: |
+          go install sigs.k8s.io/kind@v0.31.0
+          kind create cluster --name kafscale-security --wait 180s \
+            --image kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+          kind load docker-image --name kafscale-security \
+            kafscale-broker:security kafscale-etcd-tools:security kafscale-e2e-client:security kafscale-proxy:security kafscale-minio:security
+      - name: Exercise restricted workloads and root-owned PVC upgrade
+        env:
+          KAFSCALE_E2E_KIND_SECURITY: "1"
+          KAFSCALE_SECURITY_CONTEXT: kind-kafscale-security
+        run: go test -tags=e2e ./pkg/operator -run '^TestRestrictedWorkloadsKind$' -v -count=1 -timeout=20m
+      - name: Delete test cluster
+        if: always()
+        run: kind delete cluster --name kafscale-security
