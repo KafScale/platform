@@ -809,7 +809,7 @@ func etcdMaintenanceShellScript() string {
 		"fi\n" +
 		"for ep in \"$@\"; do\n" +
 		"  echo \"defrag ${ep}\"\n" +
-		"  etcdctl --endpoints=\"${ep}\" endpoint defrag\n" +
+		"  etcdctl --endpoints=\"${ep}\" defrag\n" +
 		"  echo \"disarm alarms on ${ep}\"\n" +
 		"  etcdctl --endpoints=\"${ep}\" alarm disarm\n" +
 		"  sleep 2\n" +

@@ -323,7 +323,7 @@ func TestEtcdMaintenanceCronJobs(t *testing.T) {
 		t.Fatalf("CHECK_ONLY = %q, want 0", got)
 	}
 	script := strings.Join(maintenance.Args, "\n")
-	if !strings.Contains(script, "endpoint defrag") || !strings.Contains(script, "alarm disarm") {
+	if !strings.Contains(script, `etcdctl --endpoints="${ep}" defrag`) || !strings.Contains(script, "alarm disarm") {
 		t.Fatalf("maintenance script missing defrag/disarm: %s", script)
 	}
 
