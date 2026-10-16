@@ -183,7 +183,7 @@ The operator runs broker, optional LFS proxy, and managed etcd containers, snaps
 init containers, and snapshot/maintenance jobs as UID/GID 10001 with
 `runAsNonRoot: true`, `seccompProfile: RuntimeDefault`,
 `allowPrivilegeEscalation: false`, all capabilities dropped, and a read-only root
-filesystem. The shipped broker and etcd-tools images declare `USER 10001`;
+filesystem. The shipped broker, proxy, and etcd-tools images declare `USER 10001`;
 the pod settings also override the root default of the third-party etcd and AWS
 CLI images. Custom images must support this UID and these restrictions.
 
@@ -211,15 +211,21 @@ and produce/consume through the optional LFS proxy, snapshot upload, fresh-volum
 jobs run under an enforced Kubernetes 1.35 restricted policy.
 
 To repeat the runtime test, build and load `kafscale-broker:security`,
-`kafscale-etcd-tools:security`, `kafscale-e2e-client:security`, `kafscale-proxy:security`, and `kafscale-s3mock:security` into a kind
-cluster, using the pinned S3Mock image and preparation commands in `.github/workflows/ci.yml`, then run:
+`kafscale-etcd-tools:security`, `kafscale-e2e-client:security`, `kafscale-proxy:security`, and `kafscale-minio:security` into a kind
+cluster, building the MinIO fixture from `test/e2e/minio.Dockerfile` as in `.github/workflows/ci.yml`, then run:
 
 ```sh
 KAFSCALE_E2E_KIND_SECURITY=1 KAFSCALE_SECURITY_CONTEXT=kind-<cluster-name> \
   go test -tags=e2e ./pkg/operator -run '^TestRestrictedWorkloadsKind$' -v -count=1 -timeout=20m
 ```
 
-The test creates an isolated namespace. Its S3Mock fixture and legacy root-running
+The test creates an isolated namespace. Its MinIO fixture and legacy root-running
 etcd pod start before enforcement; all upgraded workload pods and jobs must pass
 restricted admission. The test requests local-volume provisioning for its etcd
 PVC so kubelet can exercise ownership migration.
+
+The optional LFS proxy defaults to the shipped combined `kafscale-proxy` image
+with its LFS module enabled. Core listener, etcd, backend, and health settings
+are emitted as `KAFSCALE_PROXY_*`; the previous `KAFSCALE_LFS_PROXY_*` names are
+retained for custom legacy images. LFS-specific settings keep their existing
+names. Set `spec.lfsProxy.advertisedHost` to an address reachable by clients.

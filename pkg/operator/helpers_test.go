@@ -1660,6 +1660,15 @@ func TestLfsProxyContainerAllOptions(t *testing.T) {
 	for _, e := range container.Env {
 		envMap[e.Name] = e.Value
 	}
+	for _, suffix := range []string{"ADDR", "ETCD_ENDPOINTS", "ADVERTISED_HOST", "ADVERTISED_PORT", "BACKEND_CACHE_TTL_SEC", "BACKENDS", "HEALTH_ADDR"} {
+		if envMap["KAFSCALE_PROXY_"+suffix] == "" || envMap["KAFSCALE_PROXY_"+suffix] != envMap["KAFSCALE_LFS_PROXY_"+suffix] {
+			t.Fatalf("missing shipped proxy setting %s: %v", suffix, envMap)
+		}
+	}
+	if envMap["KAFSCALE_PROXY_LFS_ENABLED"] != "true" {
+		t.Fatal("shipped proxy must enable its LFS module")
+	}
+
 	if envMap["KAFSCALE_LFS_PROXY_ADVERTISED_HOST"] != "lfs.example.com" {
 		t.Fatal("expected advertised host")
 	}
