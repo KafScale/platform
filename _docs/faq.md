@@ -177,6 +177,14 @@ Yes, but it requires replaying data. KafScale uses a different storage layout (S
 2. **MirrorMaker**: Use Kafka MirrorMaker to replicate topics to KafScale
 3. **Consumer replay**: Consume from Kafka and produce to KafScale
 
+### Can I migrate from WarpStream?
+
+Yes, for workloads that do not use transactions or compacted topics. Copy topics with kaf-mirror, run both systems side by side, then cut clients over. See [Migrate from WarpStream](/migrate-from-warpstream/).
+
+### Does Bento work with KafScale?
+
+Yes. Use the Bento `kafka_franz` input and output and set `idempotent_write: false` on the output. See [Bento with KafScale](/bento/).
+
 ### Do consumer groups work?
 
 Yes. KafScale implements the full consumer group protocol including JoinGroup, SyncGroup, Heartbeat, LeaveGroup, and OffsetCommit/Fetch. Consumer offsets are stored in etcd.
