@@ -184,7 +184,9 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 	if out := etcdExec("get", "/security/upgrade", "--print-value-only"); strings.TrimSpace(out) != "preserved" {
 		t.Fatalf("upgrade lost root-owned data: %s", out)
 	}
-	if out := kubectl("", "exec", "security-etcd-0", "-c", "etcd", "--", "id", "-u"); strings.TrimSpace(out) != "10001" {
+	// Kubernetes 1.35 reports the initial process identity from the runtime.
+	// The minimal server image contains etcdctl but no shell/coreutils.
+	if out := kubectl("", "get", "pod/security-etcd-0", "-o", `jsonpath={.status.containerStatuses[?(@.name=="etcd")].user.linux.uid}`); strings.TrimSpace(out) != "10001" {
 		t.Fatalf("etcd UID: %s", out)
 	}
 	var crons batchv1.CronJobList
