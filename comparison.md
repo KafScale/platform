@@ -43,7 +43,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
   <div class="format-row">
     <span>WarpStream</span>
     <span><span class="badge badge-danger">Proprietary</span></span>
-    <span>Closed source. Owned by Confluent (acquired Sept 2024). Vendor lock-in risk.</span>
+    <span>Closed source. Owned by Confluent (acquired Sept 2024), which IBM acquired in March 2026. Vendor lock-in risk. Managed Data Pipelines (Bento inside the agents) are BYOC only.</span>
   </div>
   <div class="format-row">
     <span>Bufstream</span>
@@ -111,8 +111,8 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Metadata</span><span>Cloud control plane (Confluent)</span></div>
     <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>BYOC (agents in your VPC)</span></div>
     <div class="spec-row"><span class="spec-label">Typical latency</span><span>~400-600ms p99</span></div>
-    <div class="spec-row"><span class="spec-label">Transactions</span><span>No</span></div>
-    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No</span></div>
+    <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
+    <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
     <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-danger">Proprietary</span></div>
     <div class="spec-row"><span class="spec-label">Best for</span><span>BYOC logging, observability</span></div>
   </section>
@@ -333,7 +333,7 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
       <td class="kafscale">✗</td>
       <td>✓</td>
       <td>✓</td>
-      <td>✗</td>
+      <td>✓</td>
       <td>✓</td>
       <td>✓</td>
     </tr>
@@ -342,7 +342,7 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
       <td class="kafscale">✗</td>
       <td>✓</td>
       <td>✓</td>
-      <td>✗</td>
+      <td>✓</td>
       <td>✓</td>
       <td>✗</td>
     </tr>
@@ -495,8 +495,8 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 **KafScale is NOT for you if:**
 
 - You need <100ms latency (use Kafka, Redpanda, or AutoMQ)
-- You need exactly-once transactions (use Kafka, AutoMQ, or Bufstream)
-- You need compacted topics for CDC (use Kafka, Redpanda, or AutoMQ)
+- You need exactly-once transactions (use Kafka, AutoMQ, Bufstream, or WarpStream)
+- You need compacted topics for CDC (use Kafka, Redpanda, AutoMQ, or WarpStream)
 
 **KafScale IS for you if:**
 
@@ -507,9 +507,14 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 - You want processors that bypass brokers (AI agents, analytics, Iceberg)
 - You want to avoid vendor lock-in and control plane dependencies
 
+## Coming from WarpStream
+
+- [Migrate from WarpStream](/migrate-from-warpstream/): dual run with kaf-mirror, then cut over. Covers what KafScale does not support.
+- [Bento with KafScale](/bento/): run your Bento pipelines against KafScale. WarpStream Managed Data Pipelines are BYOC only, but plain Bento works with any Kafka-protocol cluster.
+
 ## Why we built KafScale
 
-The Confluent acquisition of WarpStream in late 2024 highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
+The Confluent acquisition of WarpStream in late 2024, and IBM's acquisition of Confluent in March 2026, highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
 
 KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. The documented .kfs segment format means you can build processors that read directly from S3 without going through brokers. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
 
