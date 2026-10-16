@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -95,4 +97,102 @@ func TestEtcdStatefulSetAntiAffinitySpreadsOwnPods(t *testing.T) {
 	sts := &appsv1.StatefulSet{}
 	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
 	assertSpreadsOwnPods(t, sts)
+}
+
+// Include both required/preferred placement and nested selectors so passthrough
+// tests catch accidental merging, partial copying, and dropped fields.
+func testAffinityOverride() *corev1.Affinity {
+	term := corev1.PodAffinityTerm{
+		LabelSelector: &metav1.LabelSelector{
+			MatchLabels:      map[string]string{"app": "placement-peer"},
+			MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"storage"}}},
+		},
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"environment": "production"}},
+		Namespaces:        []string{"default"},
+		TopologyKey:       "topology.kubernetes.io/zone",
+		MatchLabelKeys:    []string{"pod-template-hash"},
+		MismatchLabelKeys: []string{"tenant"},
+	}
+	nodeTerm := corev1.NodeSelectorTerm{
+		MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "pool", Operator: corev1.NodeSelectorOpIn, Values: []string{"storage"}}},
+		MatchFields:      []corev1.NodeSelectorRequirement{{Key: "metadata.name", Operator: corev1.NodeSelectorOpNotIn, Values: []string{"excluded-node"}}},
+	}
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution:  &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{nodeTerm}},
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{{Weight: 75, Preference: nodeTerm}},
+		},
+		PodAffinity: &corev1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution:  []corev1.PodAffinityTerm{term},
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 50, PodAffinityTerm: term}},
+		},
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution:  []corev1.PodAffinityTerm{term},
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{Weight: 25, PodAffinityTerm: term}},
+		},
+	}
+}
+
+func TestStatefulSetAffinityOverrides(t *testing.T) {
+	for _, workload := range []string{"broker", "etcd"} {
+		t.Run(workload, func(t *testing.T) {
+			cluster := testCluster("placement", nil)
+			scheme := testScheme(t)
+			c := fake.NewClientBuilder().WithScheme(scheme).Build()
+			r := &ClusterReconciler{Client: c, Scheme: scheme}
+			custom := testAffinityOverride()
+			updated := custom.DeepCopy()
+			updated.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] = "updated-pool"
+			extended := custom.DeepCopy()
+			extended.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution = append(extended.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution,
+				softPodAntiAffinity(map[string]string{"app": "kafscale-" + workload, "cluster": cluster.Name}).PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution...)
+			for _, tc := range []struct {
+				name     string
+				override *corev1.Affinity
+			}{
+				{"default", nil}, {"custom", custom}, {"update", updated}, {"explicit-extension", extended}, {"disabled", &corev1.Affinity{}}, {"removed", nil},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					cluster.Spec.Brokers.Affinity, cluster.Spec.Etcd.Affinity = nil, nil
+					if workload == "broker" {
+						cluster.Spec.Brokers.Affinity = tc.override
+					} else {
+						cluster.Spec.Etcd.Affinity = tc.override
+					}
+					before := cluster.DeepCopy()
+					var err error
+					if workload == "broker" {
+						err = r.reconcileBrokerDeployment(context.Background(), cluster, []string{"http://etcd:2379"})
+					} else {
+						err = reconcileEtcdStatefulSet(context.Background(), c, scheme, cluster)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					var sts appsv1.StatefulSet
+					assertFound(t, c, &sts, cluster.Namespace, cluster.Name+"-"+workload)
+					if tc.override == nil {
+						assertSpreadsOwnPods(t, &sts)
+					} else if !reflect.DeepEqual(sts.Spec.Template.Spec.Affinity, tc.override) {
+						t.Fatalf("override changed: got %+v want %+v", sts.Spec.Template.Spec.Affinity, tc.override)
+					}
+					if !reflect.DeepEqual(cluster, before) {
+						t.Fatal("reconcile mutated the input CR")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestWorkloadAffinityDoesNotAliasOverride(t *testing.T) {
+	original := testAffinityOverride()
+	before := original.DeepCopy()
+	got := workloadAffinity(original, map[string]string{"app": "ignored"})
+	got.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] = "changed"
+	got.PodAffinity.RequiredDuringSchedulingIgnoredDuringExecution[0].LabelSelector.MatchLabels["app"] = "changed"
+	got.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0].PodAffinityTerm.Namespaces[0] = "changed"
+	if !reflect.DeepEqual(original, before) {
+		t.Fatal("pod template aliases the CR affinity")
+	}
 }

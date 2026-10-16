@@ -215,7 +215,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Template.Labels = labels
-		sts.Spec.Template.Spec.Affinity = softPodAntiAffinity(labels)
+		sts.Spec.Template.Spec.Affinity = workloadAffinity(cluster.Spec.Etcd.Affinity, labels)
 
 		useMemory := parseBoolEnv(operatorEtcdStorageMemoryEnv)
 		if useMemory {

@@ -153,7 +153,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Template.Labels = labels
-		sts.Spec.Template.Spec.Affinity = softPodAntiAffinity(labels)
+		sts.Spec.Template.Spec.Affinity = workloadAffinity(cluster.Spec.Brokers.Affinity, labels)
 		sts.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(false)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
@@ -161,6 +161,15 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
 	return err
+}
+
+// workloadAffinity uses an explicit override as a complete replacement. Keeping
+// nil and an empty object distinct lets admins opt out of the default rule.
+func workloadAffinity(override *corev1.Affinity, labels map[string]string) *corev1.Affinity {
+	if override != nil {
+		return override.DeepCopy()
+	}
+	return softPodAntiAffinity(labels)
 }
 
 // softPodAntiAffinity returns a preferred (soft) pod anti-affinity that spreads

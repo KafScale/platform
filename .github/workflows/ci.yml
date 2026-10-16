@@ -61,6 +61,15 @@ jobs:
       - name: Run go test -race ./...
         run: go test -race ./...
 
+      - name: Affinity CRD and reconciliation API test
+        env:
+          KAFSCALE_E2E_AFFINITY: "1"
+        run: |
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@f52bbb8bb1a2275cbe90dec8d6c12d5cacb1a7de
+          KUBEBUILDER_ASSETS="$("$(go env GOPATH)/bin/setup-envtest" use -p path 1.35.0)"
+          export KUBEBUILDER_ASSETS
+          go test -race -tags=e2e ./pkg/operator -run '^TestAffinityOverridesAPI$' -v -count=1 -timeout=2m
+
       - name: Run nested module tests
         run: make test-nested-modules
 

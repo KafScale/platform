@@ -109,7 +109,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
 - **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
-- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default; broker/etcd affinity overrides via the CR are tracked separately ([#164](https://github.com/KafScale/platform/issues/164)).
+- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default. For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
 - **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
   - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
@@ -771,3 +771,45 @@ spec:
 - **Lower read latency** for consumers in EU/Asia when objects are already replicated.
 - **CRR lag** means the newest segments may not appear immediately in the replica; the broker will fall back to the primary for those reads.
 - **Extra cross-region traffic** occurs only on replica misses; steady-state reads stay in-region once replication catches up.
+
+## Broker and managed etcd affinity overrides
+
+`spec.brokers.affinity` and `spec.etcd.affinity` accept Kubernetes `Affinity`
+objects independently. Omit a field (or set it to `null`) to retain the default
+soft pod anti-affinity on `kubernetes.io/hostname`. An explicit `affinity: {}`
+disables that default. A non-empty object replaces the entire affinity; the
+operator does not merge the default into it. Removing an override restores the
+default on the next reconciliation. Changes update the StatefulSet pod template
+and can trigger a rolling update. Etcd placement applies only to managed etcd;
+it does not affect an externally configured etcd cluster.
+
+For example, require brokers on a labeled node pool and disable etcd affinity
+in a single-node development cluster (merge these fields into your existing CR):
+
+```yaml
+spec:
+  brokers:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kafscale.io/node-pool
+                  operator: In
+                  values: [brokers]
+  etcd:
+    affinity: {}
+```
+
+To extend the default, include its soft anti-affinity term alongside your custom
+rules. For a cluster named `example`, the broker selector is
+`{app: kafscale-broker, cluster: example}`; etcd uses
+`{app: kafscale-etcd, cluster: example}`. The default term has weight `100` and
+topology key `kubernetes.io/hostname`. Required affinity/anti-affinity rules can
+leave pods Pending when matching nodes or topology domains are unavailable.
+
+The affinity CRD fields use a generated structural schema. After changing the
+API types or upgrading Kubernetes API dependencies, regenerate those fields
+with `python3 hack/update_affinity_schema.py` (requires Go and PyYAML).
+`python3 hack/update_affinity_schema.py --check` checks for drift while preserving
+the other manually maintained CRD fields.
