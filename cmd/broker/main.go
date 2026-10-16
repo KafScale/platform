@@ -1693,19 +1693,31 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 			p := kmsg.NewListOffsetsResponseTopicPartition()
 			p.Partition = part.Partition
 			offset, err := func() (int64, error) {
+				nextOffset, err := h.store.NextOffset(ctx, topic.Topic, part.Partition)
+				if err != nil {
+					return 0, err
+				}
 				switch part.Timestamp {
 				case -2:
-					plog, err := h.getPartitionLog(ctx, topic.Topic, part.Partition)
+					plog, err := h.loadPartitionLog(ctx, topic.Topic, part.Partition, false)
 					if err != nil {
 						return 0, err
 					}
 					return plog.EarliestOffset(), nil
 				default:
-					return h.store.NextOffset(ctx, topic.Topic, part.Partition)
+					return nextOffset, nil
 				}
 			}()
 			if err != nil {
-				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				switch {
+				case errors.Is(err, metadata.ErrUnknownTopic):
+					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
+				case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+					p.ErrorCode = protocol.REQUEST_TIMED_OUT
+				default:
+					p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				}
+				h.logger.Warn("list offsets failed", "topic", topic.Topic, "partition", part.Partition, "timestamp", part.Timestamp, "error_code", p.ErrorCode, "error", err)
 			} else {
 				p.Timestamp = part.Timestamp
 				p.Offset = offset
@@ -1967,6 +1979,10 @@ func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32
 }
 
 func (h *handler) getPartitionLog(ctx context.Context, topic string, partition int32) (*storage.PartitionLog, error) {
+	return h.loadPartitionLog(ctx, topic, partition, h.autoCreateTopics)
+}
+
+func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition int32, autoCreate bool) (*storage.PartitionLog, error) {
 	h.logMu.RLock()
 	if partitions, ok := h.logs[topic]; ok {
 		if plog, ok := partitions[partition]; ok {
@@ -2022,7 +2038,7 @@ func (h *handler) getPartitionLog(ctx context.Context, topic string, partition i
 			return plog, nil
 		})
 		if err != nil {
-			if errors.Is(err, metadata.ErrUnknownTopic) && h.autoCreateTopics {
+			if errors.Is(err, metadata.ErrUnknownTopic) && autoCreate {
 				if err := h.ensureTopic(ctx, topic, partition); err != nil {
 					return nil, err
 				}
