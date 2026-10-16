@@ -211,15 +211,15 @@ and produce/consume through the optional LFS proxy, snapshot upload, fresh-volum
 jobs run under an enforced Kubernetes 1.35 restricted policy.
 
 To repeat the runtime test, build and load `kafscale-broker:security`,
-`kafscale-etcd-tools:security`, `kafscale-e2e-client:security`, and `kafscale-proxy:security` into a kind
-cluster, then run:
+`kafscale-etcd-tools:security`, `kafscale-e2e-client:security`, `kafscale-proxy:security`, and `kafscale-s3mock:security` into a kind
+cluster, using the pinned S3Mock image and preparation commands in `.github/workflows/ci.yml`, then run:
 
 ```sh
 KAFSCALE_E2E_KIND_SECURITY=1 KAFSCALE_SECURITY_CONTEXT=kind-<cluster-name> \
   go test -tags=e2e ./pkg/operator -run '^TestRestrictedWorkloadsKind$' -v -count=1 -timeout=20m
 ```
 
-The test creates an isolated namespace. Its MinIO fixture and legacy root-running
+The test creates an isolated namespace. Its S3Mock fixture and legacy root-running
 etcd pod start before enforcement; all upgraded workload pods and jobs must pass
 restricted admission. The test requests local-volume provisioning for its etcd
 PVC so kubelet can exercise ownership migration.

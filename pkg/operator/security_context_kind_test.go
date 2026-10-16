@@ -31,13 +31,14 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 // TestRestrictedWorkloadsKind runs reconciled templates with the shipped images
 // on an explicitly selected kind context. It needs broker, etcd-tools and
-// e2e-client and proxy images loaded into kind (see the Operator Restricted Workloads CI job).
+// e2e-client, proxy and S3Mock images loaded into kind (see the Operator Restricted Workloads CI job).
 func TestRestrictedWorkloadsKind(t *testing.T) {
 	if os.Getenv("KAFSCALE_E2E_KIND_SECURITY") != "1" {
 		t.Skip("set KAFSCALE_E2E_KIND_SECURITY=1 to run restricted workload integration")
@@ -93,7 +94,7 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 	cluster.Spec.LfsProxy.Image = "kafscale-proxy:security"
 	cluster.Spec.LfsProxy.Backends = []string{"security-broker:9092"}
 	cluster.Spec.S3.Bucket = "snapshots"
-	cluster.Spec.S3.Endpoint = "http://minio:9000"
+	cluster.Spec.S3.Endpoint = "http://s3mock:9090"
 	cluster.Spec.S3.CredentialsSecretRef = "s3"
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
@@ -136,25 +137,23 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 			"AWS_ACCESS_KEY_ID": "minioadmin", "AWS_SECRET_ACCESS_KEY": "minioadmin",
 		},
 	})
-	// MinIO is test infrastructure, started before enforcing restricted admission.
+	// S3Mock is test infrastructure, started before enforcing restricted admission.
 	apply(&corev1.Pod{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
-		ObjectMeta: metav1.ObjectMeta{Name: "minio", Namespace: namespace, Labels: map[string]string{"app": "minio"}},
+		ObjectMeta: metav1.ObjectMeta{Name: "s3mock", Namespace: namespace, Labels: map[string]string{"app": "s3mock"}},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "minio", Image: "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z",
-			Args: []string{"server", "/data"},
-			Env: []corev1.EnvVar{
-				{Name: "MINIO_ROOT_USER", Value: "minioadmin"},
-				{Name: "MINIO_ROOT_PASSWORD", Value: "minioadmin"},
-			},
+			Name: "s3mock", Image: "kafscale-s3mock:security",
+			ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{Path: "/", Port: intstr.FromInt(9090)},
+			}},
 		}}},
 	})
 	apply(&corev1.Service{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
-		ObjectMeta: metav1.ObjectMeta{Name: "minio", Namespace: namespace},
-		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "minio"}, Ports: []corev1.ServicePort{{Port: 9000}}},
+		ObjectMeta: metav1.ObjectMeta{Name: "s3mock", Namespace: namespace},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "s3mock"}, Ports: []corev1.ServicePort{{Port: 9090}}},
 	})
-	kubectl("", "wait", "--for=condition=Ready", "pod/minio", "--timeout=180s")
+	kubectl("", "wait", "--for=condition=Ready", "pod/s3mock", "--timeout=180s")
 	var etcd appsv1.StatefulSet
 	assertFound(t, c, &etcd, namespace, "security-etcd")
 	etcd.APIVersion, etcd.Kind = "apps/v1", "StatefulSet"

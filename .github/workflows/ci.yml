@@ -119,13 +119,17 @@ jobs:
             ETCD_TOOLS_IMAGE=kafscale-etcd-tools:security \
             E2E_CLIENT_IMAGE=kafscale-e2e-client:security \
             PROXY_IMAGE=kafscale-proxy:security
+      - name: Prepare S3 test fixture
+        run: |
+          docker pull adobe/s3mock:4.11.0@sha256:cd49108c0094bc3f420b24bff354073032a9ec1a6f4cc89f8e8f483a308cf99e
+          docker tag adobe/s3mock:4.11.0@sha256:cd49108c0094bc3f420b24bff354073032a9ec1a6f4cc89f8e8f483a308cf99e kafscale-s3mock:security
       - name: Create Kubernetes 1.35 test cluster
         run: |
           go install sigs.k8s.io/kind@v0.31.0
           kind create cluster --name kafscale-security --wait 180s \
             --image kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
           kind load docker-image --name kafscale-security \
-            kafscale-broker:security kafscale-etcd-tools:security kafscale-e2e-client:security kafscale-proxy:security
+            kafscale-broker:security kafscale-etcd-tools:security kafscale-e2e-client:security kafscale-proxy:security kafscale-s3mock:security
       - name: Exercise restricted workloads and root-owned PVC upgrade
         env:
           KAFSCALE_E2E_KIND_SECURITY: "1"
