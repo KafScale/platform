@@ -129,7 +129,7 @@ func assertRestrictedPod(t *testing.T, name string, pod corev1.PodSpec) {
 			switch mount.MountPath {
 			case "/var/lib/etcd", "/snapshots":
 			case "/tmp":
-				if c.Name != "snapshot-download" && c.Name != "upload" {
+				if c.Name != "snapshot-download" && c.Name != "upload" && c.Name != "lfs-proxy" {
 					t.Fatalf("%s/%s: unnecessary /tmp mount", name, c.Name)
 				}
 			default:
@@ -152,6 +152,37 @@ func assertRestrictedPod(t *testing.T, name string, pod corev1.PodSpec) {
 			if !found || !home || c.WorkingDir != "/tmp" {
 				t.Fatalf("%s/%s: missing AWS scratch space", name, c.Name)
 			}
+		}
+	}
+}
+
+func TestOperatorRestrictedLfsProxy(t *testing.T) {
+	cluster := testCluster("restricted-proxy", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme}
+	for i := 0; i < 2; i++ {
+		if err := r.reconcileLfsProxyDeployment(context.Background(), cluster, []string{"http://etcd:2379"}); err != nil {
+			t.Fatal(err)
+		}
+		var deploy appsv1.Deployment
+		assertFound(t, c, &deploy, cluster.Namespace, lfsProxyName(cluster))
+		assertRestrictedPod(t, deploy.Name, deploy.Spec.Template.Spec)
+		found := false
+		for _, mount := range deploy.Spec.Template.Spec.Containers[0].VolumeMounts {
+			if mount.MountPath == "/tmp" && !mount.ReadOnly {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("LFS verification requires writable /tmp")
+		}
+		deploy.Spec.Template.Spec.SecurityContext = nil
+		deploy.Spec.Template.Spec.Containers[0].SecurityContext = nil
+		deploy.Spec.Template.Spec.Volumes = nil
+		deploy.Spec.Template.Spec.Containers[0].VolumeMounts = nil
+		if err := c.Update(context.Background(), &deploy); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

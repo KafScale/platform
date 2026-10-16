@@ -37,7 +37,7 @@ import (
 
 // TestRestrictedWorkloadsKind runs reconciled templates with the shipped images
 // on an explicitly selected kind context. It needs broker, etcd-tools and
-// e2e-client images loaded into kind (see the Operator Restricted Workloads CI job).
+// e2e-client and proxy images loaded into kind (see the Operator Restricted Workloads CI job).
 func TestRestrictedWorkloadsKind(t *testing.T) {
 	if os.Getenv("KAFSCALE_E2E_KIND_SECURITY") != "1" {
 		t.Skip("set KAFSCALE_E2E_KIND_SECURITY=1 to run restricted workload integration")
@@ -66,6 +66,11 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 				out, _ := exec.Command("kubectl", append([]string{"--context", kubeContext, "-n", namespace}, args...)...).CombinedOutput()
 				t.Logf("%v\n%s", args, out)
 			}
+			pods, _ := exec.Command("kubectl", "--context", kubeContext, "-n", namespace, "get", "pods", "-o", "name").Output()
+			for _, pod := range strings.Fields(string(pods)) {
+				out, _ := exec.Command("kubectl", "--context", kubeContext, "-n", namespace, "logs", pod, "--all-containers=true", "--tail=100").CombinedOutput()
+				t.Logf("%s logs:\n%s", pod, out)
+			}
 		}
 		_ = exec.Command("kubectl", "--context", kubeContext, "delete", "namespace", namespace, "--wait=false").Run()
 	})
@@ -83,6 +88,10 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 	cluster := testCluster("security", nil)
 	cluster.Namespace = namespace
 	cluster.Spec.Brokers.Replicas = &replicas
+	cluster.Spec.LfsProxy.Enabled = true
+	cluster.Spec.LfsProxy.Replicas = &replicas
+	cluster.Spec.LfsProxy.Image = "kafscale-proxy:security"
+	cluster.Spec.LfsProxy.Backends = []string{"security-broker:9092"}
 	cluster.Spec.S3.Bucket = "snapshots"
 	cluster.Spec.S3.Endpoint = "http://minio:9000"
 	cluster.Spec.S3.CredentialsSecretRef = "s3"
@@ -101,6 +110,7 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 		reconcileEtcdStatefulSet(ctx, c, scheme, cluster),
 		reconcileEtcdSnapshotCronJob(ctx, c, scheme, cluster),
 		reconcileEtcdMaintenanceCronJobs(ctx, c, scheme, cluster),
+		r.reconcileLfsProxyResources(ctx, cluster, managedEtcdEndpoints(cluster)),
 		r.reconcileBrokerHeadlessService(ctx, cluster),
 		r.reconcileBrokerService(ctx, cluster),
 		r.reconcileBrokerDeployment(ctx, cluster, managedEtcdEndpoints(cluster)),
@@ -118,10 +128,32 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 		services.Items[i].Kind = "Service"
 		apply(&services.Items[i])
 	}
-	apply(&corev1.Secret{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"}, ObjectMeta: metav1.ObjectMeta{Name: "s3", Namespace: namespace}, StringData: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "minioadmin", "KAFSCALE_S3_SECRET_KEY": "minioadmin"}})
+	apply(&corev1.Secret{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
+		ObjectMeta: metav1.ObjectMeta{Name: "s3", Namespace: namespace},
+		StringData: map[string]string{
+			"KAFSCALE_S3_ACCESS_KEY": "minioadmin", "KAFSCALE_S3_SECRET_KEY": "minioadmin",
+			"AWS_ACCESS_KEY_ID": "minioadmin", "AWS_SECRET_ACCESS_KEY": "minioadmin",
+		},
+	})
 	// MinIO is test infrastructure, started before enforcing restricted admission.
-	apply(&corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Name: "minio", Namespace: namespace, Labels: map[string]string{"app": "minio"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "minio", Image: "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z", Args: []string{"server", "/data"}, Env: []corev1.EnvVar{{Name: "MINIO_ROOT_USER", Value: "minioadmin"}, {Name: "MINIO_ROOT_PASSWORD", Value: "minioadmin"}}}}}})
-	apply(&corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: "minio", Namespace: namespace}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "minio"}, Ports: []corev1.ServicePort{{Port: 9000}}}})
+	apply(&corev1.Pod{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "minio", Namespace: namespace, Labels: map[string]string{"app": "minio"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "minio", Image: "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z",
+			Args: []string{"server", "/data"},
+			Env: []corev1.EnvVar{
+				{Name: "MINIO_ROOT_USER", Value: "minioadmin"},
+				{Name: "MINIO_ROOT_PASSWORD", Value: "minioadmin"},
+			},
+		}}},
+	})
+	apply(&corev1.Service{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
+		ObjectMeta: metav1.ObjectMeta{Name: "minio", Namespace: namespace},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "minio"}, Ports: []corev1.ServicePort{{Port: 9000}}},
+	})
 	kubectl("", "wait", "--for=condition=Ready", "pod/minio", "--timeout=180s")
 	var etcd appsv1.StatefulSet
 	assertFound(t, c, &etcd, namespace, "security-etcd")
@@ -175,11 +207,33 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 	broker.Spec.Template.Spec.Containers[0].Image = "kafscale-broker:security"
 	apply(&broker)
 	kubectl("", "rollout", "status", "sts/security-broker", "--timeout=180s")
+	var proxy appsv1.Deployment
+	assertFound(t, c, &proxy, namespace, "security-lfs-proxy")
+	proxy.APIVersion, proxy.Kind = "apps/v1", "Deployment"
+	apply(&proxy)
+	kubectl("", "rollout", "status", "deployment/security-lfs-proxy", "--timeout=180s")
 	runClient := func(mode string) {
 		t.Helper()
-		pod := &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Name: mode, Namespace: namespace}, Spec: corev1.PodSpec{RestartPolicy: corev1.RestartPolicyNever, SecurityContext: restrictedPodSecurityContext(false), Containers: []corev1.Container{{Name: "client", Image: "kafscale-e2e-client:security", SecurityContext: restrictedContainerSecurityContext(), Env: []corev1.EnvVar{
-			{Name: "KAFSCALE_E2E_MODE", Value: mode}, {Name: "KAFSCALE_E2E_BROKER_ADDR", Value: "security-broker:9092"}, {Name: "KAFSCALE_E2E_TOPIC", Value: "restricted"}, {Name: "KAFSCALE_E2E_COUNT", Value: "3"}, {Name: "KAFSCALE_E2E_PARTITION", Value: "0"}, {Name: "KAFSCALE_E2E_OFFSET", Value: "0"},
-		}}}}}
+		pod := &corev1.Pod{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+			ObjectMeta: metav1.ObjectMeta{Name: mode, Namespace: namespace},
+			Spec: corev1.PodSpec{
+				RestartPolicy:   corev1.RestartPolicyNever,
+				SecurityContext: restrictedPodSecurityContext(false),
+				Containers: []corev1.Container{{
+					Name: "client", Image: "kafscale-e2e-client:security",
+					SecurityContext: restrictedContainerSecurityContext(),
+					Env: []corev1.EnvVar{
+						{Name: "KAFSCALE_E2E_MODE", Value: mode},
+						{Name: "KAFSCALE_E2E_BROKER_ADDR", Value: "security-lfs-proxy:9092"},
+						{Name: "KAFSCALE_E2E_TOPIC", Value: "restricted"},
+						{Name: "KAFSCALE_E2E_COUNT", Value: "3"},
+						{Name: "KAFSCALE_E2E_PARTITION", Value: "0"},
+						{Name: "KAFSCALE_E2E_OFFSET", Value: "0"},
+					},
+				}},
+			},
+		}
 		apply(pod)
 		kubectl("", "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+mode, "--timeout=120s")
 	}

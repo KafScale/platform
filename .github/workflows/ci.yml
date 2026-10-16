@@ -114,17 +114,18 @@ jobs:
           cache-dependency-path: go.sum
       - name: Build runtime images
         run: |
-          make docker-build-broker docker-build-etcd-tools docker-build-e2e-client \
+          make docker-build-broker docker-build-etcd-tools docker-build-e2e-client docker-build-proxy \
             BROKER_IMAGE=kafscale-broker:security \
             ETCD_TOOLS_IMAGE=kafscale-etcd-tools:security \
-            E2E_CLIENT_IMAGE=kafscale-e2e-client:security
+            E2E_CLIENT_IMAGE=kafscale-e2e-client:security \
+            PROXY_IMAGE=kafscale-proxy:security
       - name: Create Kubernetes 1.35 test cluster
         run: |
           go install sigs.k8s.io/kind@v0.31.0
           kind create cluster --name kafscale-security --wait 180s \
             --image kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
           kind load docker-image --name kafscale-security \
-            kafscale-broker:security kafscale-etcd-tools:security kafscale-e2e-client:security
+            kafscale-broker:security kafscale-etcd-tools:security kafscale-e2e-client:security kafscale-proxy:security
       - name: Exercise restricted workloads and root-owned PVC upgrade
         env:
           KAFSCALE_E2E_KIND_SECURITY: "1"

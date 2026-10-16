@@ -179,7 +179,7 @@ fixed in a release, the associated CVE is documented in `docs/releases/`.
 
 ## Operator-managed workload security
 
-The operator runs broker and managed etcd containers, snapshot download/restore
+The operator runs broker, optional LFS proxy, and managed etcd containers, snapshot download/restore
 init containers, and snapshot/maintenance jobs as UID/GID 10001 with
 `runAsNonRoot: true`, `seccompProfile: RuntimeDefault`,
 `allowPrivilegeEscalation: false`, all capabilities dropped, and a read-only root
@@ -188,7 +188,8 @@ the pod settings also override the root default of the third-party etcd and AWS
 CLI images. Custom images must support this UID and these restrictions.
 
 Only etcd data (`/var/lib/etcd`), snapshot staging (`/snapshots`), and AWS CLI
-scratch space (`/tmp`, also its home and working directory) are writable. The
+scratch space (`/tmp`, also its home and working directory), and LFS verification
+scratch space (`/tmp`) are writable. The
 broker and maintenance containers need no writable root filesystem mounts.
 Read-only root filesystems are additional hardening beyond PSA `restricted`.
 
@@ -201,16 +202,16 @@ supports `fsGroup`; hostPath volumes and storage drivers that ignore group
 ownership require an administrator to prepare permissions before rollout.
 A privileged permission-repair init container cannot run under `restricted`.
 
-`go test ./pkg/operator -run TestOperatorRestrictedWorkloads` checks every
+`go test ./pkg/operator -run TestOperatorRestricted` checks every
 operator-created pod template, including reconciliation of pre-hardening
 resources and both PVC and memory-backed etcd. CI's **Operator Restricted
 Workloads** job additionally runs the reconciled templates with real images in
 kind: an existing root-owned etcd PVC is upgraded, insecure admission is rejected,
-and produce/consume, snapshot upload, fresh-volume restore, and both maintenance
+and produce/consume through the optional LFS proxy, snapshot upload, fresh-volume restore, and both maintenance
 jobs run under an enforced Kubernetes 1.35 restricted policy.
 
 To repeat the runtime test, build and load `kafscale-broker:security`,
-`kafscale-etcd-tools:security`, and `kafscale-e2e-client:security` into a kind
+`kafscale-etcd-tools:security`, `kafscale-e2e-client:security`, and `kafscale-proxy:security` into a kind
 cluster, then run:
 
 ```sh

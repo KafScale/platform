@@ -76,6 +76,8 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		deploy.Spec.Replicas = &replicas
 		deploy.Spec.Template.Labels = labels
+		deploy.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
+		deploy.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{
 			r.lfsProxyContainer(cluster, endpoints),
 		}
@@ -264,6 +266,8 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 
 	container := corev1.Container{
 		Name:            "lfs-proxy",
+		SecurityContext: restrictedContainerSecurityContext(),
+		VolumeMounts:    []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
 		Image:           image,
 		ImagePullPolicy: pullPolicy,
 		Ports:           ports,
