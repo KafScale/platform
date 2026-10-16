@@ -15,7 +15,7 @@
 # limitations under the License.
 set -euo pipefail
 
-MIN_COVERAGE="${1:-45}"
+MIN_COVERAGE="${1:-85}"
 
 # Packages excluded from coverage: generated code, test utilities, demo tools,
 # embed-only wrappers, e2e tests, CLI entry points, and addon/skeleton packages.
