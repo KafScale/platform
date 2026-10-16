@@ -175,3 +175,56 @@ analysis as quickly as possible after validation.
 
 We aim to resolve known vulnerabilities quickly. If a runtime vulnerability is
 fixed in a release, the associated CVE is documented in [`docs/releases/`](/releases/).
+
+## Operator-managed workload security
+
+The operator runs broker, optional LFS proxy, and managed etcd containers, snapshot download/restore
+init containers, and snapshot/maintenance jobs as UID/GID 10001 with
+`runAsNonRoot: true`, `seccompProfile: RuntimeDefault`,
+`allowPrivilegeEscalation: false`, all capabilities dropped, and a read-only root
+filesystem. The shipped broker, proxy, and etcd-tools images declare `USER 10001`;
+the pod settings also override the root default of the third-party etcd and AWS
+CLI images. Custom images must support this UID and these restrictions.
+
+Only etcd data (`/var/lib/etcd`), snapshot staging (`/snapshots`), and AWS CLI
+scratch space (`/tmp`, also its home and working directory), and LFS verification
+scratch space (`/tmp`) are writable. The
+broker and maintenance containers need no writable root filesystem mounts.
+Read-only root filesystems are additional hardening beyond PSA `restricted`.
+
+Etcd and snapshot volumes use `fsGroup: 10001` and
+`fsGroupChangePolicy: Always`. For existing root-owned etcd PVCs, kubelet (or a
+CSI driver implementing volume ownership) must make all existing data accessible
+to that group before the non-root process starts. This can add startup time on
+large volumes. Back up etcd before upgrading, and verify your storage driver
+supports `fsGroup`; hostPath volumes and storage drivers that ignore group
+ownership require an administrator to prepare permissions before rollout.
+A privileged permission-repair init container cannot run under `restricted`.
+
+`go test ./pkg/operator -run TestOperatorRestricted` checks every
+operator-created pod template, including reconciliation of pre-hardening
+resources and both PVC and memory-backed etcd. CI's **Operator Restricted
+Workloads** job additionally runs the reconciled templates with real images in
+kind: an existing root-owned etcd PVC is upgraded, insecure admission is rejected,
+and produce/consume through the optional LFS proxy, snapshot upload, fresh-volume restore, and both maintenance
+jobs run under an enforced Kubernetes 1.35 restricted policy.
+
+To repeat the runtime test, build and load `kafscale-broker:security`,
+`kafscale-etcd-tools:security`, `kafscale-e2e-client:security`, `kafscale-proxy:security`, and `kafscale-minio:security` into a kind
+cluster, building the MinIO fixture from `test/e2e/minio.Dockerfile` as in `.github/workflows/ci.yml`, then run:
+
+```sh
+KAFSCALE_E2E_KIND_SECURITY=1 KAFSCALE_SECURITY_CONTEXT=kind-<cluster-name> \
+  go test -tags=e2e ./pkg/operator -run '^TestRestrictedWorkloadsKind$' -v -count=1 -timeout=20m
+```
+
+The test creates an isolated namespace. Its MinIO fixture and legacy root-running
+etcd pod start before enforcement; all upgraded workload pods and jobs must pass
+restricted admission. The test requests local-volume provisioning for its etcd
+PVC so kubelet can exercise ownership migration.
+
+The optional LFS proxy defaults to the shipped combined `kafscale-proxy` image
+with its LFS module enabled. Core listener, etcd, backend, and health settings
+are emitted as `KAFSCALE_PROXY_*`; the previous `KAFSCALE_LFS_PROXY_*` names are
+retained for custom legacy images. LFS-specific settings keep their existing
+names. Set `spec.lfsProxy.advertisedHost` to an address reachable by clients.

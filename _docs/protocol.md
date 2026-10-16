@@ -38,6 +38,12 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | 37 | CreatePartitions | 0-3 | Scale partitions |
 | 42 | DeleteGroups | 0-2 | Consumer group cleanup |
 
+`ListOffsets` does not auto-create topics, regardless of the broker's auto-create
+setting. Earliest and latest lookups return `UNKNOWN_TOPIC_OR_PARTITION` for
+missing topics or partitions. Deadline/cancellation errors return
+`REQUEST_TIMED_OUT`; other failures return `UNKNOWN_SERVER_ERROR`. Failed lookups
+emit warning logs with topic, partition, requested timestamp, error code, and cause.
+
 ## Explicitly Unsupported
 
 | API Key | Name | Reason |

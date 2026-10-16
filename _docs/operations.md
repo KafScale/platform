@@ -33,6 +33,26 @@ The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator c
 
 By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.1.0`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
 
+### Per-cluster broker image
+
+`spec.brokers.image` overrides the operator's `BROKER_IMAGE` default for that cluster:
+
+```yaml
+spec:
+  brokers:
+    image:
+      repository: ghcr.io/kafscale/kafscale-broker
+      tag: v1.6.2
+```
+
+Omitting the image keeps the operator default. A repository without a tag is used
+as supplied, including a complete `repository@sha256:...` digest reference. A tag
+without a repository replaces the tag or digest in the operator default. When both
+are set, the tag replaces any tag or digest in the supplied repository reference.
+The operator's image pull policy still applies. Updating the image changes the
+broker StatefulSet pod template, triggering its normal rolling update; removing
+the override returns that cluster to the operator default.
+
 ### Values to pay attention to
 
 | Value | Purpose |
@@ -48,6 +68,22 @@ By default, image tags follow the chart `appVersion`. Override `operator.image.t
 1. Apply a `KafscaleCluster` custom resource describing the S3 bucket, etcd endpoints, cache sizes, and credentials secret.
 2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
 3. Expose the console UI (optional) by enabling ingress in `values.yaml` or by creating a LoadBalancer service.
+
+## Broker partition restore
+
+On first access after a broker restart, a partition rebuilds its in-memory segment
+catalog from S3 before serving requests for that partition. Restore uses up to 16
+workers per partition to read segment footers and indexes. These requests also
+share the broker-wide `KAFSCALE_S3_CONCURRENCY` limit with other S3 operations.
+
+Broker logs report restore start, the listed segment count, progress every five
+seconds during downloads, and completion with restored/skipped counts, last offset,
+and duration. Failures include processed counts and the error. A failed restore
+cancels the remaining workers and does not install a partial catalog.
+
+Restore still lists all objects and reads a footer and index per eligible segment;
+large partitions can still take time. This change does not merge small segments or
+add a persistent manifest. Requests for the restoring partition wait for completion.
 
 ## Security & Hardening
 
@@ -65,7 +101,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
 - **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
-- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default; broker/etcd affinity overrides via the CR are tracked separately ([#164](https://github.com/KafScale/platform/issues/164)).
+- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default. For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
 - **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
   - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
@@ -638,3 +674,45 @@ spec:
 - **Lower read latency** for consumers in EU/Asia when objects are already replicated.
 - **CRR lag** means the newest segments may not appear immediately in the replica; the broker will fall back to the primary for those reads.
 - **Extra cross-region traffic** occurs only on replica misses; steady-state reads stay in-region once replication catches up.
+
+## Broker and managed etcd affinity overrides
+
+`spec.brokers.affinity` and `spec.etcd.affinity` accept Kubernetes `Affinity`
+objects independently. Omit a field (or set it to `null`) to retain the default
+soft pod anti-affinity on `kubernetes.io/hostname`. An explicit `affinity: {}`
+disables that default. A non-empty object replaces the entire affinity; the
+operator does not merge the default into it. Removing an override restores the
+default on the next reconciliation. Changes update the StatefulSet pod template
+and can trigger a rolling update. Etcd placement applies only to managed etcd;
+it does not affect an externally configured etcd cluster.
+
+For example, require brokers on a labeled node pool and disable etcd affinity
+in a single-node development cluster (merge these fields into your existing CR):
+
+```yaml
+spec:
+  brokers:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: kafscale.io/node-pool
+                  operator: In
+                  values: [brokers]
+  etcd:
+    affinity: {}
+```
+
+To extend the default, include its soft anti-affinity term alongside your custom
+rules. For a cluster named `example`, the broker selector is
+`{app: kafscale-broker, cluster: example}`; etcd uses
+`{app: kafscale-etcd, cluster: example}`. The default term has weight `100` and
+topology key `kubernetes.io/hostname`. Required affinity/anti-affinity rules can
+leave pods Pending when matching nodes or topology domains are unavailable.
+
+The affinity CRD fields use a generated structural schema. After changing the
+API types or upgrading Kubernetes API dependencies, regenerate those fields
+with `python3 hack/update_affinity_schema.py` (requires Go and PyYAML).
+`python3 hack/update_affinity_schema.py --check` checks for drift while preserving
+the other manually maintained CRD fields.

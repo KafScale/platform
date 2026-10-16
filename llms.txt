@@ -17,3 +17,4 @@ KafScale is an open source streaming platform. Brokers are stateless, S3 is the 
 - [Protocol compatibility](https://kafscale.io/protocol/): Kafka APIs the broker advertises
 - [Comparison](https://kafscale.io/comparison/): How KafScale compares with other Kafka-compatible platforms
 - [Project overview](https://kafscale.io/overview/): What KafScale optimizes for, and what it leaves out
+- [Release notes](https://kafscale.io/releases/): Changes, upgrade notes and fixes for each release
