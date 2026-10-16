@@ -12,16 +12,16 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1008.0",
     "@confluentinc/kafka-javascript": "^1.8.2",
-    "undici": "^6.27.0"
+    "undici": "^6.28.1"
   },
   "overrides": {
     "@aws-sdk/xml-builder": "3.972.10",
     "@aws-sdk/xml-builder@3.972.10": {
-      "fast-xml-parser": "5.5.8"
+      "fast-xml-parser": "5.7.0"
     },
     "@tootallnate/once": "3.0.1",
-    "tar": "7.5.19",
-    "fast-xml-parser": "5.5.8",
+    "tar": "7.5.21",
+    "fast-xml-parser": "5.7.0",
     "fast-xml-builder": "1.2.1"
   },
   "devDependencies": {
