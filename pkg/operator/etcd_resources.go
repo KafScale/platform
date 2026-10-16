@@ -256,10 +256,13 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				},
 			})
 		}
+		sts.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
 		sts.Spec.Template.Spec.Volumes = append([]corev1.Volume{}, volumes...)
+		sts.Spec.Template.Spec.InitContainers = nil
 
 		bucket := snapshotBucket(cluster)
 		if bucket != "" {
+			sts.Spec.Template.Spec.Volumes = append(sts.Spec.Template.Spec.Volumes, snapshotTempVolume())
 			prefix := snapshotPrefix(cluster)
 			endpoint := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotEndpointEnv))
 			if endpoint == "" {
@@ -269,6 +272,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 			backupImage := getEnv(operatorEtcdSnapshotImageEnv, defaultSnapshotImage)
 
 			restoreEnv := []corev1.EnvVar{
+				{Name: "HOME", Value: "/tmp"},
 				{Name: "AWS_REGION", Value: cluster.Spec.S3.Region},
 				{Name: "AWS_DEFAULT_REGION", Value: cluster.Spec.S3.Region},
 				{Name: "AWS_EC2_METADATA_DISABLED", Value: "true"},
@@ -371,18 +375,22 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 
 			sts.Spec.Template.Spec.InitContainers = []corev1.Container{
 				{
-					Name:    "snapshot-download",
-					Image:   backupImage,
-					Command: []string{"/bin/sh", "-c", downloadScript},
-					Env:     restoreEnv,
+					Name:            "snapshot-download",
+					SecurityContext: restrictedContainerSecurityContext(),
+					Image:           backupImage,
+					Command:         []string{"/bin/sh", "-c", downloadScript},
+					Env:             restoreEnv,
+					WorkingDir:      "/tmp",
 					VolumeMounts: []corev1.VolumeMount{
+						{Name: "snapshot-tmp", MountPath: "/tmp"},
 						{Name: "snapshots", MountPath: "/snapshots"},
 						{Name: "data", MountPath: "/var/lib/etcd"},
 					},
 				},
 				{
-					Name:  "snapshot-restore",
-					Image: etcdctlImage,
+					Name:            "snapshot-restore",
+					SecurityContext: restrictedContainerSecurityContext(),
+					Image:           etcdctlImage,
 					Command: []string{
 						"/bin/sh",
 						"-c",
@@ -401,8 +409,9 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 			}
 		}
 		etcdContainer := corev1.Container{
-			Name:  "etcd",
-			Image: image,
+			Name:            "etcd",
+			SecurityContext: restrictedContainerSecurityContext(),
+			Image:           image,
 			Ports: []corev1.ContainerPort{
 				{Name: "client", ContainerPort: 2379},
 				{Name: "peer", ContainerPort: 2380},
@@ -538,7 +547,9 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		cron.Spec.FailedJobsHistoryLimit = int32Ptr(3)
 		cron.Spec.JobTemplate.Spec.Template.Labels = labels
 		cron.Spec.JobTemplate.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
+		cron.Spec.JobTemplate.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
 		cron.Spec.JobTemplate.Spec.Template.Spec.Volumes = []corev1.Volume{
+			snapshotTempVolume(),
 			{
 				Name: "snapshots",
 				VolumeSource: corev1.VolumeSource{
@@ -559,8 +570,9 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 
 		cron.Spec.JobTemplate.Spec.Template.Spec.InitContainers = []corev1.Container{
 			{
-				Name:  "snapshot",
-				Image: etcdctlImage,
+				Name:            "snapshot",
+				SecurityContext: restrictedContainerSecurityContext(),
+				Image:           etcdctlImage,
 				Env: []corev1.EnvVar{
 					{Name: "ETCD_ENDPOINTS", Value: strings.Join(managedEtcdEndpoints(cluster), ",")},
 					{Name: "ETCDCTL_API", Value: "3"},
@@ -579,6 +591,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		}
 
 		uploadEnv := []corev1.EnvVar{
+			{Name: "HOME", Value: "/tmp"},
 			{Name: "AWS_REGION", Value: cluster.Spec.S3.Region},
 			{Name: "AWS_DEFAULT_REGION", Value: cluster.Spec.S3.Region},
 			{Name: "AWS_EC2_METADATA_DISABLED", Value: "true"},
@@ -626,8 +639,9 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 
 		cron.Spec.JobTemplate.Spec.Template.Spec.Containers = []corev1.Container{
 			{
-				Name:  "upload",
-				Image: backupImage,
+				Name:            "upload",
+				SecurityContext: restrictedContainerSecurityContext(),
+				Image:           backupImage,
 				Command: []string{
 					"/bin/sh",
 					"-c",
@@ -657,9 +671,11 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 						"aws $ENDPOINT_OPT s3 cp \"$SNAPSHOT\" \"s3://$SNAPSHOT_BUCKET/$SNAPSHOT_PREFIX/$TS.db\"\n" +
 						"aws $ENDPOINT_OPT s3 cp \"$CHECKSUM\" \"s3://$SNAPSHOT_BUCKET/$SNAPSHOT_PREFIX/$TS.db.sha256\"",
 				},
-				Env:     uploadEnv,
-				EnvFrom: envFrom,
+				Env:        uploadEnv,
+				WorkingDir: "/tmp",
+				EnvFrom:    envFrom,
 				VolumeMounts: []corev1.VolumeMount{
+					{Name: "snapshot-tmp", MountPath: "/tmp"},
 					{Name: "snapshots", MountPath: "/snapshots"},
 				},
 			},
@@ -729,12 +745,14 @@ func reconcileEtcdMaintenanceCronJob(ctx context.Context, c client.Client, schem
 		cron.Spec.FailedJobsHistoryLimit = int32Ptr(3)
 		cron.Spec.JobTemplate.Spec.Template.Labels = labels
 		cron.Spec.JobTemplate.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
+		cron.Spec.JobTemplate.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(false)
 		activeDeadline := int64(1800)
 		cron.Spec.JobTemplate.Spec.Template.Spec.ActiveDeadlineSeconds = &activeDeadline
 		cron.Spec.JobTemplate.Spec.Template.Spec.Containers = []corev1.Container{
 			{
-				Name:  "maintenance",
-				Image: spec.etcdctlImage,
+				Name:            "maintenance",
+				SecurityContext: restrictedContainerSecurityContext(),
+				Image:           spec.etcdctlImage,
 				Env: []corev1.EnvVar{
 					{Name: "ETCD_MEMBERS", Value: spec.memberEndpoints},
 					{Name: "ETCDCTL_API", Value: "3"},
