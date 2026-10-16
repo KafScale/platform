@@ -25,7 +25,6 @@ limitations under the License.
 [![Release](https://img.shields.io/github/v/release/KafScale/platform?include_prereleases&sort=semver)](https://github.com/KafScale/platform/releases)
 [![GHCR Broker](https://img.shields.io/badge/ghcr.io-kafscale--broker-blue)](https://github.com/KafScale/platform/pkgs/container/kafscale-broker)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Go Report Card](https://img.shields.io/badge/go%20report-A%2B-brightgreen)](https://goreportcard.com/report/github.com/KafScale/platform)
 
 KafScale is a Kafka-protocol compatible streaming platform built around a simple premise:  
 **durable logs belong in object storage, not in stateful brokers**.

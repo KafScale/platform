@@ -90,7 +90,29 @@ jobs:
         run: mkdir -p "$GOCACHE"
 
       - name: Enforce coverage floor
-        run: bash hack/check_coverage.sh 45
+        run: bash hack/check_coverage.sh 45 | tee coverage.txt
+
+      - name: Write coverage summary
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')
+            {
+              echo "## Go coverage"
+              echo ""
+              echo "Total statement coverage (gated packages): **${total}**"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage profile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-coverage
+          path: |
+            coverage.out
+            coverage.txt
+          if-no-files-found: ignore
 
 
   helm-lint:
