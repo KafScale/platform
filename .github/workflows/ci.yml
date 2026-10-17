@@ -92,6 +92,7 @@ jobs:
         run: mkdir -p "$GOCACHE"
 
       - name: Enforce coverage floor
+        shell: bash
         run: bash hack/check_coverage.sh 85 | tee coverage.txt
 
       - name: Write coverage summary
