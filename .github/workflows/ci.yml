@@ -76,6 +76,8 @@ jobs:
   go-coverage:
     name: Go Coverage Gate
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.summary.outputs.total }}
     env:
       GOCACHE: ${{ github.workspace }}/.gocache
     steps:
@@ -93,6 +95,7 @@ jobs:
         run: bash hack/check_coverage.sh 85 | tee coverage.txt
 
       - name: Write coverage summary
+        id: summary
         if: always()
         run: |
           if [ -f coverage.out ]; then
@@ -102,6 +105,7 @@ jobs:
               echo ""
               echo "Total statement coverage (gated packages): **${total}**"
             } >> "$GITHUB_STEP_SUMMARY"
+            echo "total=${total%\%}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload coverage profile
@@ -113,6 +117,55 @@ jobs:
             coverage.out
             coverage.txt
           if-no-files-found: ignore
+
+  coverage-badge:
+    name: Coverage Badge
+    needs: go-coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: coverage-badge
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          ref: gh-pages
+          fetch-depth: 1
+
+      - name: Commit badges/coverage.json to gh-pages
+        env:
+          TOTAL: ${{ needs.go-coverage.outputs.coverage }}
+        run: |
+          if [ -z "$TOTAL" ]; then
+            echo "No coverage total from the coverage job." >&2
+            exit 1
+          fi
+          color=red
+          if awk -v t="$TOTAL" 'BEGIN { exit !(t >= 80) }'; then
+            color=brightgreen
+          elif awk -v t="$TOTAL" 'BEGIN { exit !(t >= 60) }'; then
+            color=yellow
+          fi
+          mkdir -p badges
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' "$TOTAL" "$color" > badges/coverage.json
+          git add badges/coverage.json
+          if git diff --cached --quiet; then
+            echo "Coverage badge unchanged at ${TOTAL}%."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -q -m "Coverage badge: ${TOTAL}%"
+          for _ in 1 2 3; do
+            if git push origin HEAD:gh-pages; then
+              exit 0
+            fi
+            git pull -q --rebase origin gh-pages
+          done
+          echo "Could not push the coverage badge to gh-pages." >&2
+          exit 1
 
 
   helm-lint:
