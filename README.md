@@ -21,6 +21,7 @@ limitations under the License.
 
 [![CI](https://github.com/KafScale/platform/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KafScale/platform/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/KafScale/platform.svg)](https://pkg.go.dev/github.com/KafScale/platform)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/KafScale/platform/gh-pages/badges/coverage.json)](https://github.com/KafScale/platform/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/badge/codeql-enabled-2ea44f?logo=github)](https://github.com/KafScale/platform/security/code-scanning)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/KafScale/platform/badge)](https://securityscorecards.dev/viewer/?uri=github.com/KafScale/platform)
 [![Release](https://img.shields.io/github/v/release/KafScale/platform?include_prereleases&sort=semver)](https://github.com/KafScale/platform/releases)
