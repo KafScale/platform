@@ -199,6 +199,19 @@ More on the backup pattern: [KafShield, Kafka backup and disaster recovery on S3
 - Flink demo (E30): `examples/E30_flink-kafscale-demo/README.md`
 - Spark demo (E40): `examples/E40_spark-kafscale-demo/README.md`
 
+## Related projects
+
+These open source projects come from the same team and work with KafScale:
+
+- [KafClaw](https://github.com/KafClaw/KafClaw): agent runtime in Go that connects AI agents through Kafka topics. Its workshop setup runs on a KafScale broker and the KafScale LFS proxy.
+- [KafGraph](https://github.com/scalytics/KafGraph): shared knowledge graph for agents. It runs as a KafScale processor and reads KafClaw group topics.
+- [kafSIEM](https://github.com/scalytics/kafSIEM): entity graph over Kafka agent traffic and OSINT feeds. It can consume from KafScale.
+- [kaf-mirror](https://github.com/scalytics/kaf-mirror): Kafka-to-Kafka replication, used for migrations into KafScale.
+- [kshark-core](https://github.com/scalytics/kshark-core): Kafka connectivity diagnostics, and an example of how agents can use our tools to debug Kafka clusters.
+- [infinimesh](https://infinimesh.org/): self-hosted IoT device platform. Its [Kafka addon](https://github.com/infinimesh/addons/blob/main/kafka/README.md) streams device data to KafScale.
+
+The full list is at [scalytics.io/open-source](https://www.scalytics.io/open-source).
+
 ## Need it managed or supported?
 
 KafScale is the open-source base of [Lascaris](https://www.scalytics.io/lascaris).
