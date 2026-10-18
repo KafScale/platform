@@ -20,3 +20,18 @@ KafScale is an open source streaming platform. Brokers are stateless, S3 is the 
 - [Bento with KafScale](https://kafscale.io/bento/): Run Bento pipelines against KafScale with the kafka_franz input and output
 - [Project overview](https://kafscale.io/overview/): What KafScale optimizes for, and what it leaves out
 - [Release notes](https://kafscale.io/releases/): Changes, upgrade notes and fixes for each release
+
+## Related projects
+
+- [KafClaw](https://github.com/KafClaw/KafClaw): Agent runtime in Go that connects AI agents through Kafka topics. Its workshop setup runs on a KafScale broker and the KafScale LFS proxy
+- [KafGraph](https://github.com/scalytics/KafGraph): Shared knowledge graph for agents. Runs as a KafScale processor and reads KafClaw group topics
+- [kafSIEM](https://github.com/scalytics/kafSIEM): Entity graph over Kafka agent traffic and OSINT feeds. Can consume from KafScale
+- [kaf-mirror](https://github.com/scalytics/kaf-mirror): Kafka-to-Kafka replication, used for the WarpStream migration guide
+- [kshark-core](https://github.com/scalytics/kshark-core): Kafka connectivity diagnostics. An example of how agents can use our tools to debug Kafka clusters
+- [infinimesh](https://infinimesh.org/): Self-hosted IoT device platform. Its Kafka addon streams device data to KafScale
+- [Scalytics open source](https://www.scalytics.io/open-source): All Scalytics open source projects
+- [Lascaris](https://www.scalytics.io/lascaris): Governed AI agents on Kafka, the supported Scalytics product built on this open core
+
+## Author
+
+- [Alexander Alten](https://www.novatechflow.com/p/kafscale.html): Created KafScale. CTO at Scalytics. Writes at novatechflow.com
