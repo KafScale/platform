@@ -23,7 +23,13 @@ S3 stores data redundantly across availability zones, so KafScale keeps one copy
 
 ## What is KafScale latency?
 
-We have not published a measured p50 or p99 latency benchmark yet, so we describe latency by its mechanism. By default (KAFSCALE_PRODUCE_SYNC_FLUSH=true, producer acks=1 or acks=all) the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore about one S3 PUT round trip plus one etcd write. The segment and its index upload in parallel. Recent data is served from the broker's in-memory segment cache (KAFSCALE_CACHE_BYTES, default 1 GB). Older data is one S3 GET, with read-ahead (KAFSCALE_READAHEAD_SEGMENTS, default 2).
+KafScale latency is S3 latency plus one metadata write. By default (KAFSCALE_PRODUCE_SYNC_FLUSH=true, producer acks=1 or acks=all) the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore roughly one S3 PUT plus one etcd write, plus up to linger.ms of producer batching. The segment and its index upload in parallel.
+
+Published S3 latency, quoted from AWS:
+- "These applications can achieve consistent small object latencies (and first-byte-out latencies for larger objects) of roughly 100–200 milliseconds." Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html
+- "When you make smaller requests (for example, less than 512 KB), where median latencies are often in the tens of milliseconds range, a good guideline is to retry a GET or PUT operation after 2 seconds." Source: https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html
+
+Derived from those AWS figures (not a KafScale benchmark): produce ack is roughly S3 PUT latency plus the etcd write plus linger.ms. A fetch of recent data makes no S3 request. A cold fetch is roughly one S3 GET. Other S3-compatible backends have their own latency; measure with kafscale_s3_latency_ms_avg. Recent data is served from the broker's in-memory segment cache (KAFSCALE_CACHE_BYTES, default 1 GB). Older data is one S3 GET, with read-ahead (KAFSCALE_READAHEAD_SEGMENTS, default 2).
 
 This fits logs, telemetry, analytics, ETL, backup and AI agent workloads. It is not built for workloads that need sub-10ms produce latency, such as order matching or trading.
 

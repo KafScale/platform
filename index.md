@@ -62,7 +62,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     <div class="card">
       <h3>KafScale is for you if</h3>
       <ul>
-        <li>Sub-second latency is acceptable (<a href="/latency/">how latency works</a>)</li>
+        <li>S3 write latency is fine for you, roughly 100–200 ms per AWS (<a href="/latency/">how latency works</a>)</li>
         <li>You run ETL, logs, or async events</li>
         <li>You want processors that bypass brokers (Iceberg, analytics, AI agents)</li>
         <li>You want minimal ops and no disk management</li>

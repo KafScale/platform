@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: "KafScale Latency, Producer Batching and Trade-offs"
-description: How KafScale produce and fetch latency works on S3, which workloads it fits, the batching settings that keep S3 cost low, and the deliberate trade-offs.
+description: KafScale latency is S3 latency. How produce and fetch map to S3 requests, AWS published S3 latency figures, which workloads fit, batching settings and the deliberate trade-offs.
 permalink: /latency/
 nav_title: Latency and batching
 nav_order: 5
@@ -17,7 +17,7 @@ schema:
       name: What is KafScale latency?
       acceptedAnswer:
         "@type": Answer
-        text: "We have not published a measured p50 or p99 latency benchmark yet, so we describe latency by its mechanism. By default the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore about one S3 PUT round trip plus one etcd write. Recent data is served from the in-memory segment cache on the broker. This fits logs, telemetry, analytics, ETL, backup and AI agent workloads. It is not built for workloads that need sub-10ms produce latency."
+        text: "KafScale latency is S3 latency plus one metadata write. By default the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore roughly one S3 PUT plus one etcd write, plus up to linger.ms of batching on the producer. AWS documents small-object S3 latency of roughly 100–200 milliseconds, and median latencies in the tens of milliseconds for requests under 512 KB. Recent data is served from the broker's in-memory segment cache, and a cold fetch costs one S3 GET. These ranges are derived from AWS's published S3 numbers. They are not a KafScale benchmark. This fits logs, telemetry, analytics, ETL, backup and AI agent workloads. It is not built for workloads that need sub-10ms produce latency."
     - "@type": Question
       name: Does KafScale support transactions?
       acceptedAnswer:
@@ -31,13 +31,25 @@ schema:
 
 KafScale runs the Kafka protocol on stateless brokers and keeps all data in S3-compatible object storage. That removes broker disks, partition rebalancing and replica management from your operations work, and it gives you up to 90% lower storage cost than three-way replicated broker disks. It is open source under Apache 2.0, keeps metadata in etcd inside your own Kubernetes cluster, and stores data in the open, documented [.kfs segment format](/storage-format/), so processors can read it straight from S3.
 
-The storage figure comes from a [simple calculation with AWS list prices](/comparison/#storage-cost). The price for all of this is latency. A Kafka broker writes to a local disk. A KafScale broker writes to S3. This page explains what that means in practice, how to tune it, and what KafScale leaves out on purpose.
+The storage figure comes from a [simple calculation with AWS list prices](/comparison/#storage-cost). The price for all of this is latency. A Kafka broker writes to a local disk. A KafScale broker writes to S3, so its latency is bounded by S3 request latency. This page explains what that means in practice, how to tune it, and what KafScale leaves out on purpose.
 
 ## What is KafScale latency?
 
-We have not published a measured p50 or p99 latency benchmark yet, so we describe latency by its mechanism. By default the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore about one S3 PUT round trip plus one etcd write. Recent data is served from the in-memory segment cache on the broker. This fits logs, telemetry, analytics, ETL, backup and AI agent workloads. It is not built for workloads that need sub-10ms produce latency.
+KafScale latency is S3 latency plus one metadata write. By default the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore roughly one S3 PUT plus one etcd write, plus up to `linger.ms` of batching on the producer. AWS documents small-object S3 latency of roughly 100–200 milliseconds, and median latencies in the tens of milliseconds for requests under 512 KB. Recent data is served from the broker's in-memory segment cache, and a cold fetch costs one S3 GET. These ranges are derived from AWS's published S3 numbers. They are not a KafScale benchmark. This fits logs, telemetry, analytics, ETL, backup and AI agent workloads. It is not built for workloads that need sub-10ms produce latency.
 
-You can measure it on your own setup. The broker exports `kafscale_produce_latency_ms` (histogram) and `kafscale_s3_latency_ms_avg` (see [Metrics](/metrics/)), and the [benchmark scenarios](/benchmarks/) show how to run repeatable tests.
+### S3 latency, as AWS publishes it
+
+KafScale has no local disk, so every durable write and every cold read is an S3 request. These are the figures AWS publishes for Amazon S3, quoted as written:
+
+| What AWS says | Source |
+|---------------|--------|
+| "These applications can achieve consistent small object latencies (and first-byte-out latencies for larger objects) of roughly 100–200 milliseconds." | [Best practices design patterns: optimizing Amazon S3 performance](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html) |
+| "When you make smaller requests (for example, less than 512 KB), where median latencies are often in the tens of milliseconds range, a good guideline is to retry a GET or PUT operation after 2 seconds." | [Performance design patterns for Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html) |
+| "To optimize performance, we recommend that you access the bucket from Amazon EC2 instances in the same AWS Region when possible. This helps reduce network latency and data transfer costs." | [Performance guidelines for Amazon S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-guidelines.html) |
+
+With the recommended producer settings below (`batch.size=65536`), each partition's batch is far smaller than 512 KB, so the small-request figures are the ones that apply to the produce path.
+
+These are AWS numbers for Amazon S3. The other [S3-compatible backends](/supported/) have their own latency, and KafScale's produce latency follows whatever PUT latency your backend delivers. Measure it with `kafscale_s3_latency_ms_avg` (see [Metrics](/metrics/)).
 
 ### The produce path
 
@@ -78,9 +90,24 @@ Two other modes change this:
 
 ### The fetch path
 
-- **Recent data.** When a segment flushes, the broker keeps it in the hot segment cache (`KAFSCALE_CACHE_BYTES`, default 1 GB), so consumers that keep up read from memory.
-- **Older data.** A cache miss is an S3 GET. The broker prefetches the next `KAFSCALE_READAHEAD_SEGMENTS` segments (default 2), so sequential consumers mostly hit memory after the first read.
+- **Recent data.** When a segment flushes, the broker keeps it in the hot segment cache (`KAFSCALE_CACHE_BYTES`, default 1 GB), so consumers that keep up read from memory and make no S3 request.
+- **Older data.** A cache miss is one S3 GET for that segment, or a byte range of it. The broker prefetches the next `KAFSCALE_READAHEAD_SEGMENTS` segments (default 2), so sequential consumers mostly hit memory after the first read.
 - **Analytics and AI agents.** Processors can skip the broker and read `.kfs` segments from S3 directly. That keeps replays and backfills off the streaming path.
+
+### Derived latency by operation
+
+This table combines the KafScale request paths above with the AWS figures quoted above. It is derived from AWS's published S3 numbers, not measured on KafScale. Your numbers depend on your region, backend, network and etcd.
+
+| Operation | What it waits on | Derived from AWS's S3 figures |
+|-----------|------------------|-------------------------------|
+| Produce, default (`SYNC_FLUSH=true`, `acks=1` or `all`) | Up to `linger.ms` on the producer, one S3 PUT, one etcd write | Roughly S3 PUT latency (median often in the tens of milliseconds for requests under 512 KB, roughly 100–200 ms per AWS's small-object figure) plus the etcd write plus up to `linger.ms` (100 ms with the settings below) |
+| Produce, `SYNC_FLUSH=false` or `acks=0` | The broker buffer | No S3 request on the ack path. Data reaches S3 within `KAFSCALE_FLUSH_INTERVAL_MS` (default 500 ms), plus one S3 PUT |
+| Fetch of recent data | Broker memory | No S3 request |
+| Fetch of older data | One S3 GET | Roughly S3 GET latency, the same AWS figures, plus transfer time for larger reads |
+
+The etcd write runs inside your own Kubernetes cluster. We do not publish a figure for it. Watch your etcd metrics and `kafscale_produce_latency_ms` to see its share.
+
+You can measure the full picture on your own setup. The broker exports `kafscale_produce_latency_ms` (histogram) and `kafscale_s3_latency_ms_avg` (see [Metrics](/metrics/)), and the [benchmark scenarios](/benchmarks/) show how to run repeatable tests.
 
 ### What we have measured
 
@@ -104,7 +131,7 @@ The broker watches S3 latency and error rate and changes state when S3 gets slow
 | `KAFSCALE_S3_LATENCY_WARN_MS` | `500` | Broker reports `DEGRADED` above this |
 | `KAFSCALE_S3_LATENCY_CRIT_MS` | `2000` | Broker reports `UNAVAILABLE`, rejects produce, keeps serving cached fetches |
 
-See [S3 health](/s3-health/) for profiles for cross-region and cost-optimized buckets.
+The default warning level of 500 ms sits well above AWS's roughly 100–200 ms small-object figure, so `DEGRADED` means S3 is slower than AWS's own guidance. See [S3 health](/s3-health/) for profiles for cross-region and cost-optimized buckets.
 
 ## When latency matters and when it doesn't
 

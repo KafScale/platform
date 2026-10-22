@@ -158,7 +158,7 @@ To locate offset N: binary search index entries, then scan forward from nearest 
     <circle cx="590" cy="65" r="22" fill="rgba(255, 179, 71, 0.3)" stroke="#ffb347" stroke-width="1"/>
     <text x="590" y="70" font-size="12" font-weight="700" fill="#ffb347" text-anchor="middle">S3</text>
     <text x="590" y="100" font-size="10" fill="var(--diagram-label)" text-anchor="middle">Source of truth · ∞ capacity</text>
-    <text x="590" y="115" font-size="9" fill="#ffb347" text-anchor="middle">50-100ms latency</text>
+    <text x="590" y="115" font-size="9" fill="#ffb347" text-anchor="middle">~100–200ms (AWS figure)</text>
 
     <!-- Arrows -->
     <path d="M220,75 L255,75" stroke="var(--diagram-stroke)" stroke-width="1.5" fill="none" marker-end="url(#ac)"/>

@@ -17,7 +17,7 @@ Full text for LLMs: https://kafscale.io/llms-full.txt
 - [Operations](https://kafscale.io/operations/): Production install, hardening, and day-to-day operations
 - [Security](https://kafscale.io/security/): Current security posture and how to report a vulnerability
 - [Protocol compatibility](https://kafscale.io/protocol/): Kafka APIs the broker advertises
-- [Latency and batching](https://kafscale.io/latency/): How produce and fetch latency work on S3, producer batching settings, and the deliberate trade-offs (no compaction, transactions or idempotent producers)
+- [Latency and batching](https://kafscale.io/latency/): KafScale latency is S3 latency. How produce and fetch map to S3 requests, AWS published S3 latency figures with sources, producer batching settings, and the deliberate trade-offs (no compaction, transactions or idempotent producers)
 - [Comparison](https://kafscale.io/comparison/): How KafScale compares with other Kafka-compatible platforms
 - [Migrate from WarpStream](https://kafscale.io/migrate-from-warpstream/): Move topics from WarpStream with a kaf-mirror dual run and cutover, and what KafScale does not support
 - [Bento with KafScale](https://kafscale.io/bento/): Run Bento pipelines against KafScale with the kafka_franz input and output
