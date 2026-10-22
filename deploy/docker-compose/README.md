@@ -228,7 +228,7 @@ Override these in `docker-compose.yaml` or via your own `.env.local` if needed.
 ### Override Registry/Tag
 
 ```bash
-REGISTRY=my-registry.local:5000 TAG=v1.6.2 docker-compose up -d
+REGISTRY=my-registry.local:5000 TAG=v1.6.3 docker-compose up -d
 ```
 
 ## Architecture

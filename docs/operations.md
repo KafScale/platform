@@ -50,7 +50,7 @@ spec:
   brokers:
     image:
       repository: ghcr.io/kafscale/kafscale-broker
-      tag: v1.6.2
+      tag: v1.6.3
 ```
 
 Omitting the image keeps the operator default. A repository without a tag is used
