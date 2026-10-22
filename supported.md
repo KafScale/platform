@@ -377,7 +377,9 @@ For production, always use HTTPS endpoints. Self-signed certificates may require
 
 ### Regional Latency
 
-Place your storage in the same region as your Kubernetes cluster. Every acknowledged produce waits for an S3 write, so storage round-trip time is your produce latency. See [Latency and batching](/latency/).
+Place your storage in the same region as your Kubernetes cluster. Every acknowledged produce waits for an S3 write, so storage write latency is most of your produce latency. AWS recommends the same for Amazon S3: "To optimize performance, we recommend that you access the bucket from Amazon EC2 instances in the same AWS Region when possible. This helps reduce network latency and data transfer costs." ([source](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-guidelines.html))
+
+For Amazon S3, AWS documents small-object latency of roughly 100–200 milliseconds ([source](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html)). The other backends on this page publish their own figures or none, so measure your backend with `kafscale_s3_latency_ms_avg`. See [Latency and batching](/latency/).
 
 ### Bucket Lifecycle
 

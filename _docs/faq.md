@@ -15,11 +15,11 @@ nav_order: 10
 
 See [Comparison](/comparison/) for a detailed side-by-side analysis covering architecture, latency, licensing, and cost.
 
-The short version: KafScale is the only S3-native, stateless Kafka-compatible platform under the Apache 2.0 license. WarpStream is now Confluent-owned (proprietary), AutoMQ uses BSL licensing, and Redpanda requires local disks.
+The short version: KafScale keeps no local disk on brokers, stores data in the open .kfs format and keeps metadata in etcd in your own cluster, under Apache 2.0. WarpStream is proprietary and part of Confluent. AutoMQ is a Kafka fork under Apache 2.0 since April 2025 that pairs S3 with a write-ahead log. Redpanda uses local disks and is licensed under BSL 1.1.
 
 ### Why would I use KafScale instead of Apache Kafka?
 
-KafScale trades latency for operational simplicity and storage-native processing. If your workload can tolerate hundreds of milliseconds of latency, KafScale eliminates stateful brokers, partition rebalancing, and disk capacity planning.
+KafScale trades latency for operational simplicity and storage-native processing. If your workload can tolerate S3 write latency (AWS documents roughly 100–200 ms for small objects, see [Latency](/latency/#s3-latency-as-aws-publishes-it)), KafScale eliminates stateful brokers, partition rebalancing, and disk capacity planning.
 
 **For AI agent infrastructure**: KafScale's architecture aligns with what agentic systems actually need. AI agents reasoning over business context require completeness and replay capability, not sub-millisecond latency. The immutable log in S3 becomes the system of record that agents query, replay, and reason over. Processors convert that log to tables without competing with streaming workloads for broker resources.
 
@@ -115,16 +115,18 @@ Yes. KafScale works with any S3-compatible storage backend. See [Supported stora
 
 ### What latency should I expect?
 
-KafScale prioritizes durability and operational simplicity over sub-10ms latency. We have not published measured p50 or p99 numbers yet, so here is what each operation waits on:
+KafScale latency is S3 latency. Every acknowledged produce waits for an S3 write, so KafScale prioritizes durability and operational simplicity over sub-10ms latency.
 
-| Operation | Waits on | Notes |
-|-----------|----------|-------|
-| Produce (default, `acks=1` or `all`) | One S3 PUT plus one etcd write | Segment and index upload in parallel |
-| Fetch of recent data | Broker memory | Hot segment cache |
-| Fetch of older data | One S3 GET | Read-ahead prefetches the next segments |
-| Consumer group join | etcd coordination | |
+AWS documents that applications "can achieve consistent small object latencies (and first-byte-out latencies for larger objects) of roughly 100–200 milliseconds" ([AWS S3 performance guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html)), and that for requests under 512 KB "median latencies are often in the tens of milliseconds range" ([AWS S3 design patterns](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-design-patterns.html)). Here is what each KafScale operation waits on. The last column is derived from those AWS figures, not from a KafScale benchmark:
 
-See [Latency and batching](/latency/) for the full produce path, measured throughput and tuning.
+| Operation | Waits on | Derived from AWS's S3 figures |
+|-----------|----------|-------------------------------|
+| Produce (default, `acks=1` or `all`) | One S3 PUT plus one etcd write, plus up to `linger.ms` on the producer | Roughly S3 PUT latency plus the etcd write plus `linger.ms`. Segment and index upload in parallel |
+| Fetch of recent data | Broker memory | No S3 request |
+| Fetch of older data | One S3 GET | Roughly S3 GET latency. Read-ahead prefetches the next segments |
+| Consumer group join | etcd coordination | Not an S3 request |
+
+See [Latency and batching](/latency/) for the full produce path, the AWS sources, measured throughput and tuning.
 
 ### Can I reduce latency?
 

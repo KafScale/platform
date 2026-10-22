@@ -35,11 +35,11 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <span><span class="badge badge-warning">BSL 1.1</span></span>
     <span>Source available. Cannot offer as competing service. Converts to Apache 2.0 after 4 years.</span>
   </div>
- <div class="format-row">
-  <span>AutoMQ</span>
-  <span><span class="badge badge-warning">Apache 2.0*</span></span>
-  <span>Was BSL until May 2025. Changed for Strimzi compatibility to support K8s rollouts.</span>
-</div>
+  <div class="format-row">
+    <span>AutoMQ</span>
+    <span><span class="badge badge-success">Apache 2.0</span></span>
+    <span>Open source. The repository moved to Apache 2.0 in April 2025 (<a href="https://github.com/AutoMQ/automq/pull/2433">AutoMQ PR #2433</a>). Before that, its S3Stream storage component was under a Business Source License. 1.5.0 was the first release under Apache 2.0.</span>
+  </div>
   <div class="format-row">
     <span>WarpStream</span>
     <span><span class="badge badge-danger">Proprietary</span></span>
@@ -65,7 +65,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateless</span></div>
     <div class="spec-row"><span class="spec-label">Metadata</span><span>etcd</span></div>
     <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>CRDs + Operator + HPA</span></div>
-    <div class="spec-row"><span class="spec-label">Typical latency</span><span>One S3 PUT per acked produce (<a href="/latency/">details</a>)</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>S3 PUT latency plus one etcd write per acked produce. AWS documents roughly 100–200 ms for small S3 objects (<a href="/latency/">details</a>)</span></div>
     <div class="spec-row"><span class="spec-label">Transactions</span><span>No (by design)</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No (by design)</span></div>
     <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-success">Apache 2.0</span></div>
@@ -128,7 +128,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Typical latency</span><span>~10ms p99 (with EBS WAL)</span></div>
     <div class="spec-row"><span class="spec-label">Transactions</span><span>Yes</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>Yes</span></div>
-    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-warning">Apache 2.0*</span></div>
+    <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-success">Apache 2.0</span></div>
     <div class="spec-row"><span class="spec-label">Best for</span><span>Kafka migration, low latency + S3</span></div>
   </section>
 
@@ -242,7 +242,7 @@ This is where KafScale differs architecturally from every alternative. Most plat
 | **Kafka migration with S3 cost savings** | AutoMQ | Kafka-compatible, EBS WAL for low latency |
 | **Data lakehouse / Iceberg integration** | Bufstream | Native Iceberg, Protobuf validation |
 | **BYOC with Confluent ecosystem** | WarpStream | Confluent-backed, integrates with their tooling |
-| **Avoid vendor lock-in at all costs** | KafScale, Apache Kafka | Only Apache 2.0 options |
+| **Apache 2.0 license required** | KafScale, Apache Kafka, AutoMQ | Apache 2.0 licensed |
 
 ## Cost snapshot
 
@@ -461,7 +461,7 @@ That is about 90% less for storage. S3 already stores data redundantly across av
     </tr>
     <tr>
       <td>Jepsen tested</td>
-      <td class="kafscale">Planned</td>
+      <td class="kafscale">✗</td>
       <td>✓</td>
       <td>✓</td>
       <td>✗</td>
@@ -492,7 +492,7 @@ That is about 90% less for storage. S3 already stores data redundantly across av
       <td>✓</td>
       <td>✗ BSL</td>
       <td>✗ Prop.</td>
-      <td>✗ BSL</td>
+      <td>✓</td>
       <td>✗ Prop.</td>
     </tr>
   </tbody>
@@ -503,7 +503,7 @@ That is about 90% less for storage. S3 already stores data redundantly across av
 
 ## The honest tradeoffs
 
-KafScale fits most streaming workloads: logs, telemetry, analytics feeds, ETL, backup and AI agent context. It writes every acknowledged produce to S3 before it acks, so it is not built for sub-10ms workloads. See [Latency and batching](/latency/) for how the produce path works and how to tune it.
+KafScale fits most streaming workloads: logs, telemetry, analytics feeds, ETL, backup and AI agent context. It writes every acknowledged produce to S3 before it acks, so its latency is bounded by S3 request latency. AWS documents small-object S3 latency of roughly 100–200 milliseconds ([source](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html)), so KafScale is not built for sub-10ms workloads. See [Latency and batching](/latency/) for how the produce path works and how to tune it.
 
 Compaction, transactions and idempotent producers are left out on purpose. Segments in S3 are immutable and brokers keep no state. Many teams keep compacted or transactional topics on a regular Kafka cluster and run KafScale beside it for the high-volume topics. See [Trade-offs of the S3 design](/latency/#trade-offs-of-the-s3-design).
 
