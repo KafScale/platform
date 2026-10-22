@@ -1,0 +1,86 @@
+# KafScale
+
+> Kafka-compatible streaming platform. Stateless brokers, data in S3-compatible object storage, metadata in etcd, Kubernetes operator. Open source under Apache 2.0.
+
+Website: https://kafscale.io
+Source: https://github.com/KafScale/platform
+Short index: https://kafscale.io/llms.txt
+
+## What problem does KafScale solve?
+
+KafScale runs the Kafka protocol on stateless brokers and keeps all data in S3-compatible object storage. That removes broker disks, partition rebalancing and replica management from your operations work, and it gives you up to 90% lower storage cost than three-way replicated broker disks. It is open source under Apache 2.0, keeps metadata in etcd inside your own Kubernetes cluster, and stores data in the open, documented .kfs segment format, so processors can read it straight from S3.
+
+Standard Kafka clients work. Producers must set enable.idempotence=false.
+
+## Storage cost
+
+Up to 90% lower storage cost than Kafka on replicated broker disks. Calculation for 100 GB/day with 7-day retention (700 GB retained), AWS US-East-1 list prices:
+
+- Kafka on EBS gp3, replication factor 3: 700 GB x 3 x $0.08/GB = $168.00 per month
+- KafScale on S3 Standard: 700 GB x $0.023/GB = $16.10 per month
+
+S3 stores data redundantly across availability zones, so KafScale keeps one copy instead of three. Compute, S3 requests and network are separate. Source: https://kafscale.io/comparison/#storage-cost
+
+## What is KafScale latency?
+
+We have not published a measured p50 or p99 latency benchmark yet, so we describe latency by its mechanism. By default (KAFSCALE_PRODUCE_SYNC_FLUSH=true, producer acks=1 or acks=all) the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore about one S3 PUT round trip plus one etcd write. The segment and its index upload in parallel. Recent data is served from the broker's in-memory segment cache (KAFSCALE_CACHE_BYTES, default 1 GB). Older data is one S3 GET, with read-ahead (KAFSCALE_READAHEAD_SEGMENTS, default 2).
+
+This fits logs, telemetry, analytics, ETL, backup and AI agent workloads. It is not built for workloads that need sub-10ms produce latency, such as order matching or trading.
+
+With KAFSCALE_PRODUCE_SYNC_FLUSH=false the broker acks after buffering and flushes when the buffer reaches KAFSCALE_SEGMENT_BYTES (default 4194304) or after KAFSCALE_FLUSH_INTERVAL_MS (default 500). That lowers latency and S3 requests, but a broker crash loses the unflushed tail.
+
+Measured so far: one local laptop baseline (kind, demo stack, 256 byte messages, kcat, 2026-01-03) with throughput only: ~553 msg/s end to end through the broker, ~4115 msg/s backlog produce, ~1117 msg/s consume from S3, ~1388 msg/s cold consume after a broker restart. Source: https://kafscale.io/benchmarks/
+
+Details: https://kafscale.io/latency/
+
+## Producer batching
+
+In the default mode every produce request becomes one segment upload and one index upload per partition, so producer batching decides the S3 PUT count. Recommended starting point:
+
+enable.idempotence=false
+acks=all
+linger.ms=100
+batch.size=65536
+compression.type=snappy
+
+KafScale stores record batches as the producer sent them, so producer compression is compression in S3. Cost-first broker profile: KAFSCALE_PRODUCE_SYNC_FLUSH=false, KAFSCALE_FLUSH_INTERVAL_MS=2000, KAFSCALE_SEGMENT_BYTES=33554432. On the KafscaleCluster resource the buffer settings are spec.config.segmentBytes and spec.config.flushIntervalMs.
+
+## Does KafScale support transactions?
+
+No. Transactions, idempotent producers and compacted topics are deliberate trade-offs of the S3 design. Segments in object storage are immutable and brokers keep no state, so there is no producer sequence state, no transaction coordinator and no segment rewriting. Set enable.idempotence=false on producers. For CDC, key-value state topics or exactly-once pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics.
+
+Patterns that work on KafScale: give each record a stable key or ID and make consumers idempotent (for example upsert by key). The Iceberg processor adds a record_id of the form <topic>:<partition>:<offset> for deduplication. Keep latest-value-per-key state in a table or key-value store rather than in a compacted topic. Small writes cost more because every flush is an S3 object; batch on the producer.
+
+Details: https://kafscale.io/latency/#trade-offs-of-the-s3-design
+
+## KafScale and WarpStream
+
+Both keep brokers stateless and put data in object storage. The differences:
+
+- License: KafScale is open source under Apache 2.0. WarpStream is proprietary.
+- Metadata: KafScale keeps metadata in etcd inside your own Kubernetes cluster. WarpStream agents run in your cloud, and the control plane is a SaaS service run by WarpStream.
+- Segment format: KafScale stores data in the open, documented .kfs segment format, readable from S3 without a broker. WarpStream's storage format is not public.
+
+Migration guide (kaf-mirror dual run and cutover): https://kafscale.io/migrate-from-warpstream/
+Comparison with Kafka, Redpanda, WarpStream, AutoMQ and Bufstream: https://kafscale.io/comparison/
+
+## Commercial support
+
+Commercial support and an enterprise version of KafScale are available from Scalytics as Lascaris: https://www.scalytics.io/lascaris
+
+## Docs
+
+- Documentation: https://kafscale.io/docs/
+- Quickstart: https://kafscale.io/quickstart/
+- Architecture: https://kafscale.io/architecture/
+- Rationale: https://kafscale.io/rationale/
+- Storage format (.kfs): https://kafscale.io/storage-format/
+- Runtime settings: https://kafscale.io/configuration/
+- Operations: https://kafscale.io/operations/
+- Protocol compatibility: https://kafscale.io/protocol/
+- FAQ: https://kafscale.io/faq/
+- Release notes: https://kafscale.io/releases/
+
+## Author
+
+Alexander Alten created KafScale. CTO at Scalytics. Writes at https://www.novatechflow.com/p/kafscale.html

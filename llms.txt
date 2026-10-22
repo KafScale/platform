@@ -2,7 +2,9 @@
 
 > Kafka-compatible streaming platform. Scale streaming and analytics cloud-native on S3. Automated.
 
-KafScale is an open source streaming platform. Brokers are stateless, S3 is the source of truth, and the license is Apache 2.0.
+KafScale is an open source streaming platform. Brokers are stateless, S3 is the source of truth, and the license is Apache 2.0. It gives you up to 90% lower storage cost than Kafka on replicated broker disks. Metadata lives in etcd inside your own Kubernetes cluster, and data is stored in the open, documented .kfs segment format.
+
+Full text for LLMs: https://kafscale.io/llms-full.txt
 
 ## Docs
 
@@ -15,6 +17,7 @@ KafScale is an open source streaming platform. Brokers are stateless, S3 is the 
 - [Operations](https://kafscale.io/operations/): Production install, hardening, and day-to-day operations
 - [Security](https://kafscale.io/security/): Current security posture and how to report a vulnerability
 - [Protocol compatibility](https://kafscale.io/protocol/): Kafka APIs the broker advertises
+- [Latency and batching](https://kafscale.io/latency/): How produce and fetch latency work on S3, producer batching settings, and the deliberate trade-offs (no compaction, transactions or idempotent producers)
 - [Comparison](https://kafscale.io/comparison/): How KafScale compares with other Kafka-compatible platforms
 - [Migrate from WarpStream](https://kafscale.io/migrate-from-warpstream/): Move topics from WarpStream with a kaf-mirror dual run and cutover, and what KafScale does not support
 - [Bento with KafScale](https://kafscale.io/bento/): Run Bento pipelines against KafScale with the kafka_franz input and output

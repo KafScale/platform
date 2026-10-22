@@ -11,6 +11,12 @@ nav_order: 11
 
 WarpStream and KafScale both keep brokers stateless and put data in object storage. The difference is who runs the metadata. WarpStream agents run in your cloud, but the control plane runs at WarpStream, which is owned by Confluent and, since March 2026, by IBM. KafScale keeps metadata in etcd inside your own Kubernetes cluster, and the whole stack is Apache 2.0.
 
+In short:
+
+- **License.** KafScale is open source under Apache 2.0. WarpStream is proprietary.
+- **Metadata.** KafScale keeps metadata in etcd inside your own Kubernetes cluster. WarpStream uses a SaaS control plane.
+- **Segment format.** KafScale uses the open, documented [.kfs segment format](/storage-format/). WarpStream's format is not public.
+
 This guide moves topics over with [kaf-mirror](https://github.com/KafScale/kaf-mirror), runs both systems side by side, and then cuts clients over.
 
 ## Check fit first
@@ -23,11 +29,11 @@ KafScale does not support everything WarpStream does. Check these before you sta
 | Idempotent producers | Yes | No. Set `enable.idempotence=false` |
 | Compacted topics | Yes | No |
 | ACL admin API | Yes | No |
-| Typical produce latency | ~400-600ms p99 | ~400-500ms |
+| Produce latency | ~400-600ms p99 (WarpStream docs) | One S3 PUT plus one etcd write per acked produce. See [Latency](/latency/) |
 | Metadata | WarpStream control plane | etcd in your cluster |
 | License | Proprietary | Apache 2.0 |
 
-If a workload needs transactions or compacted topics (for example CDC with log compaction), keep it on WarpStream or move it to Apache Kafka. Move the rest: logs, events, ETL feeds and AI agent context are a good fit.
+These are deliberate trade-offs of the S3 design, explained in [Trade-offs of the S3 design](/latency/#trade-offs-of-the-s3-design). If a workload needs transactions or compacted topics (for example CDC with log compaction), keep it on WarpStream or move it to Apache Kafka. Move the rest: logs, telemetry, events, ETL feeds and AI agent context are a good fit.
 
 See the [user guide](/user-guide/) and [FAQ](/faq/) for the full list of limits.
 

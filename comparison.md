@@ -43,7 +43,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
   <div class="format-row">
     <span>WarpStream</span>
     <span><span class="badge badge-danger">Proprietary</span></span>
-    <span>Closed source. Owned by Confluent (acquired Sept 2024), which IBM acquired in March 2026. Vendor lock-in risk. Managed Data Pipelines (Bento inside the agents) are BYOC only.</span>
+    <span>Closed source. Owned by Confluent (acquired Sept 2024), which IBM acquired in March 2026. Managed Data Pipelines (Bento inside the agents) are BYOC only.</span>
   </div>
   <div class="format-row">
     <span>Bufstream</span>
@@ -65,7 +65,7 @@ Licensing determines your long-term flexibility. This matters more than most ven
     <div class="spec-row"><span class="spec-label">Broker state</span><span>Stateless</span></div>
     <div class="spec-row"><span class="spec-label">Metadata</span><span>etcd</span></div>
     <div class="spec-row"><span class="spec-label">Kubernetes native</span><span>CRDs + Operator + HPA</span></div>
-    <div class="spec-row"><span class="spec-label">Typical latency</span><span>~400ms p99</span></div>
+    <div class="spec-row"><span class="spec-label">Typical latency</span><span>One S3 PUT per acked produce (<a href="/latency/">details</a>)</span></div>
     <div class="spec-row"><span class="spec-label">Transactions</span><span>No (by design)</span></div>
     <div class="spec-row"><span class="spec-label">Compacted topics</span><span>No (by design)</span></div>
     <div class="spec-row"><span class="spec-label">License</span><span class="badge badge-success">Apache 2.0</span></div>
@@ -236,9 +236,9 @@ This is where KafScale differs architecturally from every alternative. Most plat
 
 | Use case | Recommended | Why |
 |----------|-------------|-----|
-| **ETL pipelines, logs, async events** | KafScale | ~400ms latency is fine, lowest cost, truly open |
+| **ETL pipelines, logs, telemetry, async events** | KafScale | Sub-second latency is fine, lowest storage cost, Apache 2.0 |
 | **AI agents needing replay and context** | KafScale | Broker-bypass reads, immutable logs, open format |
-| **Low-latency trading, real-time** | Kafka, Redpanda, AutoMQ | Need <10ms latency |
+| **Low-latency trading, order matching** | Kafka, Redpanda, AutoMQ | Need sub-10ms produce latency |
 | **Kafka migration with S3 cost savings** | AutoMQ | Kafka-compatible, EBS WAL for low latency |
 | **Data lakehouse / Iceberg integration** | Bufstream | Native Iceberg, Protobuf validation |
 | **BYOC with Confluent ecosystem** | WarpStream | Confluent-backed, integrates with their tooling |
@@ -246,7 +246,7 @@ This is where KafScale differs architecturally from every alternative. Most plat
 
 ## Cost snapshot
 
-Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster. See [Operations](/operations/#capacity-cost) for the sizing assumptions.
+Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster. See [Operations](/operations/#s3-cost-estimation-example) for the sizing assumptions.
 
 <div class="pricing-table">
   <table>
@@ -291,6 +291,17 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
     </tbody>
   </table>
 </div>
+
+<h2 id="storage-cost">Storage cost</h2>
+
+KafScale gives you up to 90% lower storage cost than Kafka on replicated broker disks. Here is the calculation, using the same 100 GB/day and 7-day retention as above (700 GB retained) and AWS US-East-1 list prices:
+
+| Setup | Calculation | Storage per month |
+|-------|-------------|-------------------|
+| Kafka on EBS gp3, replication factor 3 | 700 GB x 3 replicas x $0.08/GB | $168.00 |
+| KafScale on S3 Standard | 700 GB x $0.023/GB | $16.10 |
+
+That is about 90% less for storage. S3 already stores data redundantly across availability zones, so KafScale keeps one copy instead of three. Compute, S3 requests and network are separate. See [Latency and batching](/latency/#producer-batching-settings) for keeping S3 request costs low.
 
 ## Cost notes
 
@@ -492,20 +503,32 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 
 ## The honest tradeoffs
 
+KafScale fits most streaming workloads: logs, telemetry, analytics feeds, ETL, backup and AI agent context. It writes every acknowledged produce to S3 before it acks, so it is not built for sub-10ms workloads. See [Latency and batching](/latency/) for how the produce path works and how to tune it.
+
+Compaction, transactions and idempotent producers are left out on purpose. Segments in S3 are immutable and brokers keep no state. Many teams keep compacted or transactional topics on a regular Kafka cluster and run KafScale beside it for the high-volume topics. See [Trade-offs of the S3 design](/latency/#trade-offs-of-the-s3-design).
+
 **KafScale is NOT for you if:**
 
-- You need <100ms latency (use Kafka, Redpanda, or AutoMQ)
+- You need sub-10ms produce latency (use Kafka, Redpanda, or AutoMQ)
 - You need exactly-once transactions (use Kafka, AutoMQ, Bufstream, or WarpStream)
-- You need compacted topics for CDC (use Kafka, Redpanda, AutoMQ, or WarpStream)
+- You need compacted topics for CDC or key-value state (use Kafka, Redpanda, AutoMQ, or WarpStream)
 
 **KafScale IS for you if:**
 
-- ~500ms latency is acceptable (ETL, logs, async events)
-- You want the lowest possible cost
+- Sub-second latency is acceptable (logs, telemetry, analytics, ETL, AI agents)
+- You want up to 90% lower storage cost
 - You want true Apache 2.0 open source with no restrictions
 - You want stateless brokers that scale with HPA
 - You want processors that bypass brokers (AI agents, analytics, Iceberg)
 - You want to avoid vendor lock-in and control plane dependencies
+
+## KafScale and WarpStream
+
+Both keep brokers stateless and put data in object storage. The differences are:
+
+- **License.** KafScale is open source under Apache 2.0. WarpStream is proprietary.
+- **Metadata.** KafScale keeps metadata in etcd inside your own Kubernetes cluster. WarpStream agents run in your cloud, and the control plane is a SaaS service run by WarpStream.
+- **Segment format.** KafScale stores data in the open, documented [.kfs segment format](/storage-format/), so you can read it from S3 without a broker. WarpStream's storage format is not public.
 
 ## Coming from WarpStream
 
@@ -514,8 +537,8 @@ Estimated monthly cost for 100 GB/day ingestion, 7-day retention, 3-node cluster
 
 ## Why we built KafScale
 
-The Confluent acquisition of WarpStream in late 2024, and IBM's acquisition of Confluent in March 2026, highlighted the risk of depending on proprietary streaming platforms. AutoMQ and Redpanda use BSL licenses that restrict how you can use the software. Bufstream charges usage fees.
+We wanted an S3-native, stateless, Kafka-compatible platform that anyone can run, change and redistribute under Apache 2.0. The documented .kfs segment format means you can build processors that read directly from S3 without going through brokers. For the many workloads that don't need sub-10ms latency or transactions, it's the simplest and most cost-effective choice.
 
-KafScale is the only S3-native, stateless, Kafka-compatible streaming platform that is truly open source under Apache 2.0. The documented .kfs segment format means you can build processors that read directly from S3 without going through brokers. For the 80% of workloads that don't need sub-100ms latency or transactions, it's the simplest and most cost-effective choice.
+Commercial support and an enterprise version of KafScale are available from Scalytics as [Lascaris](https://www.scalytics.io/lascaris).
 
 For deeper analysis, see [Streaming Data Becomes Storage-Native](https://www.scalytics.io/blog/streaming-data-becomes-storage-native) and the [architecture decision rationale](/rationale/).
