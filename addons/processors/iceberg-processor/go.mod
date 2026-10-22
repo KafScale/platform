@@ -2,6 +2,8 @@ module github.com/KafScale/platform/addons/processors/iceberg-processor
 
 go 1.25.2
 
+toolchain go1.26.10
+
 require (
 	github.com/KafScale/platform v1.6.2
 	github.com/apache/arrow-go/v18 v18.4.1

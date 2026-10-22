@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-ARG GO_VERSION=1.25.2
-FROM golang:${GO_VERSION}-alpine@sha256:06cdd34bd531b810650e47762c01e025eb9b1c7eadd191553b91c9f2d549fae8 AS builder
+ARG GO_VERSION=1.26.10
+FROM golang:${GO_VERSION}-alpine@sha256:5cb67f19c5e7994dcb80c074f7cfca8aeeada45bbdca035f73df269cefdcce61 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
