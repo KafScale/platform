@@ -377,7 +377,7 @@ For production, always use HTTPS endpoints. Self-signed certificates may require
 
 ### Regional Latency
 
-Place your storage in the same region as your Kubernetes cluster. KafScale's ~500ms latency target assumes low-latency storage access.
+Place your storage in the same region as your Kubernetes cluster. Every acknowledged produce waits for an S3 write, so storage round-trip time is your produce latency. See [Latency and batching](/latency/).
 
 ### Bucket Lifecycle
 

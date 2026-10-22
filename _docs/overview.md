@@ -41,11 +41,17 @@ Kafscale trades latency for operational simplicity. Brokers are stateless. S3 is
 - Compatibility with common Kafka client workflows.
 - Clear operational boundaries (broker compute vs S3 durability).
 
-## Non-Goals (Current)
+## Non-Goals
 
 - Transactions or exactly-once semantics.
 - Log compaction.
 - KRaft or Kafka-internal replication APIs.
+
+These follow from the design. Segments in S3 are immutable and brokers keep no state. See [Trade-offs of the S3 design](/latency/#trade-offs-of-the-s3-design) for what to do instead.
+
+## Commercial Support
+
+Commercial support and an enterprise version of KafScale are available from Scalytics as [Lascaris](https://www.scalytics.io/lascaris).
 
 ## Where to Go Next
 

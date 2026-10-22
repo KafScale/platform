@@ -36,6 +36,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Ops API](/ops-api/)
 - [Metrics](/metrics/)
 - [Grafana](/grafana/)
+- [Latency and batching](/latency/)
 - [Benchmarks](/benchmarks/)
 - [Helm](/helm/)
 - [MCP Server](/mcp-server/)

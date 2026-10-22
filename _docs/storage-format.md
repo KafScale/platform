@@ -212,7 +212,7 @@ Segments are sealed and flushed to S3 when **any** condition is met:
 ### Flush sequence
 
 1. **Seal** current buffer (no more writes accepted)
-2. **Compress** batches (Snappy by default)
+2. **Write** the record batches as the producer sent them (producer compression is kept as is)
 3. **Build** sparse index file
 4. **Upload** segment + index to S3 (both must succeed)
 5. **Update** etcd with new segment metadata

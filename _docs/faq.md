@@ -40,7 +40,7 @@ Traditional stream processing optimizes for latency. Milliseconds matter for fra
   <text x="30" y="126" class="diagram-text">✓ AI agent infrastructure</text>
   <text x="30" y="148" class="diagram-text">✓ Event replay and audit</text>
   <text x="30" y="170" class="diagram-text">✓ Teams without Kafka expertise</text>
-  <text x="30" y="192" class="diagram-text">✓ Latency tolerance: 100-500ms</text>
+  <text x="30" y="192" class="diagram-text">✓ Latency tolerance: sub-second</text>
   <rect x="360" y="10" width="330" height="200" class="diagram-box"/>
   <text x="525" y="35" text-anchor="middle" class="diagram-title">Choose Apache Kafka</text>
   <text x="380" y="60" class="diagram-text">✓ Real-time trading systems</text>
@@ -115,25 +115,27 @@ Yes. KafScale works with any S3-compatible storage backend. See [Supported stora
 
 ### What latency should I expect?
 
-KafScale prioritizes durability and operational simplicity over sub-10ms latency. Typical latencies:
+KafScale prioritizes durability and operational simplicity over sub-10ms latency. We have not published measured p50 or p99 numbers yet, so here is what each operation waits on:
 
-| Operation | p50 | p99 | Notes |
-|-----------|-----|-----|-------|
-| Produce | 200-300ms | 400-500ms | Depends on flush interval and S3 region |
-| Fetch (cache hit) | 1-5ms | 10ms | Hot segment cache |
-| Fetch (cache miss) | 50-100ms | 150ms | S3 GetObject |
-| Consumer group join | 100-200ms | 500ms | etcd coordination |
+| Operation | Waits on | Notes |
+|-----------|----------|-------|
+| Produce (default, `acks=1` or `all`) | One S3 PUT plus one etcd write | Segment and index upload in parallel |
+| Fetch of recent data | Broker memory | Hot segment cache |
+| Fetch of older data | One S3 GET | Read-ahead prefetches the next segments |
+| Consumer group join | etcd coordination | |
+
+See [Latency and batching](/latency/) for the full produce path, measured throughput and tuning.
 
 ### Can I reduce latency?
 
 Several factors affect latency:
 
 1. **S3 region proximity**: Deploy brokers in the same region as your S3 bucket
-2. **Flush interval**: Lower `KAFSCALE_FLUSH_INTERVAL_MS` reduces produce latency but increases S3 requests
-3. **Cache size**: Larger `KAFSCALE_CACHE_SIZE` improves fetch hit rates
-4. **Segment size**: Smaller `KAFSCALE_SEGMENT_BYTES` flushes more frequently
+2. **Sync flush**: With `KAFSCALE_PRODUCE_SYNC_FLUSH=false` the broker acks after buffering and flushes on `KAFSCALE_FLUSH_INTERVAL_MS` or `KAFSCALE_SEGMENT_BYTES`. Lower latency and fewer S3 requests, but a broker crash loses the unflushed tail
+3. **Cache size**: Larger `KAFSCALE_CACHE_BYTES` improves fetch hit rates
+4. **Producer batching**: `linger.ms` adds up to that much wait per batch but cuts S3 requests. See [producer batching settings](/latency/#producer-batching-settings)
 
-The fundamental tradeoff is S3 round-trip time. If you need sub-50ms latency, KafScale is not the right choice.
+The fundamental tradeoff is S3 round-trip time. If you need sub-10ms latency, KafScale is not the right choice.
 
 ### How large can messages be?
 
