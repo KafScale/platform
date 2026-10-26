@@ -1,0 +1,57 @@
+---
+layout: doc
+title: "KafScale Release v1.6.3"
+description: "Release notes for KafScale v1.6.3."
+permalink: /releases/v1.6.3/
+nav_title: v1.6.3
+nav_order: 19
+nav_group: Releases
+---
+
+<!--
+Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# v1.6.3
+
+Release date: 2026-10-22
+
+## Highlights
+
+- Built with Go 1.26.10, which fixes CVE-2026-111943 in crypto/x509 (#208).
+- gRPC 1.83.2 and other dependency updates that resolve the open Dependabot alerts (#198, #201).
+
+## Upgrade notes
+
+- The main Helm chart is version `0.4.6`; processor charts are version `0.1.3`. All charts default to application images tagged `v1.6.3`.
+- No CRD or configuration changes since v1.6.2.
+
+## Bug fixes
+
+- None.
+
+## Security fixes
+
+- CVE-2026-111943 (GO-2026-6809): every Go binary and image is built with Go 1.26.10. Certificate.Verify in crypto/x509 now rejects a list of compromised intermediate certificates (#208).
+- GHSA-2v4p-qf9q-27wj: gRPC 1.83.2 in the platform, SQL processor and Iceberg processor (#201).
+- Updated gRPC, OpenTelemetry, Thrift, WebSocket and SDK dependencies for the open Dependabot alerts (#198).
+
+## Maintenance
+
+- The coverage gate fails when coverage drops below the floor, and the coverage badge is published to gh-pages (#199, #200, #202, #203, #204, #205).
+- README lists related projects (#207). The compose registry example uses the release tag (#195).
+
+[Full changelog](https://github.com/KafScale/platform/compare/v1.6.2...v1.6.3)
