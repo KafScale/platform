@@ -21,8 +21,22 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// KafkaSecuritySpec configures proxy authentication for a Kubernetes cluster.
+// Referenced Secrets must exist in the cluster namespace.
+type KafkaSecuritySpec struct {
+	MaxHandshakes      int32             `json:"maxHandshakes,omitempty"`
+	MaxHandshakesPerIP int32             `json:"maxHandshakesPerIP,omitempty"`
+	HandshakeTimeoutMS int32             `json:"handshakeTimeoutMs,omitempty"`
+	HandshakeQueueMS   int32             `json:"handshakeQueueMs,omitempty"`
+	TLSSecretRef       string            `json:"tlsSecretRef,omitempty"`
+	IdentitySecretRef  string            `json:"identitySecretRef,omitempty"`
+	ACLSecretRef       string            `json:"aclSecretRef,omitempty"`
+	ProxyPodSelector   map[string]string `json:"proxyPodSelector,omitempty"`
+}
+
 // KafscaleClusterSpec defines the desired state of a Kafscale cluster.
 type KafscaleClusterSpec struct {
+	Security KafkaSecuritySpec `json:"security,omitempty"`
 	Brokers  BrokerSpec        `json:"brokers"`
 	S3       S3Spec            `json:"s3"`
 	Etcd     EtcdSpec          `json:"etcd"`
@@ -434,6 +448,13 @@ func (in *ClusterConfigSpec) DeepCopy() *ClusterConfigSpec {
 
 func (in *KafscaleClusterSpec) DeepCopyInto(out *KafscaleClusterSpec) {
 	*out = *in
+	if in.Security.ProxyPodSelector != nil {
+		out.Security.ProxyPodSelector = make(map[string]string, len(in.Security.ProxyPodSelector))
+		for k, v := range in.Security.ProxyPodSelector {
+			out.Security.ProxyPodSelector[k] = v
+		}
+	}
+
 	in.Brokers.DeepCopyInto(&out.Brokers)
 	out.S3 = in.S3
 	in.Etcd.DeepCopyInto(&out.Etcd)

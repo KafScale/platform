@@ -42,6 +42,39 @@ spec:
                 - s3
                 - brokers
               properties:
+                security:
+                  type: object
+                  properties:
+                    maxHandshakes:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      maximum: 60000
+                    maxHandshakesPerIP:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      maximum: 60000
+                    handshakeTimeoutMs:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      maximum: 60000
+                    handshakeQueueMs:
+                      type: integer
+                      format: int32
+                      minimum: 1
+                      maximum: 60000
+                    tlsSecretRef:
+                      type: string
+                    identitySecretRef:
+                      type: string
+                    aclSecretRef:
+                      type: string
+                    proxyPodSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
                 brokers:
                   type: object
                   properties:

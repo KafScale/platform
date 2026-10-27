@@ -138,6 +138,9 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				if strings.TrimSpace(name) == "" {
 					continue
 				}
+				if !h.allowTopic(principal, name, acl.ActionProduce) && !h.allowAdmin(principal) {
+					continue
+				}
 				if err := h.ensureTopic(ctx, name, 0); err != nil {
 					return nil, fmt.Errorf("auto-create topic %s: %w", name, err)
 				}
@@ -191,11 +194,22 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp.Brokers = meta.Brokers
 		resp.ClusterID = meta.ClusterID
 		resp.ControllerID = meta.ControllerID
-		resp.Topics = meta.Topics
+		byID := false
+		for _, topic := range metaReq.Topics {
+			if topic.TopicID != [16]byte{} {
+				byID = true
+				break
+			}
+		}
+		resp.Topics = h.authorizedMetadata(principal, meta.Topics, metaReq.Topics == nil || (header.APIVersion == 0 && len(metaReq.Topics) == 0), byID)
 		if h.traceKafka {
 			topicSummaries := make([]string, 0, len(meta.Topics))
 			for _, topic := range meta.Topics {
-				topicSummaries = append(topicSummaries, fmt.Sprintf("%s(error=%d partitions=%d)", *topic.Topic, topic.ErrorCode, len(topic.Partitions)))
+				name := ""
+				if topic.Topic != nil {
+					name = *topic.Topic
+				}
+				topicSummaries = append(topicSummaries, fmt.Sprintf("%s(error=%d partitions=%d)", name, topic.ErrorCode, len(topic.Partitions)))
 			}
 			brokerAddrs := make([]string, 0, len(meta.Brokers))
 			for _, b := range meta.Brokers {
@@ -2204,11 +2218,16 @@ func main() {
 	controlAddr := envOrDefault("KAFSCALE_CONTROL_ADDR", defaultControlAddr)
 	startMetricsServer(ctx, metricsAddr, handler, logger)
 	startControlServer(ctx, controlAddr, handler, logger)
+	connContext, err := loadBrokerConnContext(logger)
+	if err != nil {
+		logger.Error("broker identity configuration invalid", "error", err)
+		os.Exit(1)
+	}
 	kafkaAddr := envOrDefault("KAFSCALE_BROKER_ADDR", defaultKafkaAddr)
 	srv := &broker.Server{
 		Addr:            kafkaAddr,
 		Handler:         handler,
-		ConnContextFunc: buildConnContextFunc(logger),
+		ConnContextFunc: connContext,
 	}
 	if err := srv.ListenAndServe(ctx); err != nil {
 		logger.Error("broker server error", "error", err)

@@ -14,6 +14,10 @@
 # limitations under the License.
 
 {{- if .Values.proxy.enabled }}
+{{- if or .Values.proxy.security.tlsSecretRef .Values.proxy.security.identitySecretRef }}
+{{- $_ := required "proxy.security.tlsSecretRef is required for mTLS" .Values.proxy.security.tlsSecretRef }}
+{{- $_ := required "proxy.security.identitySecretRef is required for mTLS" .Values.proxy.security.identitySecretRef }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,9 +34,15 @@ spec:
     metadata:
       labels:
 {{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "proxy") | indent 8 }}
-{{- with .Values.proxy.podAnnotations }}
+{{- if or .Values.proxy.podAnnotations .Values.proxy.security.aclSecretRef }}
       annotations:
+{{- with (omit (default dict .Values.proxy.podAnnotations) "kafscale.io/acl-checksum") }}
 {{ toYaml . | indent 8 }}
+{{- end }}
+{{- if .Values.proxy.security.aclSecretRef }}
+{{- $acl := lookup "v1" "Secret" .Release.Namespace .Values.proxy.security.aclSecretRef }}
+        kafscale.io/acl-checksum: {{ if $acl }}{{ $acl.data | toJson | sha256sum | quote }}{{ else }}"unavailable"{{ end }}
+{{- end }}
 {{- end }}
     spec:
 {{- if .Values.imagePullSecrets }}
@@ -54,6 +64,30 @@ spec:
 {{ toYaml . | indent 12 }}
 {{- end }}
           env:
+{{- if .Values.proxy.security.aclSecretRef }}
+            - name: KAFSCALE_ACL_FILE
+              value: /etc/kafscale/security/acl/acl.json
+{{- end }}
+{{- if .Values.proxy.security.tlsSecretRef }}
+            - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES
+              value: {{ .Values.proxy.security.maxHandshakes | quote }}
+            - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP
+              value: {{ .Values.proxy.security.maxHandshakesPerIP | quote }}
+            - name: KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS
+              value: {{ .Values.proxy.security.handshakeTimeoutMs | quote }}
+            - name: KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS
+              value: {{ .Values.proxy.security.handshakeQueueMs | quote }}
+            - name: KAFSCALE_PROXY_TLS_CERT_FILE
+              value: /etc/kafscale/security/tls/tls.crt
+            - name: KAFSCALE_PROXY_TLS_KEY_FILE
+              value: /etc/kafscale/security/tls/tls.key
+            - name: KAFSCALE_PROXY_TLS_CLIENT_CA_FILE
+              value: /etc/kafscale/security/tls/ca.crt
+            - name: KAFSCALE_PROXY_TLS_PRINCIPALS_FILE
+              value: /etc/kafscale/security/tls/principals.json
+            - name: KAFSCALE_PROXY_IDENTITY_KEY_FILE
+              value: /etc/kafscale/security/identity/key
+{{- end }}
             - name: KAFSCALE_PROXY_ADDR
               value: ":{{ .Values.proxy.service.port }}"
             - name: KAFSCALE_PROXY_ADVERTISED_PORT
@@ -120,9 +154,35 @@ spec:
           # read-only, so /tmp must be a writable mount or LFS verify returns HTTP 500.
           # This emptyDir keeps the restricted default and LFS coexisting.
           volumeMounts:
+{{- if .Values.proxy.security.aclSecretRef }}
+            - name: kafka-acl
+              mountPath: /etc/kafscale/security/acl
+              readOnly: true
+{{- end }}
+{{- if .Values.proxy.security.tlsSecretRef }}
+            - name: kafka-tls
+              mountPath: /etc/kafscale/security/tls
+              readOnly: true
+            - name: kafka-identity
+              mountPath: /etc/kafscale/security/identity
+              readOnly: true
+{{- end }}
             - name: tmp
               mountPath: /tmp
       volumes:
+{{- if .Values.proxy.security.aclSecretRef }}
+        - name: kafka-acl
+          secret:
+            secretName: {{ .Values.proxy.security.aclSecretRef | quote }}
+{{- end }}
+{{- if .Values.proxy.security.tlsSecretRef }}
+        - name: kafka-tls
+          secret:
+            secretName: {{ .Values.proxy.security.tlsSecretRef | quote }}
+        - name: kafka-identity
+          secret:
+            secretName: {{ .Values.proxy.security.identitySecretRef | quote }}
+{{- end }}
         - name: tmp
           emptyDir: {}
 {{- with .Values.proxy.nodeSelector }}

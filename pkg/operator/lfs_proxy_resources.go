@@ -59,12 +59,17 @@ func (r *ClusterReconciler) reconcileLfsProxyResources(ctx context.Context, clus
 }
 
 func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+	checksum, err := r.kafkaACLChecksum(ctx, cluster)
+	if err != nil {
+		return err
+	}
+
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Name:      lfsProxyName(cluster),
 		Namespace: cluster.Namespace,
 	}}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
 		replicas := int32(2)
 		if cluster.Spec.LfsProxy.Replicas != nil && *cluster.Spec.LfsProxy.Replicas > 0 {
 			replicas = *cluster.Spec.LfsProxy.Replicas
@@ -76,10 +81,14 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		deploy.Spec.Replicas = &replicas
 		deploy.Spec.Template.Labels = labels
+		setACLChecksum(&deploy.Spec.Template, checksum)
 		deploy.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
 		deploy.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{
 			r.lfsProxyContainer(cluster, endpoints),
+		}
+		if err := proxyKafkaSecurity(&deploy.Spec.Template.Spec, cluster.Spec.Security); err != nil {
+			return err
 		}
 		return controllerutil.SetControllerReference(cluster, deploy, r.Scheme)
 	})

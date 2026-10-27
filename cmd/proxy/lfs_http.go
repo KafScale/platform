@@ -257,6 +257,10 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !m.authorizeHTTPUpload(w, requestID, topic) {
+		return
+	}
+
 	var keyBytes []byte
 	if keyHeader := strings.TrimSpace(r.Header.Get(lfsHeaderKey)); keyHeader != "" {
 		decoded, err := base64.StdEncoding.DecodeString(keyHeader)
@@ -376,19 +380,19 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = backendConn.Close() }()
 
-	_, err = m.forwardToBackend(r.Context(), backendConn, payload)
+	offset, err := m.produceHTTPRecord(r.Context(), backendConn, payload, topic, partition, correlationID)
 	if err != nil {
 		m.metrics.IncRequests(topic, "error", "lfs")
 		m.trackOrphans([]orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID, Reason: "kafka_produce_failed"}})
 		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "backend_error", err.Error(), "kafka_produce", size, time.Since(start))
-		m.lfsWriteHTTPError(w, requestID, topic, http.StatusBadGateway, "backend_error", err.Error())
+		m.lfsWriteHTTPError(w, requestID, topic, produceHTTPStatus(err), "backend_error", err.Error())
 		return
 	}
 
 	m.metrics.IncRequests(topic, "ok", "lfs")
 	m.metrics.AddUploadBytes(size)
 	m.metrics.ObserveUploadDuration(time.Since(start).Seconds())
-	m.tracker.EmitUploadCompleted(requestID, topic, partition, 0, m.s3Bucket, objectKey, size, sha256Hex, checksum, checksumAlg, contentType, time.Since(start))
+	m.tracker.EmitUploadCompleted(requestID, topic, partition, offset, m.s3Bucket, objectKey, size, sha256Hex, checksum, checksumAlg, contentType, time.Since(start))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -725,6 +729,10 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if !m.authorizeHTTPUpload(w, requestID, req.Topic) {
+		return
+	}
+
 	keyBytes := []byte(nil)
 	if req.Key != "" {
 		decoded, err := base64.StdEncoding.DecodeString(req.Key)
@@ -861,6 +869,10 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
+		return
+	}
+
 	if time.Now().UTC().After(session.ExpiresAt) {
 		m.lfsDeleteUploadSession(sessionID)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusGone, "upload_expired", "upload session expired")
@@ -945,6 +957,10 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
+		return
+	}
+
 	if time.Now().UTC().After(session.ExpiresAt) {
 		m.lfsDeleteUploadSession(sessionID)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusGone, "upload_expired", "upload session expired")
@@ -1056,16 +1072,17 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	defer func() { _ = backendConn.Close() }()
 
-	if _, err := m.forwardToBackend(r.Context(), backendConn, payload); err != nil {
+	offset, err := m.produceHTTPRecord(r.Context(), backendConn, payload, session.Topic, session.Partition, correlationID)
+	if err != nil {
 		m.trackOrphans([]orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID, Reason: "kafka_produce_failed"}})
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "backend_error", err.Error(), "kafka_produce", session.TotalUploaded, 0)
-		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "backend_error", err.Error())
+		m.lfsWriteHTTPError(w, requestID, session.Topic, produceHTTPStatus(err), "backend_error", err.Error())
 		return
 	}
 
 	m.metrics.IncRequests(session.Topic, "ok", "lfs")
 	m.metrics.AddUploadBytes(session.TotalUploaded)
-	m.tracker.EmitUploadCompleted(requestID, session.Topic, session.Partition, 0, m.s3Bucket, session.S3Key, session.TotalUploaded, shaHex, checksum, string(session.ChecksumAlg), session.ContentType, 0)
+	m.tracker.EmitUploadCompleted(requestID, session.Topic, session.Partition, offset, m.s3Bucket, session.S3Key, session.TotalUploaded, shaHex, checksum, string(session.ChecksumAlg), session.ContentType, 0)
 
 	m.lfsDeleteUploadSession(sessionID)
 	w.Header().Set("Content-Type", "application/json")
@@ -1081,8 +1098,10 @@ func (m *lfsModule) handleHTTPUploadAbort(w http.ResponseWriter, r *http.Request
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
-	m.lfsDeleteUploadSession(sessionID)
+	if err := m.discardMultipartUpload(r.Context(), session); err != nil {
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "abort_failed", "multipart abort failed; retry the request")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

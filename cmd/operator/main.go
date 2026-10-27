@@ -56,6 +56,8 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
+		Client: operator.SecretClientOptions(),
+		Cache:  operator.SecretCacheOptions(),
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},

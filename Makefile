@@ -237,7 +237,15 @@ code-ql-gate: code-ql ## Fail if CodeQL reports any error findings
 	fi; \
 	echo "CodeQL gate passed: no error findings found."
 
-commit-check: ensure-local-node check fmt test test-nested-modules test-lfs-sdk-unit test-fuzz code-ql-gate ## Run pre-commit quality gates
+.PHONY: test-chart-mtls test-auth-coverage
+
+test-chart-mtls: ## Validate proxy mTLS Secret configuration
+	bash test/chart/proxy-mtls_test.sh
+
+test-auth-coverage: ## Require 100% statement coverage for authentication and identity propagation
+	bash hack/check_auth_coverage.sh
+
+commit-check: ensure-local-node check fmt test-chart-mtls test-auth-coverage test test-nested-modules test-lfs-sdk-unit test-fuzz code-ql-gate ## Run pre-commit quality gates
 	@echo "commit-check passed."
 
 test-acl: ## Run ACL e2e test (requires KAFSCALE_E2E=1)

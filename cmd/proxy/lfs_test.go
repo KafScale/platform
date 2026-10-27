@@ -41,8 +41,12 @@ import (
 
 // fakeS3 is a minimal in-memory S3 backend for testing.
 type fakeS3 struct {
-	objects map[string][]byte
-	deleted []string
+	objects       map[string][]byte
+	deleted       []string
+	aborted       []string
+	abortErr      error
+	abortCanceled bool
+	abortDeadline bool
 }
 
 func newFakeS3() *fakeS3 {
@@ -59,7 +63,10 @@ func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, params *s3.Complet
 	return &s3.CompleteMultipartUploadOutput{}, nil
 }
 func (f *fakeS3) AbortMultipartUpload(ctx context.Context, params *s3.AbortMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
-	return &s3.AbortMultipartUploadOutput{}, nil
+	f.aborted = append(f.aborted, *params.UploadId)
+	f.abortCanceled = ctx.Err() != nil
+	_, f.abortDeadline = ctx.Deadline()
+	return &s3.AbortMultipartUploadOutput{}, f.abortErr
 }
 func (f *fakeS3) PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	if params.Body != nil {

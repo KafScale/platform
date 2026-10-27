@@ -25,6 +25,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KafScale/platform/pkg/acl"
+	"github.com/KafScale/platform/pkg/authn"
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -86,6 +88,9 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 
 	for ti := range req.Topics {
 		topic := &req.Topics[ti]
+		if m.authorizer != nil && !m.authorizer.Allows(authn.Principal(ctx), acl.ActionProduce, acl.ResourceTopic, topic.Topic) {
+			continue
+		}
 		for pi := range topic.Partitions {
 			partition := &topic.Partitions[pi]
 			if len(partition.Records) == 0 {

@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/KafScale/platform/pkg/authn"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -68,6 +69,7 @@ type proxy struct {
 	// readyzFetchProbe gates /readyz on an actual Fetch round-trip to a
 	// backend, not merely on "a backend exists". See fetchProbe.
 	readyzFetchProbe bool
+	security         *proxySecurity
 	lfs              *lfsModule // nil when LFS disabled
 }
 
@@ -88,6 +90,14 @@ func main() {
 		cacheTTL = 60 * time.Second
 	}
 
+	security, err := loadProxySecurity()
+	if err != nil {
+		logger.Error("proxy security configuration invalid", "error", err)
+		os.Exit(1)
+	}
+	if security != nil {
+		security.warnSharedIP(logger)
+	}
 	store, err := buildMetadataStore(ctx)
 	if err != nil {
 		logger.Error("metadata store init failed", "error", err)
@@ -111,6 +121,7 @@ func main() {
 	}
 
 	p := &proxy{
+		security:       security,
 		addr:           addr,
 		advertisedHost: advertisedHost,
 		advertisedPort: advertisedPort,
@@ -160,6 +171,10 @@ func main() {
 			os.Exit(1)
 		}
 		p.lfs = lfsmod
+		lfsmod.identityDial = p.dialBackend
+		if security != nil {
+			lfsmod.authorizer = security.lfsACL
+		}
 		// Give the LFS HTTP API access to the proxy's backends for its own connections
 		if len(backends) > 0 {
 			lfsmod.backends = backends
@@ -471,6 +486,7 @@ func buildFetchProbePayload() []byte {
 func (p *proxy) fetchProbe(ctx context.Context) error {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	probeCtx = authn.WithPrincipal(probeCtx, authn.ProbePrincipal)
 
 	conn, addr, err := p.connectBackendExcluding(probeCtx, nil)
 	if err != nil {
@@ -512,6 +528,9 @@ func (p *proxy) initMetadataCache(ctx context.Context) {
 
 func (p *proxy) startHealthServer(ctx context.Context, addr string) {
 	mux := http.NewServeMux()
+	if p.security != nil {
+		mux.Handle("/metrics", p.security.metricsHandler())
+	}
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if p.checkReady(r.Context()) {
 			w.WriteHeader(http.StatusOK)
@@ -539,6 +558,14 @@ func (p *proxy) startHealthServer(ctx context.Context, addr string) {
 
 func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	if p.security != nil {
+		secured, authenticatedCtx, err := p.security.authenticate(ctx, conn)
+		if err != nil {
+			p.logger.Warn("client authentication failed", "remote_addr", conn.RemoteAddr().String(), "error", err)
+			return
+		}
+		conn, ctx = secured, authenticatedCtx
+	}
 	var backendConn net.Conn
 	var backendAddr string
 	defer func() {
@@ -547,6 +574,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	pool := newConnPool(p.dialTimeout)
+	pool.dial = p.dialBackend
 	defer pool.Close()
 
 	for {
@@ -589,9 +617,15 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 
 		switch header.APIKey {
 		case protocol.APIKeyMetadata:
-			resp, err := p.handleMetadata(ctx, header, frame.Payload)
+			var resp []byte
+			var err error
+			if p.security != nil && p.security.keyFile != "" {
+				resp, err = p.authenticatedMetadata(ctx, header, frame.Payload, pool)
+			} else {
+				resp, err = p.handleMetadata(ctx, header, frame.Payload)
+			}
 			if err != nil {
-				p.logger.Warn("metadata handling failed")
+				p.logger.Warn("metadata handling failed", "remote_addr", conn.RemoteAddr().String(), "reason", metadataFailureReason(err))
 				return
 			}
 			if err := protocol.WriteFrame(conn, resp); err != nil {
@@ -695,6 +729,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 // broker address. Connections are reused across produces from the same client
 // and cleaned up when the client disconnects.
 type connPool struct {
+	dial        func(context.Context, string) (net.Conn, error)
 	conns       map[string]net.Conn
 	dialTimeout time.Duration
 }
@@ -712,6 +747,9 @@ func (cp *connPool) Borrow(ctx context.Context, addr string) (net.Conn, error) {
 	if c, ok := cp.conns[addr]; ok {
 		delete(cp.conns, addr)
 		return c, nil
+	}
+	if cp.dial != nil {
+		return cp.dial(ctx, addr)
 	}
 	dialer := net.Dialer{Timeout: cp.dialTimeout}
 	return dialer.DialContext(ctx, "tcp", addr)
@@ -1089,8 +1127,7 @@ func (p *proxy) connectBackendExcluding(ctx context.Context, exclude map[string]
 			if exclude[addr] {
 				continue
 			}
-			dialer := net.Dialer{Timeout: p.dialTimeout}
-			conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+			conn, dialErr := p.dialBackend(ctx, addr)
 			if dialErr == nil {
 				return conn, addr, nil
 			}
@@ -1127,16 +1164,16 @@ func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeade
 func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte) ([]byte, error) {
 	_, req, err := protocol.ParseRequest(payload)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(errMetadataRequest, err)
 	}
 	metaReq, ok := req.(*kmsg.MetadataRequest)
 	if !ok {
-		return nil, fmt.Errorf("unexpected metadata request type %T", req)
+		return nil, errMetadataRequest
 	}
 
 	meta, err := p.loadMetadata(ctx, metaReq)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(errMetadataBackend, err)
 	}
 	resp := buildProxyMetadataResponse(meta, header.CorrelationID, header.APIVersion, p.advertisedHost, p.advertisedPort)
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
