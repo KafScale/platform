@@ -17,6 +17,7 @@ required = {
     'pkg/acl/acl.go',
     'pkg/broker/conn_context.go',
     'cmd/proxy/security.go',
+    'cmd/proxy/metadata_errors.go',
     'cmd/proxy/handshake.go',
     'cmd/proxy/lfs_authorization.go',
     'cmd/proxy/lfs_http_authorization.go',

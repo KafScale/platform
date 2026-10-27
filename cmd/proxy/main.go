@@ -622,7 +622,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				resp, err = p.handleMetadata(ctx, header, frame.Payload)
 			}
 			if err != nil {
-				p.logger.Warn("metadata handling failed", "remote_addr", conn.RemoteAddr().String(), "error", err)
+				p.logger.Warn("metadata handling failed", "remote_addr", conn.RemoteAddr().String(), "reason", metadataFailureReason(err))
 				return
 			}
 			if err := protocol.WriteFrame(conn, resp); err != nil {
@@ -1161,16 +1161,16 @@ func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeade
 func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte) ([]byte, error) {
 	_, req, err := protocol.ParseRequest(payload)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(errMetadataRequest, err)
 	}
 	metaReq, ok := req.(*kmsg.MetadataRequest)
 	if !ok {
-		return nil, fmt.Errorf("unexpected metadata request type %T", req)
+		return nil, errMetadataRequest
 	}
 
 	meta, err := p.loadMetadata(ctx, metaReq)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(errMetadataBackend, err)
 	}
 	resp := buildProxyMetadataResponse(meta, header.CorrelationID, header.APIVersion, p.advertisedHost, p.advertisedPort)
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
