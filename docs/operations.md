@@ -111,6 +111,9 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 - **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
 - **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default. For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
 - **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
+  - **Authenticated proxy** – With `KAFSCALE_PROXY_IDENTITY_KEY_FILE` configured,
+    the broker requires the proxy identity handshake and ignores legacy principal
+    sources. See [Kafka proxy authentication](kafka-authentication.md).
   - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
   - **Trust boundary** – Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
@@ -691,7 +694,21 @@ spec:
 ## Upgrades & Rollbacks
 
 - Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.
-- CRD schema changes follow Kubernetes best practices; run `helm upgrade` to pick them up.
+- Helm installs CRDs on the first installation but does not upgrade CRDs from
+  `crds/`. Before upgrading the chart or applying a cluster with `spec.security`,
+  apply the new schema explicitly:
+
+  ```sh
+  kubectl apply --server-side --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
+  kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io
+  kubectl explain kafscalecluster.spec.security --api-version=kafscale.io/v1alpha1
+  ```
+
+  Then run `helm upgrade --install` and reapply the cluster manifest with
+  `kubectl apply --validate=strict -f cluster.yaml`. Fields submitted against an
+  old schema may already have been pruned; upgrading the CRD does not restore
+  them. See [Kafka proxy authentication](kafka-authentication.md) for the full
+  configuration and rotation procedure.
 - Rollbacks can be performed with `helm rollback kafscale <REVISION>` which restores the previous deployment and service versions.  Brokers are stateless so the recovery window is short.
 
 ## S3 Cost Estimation (Example)

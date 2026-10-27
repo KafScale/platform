@@ -34,9 +34,15 @@ spec:
     metadata:
       labels:
 {{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "proxy") | indent 8 }}
-{{- with .Values.proxy.podAnnotations }}
+{{- if or .Values.proxy.podAnnotations .Values.proxy.security.aclSecretRef }}
       annotations:
+{{- with (omit (default dict .Values.proxy.podAnnotations) "kafscale.io/acl-checksum") }}
 {{ toYaml . | indent 8 }}
+{{- end }}
+{{- if .Values.proxy.security.aclSecretRef }}
+{{- $acl := lookup "v1" "Secret" .Release.Namespace .Values.proxy.security.aclSecretRef }}
+        kafscale.io/acl-checksum: {{ if $acl }}{{ $acl.data | toJson | sha256sum | quote }}{{ else }}"unavailable"{{ end }}
+{{- end }}
 {{- end }}
     spec:
 {{- if .Values.imagePullSecrets }}
@@ -63,6 +69,14 @@ spec:
               value: /etc/kafscale/security/acl/acl.json
 {{- end }}
 {{- if .Values.proxy.security.tlsSecretRef }}
+            - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES
+              value: {{ .Values.proxy.security.maxHandshakes | quote }}
+            - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP
+              value: {{ .Values.proxy.security.maxHandshakesPerIP | quote }}
+            - name: KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS
+              value: {{ .Values.proxy.security.handshakeTimeoutMs | quote }}
+            - name: KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS
+              value: {{ .Values.proxy.security.handshakeQueueMs | quote }}
             - name: KAFSCALE_PROXY_TLS_CERT_FILE
               value: /etc/kafscale/security/tls/tls.crt
             - name: KAFSCALE_PROXY_TLS_KEY_FILE

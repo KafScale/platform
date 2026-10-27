@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/KafScale/platform/pkg/acl"
@@ -37,10 +38,11 @@ type proxySecurity struct {
 	keyFile     string
 	registry    *prometheus.Registry
 	connections prometheus.Counter
-	failures    prometheus.Counter
+	failures    *prometheus.CounterVec
 	duration    prometheus.Histogram
 	handshakes  chan struct{}
 	lfsACL      *acl.Authorizer
+	admission   *handshakePolicy
 }
 
 func loadProxySecurity() (*proxySecurity, error) {
@@ -67,10 +69,14 @@ func loadProxySecurity() (*proxySecurity, error) {
 	if err != nil {
 		return nil, err
 	}
+	admission, limit, err := loadHandshakePolicy()
+	if err != nil {
+		return nil, err
+	}
 	registry := prometheus.NewRegistry()
-	s := &proxySecurity{tls: options, keyFile: keyFile, registry: registry, lfsACL: lfsACL, handshakes: make(chan struct{}, 64),
+	s := &proxySecurity{tls: options, keyFile: keyFile, registry: registry, lfsACL: lfsACL, handshakes: make(chan struct{}, limit), admission: admission,
 		connections: prometheus.NewCounter(prometheus.CounterOpts{Name: "kafscale_proxy_connections_total", Help: "Accepted TCP connections."}),
-		failures:    prometheus.NewCounter(prometheus.CounterOpts{Name: "kafscale_proxy_authentication_failures_total", Help: "Rejected TLS or certificate identities."}),
+		failures:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "kafscale_proxy_authentication_failures_total", Help: "Rejected TLS or certificate identities."}, []string{"reason"}),
 		duration:    prometheus.NewHistogram(prometheus.HistogramOpts{Name: "kafscale_proxy_handshake_seconds", Help: "TLS handshake and identity mapping duration."}),
 	}
 	registry.MustRegister(s.connections, s.failures, s.duration)
@@ -79,19 +85,36 @@ func loadProxySecurity() (*proxySecurity, error) {
 
 func (s *proxySecurity) authenticate(ctx context.Context, conn net.Conn) (net.Conn, context.Context, error) {
 	s.connections.Inc()
+	started := time.Now()
+	defer func() { s.duration.Observe(time.Since(started).Seconds()) }()
+	handshakeCtx, cancel := context.WithTimeout(ctx, s.admission.timeout)
+	defer cancel()
+	deadline, _ := handshakeCtx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return s.authFailure(ctx, "deadline", err)
+	}
+	release, err := s.admission.acquireIP(conn)
+	if err != nil {
+		return s.authFailure(ctx, "ip_limit", err)
+	}
+	defer release()
+	buffered, err := clientHello(conn)
+	if err != nil {
+		return s.authFailure(ctx, "client_hello", err)
+	}
+	queue := time.NewTimer(s.admission.queueTimeout)
+	defer queue.Stop()
 	select {
 	case s.handshakes <- struct{}{}:
 		defer func() { <-s.handshakes }()
-	default:
-		s.failures.Inc()
-		return nil, ctx, errors.New("TLS handshake capacity reached")
+	case <-handshakeCtx.Done():
+		return s.authFailure(ctx, "timeout", handshakeCtx.Err())
+	case <-queue.C:
+		return s.authFailure(ctx, "capacity", errors.New("TLS handshake queue timeout"))
 	}
-	start := time.Now()
-	secured, principal, err := s.tls.Authenticate(ctx, conn)
-	s.duration.Observe(time.Since(start).Seconds())
+	secured, principal, err := s.tls.Authenticate(handshakeCtx, buffered)
 	if err != nil {
-		s.failures.Inc()
-		return nil, ctx, err
+		return s.authFailure(ctx, "tls", err)
 	}
 	return secured, authn.WithPrincipal(ctx, principal), nil
 }
@@ -126,12 +149,49 @@ func (p *proxy) dialBackend(ctx context.Context, addr string) (net.Conn, error) 
 
 // authenticatedMetadata obtains broker-authorized metadata before rewriting
 // broker addresses. Reading etcd directly here would bypass metadata ACLs.
-func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte) ([]byte, error) {
-	conn, addr, err := p.connectBackend(ctx)
+func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) (encoded []byte, err error) {
+	var conn net.Conn
+	var addr string
+	if pool == nil {
+		conn, addr, err = p.connectBackend(ctx)
+	} else {
+		var backends []string
+		if p.store == nil && len(p.backends) == 0 {
+			return nil, errors.New("no metadata backends")
+		}
+		backends, err = p.currentBackends(ctx)
+		if err != nil || len(backends) == 0 {
+			cached := p.cachedBackendsSnapshot()
+			if len(cached) == 0 || !p.cacheFresh() {
+				if err != nil {
+					return nil, err
+				}
+				return nil, errors.New("no metadata backends available")
+			}
+			backends = cached
+			err = nil
+		}
+		for _, candidate := range backends {
+			if _, ok := pool.conns[candidate]; ok {
+				addr = candidate
+				break
+			}
+		}
+		if addr == "" {
+			addr = backends[int(atomic.AddUint32(&p.rr, 1))%len(backends)]
+		}
+		conn, err = pool.Borrow(ctx, addr)
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer func() {
+		if err != nil || pool == nil {
+			conn.Close()
+		} else {
+			pool.Return(addr, conn)
+		}
+	}()
 	response, err := p.forwardToBackend(ctx, conn, addr, payload)
 	if err != nil {
 		return nil, err

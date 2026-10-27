@@ -17,9 +17,12 @@ required = {
     'pkg/acl/acl.go',
     'pkg/broker/conn_context.go',
     'cmd/proxy/security.go',
+    'cmd/proxy/handshake.go',
     'cmd/proxy/lfs_authorization.go',
+    'cmd/proxy/lfs_http_authorization.go',
     'cmd/broker/identity.go',
     'pkg/operator/kafka_security.go',
+    'pkg/operator/kafka_acl_rollout.go',
 }
 seen = set()
 statements = covered = 0

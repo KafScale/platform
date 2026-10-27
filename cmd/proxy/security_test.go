@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -33,6 +34,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/pkg/authn"
+	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -193,7 +195,7 @@ func TestProxyMTLSIdentityIsolation(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	security.metricsHandler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
 	body := recorder.Body.String()
-	for _, expected := range []string{"kafscale_proxy_connections_total 3", "kafscale_proxy_authentication_failures_total 1", "kafscale_proxy_handshake_seconds_count 3"} {
+	for _, expected := range []string{"kafscale_proxy_connections_total 3", `kafscale_proxy_authentication_failures_total{reason="deadline"} 1`, "kafscale_proxy_handshake_seconds_count 3"} {
 		if !strings.Contains(body, expected) {
 			t.Fatal(body)
 		}
@@ -275,7 +277,7 @@ func TestAuthenticatedMetadata(t *testing.T) {
 				return protocol.EncodeResponse(7, 9, r)
 			})
 			p := &proxy{security: s, backends: []string{addr}, backendRetries: 1, dialTimeout: time.Second, advertisedHost: "entry", advertisedPort: 9092}
-			payload, err := p.authenticatedMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, request)
+			payload, err := p.authenticatedMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, request, nil)
 			if tc != "ok" {
 				if err == nil {
 					t.Fatal("invalid response accepted")
@@ -296,7 +298,7 @@ func TestAuthenticatedMetadata(t *testing.T) {
 		})
 	}
 	p := &proxy{backends: []string{"127.0.0.1:0"}, backendRetries: 1, dialTimeout: time.Millisecond}
-	if _, err := p.authenticatedMetadata(context.Background(), header, request); err == nil {
+	if _, err := p.authenticatedMetadata(context.Background(), header, request, nil); err == nil {
 		t.Fatal("missing backend accepted")
 	}
 }
@@ -430,5 +432,69 @@ func TestAuthenticatedReadinessUsesReservedPrincipal(t *testing.T) {
 	}
 	if got := <-seen; got != authn.ProbePrincipal+":kafscale-proxy-readyz" {
 		t.Fatal("readiness principal", got)
+	}
+}
+
+type brokenMetadataStore struct{ metadata.Store }
+
+func (brokenMetadataStore) Metadata(context.Context, []string) (*metadata.ClusterMetadata, error) {
+	return nil, errors.New("metadata unavailable")
+}
+
+func TestAuthenticatedMetadataReusesClientPool(t *testing.T) {
+	pki := newTestPKI(t)
+	path := proxySecurityEnv(t, pki)
+	s, err := loadProxySecurity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := authn.ReadKey(path)
+	seen := make(chan string, 2)
+	addr := securityBackend(t, key, seen, func(header *protocol.RequestHeader, _ []byte) []byte {
+		r := kmsg.NewPtrMetadataResponse()
+		r.Version = 9
+		return protocol.EncodeResponse(header.CorrelationID, 9, r)
+	})
+	p := &proxy{security: s, backends: []string{addr}, dialTimeout: time.Second}
+	pool := newConnPool(time.Second)
+	pool.dial = p.dialBackend
+	defer pool.Close()
+	req := kmsg.NewPtrMetadataRequest()
+	req.Version = 9
+	data := kmsg.NewRequestFormatter(kmsg.FormatterClientID("client")).AppendRequest(nil, req, 1)[4:]
+	header, _, _ := protocol.ParseRequestHeader(data)
+	ctx := authn.WithPrincipal(context.Background(), "service-a")
+	if _, err := p.authenticatedMetadata(ctx, header, data, pool); err != nil {
+		t.Fatal(err)
+	}
+	first := pool.conns[addr]
+	p.backends = []string{"127.0.0.1:0", addr}
+	if _, err := p.authenticatedMetadata(ctx, header, data, pool); err != nil {
+		t.Fatal(err)
+	}
+	if pool.conns[addr] != first {
+		t.Fatal("metadata opened a new backend connection")
+	}
+	for i := 0; i < 2; i++ {
+		if got := <-seen; got != "service-a:client" {
+			t.Fatal(got)
+		}
+	}
+	p.backends = nil
+	p.store = brokenMetadataStore{}
+	p.cacheTTL = time.Minute
+	p.setCachedBackends([]string{addr})
+	p.touchHealthy()
+	if _, err := p.authenticatedMetadata(ctx, header, data, pool); err != nil {
+		t.Fatal("fresh cached backend unavailable during metadata outage", err)
+	}
+	if got := <-seen; got != "service-a:client" {
+		t.Fatal(got)
+	}
+
+	for _, p := range []*proxy{{}, {store: metadata.NewInMemoryStore(metadata.ClusterMetadata{})}, {store: brokenMetadataStore{}}, {backends: []string{"127.0.0.1:0"}, dialTimeout: time.Millisecond}} {
+		if _, err := p.authenticatedMetadata(ctx, header, data, pool); err == nil {
+			t.Fatal("missing backend accepted")
+		}
 	}
 }

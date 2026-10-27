@@ -18,6 +18,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -170,17 +171,17 @@ func TestMetadataAuthorizationDoesNotMutateStore(t *testing.T) {
 	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"reader","allow":[{"action":"fetch","resource":"topic","name":"read"}]},{"name":"writer","allow":[{"action":"produce","resource":"topic","name":"read"}]},{"name":"admin","allow":[{"action":"admin","resource":"cluster","name":"*"}]}]}`)
 	h := newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))
 	a, b := "read", "private"
-	topics := []kmsg.MetadataResponseTopic{{Topic: &a}, {Topic: &b, Partitions: []kmsg.MetadataResponseTopicPartition{{Partition: 0}}}, {ErrorCode: protocol.UNKNOWN_TOPIC_ID}}
+	topics := []kmsg.MetadataResponseTopic{{Topic: &a}, {Topic: &b, TopicID: [16]byte{9}, IsInternal: true, Partitions: []kmsg.MetadataResponseTopicPartition{{Partition: 0}}}, {ErrorCode: protocol.UNKNOWN_TOPIC_ID}}
 	for _, principal := range []string{"reader", "writer", "admin"} {
-		got := h.authorizedMetadata(principal, topics, false)
+		got := h.authorizedMetadata(principal, topics, false, false)
 		if got[0].ErrorCode != 0 {
 			t.Fatal(got)
 		}
-		if principal != "admin" && (got[1].ErrorCode != protocol.TOPIC_AUTHORIZATION_FAILED || len(got[1].Partitions) != 0) {
+		if principal != "admin" && (got[1].ErrorCode != protocol.TOPIC_AUTHORIZATION_FAILED || len(got[1].Partitions) != 0 || got[1].TopicID != [16]byte{} || got[1].IsInternal) {
 			t.Fatal(got)
 		}
 	}
-	listed := h.authorizedMetadata("reader", topics, true)
+	listed := h.authorizedMetadata("reader", topics, true, false)
 	if len(listed) != 2 {
 		t.Fatal(listed)
 	}
@@ -237,5 +238,47 @@ func TestAuthenticatedMetadataLegacyListAll(t *testing.T) {
 	request.Topics = []kmsg.MetadataRequestTopic{{TopicID: [16]byte{1}}}
 	if _, err := h.Handle(ctx, &protocol.RequestHeader{APIKey: protocol.APIKeyMetadata, APIVersion: 12, ClientID: &id}, request); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMetadataAutoCreateWithoutClientFlag(t *testing.T) {
+	for _, version := range []int16{1, 4} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			t.Setenv("KAFSCALE_ACL_ENABLED", "false")
+			store := metadata.NewInMemoryStore(defaultMetadata())
+			h := newTestHandler(store)
+			h.autoCreateTopics = true
+			name := "legacy-auto-create"
+			request := kmsg.NewPtrMetadataRequest()
+			request.Version = version
+			request.AllowAutoTopicCreation = false
+			request.Topics = []kmsg.MetadataRequestTopic{{Topic: &name}}
+			if _, err := h.Handle(context.Background(), &protocol.RequestHeader{APIKey: protocol.APIKeyMetadata, APIVersion: version}, request); err != nil {
+				t.Fatal(err)
+			}
+			all, err := store.Metadata(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, topic := range all.Topics {
+				if topic.Topic != nil && *topic.Topic == name {
+					return
+				}
+			}
+			t.Fatal("broker auto-create was disabled by absent client flag")
+		})
+	}
+}
+
+func TestDeniedMetadataByIDDoesNotRevealTopic(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
+	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny"}`)
+	h := newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))
+	name := "private"
+	id := [16]byte{9}
+	topics := []kmsg.MetadataResponseTopic{{Topic: &name, TopicID: id, IsInternal: true}}
+	denied := h.authorizedMetadata("denied", topics, false, true)
+	if len(denied) != 1 || denied[0].ErrorCode != protocol.UNKNOWN_TOPIC_ID || denied[0].Topic != nil || denied[0].TopicID != id || denied[0].IsInternal {
+		t.Fatal(denied)
 	}
 }

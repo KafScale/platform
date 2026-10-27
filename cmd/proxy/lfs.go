@@ -19,8 +19,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"github.com/KafScale/platform/pkg/acl"
-	"github.com/KafScale/platform/pkg/authn"
 	"log/slog"
 	"net"
 	"os"
@@ -30,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/KafScale/platform/pkg/acl"
+	"github.com/KafScale/platform/pkg/authn"
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/google/uuid"
@@ -421,7 +421,7 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 		var conn net.Conn
 		var dialErr error
 		if m.identityDial != nil {
-			conn, dialErr = m.identityDial(authn.WithPrincipal(ctx, "__kafscale_lfs_service"), addr)
+			conn, dialErr = m.identityDial(authn.WithPrincipal(ctx, authn.LFSPrincipal), addr)
 		} else {
 			conn, dialErr = dialer.DialContext(ctx, "tcp", addr)
 		}

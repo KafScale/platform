@@ -277,3 +277,14 @@ func BenchmarkIdentityHandshake(b *testing.B) {
 		client.Close()
 	}
 }
+
+func BenchmarkReadIdentityKey(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "key")
+	writeTestFile(b, path, testKey)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ReadKey(path); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

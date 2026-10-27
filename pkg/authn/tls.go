@@ -69,7 +69,7 @@ func (o TLSOptions) Config() (*tls.Config, map[string]string, error) {
 		return nil, nil, errors.New("empty principal mapping")
 	}
 	for identity, principal := range principals {
-		if identity == "" || !validPrincipal(principal) || principal == ProbePrincipal {
+		if identity == "" || !validPrincipal(principal) || (principal == ProbePrincipal || principal == LFSPrincipal) {
 			return nil, nil, errors.New("invalid principal mapping")
 		}
 	}
@@ -107,7 +107,11 @@ func (o TLSOptions) Authenticate(ctx context.Context, conn net.Conn) (net.Conn, 
 			return err
 		}
 	}
-	if err := conn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+	deadline := time.Now().Add(handshakeTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, "", err
 	}
 	secured := tls.Server(conn, config)

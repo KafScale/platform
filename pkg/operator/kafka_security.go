@@ -18,6 +18,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -33,13 +34,18 @@ const kafkaSecurityPath = "/etc/kafscale/security"
 
 func validateKafkaSecurity(s kafscalev1alpha1.KafkaSecuritySpec) error {
 	if s.IdentitySecretRef == "" {
-		if s.ACLSecretRef != "" || s.TLSSecretRef != "" || len(s.ProxyPodSelector) != 0 {
+		if s.ACLSecretRef != "" || s.TLSSecretRef != "" || len(s.ProxyPodSelector) != 0 || s.MaxHandshakes != 0 || s.MaxHandshakesPerIP != 0 || s.HandshakeTimeoutMS != 0 || s.HandshakeQueueMS != 0 {
 			return errors.New("Kafka security requires identitySecretRef")
 		}
 		return nil
 	}
 	if s.ACLSecretRef == "" {
 		return errors.New("Kafka security requires aclSecretRef")
+	}
+	for _, value := range []int32{s.MaxHandshakes, s.MaxHandshakesPerIP, s.HandshakeTimeoutMS, s.HandshakeQueueMS} {
+		if value < 0 || value > 60000 {
+			return errors.New("Kafka handshake settings must be 1..60000, or omitted")
+		}
 	}
 	return nil
 }
@@ -83,7 +89,8 @@ func proxyKafkaSecurity(pod *corev1.PodSpec, s kafscalev1alpha1.KafkaSecuritySpe
 	mountSecuritySecret(pod, container, "identity", s.IdentitySecretRef)
 	mountSecuritySecret(pod, container, "tls", s.TLSSecretRef)
 	mountSecuritySecret(pod, container, "acl", s.ACLSecretRef)
-	container.Env = append(container.Env,
+	replaceSecurityEnv(container,
+		corev1.EnvVar{Name: "KAFSCALE_ACL_JSON", Value: ""},
 		corev1.EnvVar{Name: "KAFSCALE_PROXY_IDENTITY_KEY_FILE", Value: kafkaSecurityPath + "/identity/key"},
 		corev1.EnvVar{Name: "KAFSCALE_ACL_FILE", Value: kafkaSecurityPath + "/acl/acl.json"},
 		corev1.EnvVar{Name: "KAFSCALE_PROXY_TLS_CERT_FILE", Value: kafkaSecurityPath + "/tls/tls.crt"},
@@ -91,6 +98,7 @@ func proxyKafkaSecurity(pod *corev1.PodSpec, s kafscalev1alpha1.KafkaSecuritySpe
 		corev1.EnvVar{Name: "KAFSCALE_PROXY_TLS_CLIENT_CA_FILE", Value: kafkaSecurityPath + "/tls/ca.crt"},
 		corev1.EnvVar{Name: "KAFSCALE_PROXY_TLS_PRINCIPALS_FILE", Value: kafkaSecurityPath + "/tls/principals.json"},
 	)
+	replaceSecurityEnv(container, kafkaHandshakeEnv(s)...)
 	return nil
 }
 
@@ -131,3 +139,37 @@ func (r *ClusterReconciler) reconcileKafkaNetworkPolicy(ctx context.Context, clu
 }
 
 func ptrPort(port int) *intstr.IntOrString { value := intstr.FromInt(port); return &value }
+
+func replaceSecurityEnv(container *corev1.Container, updates ...corev1.EnvVar) {
+	names := make(map[string]bool, len(updates))
+	for _, entry := range updates {
+		names[entry.Name] = true
+	}
+	env := container.Env[:0]
+	for _, entry := range container.Env {
+		if !names[entry.Name] {
+			env = append(env, entry)
+		}
+	}
+	container.Env = append(env, updates...)
+}
+
+func kafkaHandshakeEnv(s kafscalev1alpha1.KafkaSecuritySpec) []corev1.EnvVar {
+	var env []corev1.EnvVar
+	for _, setting := range []struct {
+		name                string
+		value, defaultValue int32
+	}{
+		{"KAFSCALE_PROXY_TLS_MAX_HANDSHAKES", s.MaxHandshakes, 64},
+		{"KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP", s.MaxHandshakesPerIP, 8},
+		{"KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS", s.HandshakeTimeoutMS, 1000},
+		{"KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS", s.HandshakeQueueMS, 100},
+	} {
+		value := setting.value
+		if value == 0 {
+			value = setting.defaultValue
+		}
+		env = append(env, corev1.EnvVar{Name: setting.name, Value: strconv.Itoa(int(value))})
+	}
+	return env
+}

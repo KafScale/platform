@@ -21,10 +21,11 @@ Kafscale is a kubernetes native platform focused on Kafka protocol parity and
 operational stability. This document summarizes the current security posture
 and the boundaries of what is and is not supported in v1.
 
-## Current Security Posture (v1)
+## Current Security Posture
 
 - **Authentication**: optional mTLS at the Kafka entry proxy, with authenticated
-  principal forwarding to brokers. See [Kafka proxy authentication](kafka-authentication.md).
+  principal forwarding to brokers. See [Kafka proxy authentication](kafka-authentication.md) for installation,
+  CRD upgrades, admission limits, ACL rollouts, and measured costs.
   Legacy deployments accept unauthenticated Kafka connections. The console UI
   supports basic auth via
   `KAFSCALE_UI_USERNAME` / `KAFSCALE_UI_PASSWORD`.

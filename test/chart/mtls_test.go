@@ -41,6 +41,13 @@ func TestProxyMTLSChart(t *testing.T) {
 			t.Fatal(key, env[key])
 		}
 	}
+	if deployment.Spec.Template.Annotations["kafscale.io/acl-checksum"] != "unavailable" {
+		t.Fatal("missing external ACL checksum annotation")
+	}
+	if env["KAFSCALE_PROXY_TLS_MAX_HANDSHAKES"] != "64" || env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"] != "1000" {
+		t.Fatal("missing handshake limits", env)
+	}
+
 	expected := map[string]string{"kafka-tls": "client-tls", "kafka-identity": "identity", "kafka-acl": "acl"}
 	for name, secret := range expected {
 		found := false

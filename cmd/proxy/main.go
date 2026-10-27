@@ -558,7 +558,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	if p.security != nil {
 		secured, authenticatedCtx, err := p.security.authenticate(ctx, conn)
 		if err != nil {
-			p.logger.Warn("client authentication failed")
+			p.logger.Warn("client authentication failed", "remote_addr", conn.RemoteAddr().String(), "error", err)
 			return
 		}
 		conn, ctx = secured, authenticatedCtx
@@ -617,12 +617,12 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			var resp []byte
 			var err error
 			if p.security != nil && p.security.keyFile != "" {
-				resp, err = p.authenticatedMetadata(ctx, header, frame.Payload)
+				resp, err = p.authenticatedMetadata(ctx, header, frame.Payload, pool)
 			} else {
 				resp, err = p.handleMetadata(ctx, header, frame.Payload)
 			}
 			if err != nil {
-				p.logger.Warn("metadata handling failed")
+				p.logger.Warn("metadata handling failed", "remote_addr", conn.RemoteAddr().String(), "error", err)
 				return
 			}
 			if err := protocol.WriteFrame(conn, resp); err != nil {

@@ -133,7 +133,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				topicNames = append(topicNames, *t.Topic)
 			}
 		}
-		if h.autoCreateTopics && metaReq.AllowAutoTopicCreation && len(topicNames) > 0 {
+		if h.autoCreateTopics && len(topicNames) > 0 {
 			for _, name := range topicNames {
 				if strings.TrimSpace(name) == "" {
 					continue
@@ -194,7 +194,14 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp.Brokers = meta.Brokers
 		resp.ClusterID = meta.ClusterID
 		resp.ControllerID = meta.ControllerID
-		resp.Topics = h.authorizedMetadata(principal, meta.Topics, metaReq.Topics == nil || (header.APIVersion == 0 && len(metaReq.Topics) == 0))
+		byID := false
+		for _, topic := range metaReq.Topics {
+			if topic.TopicID != [16]byte{} {
+				byID = true
+				break
+			}
+		}
+		resp.Topics = h.authorizedMetadata(principal, meta.Topics, metaReq.Topics == nil || (header.APIVersion == 0 && len(metaReq.Topics) == 0), byID)
 		if h.traceKafka {
 			topicSummaries := make([]string, 0, len(meta.Topics))
 			for _, topic := range meta.Topics {

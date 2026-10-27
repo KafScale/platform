@@ -53,7 +53,7 @@ func loadBrokerConnContext(logger *slog.Logger) (broker.ConnContextFunc, error) 
 }
 
 // authorizedMetadata copies the slice so filtering does not mutate store caches.
-func (h *handler) authorizedMetadata(principal string, topics []kmsg.MetadataResponseTopic, listAll bool) []kmsg.MetadataResponseTopic {
+func (h *handler) authorizedMetadata(principal string, topics []kmsg.MetadataResponseTopic, listAll, byID bool) []kmsg.MetadataResponseTopic {
 	result := make([]kmsg.MetadataResponseTopic, 0, len(topics))
 	for _, topic := range topics {
 		if topic.Topic != nil && !h.allowTopic(principal, *topic.Topic, acl.ActionFetch) && !h.allowTopic(principal, *topic.Topic, acl.ActionProduce) && !h.allowAdmin(principal) {
@@ -63,6 +63,14 @@ func (h *handler) authorizedMetadata(principal string, topics []kmsg.MetadataRes
 			}
 			topic.ErrorCode = protocol.TOPIC_AUTHORIZATION_FAILED
 			topic.Partitions = nil
+			if byID {
+				topic.ErrorCode = protocol.UNKNOWN_TOPIC_ID
+				topic.Topic = nil
+			} else {
+				topic.TopicID = [16]byte{}
+			}
+			topic.IsInternal = false
+			topic.AuthorizedOperations = 0
 		}
 		result = append(result, topic)
 	}

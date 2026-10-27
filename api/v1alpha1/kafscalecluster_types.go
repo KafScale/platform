@@ -24,10 +24,14 @@ import (
 // KafkaSecuritySpec configures proxy authentication for a Kubernetes cluster.
 // Referenced Secrets must exist in the cluster namespace.
 type KafkaSecuritySpec struct {
-	TLSSecretRef      string            `json:"tlsSecretRef,omitempty"`
-	IdentitySecretRef string            `json:"identitySecretRef,omitempty"`
-	ACLSecretRef      string            `json:"aclSecretRef,omitempty"`
-	ProxyPodSelector  map[string]string `json:"proxyPodSelector,omitempty"`
+	MaxHandshakes      int32             `json:"maxHandshakes,omitempty"`
+	MaxHandshakesPerIP int32             `json:"maxHandshakesPerIP,omitempty"`
+	HandshakeTimeoutMS int32             `json:"handshakeTimeoutMs,omitempty"`
+	HandshakeQueueMS   int32             `json:"handshakeQueueMs,omitempty"`
+	TLSSecretRef       string            `json:"tlsSecretRef,omitempty"`
+	IdentitySecretRef  string            `json:"identitySecretRef,omitempty"`
+	ACLSecretRef       string            `json:"aclSecretRef,omitempty"`
+	ProxyPodSelector   map[string]string `json:"proxyPodSelector,omitempty"`
 }
 
 // KafscaleClusterSpec defines the desired state of a Kafscale cluster.

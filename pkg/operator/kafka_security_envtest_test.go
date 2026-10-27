@@ -10,7 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -45,7 +50,7 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	}
 	ctx := context.Background()
 	cluster := testCluster("auth-api", nil)
-	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy"}}
+	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", MaxHandshakes: 3, MaxHandshakesPerIP: 2, HandshakeTimeoutMS: 500, HandshakeQueueMS: 20, ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy"}}
 	if err := c.Create(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +67,14 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	if stored.Spec.Security.ProxyPodSelector["app.kubernetes.io/component"] != "proxy" {
 		t.Fatal("deep copy shared security selector")
 	}
+	aclSecret := &corev1.Secret{}
+	aclSecret.Name = "acl"
+	aclSecret.Namespace = "default"
+	aclSecret.Data = map[string][]byte{"acl.json": []byte(`{"default_policy":"deny"}`)}
+	if err := c.Create(ctx, aclSecret); err != nil {
+		t.Fatal(err)
+	}
+
 	r := &ClusterReconciler{Client: c, Scheme: scheme}
 	for _, err := range []error{r.reconcileKafkaNetworkPolicy(ctx, &stored), r.reconcileBrokerDeployment(ctx, &stored, nil), r.reconcileLfsProxyDeployment(ctx, &stored, nil)} {
 		if err != nil {
@@ -98,4 +111,56 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	if envValue(sts.Spec.Template.Spec.Containers[0].Env, "KAFSCALE_PROXY_IDENTITY_KEY_FILE") == "" {
 		t.Fatal("missing identity file reference")
 	}
+	// Exercise a real Secret watch and the production mapper. The test controller
+	// reconciles only workloads, avoiding unrelated S3/etcd provisioning in envtest.
+	manager, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test").For(&kafscalev1alpha1.KafscaleCluster{}).Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
+		var cluster kafscalev1alpha1.KafscaleCluster
+		if err := c.Get(ctx, req.NamespacedName, &cluster); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		if err := r.reconcileBrokerDeployment(ctx, &cluster, nil); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, r.reconcileLfsProxyDeployment(ctx, &cluster, nil)
+	})); err != nil {
+		t.Fatal(err)
+	}
+	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	managerDone := make(chan error, 1)
+	go func() { managerDone <- manager.Start(watchCtx) }()
+	t.Cleanup(func() {
+		cancelWatch()
+		if err := <-managerDone; err != nil {
+			t.Error(err)
+		}
+	})
+	if !manager.GetCache().WaitForCacheSync(watchCtx) {
+		t.Fatal("cache did not synchronize")
+	}
+	oldChecksum := sts.Spec.Template.Annotations[aclChecksumAnnotation]
+	aclSecret.Data["acl.json"] = []byte(`{"default_policy":"deny","principals":[]}`)
+	if err := c.Update(ctx, aclSecret); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(sts), sts); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(deployment), deployment); err != nil {
+			t.Fatal(err)
+		}
+		checksum := sts.Spec.Template.Annotations[aclChecksumAnnotation]
+		if checksum != "" && checksum != oldChecksum && deployment.Spec.Template.Annotations[aclChecksumAnnotation] == checksum {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("ACL Secret watch did not roll both workloads")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
 }

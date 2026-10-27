@@ -283,3 +283,20 @@ helm uninstall kafscale -n kafscale-system
 - [Operations Guide](../../../docs/operations.md) — external access, proxy, TLS
 - [Docker Compose (local LFS)](../../docker-compose/README.md)
 - [OpenAPI spec](../../../api/lfs-proxy/openapi.yaml)
+
+## Kafka client authentication
+
+The proxy supports optional TLS 1.3 and mTLS. Configure existing TLS and identity
+Secrets through `proxy.security.tlsSecretRef` and `identitySecretRef`. An enabled
+LFS module also needs `proxy.security.aclSecretRef`, matching the brokers' ACL
+Secret. Admission defaults are 64 concurrent TLS handshakes, eight pending
+connections per source IP, a 1,000 ms total deadline, and a 100 ms queue wait.
+Override them with `proxy.security.maxHandshakes`, `maxHandshakesPerIP`,
+`handshakeTimeoutMs`, and `handshakeQueueMs`.
+
+For existing installations, apply the CRDs explicitly before configuring
+`spec.security`; Helm does not upgrade schemas from `crds/`. Operator-managed
+workloads roll when the ACL Secret changes. For the standalone Helm proxy, run
+`helm upgrade` after changing its external ACL Secret so the pod checksum updates.
+See [Kafka proxy authentication](../../../docs/kafka-authentication.md) for the
+upgrade commands, Secret keys, certificate mapping, and rotation behavior.

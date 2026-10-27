@@ -36,6 +36,7 @@ import (
 const handshakeTimeout = 5 * time.Second
 const challengeMagic = "KSAUTH01"
 const ProbePrincipal = "__kafscale_proxy_probe"
+const LFSPrincipal = "__kafscale_lfs_service"
 
 type principalKey struct{}
 

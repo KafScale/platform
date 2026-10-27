@@ -206,7 +206,7 @@ func TestTLSOptionsErrors(t *testing.T) {
 			}
 		})
 	}
-	for _, data := range []string{"{", "{}", "null", `{"":"a"}`, `{"a":""}`, `{"a":"two words"}`, `{"a":"__kafscale_proxy_probe"}`} {
+	for _, data := range []string{"{", "{}", "null", `{"":"a"}`, `{"a":""}`, `{"a":"two words"}`, `{"a":"__kafscale_proxy_probe"}`, `{"a":"__kafscale_lfs_service"}`} {
 		writeTestFile(t, p.options.PrincipalsFile, []byte(data))
 		if _, _, err := p.options.Config(); err == nil {
 			t.Fatalf("accepted %s", data)
@@ -343,5 +343,21 @@ func BenchmarkMTLSSteadyRecords(b *testing.B) {
 	raw.Close()
 	if err := <-done; err != nil {
 		b.Fatal(err)
+	}
+}
+
+func TestTLSHonorsEarlierContextDeadline(t *testing.T) {
+	p := newTestPKI(t)
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, _, err := p.options.Authenticate(ctx, server); err == nil {
+		t.Fatal("idle handshake accepted")
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Fatal("connection deadline exceeded handshake budget")
 	}
 }

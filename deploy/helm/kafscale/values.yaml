@@ -161,6 +161,10 @@ console:
 proxy:
   # mTLS Secrets are projected as files so new connections see rotations.
   security:
+    maxHandshakes: 64
+    maxHandshakesPerIP: 8
+    handshakeTimeoutMs: 1000
+    handshakeQueueMs: 100
     tlsSecretRef: ""       # tls.crt, tls.key, ca.crt, principals.json
     identitySecretRef: ""  # key: at least 32 random bytes, shared with brokers
     aclSecretRef: ""       # acl.json: also required if the LFS module is enabled

@@ -22,6 +22,7 @@ import (
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,7 +36,7 @@ func TestKafkaSecurityReconciliation(t *testing.T) {
 	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"allow"}`)
 	ctx := context.Background()
 	scheme := testScheme(t)
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "acl", Namespace: "default"}, Data: map[string][]byte{"acl.json": []byte(`{"default_policy":"deny"}`)}}).Build()
 	r := &ClusterReconciler{Client: c, Scheme: scheme}
 	cluster := testCluster("secure", nil)
 	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy", "app.kubernetes.io/instance": "secure"}}
@@ -115,7 +116,7 @@ func TestKafkaSecurityValidation(t *testing.T) {
 	}
 	ctx := context.Background()
 	scheme := testScheme(t)
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "acl", Namespace: "default"}, Data: map[string][]byte{"acl.json": []byte(`{"default_policy":"deny"}`)}}).Build()
 	r := &ClusterReconciler{Client: c, Scheme: scheme}
 	cluster := testCluster("secure", nil)
 	cluster.Spec.Security.IdentitySecretRef = "key"

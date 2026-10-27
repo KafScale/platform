@@ -35,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 )
@@ -135,6 +136,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
 }
@@ -143,12 +145,17 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 	if err := validateKafkaSecurity(cluster.Spec.Security); err != nil {
 		return err
 	}
+	checksum, err := r.kafkaACLChecksum(ctx, cluster)
+	if err != nil {
+		return err
+	}
+
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-broker", cluster.Name),
 		Namespace: cluster.Namespace,
 	}}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		replicas := int32(3)
 		if cluster.Spec.Brokers.Replicas != nil {
 			replicas = *cluster.Spec.Brokers.Replicas
@@ -161,6 +168,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Template.Labels = labels
+		setACLChecksum(&sts.Spec.Template, checksum)
 		sts.Spec.Template.Spec.Affinity = workloadAffinity(cluster.Spec.Brokers.Affinity, labels)
 		sts.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(false)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
