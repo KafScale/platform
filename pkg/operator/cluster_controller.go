@@ -26,6 +26,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -69,6 +70,9 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if err := r.reconcileKafkaNetworkPolicy(ctx, &cluster); err != nil {
+		return ctrl.Result{}, err
+	}
 	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -128,6 +132,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kafscalev1alpha1.KafscaleCluster{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
@@ -135,6 +140,9 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+	if err := validateKafkaSecurity(cluster.Spec.Security); err != nil {
+		return err
+	}
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-broker", cluster.Name),
 		Namespace: cluster.Namespace,
@@ -158,6 +166,8 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
 			r.brokerContainer(cluster, endpoints),
 		}
+		sts.Spec.Template.Spec.Volumes = nil
+		brokerKafkaSecurity(&sts.Spec.Template.Spec, cluster.Spec.Security)
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
 	return err

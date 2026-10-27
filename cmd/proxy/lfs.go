@@ -19,6 +19,8 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/KafScale/platform/pkg/acl"
+	"github.com/KafScale/platform/pkg/authn"
 	"log/slog"
 	"net"
 	"os"
@@ -55,6 +57,8 @@ const (
 // to detect LFS_BLOB headers, uploads payloads to S3, and replaces record
 // values with JSON envelopes — all before the existing partition-aware fan-out.
 type lfsModule struct {
+	authorizer           *acl.Authorizer
+	identityDial         func(context.Context, string) (net.Conn, error)
 	logger               *slog.Logger
 	s3Uploader           *s3Uploader
 	s3Bucket             string
@@ -414,7 +418,13 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 		index := atomic.AddUint32(&m.rr, 1)
 		addr := backends[int(index)%len(backends)]
 		dialer := net.Dialer{Timeout: m.dialTimeout}
-		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+		var conn net.Conn
+		var dialErr error
+		if m.identityDial != nil {
+			conn, dialErr = m.identityDial(authn.WithPrincipal(ctx, "__kafscale_lfs_service"), addr)
+		} else {
+			conn, dialErr = dialer.DialContext(ctx, "tcp", addr)
+		}
 		if dialErr == nil {
 			wrapped, err := m.wrapBackendTLS(ctx, conn, addr)
 			if err != nil {

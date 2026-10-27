@@ -135,7 +135,12 @@ operator:
 - **Startup gating** – Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
 - **Leader IDs** – Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
-### Proxy TLS via LoadBalancer (Recommended)
+### Proxy TLS via LoadBalancer
+
+For per-client authentication and broker ACLs, use the native proxy mTLS listener
+with TLS passthrough. See [Kafka proxy authentication](kafka-authentication.md).
+The external termination configuration below provides transport security but does
+not forward certificate identities.
 
 The proxy is the external Kafka entrypoint. For TLS in v1.5, terminate TLS at
 the cloud LoadBalancer by supplying Service annotations in the Helm values.

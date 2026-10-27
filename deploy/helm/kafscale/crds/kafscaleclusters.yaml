@@ -42,6 +42,19 @@ spec:
                 - s3
                 - brokers
               properties:
+                security:
+                  type: object
+                  properties:
+                    tlsSecretRef:
+                      type: string
+                    identitySecretRef:
+                      type: string
+                    aclSecretRef:
+                      type: string
+                    proxyPodSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
                 brokers:
                   type: object
                   properties:

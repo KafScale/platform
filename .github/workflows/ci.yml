@@ -61,14 +61,23 @@ jobs:
       - name: Run go test -race ./...
         run: go test -race ./...
 
-      - name: Affinity CRD and reconciliation API test
+      - name: Require 100% authentication coverage
+        run: bash hack/check_auth_coverage.sh
+
+      - name: Kafka mTLS end-to-end test
+        env:
+          KAFSCALE_E2E_AUTH: "1"
+        run: go test -race -tags=e2e ./test/e2e -run '^TestProxyMTLSE2E$' -v -count=1 -timeout=3m
+
+      - name: CRD and security reconciliation API tests
         env:
           KAFSCALE_E2E_AFFINITY: "1"
+          KAFSCALE_E2E_AUTH: "1"
         run: |
           go install sigs.k8s.io/controller-runtime/tools/setup-envtest@f52bbb8bb1a2275cbe90dec8d6c12d5cacb1a7de
           KUBEBUILDER_ASSETS="$("$(go env GOPATH)/bin/setup-envtest" use -p path 1.35.0)"
           export KUBEBUILDER_ASSETS
-          go test -race -tags=e2e ./pkg/operator -run '^TestAffinityOverridesAPI$' -v -count=1 -timeout=2m
+          go test -race -tags=e2e ./pkg/operator -run '^Test(AffinityOverridesAPI|KafkaSecurityAPI)$' -v -count=1 -timeout=2m
 
       - name: Run nested module tests
         run: make test-nested-modules
@@ -178,6 +187,11 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
       - name: Lint chart
         run: helm lint deploy/helm/kafscale
 
@@ -186,6 +200,7 @@ jobs:
           make test-chart-proxy-nodeport
           make test-chart-psa
           make test-chart-antiaffinity
+          make test-chart-mtls
 
   operator-restricted:
     name: Operator Restricted Workloads

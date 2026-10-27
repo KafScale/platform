@@ -250,3 +250,14 @@ func TestAuthorizerFallbackToDefault(t *testing.T) {
 		t.Fatal("unmatched action should fall back to default (allow)")
 	}
 }
+
+// Matching an action and name must not grant access to a different resource type.
+func TestAuthorizerRejectsResourceTypeMismatch(t *testing.T) {
+	authorizer := NewAuthorizer(Config{Enabled: true, DefaultPolicy: "deny", Principals: []PrincipalRules{{Name: "service", Allow: []Rule{{Action: ActionAny, Resource: ResourceGroup, Name: "orders"}}}}})
+	if authorizer.Allows("service", ActionFetch, ResourceTopic, "orders") {
+		t.Fatal("group permission granted topic access")
+	}
+	if !authorizer.Allows("service", ActionGroupRead, ResourceGroup, "orders") {
+		t.Fatal("matching group permission rejected")
+	}
+}

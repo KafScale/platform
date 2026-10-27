@@ -81,6 +81,9 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{
 			r.lfsProxyContainer(cluster, endpoints),
 		}
+		if err := proxyKafkaSecurity(&deploy.Spec.Template.Spec, cluster.Spec.Security); err != nil {
+			return err
+		}
 		return controllerutil.SetControllerReference(cluster, deploy, r.Scheme)
 	})
 	return err

@@ -159,6 +159,11 @@ console:
     tls: []
 
 proxy:
+  # mTLS Secrets are projected as files so new connections see rotations.
+  security:
+    tlsSecretRef: ""       # tls.crt, tls.key, ca.crt, principals.json
+    identitySecretRef: ""  # key: at least 32 random bytes, shared with brokers
+    aclSecretRef: ""       # acl.json: also required if the LFS module is enabled
   enabled: false
   replicaCount: 2
   image:
