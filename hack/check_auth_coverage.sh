@@ -24,6 +24,7 @@ required = {
     'cmd/broker/identity.go',
     'pkg/operator/kafka_security.go',
     'pkg/operator/kafka_acl_rollout.go',
+    'pkg/operator/secret_cache.go',
 }
 seen = set()
 statements = covered = 0

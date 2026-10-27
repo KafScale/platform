@@ -498,3 +498,76 @@ func TestAuthenticatedMetadataReusesClientPool(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedIPWarningAtStartup(t *testing.T) {
+	pki := newTestPKI(t)
+	proxySecurityEnv(t, pki)
+	security, err := loadProxySecurity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buffer bytes.Buffer
+	security.warnSharedIP(slog.New(slog.NewJSONHandler(&buffer, nil)))
+	for _, expected := range []string{"source-rewriting", "max_pending_per_ip", "8", "KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP"} {
+		if !strings.Contains(buffer.String(), expected) {
+			t.Fatal(buffer.String())
+		}
+	}
+}
+
+func TestMetadataRetriesStaleAuthenticatedConnection(t *testing.T) {
+	for _, kind := range []string{"write", "read", "redial_failure", "second_failure"} {
+		t.Run(kind, func(t *testing.T) {
+			pki := newTestPKI(t)
+			path := proxySecurityEnv(t, pki)
+			security, err := loadProxySecurity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, _ := authn.ReadKey(path)
+			seen := make(chan string, 1)
+			addr := securityBackend(t, key, seen, func(h *protocol.RequestHeader, _ []byte) []byte {
+				if kind == "second_failure" {
+					return nil
+				}
+				r := kmsg.NewPtrMetadataResponse()
+				r.Version = 9
+				return protocol.EncodeResponse(h.CorrelationID, 9, r)
+			})
+			if kind == "redial_failure" {
+				addr = "127.0.0.1:0"
+			}
+			p := &proxy{security: security, backends: []string{addr}, dialTimeout: time.Second}
+			pool := newConnPool(time.Second)
+			pool.dial = p.dialBackend
+			defer pool.Close()
+			oldServer, oldClient := net.Pipe()
+			if kind == "read" {
+				go func() { defer oldServer.Close(); _, _ = protocol.ReadFrame(oldServer) }()
+			} else {
+				oldServer.Close()
+			}
+			pool.Return(addr, oldClient)
+			request := kmsg.NewPtrMetadataRequest()
+			request.Version = 9
+			data := kmsg.NewRequestFormatter(kmsg.FormatterClientID("spoof")).AppendRequest(nil, request, 1)[4:]
+			header, _, _ := protocol.ParseRequestHeader(data)
+			_, err = p.authenticatedMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, data, pool)
+			if kind == "redial_failure" || kind == "second_failure" {
+				if err == nil || len(pool.conns) != 0 {
+					t.Fatal("failed retry was pooled", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("stale connection dropped metadata request", err)
+			}
+			if pool.conns[addr] == oldClient {
+				t.Fatal("stale connection returned to pool")
+			}
+			if principal := <-seen; principal != "service-a:spoof" {
+				t.Fatal("retry lost authenticated principal", principal)
+			}
+		})
+	}
+}

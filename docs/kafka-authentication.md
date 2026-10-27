@@ -124,13 +124,21 @@ It does not inherit a Kafka client's certificate identity. Permission is checked
 before a direct upload or multipart operation writes to S3. HTTP success requires
 a matching Kafka Produce response with no partition error. Authorization failures
 return HTTP 403; other broker or malformed-response failures return HTTP 502.
+If permission is revoked during a multipart upload, a denied part or completion
+request aborts the S3 upload and removes its session. Cleanup uses a bounded
+context independent of request cancellation. Failed aborts retain the session for
+a retry; an explicit abort returns HTTP 502 on cleanup failure.
 Objects created before a later Kafka failure are recorded as orphans. In
 authenticated mode, startup rejects an enabled LFS HTTP listener without an API key. Secure the HTTP
 endpoint independently and configure `KAFSCALE_LFS_PROXY_HTTP_API_KEY` before
 exposing it. Kafka produce and fetch requests retain their certificate identity.
 The LFS module loads the same ACL configuration as brokers and checks produce permission
 before uploading records to S3. Denied topics pass through unchanged for broker
-rejection. The operator watches the ACL Secret and updates a checksum annotation
+rejection. The operator watches Secret metadata and queues only clusters referencing
+the changed ACL Secret. Secret values are read directly from the API when needed,
+and are never stored in its informer cache. Cached Secret metadata excludes
+annotations, labels, and managed fields, including last-applied Secret contents.
+The operator updates a checksum annotation
 on both pod templates, triggering a rollout when `acl.json` changes. For the standalone
 Helm proxy, run `helm upgrade` after changing the external ACL Secret; Helm
 recomputes its checksum annotation from the live Secret. A Secret update alone
@@ -160,7 +168,9 @@ TLS session tickets are disabled, so reconnects revalidate certificates and
 mappings. Revoking an active client requires closing its existing connections.
 Shared-key changes must be coordinated between proxies and brokers; a temporary
 mismatch rejects new backend connections. Existing authenticated connections
-continue. ACLs load at startup. Operator-managed brokers and proxies roll
+continue. A metadata request that encounters a stale pooled backend connection
+retries once on a fresh connection authenticated with the same principal. New
+connection failures and Kafka response errors are not retried. ACLs load at startup. Operator-managed brokers and proxies roll
 automatically when the referenced ACL Secret changes. Standalone Helm proxies require the
 Helm upgrade described above.
 
@@ -182,8 +192,11 @@ Tune these values through `spec.security` for operator-managed proxies or
 `KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS`. Each accepts an integer from 1 to 60000.
 Raise the deadline for high-latency clients. If a load balancer hides client IPs,
 configure source IP preservation or size the per-IP limit for the shared address.
-These controls bound handshake work; edge connection rate limiting is still
-needed against distributed attacks.
+At startup, the proxy warns that source-rewriting load balancers make clients
+share the per-IP quota. PROXY protocol is not supported.
+Peers that send a ClientHello and then stall can still occupy all cryptographic
+slots until the handshake deadline. These controls bound handshake work; edge
+connection rate limiting is still needed against distributed attacks.
 
 ## Internal identity protocol and trust boundary
 

@@ -95,6 +95,9 @@ func main() {
 		logger.Error("proxy security configuration invalid", "error", err)
 		os.Exit(1)
 	}
+	if security != nil {
+		security.warnSharedIP(logger)
+	}
 	store, err := buildMetadataStore(ctx)
 	if err != nil {
 		logger.Error("metadata store init failed", "error", err)

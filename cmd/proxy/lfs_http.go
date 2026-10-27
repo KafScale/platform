@@ -869,7 +869,7 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if !m.authorizeHTTPUpload(w, requestID, session.Topic) {
+	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
 		return
 	}
 
@@ -957,7 +957,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if !m.authorizeHTTPUpload(w, requestID, session.Topic) {
+	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
 		return
 	}
 
@@ -1098,8 +1098,10 @@ func (m *lfsModule) handleHTTPUploadAbort(w http.ResponseWriter, r *http.Request
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
-	m.lfsDeleteUploadSession(sessionID)
+	if err := m.discardMultipartUpload(r.Context(), session); err != nil {
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "abort_failed", "multipart abort failed; retry the request")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/KafScale/platform/pkg/acl"
 	"github.com/KafScale/platform/pkg/authn"
+	"github.com/aws/smithy-go"
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
@@ -65,4 +67,34 @@ func produceHTTPStatus(err error) int {
 		return http.StatusForbidden
 	}
 	return http.StatusBadGateway
+}
+
+// The caller holds session.mu. Preserve the session on abort failure so an
+// explicit abort or a later denied request can retry the cleanup.
+func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadSession) error {
+	timeout := m.dialTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	err := m.s3Uploader.AbortMultipartUpload(cleanupCtx, session.S3Key, session.UploadID)
+	if err != nil {
+		var apiError smithy.APIError
+		if !errors.As(err, &apiError) || apiError.ErrorCode() != "NoSuchUpload" {
+			return err
+		}
+	}
+	m.lfsDeleteUploadSession(session.ID)
+	return nil
+}
+
+func (m *lfsModule) authorizeMultipartUpload(ctx context.Context, w http.ResponseWriter, requestID string, session *uploadSession) bool {
+	if m.authorizeHTTPUpload(w, requestID, session.Topic) {
+		return true
+	}
+	if err := m.discardMultipartUpload(ctx, session); err != nil {
+		m.logger.Warn("revoked multipart upload cleanup failed", "request_id", logSafe(requestID), "upload_id", logSafe(session.UploadID), "error", err)
+	}
+	return false
 }

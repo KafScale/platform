@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -158,6 +159,7 @@ func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.Requ
 	}()
 	var conn net.Conn
 	var addr string
+	reused := false
 	if pool == nil {
 		conn, addr, err = p.connectBackend(ctx)
 	} else {
@@ -186,12 +188,16 @@ func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.Requ
 		if addr == "" {
 			addr = backends[int(atomic.AddUint32(&p.rr, 1))%len(backends)]
 		}
+		_, reused = pool.conns[addr]
 		conn, err = pool.Borrow(ctx, addr)
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
+		if conn == nil {
+			return
+		}
 		if err != nil || pool == nil {
 			conn.Close()
 		} else {
@@ -199,6 +205,14 @@ func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.Requ
 		}
 	}()
 	response, err := p.forwardToBackend(ctx, conn, addr, payload)
+	if err != nil && reused {
+		conn.Close()
+		conn, err = p.dialBackend(ctx, addr)
+		if err != nil {
+			return nil, err
+		}
+		response, err = p.forwardToBackend(ctx, conn, addr, payload)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -227,4 +241,8 @@ func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.Requ
 		}
 	}
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, decoded), nil
+}
+
+func (s *proxySecurity) warnSharedIP(logger *slog.Logger) {
+	logger.Warn("TLS per-IP limits use socket source addresses; source-rewriting load balancers make clients share this quota", "max_pending_per_ip", s.admission.perIP, "recommendation", "preserve client source IPs or tune KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP")
 }

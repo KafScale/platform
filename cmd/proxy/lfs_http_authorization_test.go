@@ -7,17 +7,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"github.com/KafScale/platform/pkg/acl"
-	"github.com/KafScale/platform/pkg/authn"
-	"github.com/KafScale/platform/pkg/lfs"
-	"github.com/KafScale/platform/pkg/protocol"
-	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/KafScale/platform/pkg/acl"
+	"github.com/KafScale/platform/pkg/authn"
+	"github.com/KafScale/platform/pkg/lfs"
+	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/aws/smithy-go"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestLFSHTTPProduceReplies(t *testing.T) {
@@ -182,9 +184,75 @@ func TestLFSHTTPMultipartBrokerRejection(t *testing.T) {
 	if recorder.Code != 403 {
 		t.Fatal(recorder.Code)
 	}
+	if _, exists := m.lfsGetUploadSession("session"); exists {
+		t.Fatal("revoked session was retained")
+	}
+	session.ID = "part-session"
+	session.UploadID = "part-upload"
+	m.lfsStoreUploadSession(session)
 	recorder = httptest.NewRecorder()
-	m.handleHTTPUploadPart(recorder, httptest.NewRequest("PUT", "/", bytes.NewReader([]byte("x"))), "request", "session", 2)
+	m.handleHTTPUploadPart(recorder, httptest.NewRequest("PUT", "/", bytes.NewReader([]byte("x"))), "request", "part-session", 2)
+	if _, exists := m.lfsGetUploadSession("part-session"); exists {
+		t.Fatal("revoked part session was retained")
+	}
+	if len(m.s3Uploader.api.(*fakeS3).aborted) != 2 {
+		t.Fatal("revoked uploads were not aborted")
+	}
 	if recorder.Code != 403 {
 		t.Fatal(recorder.Code)
+	}
+}
+
+func TestRevokedMultipartCleanupIsRetryable(t *testing.T) {
+	m := testHTTPModule(t)
+	m.authorizer = acl.NewAuthorizer(acl.Config{Enabled: true, DefaultPolicy: "deny"})
+	storage := m.s3Uploader.api.(*fakeS3)
+	session := &uploadSession{ID: "session", Topic: "denied", S3Key: "object", UploadID: "upload", ExpiresAt: time.Now().Add(time.Hour)}
+	m.lfsStoreUploadSession(session)
+	storage.abortErr = errors.New("storage unavailable")
+	recorder := httptest.NewRecorder()
+	if m.authorizeMultipartUpload(context.Background(), recorder, "request", session) || recorder.Code != 403 {
+		t.Fatal(recorder.Code)
+	}
+	if _, exists := m.lfsGetUploadSession(session.ID); !exists {
+		t.Fatal("failed cleanup cannot be retried")
+	}
+	storage.abortErr = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	recorder = httptest.NewRecorder()
+	if m.authorizeMultipartUpload(ctx, recorder, "request", session) {
+		t.Fatal("revoked upload accepted")
+	}
+	if _, exists := m.lfsGetUploadSession(session.ID); exists {
+		t.Fatal("aborted session retained")
+	}
+	if storage.abortCanceled || !storage.abortDeadline {
+		t.Fatal("cleanup did not get a live bounded context")
+	}
+}
+
+func TestMultipartAbortErrorsDoNotReportSuccess(t *testing.T) {
+	m := testHTTPModule(t)
+	m.dialTimeout = time.Second
+	storage := m.s3Uploader.api.(*fakeS3)
+	session := &uploadSession{ID: "session", Topic: "topic", S3Key: "object", UploadID: "upload", ExpiresAt: time.Now().Add(time.Hour)}
+	m.lfsStoreUploadSession(session)
+	storage.abortErr = errors.New("storage unavailable")
+	recorder := httptest.NewRecorder()
+	m.handleHTTPUploadAbort(recorder, httptest.NewRequest("DELETE", "/", nil), "request", session.ID)
+	if recorder.Code != 502 {
+		t.Fatal("failed abort reported success", recorder.Code)
+	}
+	storage.abortErr = &smithy.GenericAPIError{Code: "AccessDenied"}
+	if err := m.discardMultipartUpload(context.Background(), session); err == nil {
+		t.Fatal("S3 error ignored")
+	}
+	storage.abortErr = &smithy.GenericAPIError{Code: "NoSuchUpload"}
+	if err := m.discardMultipartUpload(context.Background(), session); err != nil {
+		t.Fatal("missing upload must be idempotent", err)
+	}
+	if _, exists := m.lfsGetUploadSession(session.ID); exists {
+		t.Fatal("missing upload session retained")
 	}
 }

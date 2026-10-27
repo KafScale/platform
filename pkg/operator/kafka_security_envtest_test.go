@@ -7,23 +7,25 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"testing"
 	"time"
 
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
-
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func TestKafkaSecurityAPI(t *testing.T) {
@@ -101,6 +103,7 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	secret.Name = "identity"
 	secret.Namespace = "default"
 	secret.Data = map[string][]byte{"key": make([]byte, 32)}
+	secret.Annotations = map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{"data":{"key":"sensitive"}}`}
 	if err := c.Create(ctx, secret); err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +116,13 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	}
 	// Exercise a real Secret watch and the production mapper. The test controller
 	// reconciles only workloads, avoiding unrelated S3/etcd provisioning in envtest.
-	manager, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0"})
+	cacheOptions := SecretCacheOptions()
+	cacheOptions.ReaderFailOnMissingInformer = true
+	manager, err := ctrl.NewManager(cfg, ctrl.Options{Client: SecretClientOptions(), Cache: cacheOptions, Scheme: scheme, Metrics: metricsserver.Options{BindAddress: "0"}, HealthProbeBindAddress: "0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test").For(&kafscalev1alpha1.KafscaleCluster{}).Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
+	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test").For(&kafscalev1alpha1.KafscaleCluster{}).WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
 		var cluster kafscalev1alpha1.KafscaleCluster
 		if err := c.Get(ctx, req.NamespacedName, &cluster); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -140,6 +145,27 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	})
 	if !manager.GetCache().WaitForCacheSync(watchCtx) {
 		t.Fatal("cache did not synchronize")
+	}
+	// Metadata events must not populate a second, full Secret cache, including
+	// after a typed read through the manager's client.
+	var directSecret corev1.Secret
+	if err := manager.GetClient().Get(ctx, client.ObjectKeyFromObject(secret), &directSecret); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(directSecret.Data, secret.Data) {
+		t.Fatal("direct Secret read lost data")
+	}
+	var notCached *cache.ErrResourceNotCached
+	if err := manager.GetCache().Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); !errors.As(err, &notCached) {
+		t.Fatalf("full Secret unexpectedly cached: %v", err)
+	}
+	metadata := &metav1.PartialObjectMetadata{}
+	metadata.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+	if err := manager.GetCache().Get(ctx, client.ObjectKeyFromObject(secret), metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Name != secret.Name || metadata.Namespace != secret.Namespace || metadata.ResourceVersion == "" || len(metadata.Annotations) != 0 {
+		t.Fatal("Secret metadata cache retained sensitive annotations or lost routing metadata")
 	}
 	oldChecksum := sts.Spec.Template.Annotations[aclChecksumAnnotation]
 	aclSecret.Data["acl.json"] = []byte(`{"default_policy":"deny","principals":[]}`)
