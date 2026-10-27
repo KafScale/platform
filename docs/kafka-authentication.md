@@ -127,7 +127,10 @@ return HTTP 403; other broker or malformed-response failures return HTTP 502.
 If permission is revoked during a multipart upload, a denied part or completion
 request aborts the S3 upload and removes its session. Cleanup uses a bounded
 context independent of request cancellation. Failed aborts retain the session for
-a retry; an explicit abort returns HTTP 502 on cleanup failure.
+a retry until it expires or the proxy restarts; an explicit abort returns HTTP 502
+on cleanup failure. Expiry does not abort S3 uploads. Configure a bucket lifecycle
+rule to clean up incomplete multipart uploads as described in
+[operations](operations.md#lfs-proxy).
 Objects created before a later Kafka failure are recorded as orphans. In
 authenticated mode, startup rejects an enabled LFS HTTP listener without an API key. Secure the HTTP
 endpoint independently and configure `KAFSCALE_LFS_PROXY_HTTP_API_KEY` before

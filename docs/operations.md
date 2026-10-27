@@ -537,6 +537,21 @@ HTTP endpoints (served on `KAFSCALE_LFS_PROXY_HTTP_ADDR`):
 - `DELETE /lfs/uploads/{id}` – Abort the upload.
 - `GET /swagger` and `GET /api/openapi.yaml` – API docs and OpenAPI spec.
 
+Multipart upload cleanup:
+
+Upload sessions live in proxy memory. Expiry removes a session without aborting
+its S3 multipart upload, and a proxy restart also loses the session. Retrying a
+failed abort is therefore possible only while the session remains available.
+Configure an S3 bucket lifecycle rule with `AbortIncompleteMultipartUpload` for
+the LFS object prefix, or the whole bucket if it is dedicated to LFS. For example,
+set `DaysAfterInitiation` to `7`, choosing an interval longer than the longest
+intended upload. S3 then makes incomplete uploads eligible for cleanup after that
+interval; session expiry itself does not perform storage cleanup. This action
+leaves completed objects intact. Merge the rule into the bucket's existing
+lifecycle configuration. For S3-compatible storage, verify that the provider
+supports and applies this action. See the
+[Amazon S3 lifecycle configuration guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html).
+
 Kafka backends:
 
 - `KAFSCALE_LFS_PROXY_BACKENDS` – Comma-separated broker list used by the LFS module and tracker.
