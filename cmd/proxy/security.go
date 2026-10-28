@@ -148,9 +148,10 @@ func (p *proxy) dialBackend(ctx context.Context, addr string) (net.Conn, error) 
 	return conn, nil
 }
 
-// authenticatedMetadata obtains broker-authorized metadata before rewriting
-// broker addresses. Reading etcd directly here would bypass metadata ACLs.
-func (p *proxy) authenticatedMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) (encoded []byte, err error) {
+// brokerMetadata forwards the request before rewriting broker addresses.
+// Backend connections use identity forwarding when configured. Authenticated
+// clients always use this path to enforce broker metadata ACLs.
+func (p *proxy) brokerMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) (encoded []byte, err error) {
 	phase := errMetadataBackend
 	defer func() {
 		if err != nil {

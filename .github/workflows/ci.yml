@@ -64,10 +64,10 @@ jobs:
       - name: Require 100% authentication coverage
         run: bash hack/check_auth_coverage.sh
 
-      - name: Kafka mTLS end-to-end test
+      - name: Kafka proxy end-to-end tests
         env:
           KAFSCALE_E2E_AUTH: "1"
-        run: go test -race -tags=e2e ./test/e2e -run '^TestProxyMTLSE2E$' -v -count=1 -timeout=3m
+        run: go test -race -tags=e2e ./test/e2e -run '^TestProxy(MTLS|PlainAutoCreate)E2E$' -v -count=1 -timeout=3m
 
       - name: CRD and security reconciliation API tests
         env:

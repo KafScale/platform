@@ -580,6 +580,17 @@ The Iceberg processor addon has its own LFS environment overrides. See `addons/p
 - `KAFSCALE_IDOC_VALIDATE_CHECKSUM` – Validate LFS checksums (default `true`).
 - LFS blobs are resolved from S3 using `KAFSCALE_LFS_PROXY_S3_BUCKET`, `KAFSCALE_LFS_PROXY_S3_REGION`, `KAFSCALE_LFS_PROXY_S3_ENDPOINT`, `KAFSCALE_LFS_PROXY_S3_ACCESS_KEY`, `KAFSCALE_LFS_PROXY_S3_SECRET_KEY`, `KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN` and `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE`. Without bucket and region, blobs are not fetched from S3.
 
+### Topic auto-creation through the proxy
+
+In plain mode, a Metadata request for a missing named topic is forwarded to a
+broker before the proxy rewrites the advertised addresses. The broker decides
+whether to create the topic using `KAFSCALE_AUTO_CREATE_TOPICS` and its configured
+partition count. This preserves direct-broker behavior for older request versions
+and clients that leave `AllowAutoTopicCreation` unset. If broker auto-creation is
+disabled, the response contains `UNKNOWN_TOPIC_OR_PARTITION`. Known-topic and
+ID-based lookups continue to use the metadata store. Authenticated proxies always
+forward Metadata to enforce broker ACLs.
+
 ## External Kafka Access
 
 By default, brokers advertise the in-cluster service DNS name. That works for
