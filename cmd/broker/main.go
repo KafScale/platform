@@ -248,7 +248,11 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			resp.ErrorCode = protocol.REQUEST_TIMED_OUT
 			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 		}
-		resp, err := h.coordinator.JoinGroup(ctx, req)
+		clientID := ""
+		if header.ClientID != nil {
+			clientID = *header.ClientID
+		}
+		resp, err := h.coordinator.JoinGroupWithClient(ctx, req, clientID)
 		if err != nil {
 			return nil, err
 		}

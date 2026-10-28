@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -87,10 +88,14 @@ type groupState struct {
 }
 
 type memberState struct {
-	topics         []string
-	sessionTimeout time.Duration
-	lastHeartbeat  time.Time
-	joinGeneration int32
+	clientID         string
+	clientHost       string
+	protocolMetadata []byte
+	memberAssignment []byte
+	topics           []string
+	sessionTimeout   time.Duration
+	lastHeartbeat    time.Time
+	joinGeneration   int32
 }
 
 type assignmentTopic struct {
@@ -124,6 +129,11 @@ func (c *GroupCoordinator) FindCoordinatorResponse(errorCode int16) *kmsg.FindCo
 }
 
 func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *kmsg.JoinGroupRequest) (*kmsg.JoinGroupResponse, error) {
+	return c.JoinGroupWithClient(ctx, req, "")
+}
+
+// JoinGroupWithClient records display metadata separately from authentication.
+func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.JoinGroupRequest, clientID string) (*kmsg.JoinGroupResponse, error) {
 	c.mu.Lock()
 	state, err := c.ensureGroup(ctx, req.Group)
 	if err != nil {
@@ -154,7 +164,22 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *kmsg.JoinGroupReq
 	} else if member.sessionTimeout == 0 {
 		member.sessionTimeout = defaultSessionTimeout
 	}
-	member.topics = c.parseSubscriptionTopics(req.Protocols)
+	member.clientID = clientID
+	if info := ConnInfoFromContext(ctx); info != nil {
+		member.clientHost = info.RemoteAddr
+		if host, _, err := net.SplitHostPort(member.clientHost); err == nil {
+			member.clientHost = host
+		}
+	}
+	member.protocolMetadata = nil
+	member.topics = nil
+	for _, offered := range req.Protocols {
+		if offered.Name == state.protocolName {
+			member.protocolMetadata = append([]byte(nil), offered.Metadata...)
+			member.topics = c.parseSubscriptionTopics([]kmsg.JoinGroupRequestProtocol{offered})
+			break
+		}
+	}
 	member.lastHeartbeat = time.Now()
 
 	if len(state.members) == 1 && state.state == groupStateEmpty {
@@ -238,6 +263,9 @@ func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *kmsg.SyncGroupReq
 			return mkErrResp(protocol.REBALANCE_IN_PROGRESS), nil
 		}
 		state.assignments = c.assignPartitions(ctx, state)
+		for id, member := range state.members {
+			member.memberAssignment = encodeAssignment(state.assignments[id])
+		}
 		state.markStable()
 	}
 
@@ -256,6 +284,7 @@ func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *kmsg.SyncGroupReq
 		resp.Protocol = &state.protocolName
 	}
 	resp.MemberAssignment = encodeAssignment(assignments)
+	state.members[req.MemberID].memberAssignment = append([]byte(nil), resp.MemberAssignment...)
 
 	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -619,6 +648,9 @@ func buildConsumerGroup(groupID string, state *groupState) *metadatapb.ConsumerG
 	for memberID, member := range state.members {
 		pbMember := &metadatapb.GroupMember{
 			Subscriptions: append([]string(nil), member.topics...),
+			ClientId:      member.clientID, ClientHost: member.clientHost,
+			ProtocolMetadata: append([]byte(nil), member.protocolMetadata...),
+			MemberAssignment: append([]byte(nil), member.memberAssignment...),
 		}
 		if member.sessionTimeout > 0 {
 			pbMember.SessionTimeoutMs = int32(member.sessionTimeout / time.Millisecond)
@@ -663,6 +695,18 @@ func buildDescribeGroup(group *metadatapb.ConsumerGroup, includeAuthorized bool)
 		m.MemberID = memberID
 		m.ClientID = member.ClientId
 		m.ClientHost = member.ClientHost
+		m.ProtocolMetadata = append([]byte(nil), member.ProtocolMetadata...)
+		if len(m.ProtocolMetadata) == 0 && len(member.Subscriptions) > 0 {
+			m.ProtocolMetadata = encodeSubscription(member.Subscriptions)
+		}
+		m.MemberAssignment = append([]byte(nil), member.MemberAssignment...)
+		if len(m.MemberAssignment) == 0 && len(member.Assignments) > 0 {
+			assignments := make([]assignmentTopic, 0, len(member.Assignments))
+			for _, assignment := range member.Assignments {
+				assignments = append(assignments, assignmentTopic{Name: assignment.Topic, Partitions: assignment.Partitions})
+			}
+			m.MemberAssignment = encodeAssignment(assignments)
+		}
 		members = append(members, m)
 	}
 	authorizedOps := int32(-2147483648)
@@ -701,9 +745,12 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 			sessionTimeout = time.Duration(member.SessionTimeoutMs) * time.Millisecond
 		}
 		entry := &memberState{
-			topics:         append([]string(nil), member.Subscriptions...),
-			sessionTimeout: sessionTimeout,
-			joinGeneration: group.GenerationId,
+			topics:   append([]string(nil), member.Subscriptions...),
+			clientID: member.ClientId, clientHost: member.ClientHost,
+			protocolMetadata: append([]byte(nil), member.ProtocolMetadata...),
+			memberAssignment: append([]byte(nil), member.MemberAssignment...),
+			sessionTimeout:   sessionTimeout,
+			joinGeneration:   group.GenerationId,
 		}
 		if member.HeartbeatAt != "" {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
@@ -839,6 +886,10 @@ func (c *GroupCoordinator) parseSubscriptionTopics(protocols []kmsg.JoinGroupReq
 }
 
 func (c *GroupCoordinator) encodeSubscription(topics []string) []byte {
+	return encodeSubscription(topics)
+}
+
+func encodeSubscription(topics []string) []byte {
 	buf := make([]byte, 0, 6+len(topics)*10)
 	writeInt16 := func(v int16) {
 		tmp := make([]byte, 2)
@@ -867,7 +918,10 @@ func (c *GroupCoordinator) encodeMemberSubscriptions(state *groupState) []kmsg.J
 		member := state.members[id]
 		m := kmsg.NewJoinGroupResponseMember()
 		m.MemberID = id
-		m.ProtocolMetadata = c.encodeSubscription(member.topics)
+		m.ProtocolMetadata = append([]byte(nil), member.protocolMetadata...)
+		if len(m.ProtocolMetadata) == 0 {
+			m.ProtocolMetadata = c.encodeSubscription(member.topics)
+		}
 		members = append(members, m)
 	}
 	return members
@@ -1090,6 +1144,7 @@ func (s *groupState) startRebalance(timeout time.Duration) {
 	s.ensureLeader()
 	for _, member := range s.members {
 		member.joinGeneration = 0
+		member.memberAssignment = nil
 	}
 }
 
