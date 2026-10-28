@@ -82,7 +82,7 @@ Read-only tools (default):
 - `fetch_offsets` (consumer group offsets).
 - `describe_configs` (topic configs).
 
-Mutation tools (future, gated by auth + RBAC):
+Not implemented. MCP has no mutation tools such as:
 
 - `create_topic` / `delete_topic`.
 - `create_partitions`.
@@ -103,21 +103,9 @@ Requirements:
 - Dry-run mode for all mutations.
 - Environment fences (production requires explicit break-glass or approval).
 
-See [`docs/security.md`](/security/) for the current security posture and roadmap; MCP should
-not enable any operations that bypass the auth/authorization roadmap there.
+See [`docs/security.md`](/security/) for the current security posture.
 
-## Rollout Plan
+## Current status
 
-- Phase 1: Read-only MCP server with auth and audit logging.
-- Phase 2: Mutations behind RBAC + dry-run + approval workflows.
-
-Current status:
-
-- Read-only MCP server is implemented.
-- Optional bearer token auth is supported; stronger auth and audit logging remain pending.
-
-## Open Questions
-
-- Which auth provider(s) to standardize (OIDC provider and token format).
-- Where to store audit logs (stdout, file, or external sink).
-- Whether to expose broker control actions in v1 or v2.
+- The MCP server is read-only.
+- Optional bearer token auth is supported. Audit logging is not implemented.
