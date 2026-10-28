@@ -620,9 +620,9 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			var resp []byte
 			var err error
 			if p.security != nil && p.security.keyFile != "" {
-				resp, err = p.authenticatedMetadata(ctx, header, frame.Payload, pool)
+				resp, err = p.brokerMetadata(ctx, header, frame.Payload, pool)
 			} else {
-				resp, err = p.handleMetadata(ctx, header, frame.Payload)
+				resp, err = p.handleMetadata(ctx, header, frame.Payload, pool)
 			}
 			if err != nil {
 				p.logger.Warn("metadata handling failed", "remote_addr", conn.RemoteAddr().String(), "reason", metadataFailureReason(err))
@@ -1161,7 +1161,7 @@ func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeade
 	_ = protocol.WriteFrame(conn, resp)
 }
 
-func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte) ([]byte, error) {
+func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
 	_, req, err := protocol.ParseRequest(payload)
 	if err != nil {
 		return nil, errors.Join(errMetadataRequest, err)
@@ -1175,8 +1175,34 @@ func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHead
 	if err != nil {
 		return nil, errors.Join(errMetadataBackend, err)
 	}
+	// Missing named topics must reach the broker's auto-create policy. Forward
+	// the original request, including legacy versions and client flag defaults,
+	// so direct, plain proxy, and mTLS clients get the same broker behavior.
+	if metadataNeedsBroker(metaReq, meta) {
+		response, err := p.brokerMetadata(ctx, header, payload, pool)
+		if err != nil {
+			return nil, err
+		}
+		p.refreshMetadataCache(ctx)
+		return response, nil
+	}
 	resp := buildProxyMetadataResponse(meta, header.CorrelationID, header.APIVersion, p.advertisedHost, p.advertisedPort)
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+}
+
+func metadataNeedsBroker(req *kmsg.MetadataRequest, meta *metadata.ClusterMetadata) bool {
+	known := make(map[string]bool, len(meta.Topics))
+	for _, topic := range meta.Topics {
+		if topic.Topic != nil && topic.ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+			known[*topic.Topic] = true
+		}
+	}
+	for _, topic := range req.Topics {
+		if topic.TopicID == ([16]byte{}) && topic.Topic != nil && !known[*topic.Topic] {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *proxy) handleFindCoordinator(header *protocol.RequestHeader) ([]byte, error) {

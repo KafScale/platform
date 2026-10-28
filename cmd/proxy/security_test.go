@@ -277,7 +277,7 @@ func TestAuthenticatedMetadata(t *testing.T) {
 				return protocol.EncodeResponse(7, 9, r)
 			})
 			p := &proxy{security: s, backends: []string{addr}, backendRetries: 1, dialTimeout: time.Second, advertisedHost: "entry", advertisedPort: 9092}
-			payload, err := p.authenticatedMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, request, nil)
+			payload, err := p.brokerMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, request, nil)
 			if tc != "ok" {
 				if err == nil {
 					t.Fatal("invalid response accepted")
@@ -298,7 +298,7 @@ func TestAuthenticatedMetadata(t *testing.T) {
 		})
 	}
 	p := &proxy{backends: []string{"127.0.0.1:0"}, backendRetries: 1, dialTimeout: time.Millisecond}
-	if _, err := p.authenticatedMetadata(context.Background(), header, request, nil); err == nil {
+	if _, err := p.brokerMetadata(context.Background(), header, request, nil); err == nil {
 		t.Fatal("missing backend accepted")
 	}
 }
@@ -464,12 +464,12 @@ func TestAuthenticatedMetadataReusesClientPool(t *testing.T) {
 	data := kmsg.NewRequestFormatter(kmsg.FormatterClientID("client")).AppendRequest(nil, req, 1)[4:]
 	header, _, _ := protocol.ParseRequestHeader(data)
 	ctx := authn.WithPrincipal(context.Background(), "service-a")
-	if _, err := p.authenticatedMetadata(ctx, header, data, pool); err != nil {
+	if _, err := p.brokerMetadata(ctx, header, data, pool); err != nil {
 		t.Fatal(err)
 	}
 	first := pool.conns[addr]
 	p.backends = []string{"127.0.0.1:0", addr}
-	if _, err := p.authenticatedMetadata(ctx, header, data, pool); err != nil {
+	if _, err := p.brokerMetadata(ctx, header, data, pool); err != nil {
 		t.Fatal(err)
 	}
 	if pool.conns[addr] != first {
@@ -485,7 +485,7 @@ func TestAuthenticatedMetadataReusesClientPool(t *testing.T) {
 	p.cacheTTL = time.Minute
 	p.setCachedBackends([]string{addr})
 	p.touchHealthy()
-	if _, err := p.authenticatedMetadata(ctx, header, data, pool); err != nil {
+	if _, err := p.brokerMetadata(ctx, header, data, pool); err != nil {
 		t.Fatal("fresh cached backend unavailable during metadata outage", err)
 	}
 	if got := <-seen; got != "service-a:client" {
@@ -493,7 +493,7 @@ func TestAuthenticatedMetadataReusesClientPool(t *testing.T) {
 	}
 
 	for _, p := range []*proxy{{}, {store: metadata.NewInMemoryStore(metadata.ClusterMetadata{})}, {store: brokenMetadataStore{}}, {backends: []string{"127.0.0.1:0"}, dialTimeout: time.Millisecond}} {
-		if _, err := p.authenticatedMetadata(ctx, header, data, pool); err == nil {
+		if _, err := p.brokerMetadata(ctx, header, data, pool); err == nil {
 			t.Fatal("missing backend accepted")
 		}
 	}
@@ -552,7 +552,7 @@ func TestMetadataRetriesStaleAuthenticatedConnection(t *testing.T) {
 			request.Version = 9
 			data := kmsg.NewRequestFormatter(kmsg.FormatterClientID("spoof")).AppendRequest(nil, request, 1)[4:]
 			header, _, _ := protocol.ParseRequestHeader(data)
-			_, err = p.authenticatedMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, data, pool)
+			_, err = p.brokerMetadata(authn.WithPrincipal(context.Background(), "service-a"), header, data, pool)
 			if kind == "redial_failure" || kind == "second_failure" {
 				if err == nil || len(pool.conns) != 0 {
 					t.Fatal("failed retry was pooled", err)
