@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -51,9 +52,11 @@ func produceFetchWaitRecord(t *testing.T, h *handler, partition int32) {
 }
 
 func produceFetchWait(h *handler, partition int32) error {
+	batch := testBatchBytes(0, 0, 1)
+	binary.BigEndian.PutUint32(batch[8:12], uint32(len(batch)-12))
 	req := kmsg.NewPtrProduceRequest()
 	req.Acks = -1
-	req.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: partition, Records: testBatchBytes(0, 0, 1)}}}}
+	req.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: partition, Records: batch}}}}
 	data, err := h.handleProduce(context.Background(), &protocol.RequestHeader{APIVersion: 3}, req)
 	if err != nil {
 		return err
