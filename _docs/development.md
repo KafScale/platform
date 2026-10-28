@@ -267,7 +267,7 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 14 | SyncGroup | 4 | ✅ Implemented |
 | 15 | DescribeGroups | 5 | ✅ Implemented |
 | 16 | ListGroups | 5 | ✅ Implemented |
-| 17 | SaslHandshake | 1 | ❌ Authentication not in scope yet |
+| 17 | SaslHandshake | 1 | ❌ Not supported |
 | 18 | ApiVersions | 3 | ✅ Implemented (v0-3) |
 | 19 | CreateTopics | 7 | ✅ Implemented (v0-2) |
 | 20 | DeleteTopics | 6 | ✅ Implemented (v0-2) |
@@ -279,19 +279,19 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 26 | EndTxn | 3 | ❌ Transactions out of scope |
 | 27 | WriteTxnMarkers | 0 | ❌ Transactions out of scope |
 | 28 | TxnOffsetCommit | 3 | ❌ Transactions out of scope |
-| 29 | DescribeAcls | 1 | ❌ Auth not in v1 |
-| 30 | CreateAcls | 1 | ❌ Auth not in v1 |
-| 31 | DeleteAcls | 1 | ❌ Auth not in v1 |
+| 29 | DescribeAcls | 1 | ❌ Not supported |
+| 30 | CreateAcls | 1 | ❌ Not supported |
+| 31 | DeleteAcls | 1 | ❌ Not supported |
 | 32 | DescribeConfigs | 4 | ✅ Implemented |
 | 33 | AlterConfigs | 1 | ✅ Implemented |
 | 34 | AlterReplicaLogDirs | 1 | ❌ Not relevant (S3 backed) |
 | 35 | DescribeLogDirs | 1 | ❌ Not relevant (S3 backed) |
-| 36 | SaslAuthenticate | 2 | ❌ Auth not in v1 |
+| 36 | SaslAuthenticate | 2 | ❌ Not supported |
 | 37 | CreatePartitions | 0-3 | ✅ Implemented |
-| 38 | CreateDelegationToken | 2 | ❌ Auth not in v1 |
-| 39 | RenewDelegationToken | 2 | ❌ Auth not in v1 |
-| 40 | ExpireDelegationToken | 2 | ❌ Auth not in v1 |
-| 41 | DescribeDelegationToken | 2 | ❌ Auth not in v1 |
+| 38 | CreateDelegationToken | 2 | ❌ Not supported |
+| 39 | RenewDelegationToken | 2 | ❌ Not supported |
+| 40 | ExpireDelegationToken | 2 | ❌ Not supported |
+| 41 | DescribeDelegationToken | 2 | ❌ Not supported |
 | 42 | DeleteGroups | 0-2 | ✅ Implemented |
 
 We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer in the spec backlog so we can track when to bring it online (e.g., DescribeGroups/ListGroups for Kafka UI parity, OffsetForLeaderEpoch for catch-up tooling).
