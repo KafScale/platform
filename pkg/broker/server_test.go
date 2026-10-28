@@ -394,3 +394,65 @@ func TestServerHandleConnection_NilResponse(t *testing.T) {
 		t.Fatal("handleConnection should exit after client close")
 	}
 }
+
+type captureConnectionHandler struct{ seen chan ConnContext }
+
+func (h captureConnectionHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error) {
+	info := ConnInfoFromContext(ctx)
+	if info == nil {
+		return nil, errors.New("missing connection metadata")
+	}
+	h.seen <- *info
+	return (&testHandler{}).Handle(ctx, header, req)
+}
+
+func TestServerAlwaysSuppliesPeerAddress(t *testing.T) {
+	for _, mode := range []string{"plain", "principal_only", "forwarded"} {
+		t.Run(mode, func(t *testing.T) {
+			server, client := net.Pipe()
+			defer client.Close()
+			client.SetDeadline(time.Now().Add(time.Second))
+			seen := make(chan ConnContext, 1)
+			supplied := &ConnContext{Principal: "service", ProxyAddr: "proxy"}
+			s := &Server{Handler: captureConnectionHandler{seen: seen}}
+			if mode != "plain" {
+				if mode == "forwarded" {
+					supplied.RemoteAddr = "198.51.100.1:1234"
+				}
+				s.ConnContextFunc = func(conn net.Conn) (net.Conn, *ConnContext, error) { return conn, supplied, nil }
+			}
+			done := make(chan struct{})
+			go func() { defer close(done); s.handleConnection(server) }()
+			if err := protocol.WriteFrame(client, buildApiVersionsRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := protocol.ReadFrame(client); err != nil {
+				t.Fatal(err)
+			}
+			got := <-seen
+			expected := server.RemoteAddr().String()
+			if mode == "forwarded" {
+				expected = supplied.RemoteAddr
+			}
+			if got.RemoteAddr != expected {
+				t.Fatal(got)
+			}
+			if mode == "plain" {
+				if got.Principal != "" {
+					t.Fatal("socket metadata changed identity", got)
+				}
+			} else if got.Principal != "service" || got.ProxyAddr != "proxy" {
+				t.Fatal(got)
+			}
+			if mode == "principal_only" && supplied.RemoteAddr != "" {
+				t.Fatal("hook result was mutated")
+			}
+			client.Close()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("connection did not close")
+			}
+		})
+	}
+}
