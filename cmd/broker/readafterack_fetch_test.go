@@ -43,7 +43,7 @@ func newFlushDisabledHandler(store metadata.Store) *handler {
 }
 
 // TestHandleFetchReadAfterAckFlushDisabled drives the REAL fetch path
-// (handleFetch -> waitForFetchData -> high-watermark bound -> PartitionLog.Read),
+// (handleFetch -> request-wide polling -> high-watermark bound -> PartitionLog.Read),
 // not a direct PartitionLog.Read call. It produces with acks=-1 under
 // flushOnAck=false (nothing flushes), then fetches the just-acknowledged offset.
 //
