@@ -44,6 +44,8 @@ type Store interface {
 	FetchConsumerOffset(ctx context.Context, group, topic string, partition int32) (int64, string, error)
 	// ListConsumerOffsets returns all committed consumer offsets.
 	ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error)
+	// ListGroupConsumerOffsets returns committed offsets and metadata for one group.
+	ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error)
 	// PutConsumerGroup persists consumer group metadata.
 	PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error
 	// FetchConsumerGroup retrieves consumer group metadata.
@@ -77,6 +79,7 @@ type ConsumerOffset struct {
 	Topic     string
 	Partition int32
 	Offset    int64
+	Metadata  string
 }
 
 var (
@@ -502,6 +505,15 @@ func (s *InMemoryStore) FetchConsumerOffset(ctx context.Context, group, topic st
 
 // ListConsumerOffsets implements Store.ListConsumerOffsets.
 func (s *InMemoryStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error) {
+	return s.listConsumerOffsets(ctx, "", false)
+}
+
+// ListGroupConsumerOffsets implements Store.ListGroupConsumerOffsets.
+func (s *InMemoryStore) ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error) {
+	return s.listConsumerOffsets(ctx, group, true)
+}
+
+func (s *InMemoryStore) listConsumerOffsets(ctx context.Context, groupID string, filterGroup bool) ([]ConsumerOffset, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -512,7 +524,7 @@ func (s *InMemoryStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffs
 	offsets := make([]ConsumerOffset, 0, len(s.consumerOffsets))
 	for key, offset := range s.consumerOffsets {
 		group, topic, partition, ok := parseConsumerKey(key)
-		if !ok {
+		if !ok || (filterGroup && group != groupID) {
 			continue
 		}
 		offsets = append(offsets, ConsumerOffset{
@@ -520,6 +532,7 @@ func (s *InMemoryStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffs
 			Topic:     topic,
 			Partition: partition,
 			Offset:    offset,
+			Metadata:  s.consumerMeta[key],
 		})
 	}
 	return offsets, nil

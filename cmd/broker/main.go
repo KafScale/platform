@@ -454,6 +454,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		if err != nil {
 			return nil, err
 		}
+		resp.Topics = h.authorizedOffsetFetch(principal, resp.Topics, req.Topics == nil && req.Version >= 2)
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.OffsetForLeaderEpochRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
