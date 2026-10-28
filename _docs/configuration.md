@@ -225,9 +225,6 @@ Fetch requests for cached segments continue to work. Brokers serve reads from th
 | `KAFSCALE_ETCD_ENDPOINTS` | required | Comma-separated etcd endpoints |
 | `KAFSCALE_ETCD_USERNAME` | | etcd basic auth username |
 | `KAFSCALE_ETCD_PASSWORD` | | etcd basic auth password |
-| `KAFSCALE_ETCD_CERT_FILE` | | Path to client certificate |
-| `KAFSCALE_ETCD_KEY_FILE` | | Path to client key |
-| `KAFSCALE_ETCD_CA_FILE` | | Path to CA certificate |
 
 Examples:
 
@@ -237,12 +234,6 @@ KAFSCALE_ETCD_ENDPOINTS=http://etcd.kafscale.svc:2379
 
 # Cluster (production)
 KAFSCALE_ETCD_ENDPOINTS=http://etcd-0.etcd:2379,http://etcd-1.etcd:2379,http://etcd-2.etcd:2379
-
-# With TLS
-KAFSCALE_ETCD_ENDPOINTS=https://etcd-0.etcd:2379,https://etcd-1.etcd:2379,https://etcd-2.etcd:2379
-KAFSCALE_ETCD_CERT_FILE=/etc/kafscale/etcd/tls.crt
-KAFSCALE_ETCD_KEY_FILE=/etc/kafscale/etcd/tls.key
-KAFSCALE_ETCD_CA_FILE=/etc/kafscale/etcd/ca.crt
 ```
 
 Topic recovery via `kafscale-cli restore` uses the same `KAFSCALE_ETCD_*` settings for topic metadata, partition state, and recovered next offsets.
@@ -376,28 +367,37 @@ The operator passes these to brokers if not overridden in the CRD:
 
 ---
 
-## TLS Configuration
+## TLS and mTLS Configuration
+
+Kafka client TLS and mTLS terminate at the KafScale proxy. Brokers do not open their own TLS listener. Settings for the proxy:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KAFSCALE_TLS_ENABLED` | `false` | Enable TLS for client connections |
-| `KAFSCALE_TLS_CERT_FILE` | | Path to server certificate |
-| `KAFSCALE_TLS_KEY_FILE` | | Path to server private key |
-| `KAFSCALE_TLS_CA_FILE` | | Path to CA certificate (for mTLS) |
-| `KAFSCALE_TLS_CLIENT_AUTH` | `false` | Require client certificates |
+| `KAFSCALE_PROXY_TLS_CERT_FILE` | | Server certificate chain. With the key file alone, enables server TLS |
+| `KAFSCALE_PROXY_TLS_KEY_FILE` | | Server private key |
+| `KAFSCALE_PROXY_TLS_CLIENT_CA_FILE` | | Client CA bundle. Required for mTLS |
+| `KAFSCALE_PROXY_TLS_PRINCIPALS_FILE` | | JSON map from client certificate URI SAN to principal. Required for mTLS |
+| `KAFSCALE_PROXY_IDENTITY_KEY_FILE` | | Shared forwarding key file, set on proxy and brokers. Required for mTLS |
+| `KAFSCALE_PROXY_TLS_MAX_HANDSHAKES` | `64` | Concurrent TLS handshakes |
+| `KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP` | `8` | Pending connections per source IP |
+| `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` | `1000` | Total handshake deadline |
+| `KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS` | `100` | Wait for a handshake slot |
+
+The four limits accept integers from 1 to 60000. TLS 1.3 is required. Invalid or incomplete configuration fails startup.
 
 CRD example:
 
 ```yaml
 spec:
-  tls:
-    enabled: true
-    secretRef: kafscale-tls
+  security:
+    tlsSecretRef: kafka-proxy-tls
+    identitySecretRef: kafka-proxy-identity
+    aclSecretRef: kafka-acl
 ```
 
-The secret should contain `tls.crt` and `tls.key`. For mTLS, include `ca.crt`.
+`kafka-proxy-tls` holds `tls.crt`, `tls.key`, `ca.crt` and `principals.json`. `kafka-proxy-identity` holds `key`, at least 32 random bytes. `kafka-acl` holds `acl.json`.
 
-See [Security](/security/) for complete TLS setup instructions.
+See [mTLS authentication](/kafka-authentication/) for the full setup and [Security](/security/) for the overall posture.
 
 ---
 
@@ -593,4 +593,5 @@ spec:
 - [Installation](/installation/) for Helm and CRD setup
 - [Supported storage](/supported/) for non-AWS backends
 - [Operations](/operations/) for monitoring and scaling
-- [Security](/security/) for TLS and authentication
+- [Security](/security/) for the security posture
+- [mTLS authentication](/kafka-authentication/) for Kafka client TLS and mTLS

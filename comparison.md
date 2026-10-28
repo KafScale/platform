@@ -457,7 +457,25 @@ That is about 90% less for storage. S3 already stores data redundantly across av
       <td>Built-in</td>
     </tr>
     <tr class="section-row">
-      <td colspan="7">Trust &amp; Licensing</td>
+      <td colspan="7">Security, Trust &amp; Licensing</td>
+    </tr>
+    <tr>
+      <td>mTLS client auth</td>
+      <td class="kafscale">✓ proxy</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>SASL auth</td>
+      <td class="kafscale">✗</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
+      <td>✓</td>
     </tr>
     <tr>
       <td>Jepsen tested</td>

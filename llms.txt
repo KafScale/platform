@@ -16,6 +16,7 @@ Full text for LLMs: https://kafscale.io/llms-full.txt
 - [Supported storage](https://kafscale.io/supported/): S3-compatible backends and what each one requires
 - [Operations](https://kafscale.io/operations/): Production install, hardening, and day-to-day operations
 - [Security](https://kafscale.io/security/): Current security posture and how to report a vulnerability
+- [mTLS authentication](https://kafscale.io/kafka-authentication/): TLS 1.3 and mTLS for Kafka clients at the KafScale proxy. URI SAN to principal mapping, broker ACLs, Secrets, Helm and CRD fields, certificate rotation
 - [Protocol compatibility](https://kafscale.io/protocol/): Kafka APIs the broker advertises
 - [Latency and batching](https://kafscale.io/latency/): KafScale latency is S3 latency. How produce and fetch map to S3 requests, AWS published S3 latency figures with sources, producer batching settings, and the deliberate trade-offs (no compaction, transactions or idempotent producers)
 - [Comparison](https://kafscale.io/comparison/): How KafScale compares with other Kafka-compatible platforms
