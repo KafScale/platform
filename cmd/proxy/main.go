@@ -903,6 +903,7 @@ func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *kmsg.ProduceRe
 			subReq.Topics[idx].Partitions = append(subReq.Topics[idx].Partitions, part)
 		}
 	}
+	coalesceProduceFallback(groups)
 	return groups
 }
 
@@ -997,6 +998,7 @@ type fanOutResult struct {
 // When there's only one group and originalPayload is non-nil, the original
 // payload is forwarded as-is (avoiding re-encoding).
 func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.ProduceRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fanOutResult {
+	coalesceProduceFallback(groups)
 	type workItem struct {
 		subReq  *kmsg.ProduceRequest
 		conn    net.Conn
@@ -1013,7 +1015,6 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 			connectErrors = append(connectErrors, fanOutResult{subReq: subReq, target: addr, err: err})
 			continue
 		}
-		triedBackends[targetAddr] = true
 
 		var payload []byte
 		if canUseOriginal {
@@ -1888,6 +1889,7 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.Fetc
 			subReq.Topics[idx].Partitions = append(subReq.Topics[idx].Partitions, part)
 		}
 	}
+	coalesceFetchFallback(groups)
 	return groups
 }
 
@@ -2007,6 +2009,7 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 
 // fanOutFetch borrows connections and forwards fetch sub-requests concurrently.
 func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.FetchRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fetchFanOutResult {
+	coalesceFetchFallback(groups)
 	type workItem struct {
 		subReq  *kmsg.FetchRequest
 		conn    net.Conn
@@ -2023,7 +2026,6 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 			connectErrors = append(connectErrors, fetchFanOutResult{subReq: subReq, target: addr, err: err})
 			continue
 		}
-		triedBackends[targetAddr] = true
 
 		var payload []byte
 		if canUseOriginal {
