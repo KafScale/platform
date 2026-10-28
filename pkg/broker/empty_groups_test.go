@@ -16,12 +16,13 @@ package broker
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
-	"testing"
-	"time"
 )
 
 func TestGroupsWithOffsetsRemainVisibleWithoutMembers(t *testing.T) {
@@ -137,5 +138,44 @@ func TestOffsetOnlyGroupReadFailures(t *testing.T) {
 	deletion.Groups = []string{"g"}
 	if resp, err := c.DeleteGroups(context.Background(), deletion); err != nil || resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
 		t.Fatal(resp, err)
+	}
+}
+
+type storeWithoutAtomicDeletion struct{ metadata.Store }
+
+func TestDeleteGroupsWithLegacyStore(t *testing.T) {
+	ctx := context.Background()
+	for _, offsets := range []bool{false, true} {
+		base := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+		seedCoordinatorGroup(t, base, groupStateEmptyStr)
+		if offsets {
+			if err := base.CommitConsumerOffset(ctx, "readers", "orders", 0, 42, ""); err != nil {
+				t.Fatal(err)
+			}
+		}
+		legacy := storeWithoutAtomicDeletion{Store: base}
+		if _, ok := any(legacy).(metadata.ConsumerGroupDeleter); ok {
+			t.Fatal("Store interface requires atomic deletion")
+		}
+		c := newTestCoordinator(t, legacy)
+		req := kmsg.NewPtrDeleteGroupsRequest()
+		req.Groups = []string{"readers"}
+		resp, err := c.DeleteGroups(ctx, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if offsets {
+			if resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
+				t.Fatal(resp)
+			}
+			if group, _ := base.FetchConsumerGroup(ctx, "readers"); group == nil {
+				t.Fatal("failed legacy deletion removed group")
+			}
+			if offset, _, _ := base.FetchConsumerOffset(ctx, "readers", "orders", 0); offset != 42 {
+				t.Fatal("failed legacy deletion removed offsets")
+			}
+		} else if resp.Groups[0].ErrorCode != 0 {
+			t.Fatal(resp)
+		}
 	}
 }

@@ -55,8 +55,6 @@ type Store interface {
 	ListConsumerGroups(ctx context.Context) ([]*metadatapb.ConsumerGroup, error)
 	// DeleteConsumerGroup removes consumer group metadata.
 	DeleteConsumerGroup(ctx context.Context, groupID string) error
-	// DeleteConsumerGroupAndOffsets atomically removes the group record and committed offsets.
-	DeleteConsumerGroupAndOffsets(ctx context.Context, groupID string) error
 	// FetchTopicConfig returns the stored topic configuration.
 	FetchTopicConfig(ctx context.Context, topic string) (*metadatapb.TopicConfig, error)
 	// UpdateTopicConfig persists topic configuration updates.
@@ -610,24 +608,6 @@ func (s *InMemoryStore) DeleteConsumerGroup(ctx context.Context, groupID string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.consumerGroups, groupID)
-	return nil
-}
-
-// DeleteConsumerGroupAndOffsets is used only for an explicit group deletion.
-func (s *InMemoryStore) DeleteConsumerGroupAndOffsets(ctx context.Context, groupID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.consumerGroups, groupID)
-	for key := range s.consumerOffsets {
-		group, _, _, ok := parseConsumerKey(key)
-		if ok && group == groupID {
-			delete(s.consumerOffsets, key)
-			delete(s.consumerMeta, key)
-		}
-	}
 	return nil
 }
 

@@ -145,6 +145,10 @@ Request-specific notes:
   to return its committed offsets.
 - DeleteGroups atomically removes each group's metadata and committed offsets.
   It returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`.
+- Built-in stores support atomic deletion through the optional
+  `metadata.ConsumerGroupDeleter` capability. The required `metadata.Store`
+  interface is unchanged. A custom store without this capability can still delete
+  metadata-only groups; deleting a group with offsets fails without mutation.
 - DescribeConfigs returns only keys from the whitelist and ignores unknown keys.
 - AlterConfigs rejects any broker resource mutation with `INVALID_CONFIG`.
 

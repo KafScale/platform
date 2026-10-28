@@ -587,7 +587,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
-		if err := c.store.DeleteConsumerGroupAndOffsets(ctx, groupID); err != nil {
+		if err := metadata.DeleteConsumerGroupAndOffsets(ctx, c.store, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			resp.Groups = append(resp.Groups, result)
 			continue

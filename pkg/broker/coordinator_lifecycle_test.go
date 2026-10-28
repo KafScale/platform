@@ -207,7 +207,7 @@ func (s coordinatorFaultStore) DeleteConsumerGroupAndOffsets(ctx context.Context
 	if s.fail == "delete" {
 		return errCoordinatorStore
 	}
-	return s.Store.DeleteConsumerGroupAndOffsets(ctx, group)
+	return s.Store.(metadata.ConsumerGroupDeleter).DeleteConsumerGroupAndOffsets(ctx, group)
 }
 
 func (s coordinatorFaultStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string) error {

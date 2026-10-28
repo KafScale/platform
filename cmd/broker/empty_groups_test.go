@@ -17,11 +17,14 @@ package main
 
 import (
 	"context"
+	"testing"
+
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/broker"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
-	"testing"
 )
 
 func TestOffsetOnlyGroupVisibilityUsesGroupACLs(t *testing.T) {
@@ -69,5 +72,44 @@ func TestOffsetOnlyGroupVisibilityUsesGroupACLs(t *testing.T) {
 	described := decodeKmsgResponse(t, 5, data, kmsg.NewPtrDescribeGroupsResponse)
 	if described.Groups[0].ErrorCode != 0 || described.Groups[0].State != "Empty" || described.Groups[1].ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
 		t.Fatal(described)
+	}
+}
+
+func TestDeleteGroupsCannotCrossNestedGroupACL(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "true")
+	t.Setenv("KAFSCALE_ACL_JSON", `{"default_policy":"deny","principals":[{"name":"admin-a","allow":[{"action":"group_admin","resource":"group","name":"a"}]}]}`)
+	ctx := context.Background()
+	store, err := metadata.NewEtcdStore(ctx, defaultMetadata(), metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	victim := "a/offsets/victim"
+	for _, group := range []string{"a", victim} {
+		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: group, State: "empty"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CommitConsumerOffset(ctx, group, "orders", 0, 42, "checkpoint"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := newTestHandler(store)
+	t.Cleanup(h.coordinator.Stop)
+	ctx = broker.ContextWithConnInfo(ctx, &broker.ConnContext{Principal: "admin-a"})
+	req := kmsg.NewPtrDeleteGroupsRequest()
+	req.Groups = []string{"a", victim}
+	data, err := h.Handle(ctx, &protocol.RequestHeader{APIKey: protocol.APIKeyDeleteGroups, APIVersion: 2}, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := decodeKmsgResponse(t, 2, data, kmsg.NewPtrDeleteGroupsResponse)
+	if resp.Groups[0].ErrorCode != 0 || resp.Groups[1].ErrorCode != protocol.GROUP_AUTHORIZATION_FAILED {
+		t.Fatal(resp)
+	}
+	if record, err := store.FetchConsumerGroup(ctx, victim); err != nil || record == nil {
+		t.Fatal("deletion crossed group ACL", record, err)
+	}
+	if offset, meta, err := store.FetchConsumerOffset(ctx, victim, "orders", 0); err != nil || offset != 42 || meta != "checkpoint" {
+		t.Fatal("deletion crossed offset ACL", offset, meta, err)
 	}
 }

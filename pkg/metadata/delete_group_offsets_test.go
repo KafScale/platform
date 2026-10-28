@@ -17,9 +17,10 @@ package metadata
 
 import (
 	"context"
+	"testing"
+
 	"github.com/KafScale/platform/internal/testutil"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
-	"testing"
 )
 
 func TestDeleteConsumerGroupAndOffsets(t *testing.T) {
@@ -40,13 +41,13 @@ func TestDeleteConsumerGroupAndOffsets(t *testing.T) {
 			}
 			canceled, cancel := context.WithCancel(ctx)
 			cancel()
-			if err := store.DeleteConsumerGroupAndOffsets(canceled, "g"); err == nil {
+			if err := DeleteConsumerGroupAndOffsets(canceled, store, "g"); err == nil {
 				t.Fatal("canceled deletion succeeded")
 			}
 			if group, err := store.FetchConsumerGroup(ctx, "g"); err != nil || group == nil {
 				t.Fatal("canceled deletion changed group", group, err)
 			}
-			if err := store.DeleteConsumerGroupAndOffsets(ctx, "g"); err != nil {
+			if err := DeleteConsumerGroupAndOffsets(ctx, store, "g"); err != nil {
 				t.Fatal(err)
 			}
 			if group, err := store.FetchConsumerGroup(ctx, "g"); err != nil || group != nil {
@@ -58,7 +59,7 @@ func TestDeleteConsumerGroupAndOffsets(t *testing.T) {
 			if offsets, err := store.ListGroupConsumerOffsets(ctx, "g-other"); err != nil || len(offsets) != 1 {
 				t.Fatal(offsets, err)
 			}
-			if err := store.DeleteConsumerGroupAndOffsets(ctx, "g"); err != nil {
+			if err := DeleteConsumerGroupAndOffsets(ctx, store, "g"); err != nil {
 				t.Fatal("deletion not idempotent", err)
 			}
 		})
