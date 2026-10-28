@@ -137,6 +137,41 @@ func TestProxyPlainAutoCreateE2E(t *testing.T) {
 			if len(records) != 1 || string(records[0].Value) != "auto-created" {
 				t.Fatal(records)
 			}
+			// Empty partitions must not each consume the client's default 5s wait.
+			create := kmsg.NewPtrCreateTopicsRequest()
+			create.Topics = []kmsg.CreateTopicsRequestTopic{{Topic: "qa-eight", NumPartitions: 8, ReplicationFactor: 1}}
+			created, err := create.RequestWith(requestCtx, producer)
+			if err != nil || created.Topics[0].ErrorCode != 0 {
+				t.Fatal(created, err)
+			}
+			manual, err := kgo.NewClient(kgo.SeedBrokers(proxyAddr), kgo.DisableIdempotentWrite(), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manual.Close()
+			if err := manual.ProduceSync(requestCtx, &kgo.Record{Topic: "qa-eight", Partition: 7, Value: []byte("last-partition")}).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
+			for _, address := range []string{brokerAddr} {
+				partitions := map[int32]kgo.Offset{}
+				for i := int32(0); i < 8; i++ {
+					partitions[i] = kgo.NewOffset().AtStart()
+				}
+				reader, err := kgo.NewClient(kgo.SeedBrokers(address), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"qa-eight": partitions}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				fetchCtx, stopFetch := context.WithTimeout(ctx, 12*time.Second)
+				start := time.Now()
+				fetched := reader.PollFetches(fetchCtx)
+				elapsed := time.Since(start)
+				stopFetch()
+				reader.Close()
+				if len(fetched.Errors()) != 0 || len(fetched.Records()) != 1 || elapsed > 4*time.Second {
+					t.Fatalf("8-partition fetch via %s: elapsed=%s errors=%v records=%d", address, elapsed, fetched.Errors(), len(fetched.Records()))
+				}
+			}
+
 		})
 	}
 }

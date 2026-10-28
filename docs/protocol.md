@@ -24,7 +24,7 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | API Key | Name | Version | Notes |
 |---------|------|---------|-------|
 | 0 | Produce | 0-9 | Core produce path |
-| 1 | Fetch | 11-13 | Core consume path |
+| 1 | Fetch | 11-13 | Request-wide MaxWait and MinBytes across partitions |
 | 2 | ListOffsets | 0-4 | Required for consumers |
 | 3 | Metadata | 0-12 | Topic/broker discovery |
 | 8 | OffsetCommit | 3 | Consumer group tracking (v3 only) |
