@@ -97,12 +97,12 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set console.auth.password='use-a-secret'
 ```
 
-- **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
+- **TLS and mTLS** – The proxy can terminate TLS 1.3 and authenticate Kafka clients with mTLS. See [mTLS authentication](/kafka-authentication/). Brokers and the console have no TLS listener of their own; terminate TLS for the console at your ingress or service mesh.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
 - **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
 - **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default. For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
-- **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. Identity comes from Kafka `client.id` until SASL is introduced. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
+- **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. With proxy mTLS enabled, identity comes from the client certificate mapping. Without it, identity comes from Kafka `client.id` or network identity, which is not authentication. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
   - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
   - **Trust boundary** – Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
@@ -129,8 +129,10 @@ operator:
 
 ### Proxy TLS via LoadBalancer (Recommended)
 
-The proxy is the external Kafka entrypoint. For TLS in v1.5, terminate TLS at
+The proxy is the external Kafka entrypoint. One option is to terminate TLS at
 the cloud LoadBalancer by supplying Service annotations in the Helm values.
+For per-client authentication and broker ACLs, use the proxy's own mTLS listener
+with TLS passthrough at the LoadBalancer instead. See [mTLS authentication](/kafka-authentication/).
 This keeps broker traffic plaintext inside the cluster while enabling HTTPS/TLS
 for clients.
 
@@ -563,8 +565,8 @@ spec:
     endpoints: []
 ```
 
-TLS note: brokers speak plaintext today. If you need TLS for Kafka traffic,
-terminate TLS at your load balancer, ingress TCP proxy, or service mesh and
+TLS note: brokers speak plaintext. For TLS on Kafka traffic, enable TLS or mTLS
+on the proxy ([mTLS authentication](/kafka-authentication/)), or terminate TLS at your load balancer, ingress TCP proxy, or service mesh and
 advertise that endpoint in `advertisedHost`/`advertisedPort`. See [`docs/security.md`](/security/)
 for the current transport security posture.
 

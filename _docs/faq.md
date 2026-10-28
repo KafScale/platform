@@ -358,20 +358,15 @@ The operator and CRDs are Kubernetes-native, but the broker binary can run stand
 
 ### Does KafScale support TLS?
 
-Yes. Configure TLS for client connections and inter-broker communication via the CRD:
+Yes. The KafScale proxy terminates TLS 1.3 for Kafka clients. Supplying `KAFSCALE_PROXY_TLS_CERT_FILE` and `KAFSCALE_PROXY_TLS_KEY_FILE` enables server TLS. Traffic from the proxy to brokers stays plaintext inside the cluster, so restrict it with the NetworkPolicies the operator creates. You can still terminate TLS at a load balancer, ingress or service mesh instead. See [mTLS authentication](/kafka-authentication/).
 
-```yaml
-spec:
-  tls:
-    enabled: true
-    secretRef: kafscale-tls
-```
+### Does KafScale support mTLS?
 
-The secret should contain `tls.crt` and `tls.key`.
+Yes, at the proxy. Clients present a certificate with a URI SAN, and `principals.json` maps that URI to a principal. The proxy forwards the principal to brokers with a per-connection HMAC proof, and broker ACLs authorize it. There is no CN, subject DN or `client.id` fallback. On a KafscaleCluster, set `spec.security.tlsSecretRef`, `identitySecretRef` and `aclSecretRef`. Certificates, CAs and mappings are reloaded for each new connection. It was merged to main after v1.6.3. See [mTLS authentication](/kafka-authentication/).
 
 ### Does KafScale support authentication?
 
-SASL/PLAIN and SASL/SCRAM are on the roadmap. Currently, network-level security (Kubernetes NetworkPolicies, service mesh) is recommended.
+Yes, with mTLS at the proxy. SASL is not supported, so set Kafka clients to `security.protocol=SSL` with a keystore and truststore. Without proxy mTLS, ACLs use `client.id` or network identity, which is not authentication.
 
 ### Is data encrypted at rest?
 

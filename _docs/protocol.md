@@ -64,19 +64,13 @@ emit warning logs with topic, partition, requested timestamp, error code, and ca
 | 57 | UpdateFeatures | Feature flags deferred |
 | 65-67 | Transaction APIs | Transactions not supported |
 
-## Authentication Roadmap
+## Authentication
 
-| Version | Auth Mechanism | Use Case |
-|---------|---------------|----------|
-| v1.0 | None | Internal/dev clusters |
-| v1.5 | Auth groundwork | TLS on by default, auth plumbing, and UI/session hardening |
-| v2.0 | SASL/PLAIN | Username/password |
-| v2.0 | SASL/SCRAM-SHA-256/512 | Username/password + challenge-response |
-| v2.0 | ACL authorization | Per-topic/group access control |
-| v2.0 | mTLS | Certificate-based auth |
-| v2.0 | SASL/OAUTHBEARER | Enterprise SSO |
+| Mechanism | Status |
+|-----------|--------|
+| mTLS at the proxy | Supported on main since PR #214. URI SAN mapped to a principal, enforced by broker ACLs. See [mTLS authentication](/kafka-authentication/) |
+| ACL authorization | Supported. Per-topic, group and admin rules |
+| SASL (PLAIN, SCRAM, OAUTHBEARER) | Not supported |
 
-v1.5 focuses on basic broker ACLs with identity derived from `client.id`; terminate TLS at the proxy/LB.
-
-Until SASL lands, Kafscale rejects SASL handshake/auth requests as unsupported
+Kafscale rejects SASL handshake/auth requests as unsupported
 API keys and closes the connection (no SASL-specific error payload is returned).

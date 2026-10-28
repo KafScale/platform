@@ -21,6 +21,14 @@ Up to 90% lower storage cost than Kafka on replicated broker disks. Calculation 
 
 S3 stores data redundantly across availability zones, so KafScale keeps one copy instead of three. Compute, S3 requests and network are separate. Source: https://kafscale.io/comparison/#storage-cost
 
+## Does KafScale support TLS, mTLS and authentication?
+
+Yes, at the KafScale proxy (PR #214, merged to main on 27 October 2026, after v1.6.3). The proxy terminates TLS 1.3. With a client CA, a principal mapping file and a shared forwarding key it requires client certificates (mTLS). Each client certificate carries a URI SAN, and principals.json maps the URI to a principal. There is no CN, subject DN or client.id fallback. The proxy forwards the principal to brokers with a per-connection challenge and HMAC proof, and broker ACLs enforce it. Proxy to broker traffic stays plaintext inside the cluster; the operator creates NetworkPolicies that allow broker port 9092 only from the proxy.
+
+Configure on a KafscaleCluster with spec.security.tlsSecretRef (tls.crt, tls.key, ca.crt, principals.json), identitySecretRef (key, at least 32 random bytes) and aclSecretRef (acl.json), or in Helm with proxy.security.*. Runtime variables: KAFSCALE_PROXY_TLS_CERT_FILE, KAFSCALE_PROXY_TLS_KEY_FILE, KAFSCALE_PROXY_TLS_CLIENT_CA_FILE, KAFSCALE_PROXY_TLS_PRINCIPALS_FILE, KAFSCALE_PROXY_IDENTITY_KEY_FILE. Handshake defaults: 64 concurrent handshakes, 8 pending per source IP, 1000 ms deadline, 100 ms queue wait. Certificates, CAs and mappings are reloaded for each new connection. Clients use security.protocol=SSL. SASL is not supported.
+
+Details: https://kafscale.io/kafka-authentication/
+
 ## What is KafScale latency?
 
 KafScale latency is S3 latency plus one metadata write. By default (KAFSCALE_PRODUCE_SYNC_FLUSH=true, producer acks=1 or acks=all) the broker acknowledges a produce request after the batch is written to S3 and the segment metadata is committed to etcd. Produce latency is therefore roughly one S3 PUT plus one etcd write, plus up to linger.ms of producer batching. The segment and its index upload in parallel.

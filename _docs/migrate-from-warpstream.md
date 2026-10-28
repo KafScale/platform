@@ -29,6 +29,8 @@ KafScale does not support everything WarpStream does. Check these before you sta
 | Idempotent producers | Yes | No. Set `enable.idempotence=false` |
 | Compacted topics | Yes | No |
 | ACL admin API | Yes | No |
+| SASL authentication | Yes | No |
+| mTLS client authentication | Yes | Yes, at the KafScale proxy. See [mTLS authentication](/kafka-authentication/) |
 | Produce latency | ~400-600ms p99 (WarpStream docs) | Roughly S3 PUT latency plus one etcd write per acked produce. AWS documents roughly 100–200 ms for small S3 objects. See [Latency](/latency/#derived-latency-by-operation) |
 | Metadata | WarpStream control plane | etcd in your cluster |
 | License | Proprietary | Apache 2.0 |

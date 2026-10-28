@@ -59,4 +59,5 @@ Commercial support and an enterprise version of KafScale are available from Scal
 - [`docs/architecture.md`](/architecture/) for system internals.
 - [`docs/protocol.md`](/protocol/) for Kafka protocol coverage.
 - [`docs/security.md`](/security/) for security posture and roadmap.
+- [mTLS authentication](/kafka-authentication/) for Kafka client TLS and mTLS at the proxy.
 - `kafscale-spec.md` for the technical specification.

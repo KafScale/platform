@@ -61,7 +61,7 @@ local clusters (kind), pin `proxy.service.nodePort` (range `30000–32767`).
 **Optional:** to expose brokers directly (bypassing the proxy), configure
 `KafscaleCluster` `spec.brokers.service` and `advertisedHost` / `advertisedPort`.
 
-See [Operations](/operations/) for full examples and TLS termination guidance.
+See [Operations](/operations/) for full examples and TLS termination guidance. For Kafka client mTLS at the proxy, set `proxy.security.tlsSecretRef`, `identitySecretRef` and `aclSecretRef`; see [mTLS authentication](/kafka-authentication/).
 
 ### MCP
 
