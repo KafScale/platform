@@ -248,7 +248,11 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			resp.ErrorCode = protocol.REQUEST_TIMED_OUT
 			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 		}
-		resp, err := h.coordinator.JoinGroup(ctx, req)
+		clientID := ""
+		if header.ClientID != nil {
+			clientID = *header.ClientID
+		}
+		resp, err := h.coordinator.JoinGroupWithClient(ctx, req, clientID)
 		if err != nil {
 			return nil, err
 		}
@@ -1758,14 +1762,50 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 }
 
 func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeader, req *kmsg.FetchRequest) ([]byte, error) {
+	deadline := time.Now().Add(time.Duration(req.MaxWaitMillis) * time.Millisecond)
+	for {
+		// Inspect every partition before waiting. A request has one MinBytes target
+		// and one deadline, regardless of how many partitions are empty.
+		resp, messages, err := h.fetchResponseOnce(ctx, header, req)
+		if err != nil {
+			return nil, err
+		}
+		bytes := 0
+		failed := false
+		for _, topic := range resp.Topics {
+			for _, part := range topic.Partitions {
+				bytes += len(part.RecordBatches)
+				failed = failed || part.ErrorCode != protocol.NONE
+			}
+		}
+		remaining := time.Until(deadline)
+		finish := func() ([]byte, error) {
+			if messages > 0 {
+				h.fetchRate.add(messages)
+			}
+			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+		}
+		if failed || bytes >= int(req.MinBytes) || remaining <= 0 || ctx.Err() != nil || len(req.Topics) == 0 {
+			return finish()
+		}
+		if remaining > fetchPollInterval {
+			remaining = fetchPollInterval
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return finish()
+		case <-timer.C:
+		}
+	}
+}
+
+func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.RequestHeader, req *kmsg.FetchRequest) (*kmsg.FetchResponse, int64, error) {
 	if header.APIVersion > 13 {
-		return nil, fmt.Errorf("fetch version %d not supported", header.APIVersion)
+		return nil, 0, fmt.Errorf("fetch version %d not supported", header.APIVersion)
 	}
 	topicResponses := make([]kmsg.FetchResponseTopic, 0, len(req.Topics))
-	maxWait := time.Duration(req.MaxWaitMillis) * time.Millisecond
-	if maxWait < 0 {
-		maxWait = 0
-	}
 	var fetchedMessages int64
 	zeroID := [16]byte{}
 	idToName := map[[16]byte]string{}
@@ -1774,7 +1814,7 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 		if topic.TopicID != zeroID {
 			meta, err := h.store.Metadata(ctx, nil)
 			if err != nil {
-				return nil, fmt.Errorf("load metadata: %w", err)
+				return nil, 0, fmt.Errorf("load metadata: %w", err)
 			}
 			for _, t := range meta.Topics {
 				idToName[t.TopicID] = *t.Topic
@@ -1846,7 +1886,7 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 				partitionResponses = append(partitionResponses, p)
 				continue
 			}
-			nextOffset, offsetErr := h.waitForFetchData(ctx, topicName, part.Partition, part.FetchOffset, maxWait)
+			nextOffset, offsetErr := h.store.NextOffset(ctx, topicName, part.Partition)
 			// In flush-disabled / acks=0 mode (KAFSCALE_PRODUCE_SYNC_FLUSH=false)
 			// no flush fires for the buffered tail, so the metadata store's
 			// high-watermark (nextOffset) lags the records already acknowledged to
@@ -1930,47 +1970,12 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 		topicResponses = append(topicResponses, t)
 	}
 
-	if fetchedMessages > 0 {
-		h.fetchRate.add(fetchedMessages)
-	}
-
 	resp := kmsg.NewPtrFetchResponse()
 	resp.Topics = topicResponses
-	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+	return resp, fetchedMessages, nil
 }
 
 const fetchPollInterval = 10 * time.Millisecond
-
-func (h *handler) waitForFetchData(ctx context.Context, topic string, partition int32, fetchOffset int64, maxWait time.Duration) (int64, error) {
-	nextOffset, err := h.store.NextOffset(ctx, topic, partition)
-	if err != nil || maxWait == 0 || fetchOffset < nextOffset {
-		return nextOffset, err
-	}
-
-	deadline := time.Now().Add(maxWait)
-	for {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return nextOffset, err
-		}
-		sleep := fetchPollInterval
-		if remaining < sleep {
-			sleep = remaining
-		}
-		timer := time.NewTimer(sleep)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nextOffset, ctx.Err()
-		case <-timer.C:
-		}
-
-		nextOffset, err = h.store.NextOffset(ctx, topic, partition)
-		if err != nil || fetchOffset < nextOffset {
-			return nextOffset, err
-		}
-	}
-}
 
 func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32) error {
 	desired := int32(h.autoCreatePartitions)

@@ -101,6 +101,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer func() { _ = conn.Close() }()
+	// Socket metadata is available even when no authentication hook is configured.
+	ctx = ContextWithConnInfo(ctx, &ConnContext{RemoteAddr: conn.RemoteAddr().String()})
 	if s.ConnContextFunc != nil {
 		wrapped, info, err := s.ConnContextFunc(conn)
 		if err != nil {
@@ -111,7 +113,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 			conn = wrapped
 		}
 		if info != nil {
-			ctx = ContextWithConnInfo(ctx, info)
+			copy := *info
+			if copy.RemoteAddr == "" {
+				copy.RemoteAddr = conn.RemoteAddr().String()
+			}
+			ctx = ContextWithConnInfo(ctx, &copy)
 		}
 	}
 	for {

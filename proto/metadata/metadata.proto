@@ -60,6 +60,8 @@ message GroupMember {
   repeated Assignment assignments = 4;
   repeated string subscriptions = 5;
   int32 session_timeout_ms = 6;
+  bytes protocol_metadata = 7;
+  bytes member_assignment = 8;
 }
 
 message ConsumerGroup {

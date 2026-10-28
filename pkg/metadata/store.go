@@ -27,6 +27,7 @@ import (
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"google.golang.org/protobuf/proto"
 )
 
 // Store exposes read-only access to cluster metadata used by Kafka protocol handlers.
@@ -634,34 +635,7 @@ func cloneConsumerGroup(group *metadatapb.ConsumerGroup) *metadatapb.ConsumerGro
 	if group == nil {
 		return nil
 	}
-	out := &metadatapb.ConsumerGroup{
-		GroupId:      group.GroupId,
-		State:        group.State,
-		ProtocolType: group.ProtocolType,
-		Protocol:     group.Protocol,
-		Leader:       group.Leader,
-		GenerationId: group.GenerationId,
-		Members:      make(map[string]*metadatapb.GroupMember, len(group.Members)),
-	}
-	for memberID, member := range group.Members {
-		cloned := &metadatapb.GroupMember{
-			ClientId:      member.ClientId,
-			ClientHost:    member.ClientHost,
-			HeartbeatAt:   member.HeartbeatAt,
-			Subscriptions: append([]string(nil), member.Subscriptions...),
-		}
-		if len(member.Assignments) > 0 {
-			cloned.Assignments = make([]*metadatapb.Assignment, 0, len(member.Assignments))
-			for _, assignment := range member.Assignments {
-				cloned.Assignments = append(cloned.Assignments, &metadatapb.Assignment{
-					Topic:      assignment.Topic,
-					Partitions: append([]int32(nil), assignment.Partitions...),
-				})
-			}
-		}
-		out.Members[memberID] = cloned
-	}
-	return out
+	return proto.Clone(group).(*metadatapb.ConsumerGroup)
 }
 
 func defaultTopicConfigFromTopic(topic *protocol.MetadataTopic, replicationFactor int16) *metadatapb.TopicConfig {
