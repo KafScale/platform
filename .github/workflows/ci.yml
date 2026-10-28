@@ -78,6 +78,7 @@ jobs:
           KUBEBUILDER_ASSETS="$("$(go env GOPATH)/bin/setup-envtest" use -p path 1.35.0)"
           export KUBEBUILDER_ASSETS
           go test -race -tags=e2e ./pkg/operator -run '^Test(AffinityOverridesAPI|KafkaSecurityAPI)$' -v -count=1 -timeout=2m
+          KAFSCALE_E2E=1 go test -race -tags=e2e ./test/e2e -run '^TestOperator(BrokerExternalAccessConfig|ManagedEtcdResources)$' -v -count=1 -timeout=3m
 
       - name: Run nested module tests
         run: make test-nested-modules

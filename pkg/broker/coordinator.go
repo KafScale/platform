@@ -306,47 +306,50 @@ func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *kmsg.HeartbeatReq
 
 func (c *GroupCoordinator) LeaveGroup(ctx context.Context, req *kmsg.LeaveGroupRequest) *kmsg.LeaveGroupResponse {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	resp := kmsg.NewPtrLeaveGroupResponse()
 	state, err := c.loadGroupIfMissing(ctx, req.Group)
-
-	mkResp := func(code int16) *kmsg.LeaveGroupResponse {
-		r := kmsg.NewPtrLeaveGroupResponse()
-		r.ErrorCode = code
-		return r
-	}
-
 	if err != nil {
-		c.mu.Unlock()
-		return mkResp(protocol.UNKNOWN_SERVER_ERROR)
-	}
-	if state == nil {
-		c.mu.Unlock()
-		return mkResp(protocol.UNKNOWN_MEMBER_ID)
-	}
-	if _, ok := state.members[req.MemberID]; !ok {
-		c.mu.Unlock()
-		return mkResp(protocol.UNKNOWN_MEMBER_ID)
-	}
-	delete(state.members, req.MemberID)
-	delete(state.assignments, req.MemberID)
-
-	if len(state.members) == 0 {
-		delete(c.groups, req.Group)
-		resp := mkResp(protocol.NONE)
-		if err := c.persistGroupLocked(ctx, req.Group, nil); err != nil {
-			resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-		}
-		c.mu.Unlock()
+		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 		return resp
 	}
-	if state.leaderID == req.MemberID {
-		state.leaderID = ""
+	members := req.Members
+	if req.Version < 3 {
+		members = []kmsg.LeaveGroupRequestMember{{MemberID: req.MemberID}}
 	}
-	state.startRebalance(0)
-	resp := mkResp(protocol.NONE)
+	removed := false
+	for _, member := range members {
+		result := kmsg.NewLeaveGroupResponseMember()
+		result.MemberID, result.InstanceID = member.MemberID, member.InstanceID
+		if state == nil || state.members[member.MemberID] == nil {
+			result.ErrorCode = protocol.UNKNOWN_MEMBER_ID
+		} else {
+			delete(state.members, member.MemberID)
+			delete(state.assignments, member.MemberID)
+			if state.leaderID == member.MemberID {
+				state.leaderID = ""
+			}
+			removed = true
+		}
+		if req.Version < 3 {
+			resp.ErrorCode = result.ErrorCode
+		} else {
+			resp.Members = append(resp.Members, result)
+		}
+	}
+	if !removed {
+		return resp
+	}
+	// Apply one group transition for the whole batch, including mixed success.
+	if len(state.members) == 0 {
+		delete(c.groups, req.Group)
+		state = nil
+	} else {
+		state.startRebalance(0)
+	}
 	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
-	c.mu.Unlock()
 	return resp
 }
 
@@ -398,6 +401,32 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *kmsg.OffsetFetchRequest) (*kmsg.OffsetFetchResponse, error) {
 	resp := kmsg.NewPtrOffsetFetchResponse()
 	resp.ErrorCode = protocol.NONE
+	if req.Version >= 2 && req.Topics == nil {
+		offsets, err := c.store.ListGroupConsumerOffsets(ctx, req.Group)
+		if err != nil {
+			resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+			return resp, nil
+		}
+		sort.Slice(offsets, func(i, j int) bool {
+			if offsets[i].Topic != offsets[j].Topic {
+				return offsets[i].Topic < offsets[j].Topic
+			}
+			return offsets[i].Partition < offsets[j].Partition
+		})
+		for _, offset := range offsets {
+			if len(resp.Topics) == 0 || resp.Topics[len(resp.Topics)-1].Topic != offset.Topic {
+				topic := kmsg.NewOffsetFetchResponseTopic()
+				topic.Topic = offset.Topic
+				resp.Topics = append(resp.Topics, topic)
+			}
+			part := kmsg.NewOffsetFetchResponseTopicPartition()
+			part.Partition, part.Offset, part.LeaderEpoch = offset.Partition, offset.Offset, -1
+			part.Metadata = kmsg.StringPtr(offset.Metadata)
+			topic := &resp.Topics[len(resp.Topics)-1]
+			topic.Partitions = append(topic.Partitions, part)
+		}
+		return resp, nil
+	}
 	resp.Topics = make([]kmsg.OffsetFetchResponseTopic, 0, len(req.Topics))
 	for _, topic := range req.Topics {
 		topicResp := kmsg.NewOffsetFetchResponseTopic()
