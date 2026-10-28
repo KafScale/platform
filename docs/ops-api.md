@@ -27,7 +27,7 @@ out of scope.
 - Prioritize operator parity (visibility, recovery, and cleanup).
 - Keep config mutation narrow and explicit.
 - Preserve a single source of truth in etcd metadata snapshots.
-- Avoid UI write paths until authentication and authorization exist.
+- No UI write paths.
 
 ## API Coverage (v1)
 
@@ -44,7 +44,7 @@ out of scope.
 ## Selection Rationale
 
 - These APIs unlock core ops workflows without requiring KRaft, transactions, or compaction.
-- Write APIs are intentionally narrow to reduce blast radius until auth/ACLs exist.
+- Write APIs are intentionally narrow to reduce blast radius.
 - Anything outside this list is deferred and advertised as unsupported in ApiVersions.
 
 ## Versioning Notes
@@ -123,7 +123,7 @@ metadata snapshot. The Kafka admin APIs will map to the same storage rules:
 - Partition creation should also pre-create empty partition metadata so brokers
   can begin serving immediately.
 
-Until auth lands, write access should remain API-only (no UI mutation).
+Write access is API-only (no UI mutation).
 
 ## Error Semantics
 

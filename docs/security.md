@@ -120,15 +120,24 @@ are rejected.
 - Admin APIs are writable without auth if ACLs are disabled; UI is read-only by
   policy, not enforcement.
 
-## Roadmap
+## Security model
 
-Planned security milestones (order may change as requirements evolve):
-
-- TLS enabled by default in production templates.
-- SASL/PLAIN and SASL/SCRAM for Kafka client authentication.
-- Optional mTLS for direct broker and console endpoints.
-- MCP services (if deployed) must be secured with strong auth, RBAC, and audit
-  logging; see `docs/mcp.md`.
+- Kafka clients connect to the KafScale proxy over TLS 1.3. With a client CA,
+  a principal mapping and a forwarding key configured, the proxy requires
+  client certificates (mTLS) and maps each certificate URI SAN to a principal.
+  See [Kafka proxy authentication](kafka-authentication.md).
+- Traffic from the proxy to brokers is plaintext inside the cluster. When
+  `spec.security` is configured, the operator creates a NetworkPolicy that
+  allows broker port 9092 only from the proxy and allows metrics port 9093.
+  Enforcement depends on the CNI.
+- The proxy forwards the principal to brokers with a per-connection challenge
+  and HMAC proof. Brokers reject connections without a valid proof and
+  enforce ACLs on the forwarded principal.
+- etcd runs inside the Kubernetes cluster. The operator-managed etcd listens on
+  plain HTTP. Components connect with an optional username and password
+  (`KAFSCALE_ETCD_USERNAME`, `KAFSCALE_ETCD_PASSWORD`). There is no etcd client
+  TLS setting.
+- SASL is not supported.
 
 ## Reporting Security Issues
 

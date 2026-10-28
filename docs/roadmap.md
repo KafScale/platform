@@ -36,3 +36,4 @@ This roadmap tracks completed work and open gaps. It is intentionally high level
 - Security review (TLS/auth)
 - End-to-end tests multi-segment restart durability
 - Authentication / ACL and security hardening
+- Kafka client mTLS at the proxy with authenticated principal forwarding to broker ACLs (#214)
