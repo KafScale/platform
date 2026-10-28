@@ -320,6 +320,18 @@ func (s *EtcdStore) DeleteConsumerGroup(ctx context.Context, groupID string) err
 	return err
 }
 
+// DeleteConsumerGroupAndOffsets atomically removes an explicitly deleted group.
+func (s *EtcdStore) DeleteConsumerGroupAndOffsets(ctx context.Context, groupID string) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err := s.client.Txn(ctx).Then(
+		clientv3.OpDelete(ConsumerGroupKey(groupID)),
+		clientv3.OpDelete(fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), groupID), clientv3.WithPrefix()),
+	).Commit()
+	s.recordEtcdResult(err)
+	return err
+}
+
 // FetchTopicConfig loads topic configuration from etcd or falls back to defaults.
 func (s *EtcdStore) FetchTopicConfig(ctx context.Context, topic string) (*metadatapb.TopicConfig, error) {
 	if topic == "" {

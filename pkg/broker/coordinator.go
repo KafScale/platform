@@ -455,7 +455,7 @@ func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.Describ
 	resp := kmsg.NewPtrDescribeGroupsResponse()
 	resp.Groups = make([]kmsg.DescribeGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
-		group, err := c.store.FetchConsumerGroup(ctx, groupID)
+		group, err := c.consumerGroupWithOffsets(ctx, groupID)
 		if err != nil {
 			g := kmsg.NewDescribeGroupsResponseGroup()
 			g.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -483,6 +483,24 @@ func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsR
 		return resp, nil
 	}
 
+	// Offset-only groups remain visible after leave, expiry, and restart.
+	offsets, err := c.store.ListConsumerOffsets(ctx)
+	if err != nil {
+		resp := kmsg.NewPtrListGroupsResponse()
+		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+		return resp, nil
+	}
+	known := make(map[string]bool, len(groups))
+	for _, group := range groups {
+		known[group.GroupId] = true
+	}
+	for _, offset := range offsets {
+		if !known[offset.Group] {
+			groups = append(groups, emptyConsumerGroup(offset.Group))
+			known[offset.Group] = true
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool { return groups[i].GroupId < groups[j].GroupId })
 	var statesFilter, typesFilter []string
 	if len(req.StatesFilter) > 0 {
 		statesFilter = req.StatesFilter
@@ -528,7 +546,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
-		group, err := c.store.FetchConsumerGroup(ctx, groupID)
+		group, err := c.consumerGroupWithOffsets(ctx, groupID)
 		if err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			resp.Groups = append(resp.Groups, result)
@@ -540,7 +558,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
-		if err := c.store.DeleteConsumerGroup(ctx, groupID); err != nil {
+		if err := c.store.DeleteConsumerGroupAndOffsets(ctx, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			resp.Groups = append(resp.Groups, result)
 			continue
@@ -550,6 +568,25 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		resp.Groups = append(resp.Groups, result)
 	}
 	return resp, nil
+}
+
+func emptyConsumerGroup(groupID string) *metadatapb.ConsumerGroup {
+	return &metadatapb.ConsumerGroup{GroupId: groupID, State: groupStateEmptyStr, ProtocolType: "consumer"}
+}
+
+func (c *GroupCoordinator) consumerGroupWithOffsets(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, error) {
+	group, err := c.store.FetchConsumerGroup(ctx, groupID)
+	if err != nil || group != nil {
+		return group, err
+	}
+	offsets, err := c.store.ListGroupConsumerOffsets(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	if len(offsets) > 0 {
+		return emptyConsumerGroup(groupID), nil
+	}
+	return nil, nil
 }
 
 func (c *GroupCoordinator) deleteGroupState(groupID string) {

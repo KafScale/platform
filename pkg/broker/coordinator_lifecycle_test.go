@@ -203,6 +203,13 @@ func (s coordinatorFaultStore) ListConsumerGroups(ctx context.Context) ([]*metad
 	return s.Store.ListConsumerGroups(ctx)
 }
 
+func (s coordinatorFaultStore) DeleteConsumerGroupAndOffsets(ctx context.Context, group string) error {
+	if s.fail == "delete" {
+		return errCoordinatorStore
+	}
+	return s.Store.DeleteConsumerGroupAndOffsets(ctx, group)
+}
+
 func (s coordinatorFaultStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string) error {
 	if s.fail == "commit" {
 		return errCoordinatorStore
