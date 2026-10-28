@@ -217,9 +217,18 @@ func (s *EtcdStore) FetchConsumerOffset(ctx context.Context, group, topic string
 
 // ListConsumerOffsets returns all committed offsets stored in etcd.
 func (s *EtcdStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error) {
+	return s.listConsumerOffsets(ctx, ConsumerGroupPrefix())
+}
+
+// ListGroupConsumerOffsets reads only the requested group's offset prefix.
+func (s *EtcdStore) ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error) {
+	return s.listConsumerOffsets(ctx, fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), group))
+}
+
+func (s *EtcdStore) listConsumerOffsets(ctx context.Context, prefix string) ([]ConsumerOffset, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := s.client.Get(ctx, ConsumerGroupPrefix(), clientv3.WithPrefix())
+	resp, err := s.client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
 		s.recordEtcdResult(err)
 		return nil, err
@@ -240,6 +249,7 @@ func (s *EtcdStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, 
 			Topic:     topic,
 			Partition: partition,
 			Offset:    rec.Offset,
+			Metadata:  rec.Metadata,
 		})
 	}
 	return offsets, nil

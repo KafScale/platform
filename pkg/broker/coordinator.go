@@ -401,6 +401,32 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *kmsg.OffsetFetchRequest) (*kmsg.OffsetFetchResponse, error) {
 	resp := kmsg.NewPtrOffsetFetchResponse()
 	resp.ErrorCode = protocol.NONE
+	if req.Version >= 2 && req.Topics == nil {
+		offsets, err := c.store.ListGroupConsumerOffsets(ctx, req.Group)
+		if err != nil {
+			resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+			return resp, nil
+		}
+		sort.Slice(offsets, func(i, j int) bool {
+			if offsets[i].Topic != offsets[j].Topic {
+				return offsets[i].Topic < offsets[j].Topic
+			}
+			return offsets[i].Partition < offsets[j].Partition
+		})
+		for _, offset := range offsets {
+			if len(resp.Topics) == 0 || resp.Topics[len(resp.Topics)-1].Topic != offset.Topic {
+				topic := kmsg.NewOffsetFetchResponseTopic()
+				topic.Topic = offset.Topic
+				resp.Topics = append(resp.Topics, topic)
+			}
+			part := kmsg.NewOffsetFetchResponseTopicPartition()
+			part.Partition, part.Offset, part.LeaderEpoch = offset.Partition, offset.Offset, -1
+			part.Metadata = kmsg.StringPtr(offset.Metadata)
+			topic := &resp.Topics[len(resp.Topics)-1]
+			topic.Partitions = append(topic.Partitions, part)
+		}
+		return resp, nil
+	}
 	resp.Topics = make([]kmsg.OffsetFetchResponseTopic, 0, len(req.Topics))
 	for _, topic := range req.Topics {
 		topicResp := kmsg.NewOffsetFetchResponseTopic()

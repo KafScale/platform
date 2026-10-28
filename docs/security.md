@@ -98,6 +98,11 @@ or invalid. Default is fail-closed (deny).
 - **Actions**: `produce`, `fetch`, `group_read`, `group_write`, `group_admin`, `admin`
 - **Resources**: `topic`, `group`, `cluster`
 
+OffsetFetch requires `group_read` on the group and `fetch` on each topic. A null
+topic list returns all committed partitions the principal may fetch. An empty
+topic list returns no partitions. Explicitly named denied topics return
+`TOPIC_AUTHORIZATION_FAILED` without committed offsets or metadata.
+
 ### Client Configuration
 
 In legacy mode, set `client.id` to the principal name used in ACLs. This value

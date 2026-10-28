@@ -22,6 +22,7 @@ required = {
     'cmd/proxy/lfs_authorization.go',
     'cmd/proxy/lfs_http_authorization.go',
     'cmd/broker/identity.go',
+    'cmd/broker/offset_fetch.go',
     'pkg/operator/kafka_security.go',
     'pkg/operator/kafka_acl_rollout.go',
     'pkg/operator/secret_cache.go',
