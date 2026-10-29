@@ -273,6 +273,7 @@ func (m *LeaseManager) Owns(resourceID string) bool {
 func (m *LeaseManager) Release(resourceID string) {
 	m.mu.Lock()
 	_, ok := m.owned[resourceID]
+	session := m.session
 	if ok {
 		delete(m.owned, resourceID)
 	}
@@ -282,7 +283,11 @@ func (m *LeaseManager) Release(resourceID string) {
 		leaseKey := m.leaseKey(resourceID)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, err := m.client.Delete(ctx, leaseKey); err != nil {
+		checks := []clientv3.Cmp{clientv3.Compare(clientv3.Value(leaseKey), "=", m.brokerID)}
+		if session != nil {
+			checks = append(checks, clientv3.Compare(clientv3.LeaseValue(leaseKey), "=", int64(session.Lease())))
+		}
+		if _, err := m.client.Txn(ctx).If(checks...).Then(clientv3.OpDelete(leaseKey)).Commit(); err != nil {
 			m.logger.Warn(fmt.Sprintf("failed to delete %s lease key", m.resourceKind),
 				"key", leaseKey, "error", err)
 		}

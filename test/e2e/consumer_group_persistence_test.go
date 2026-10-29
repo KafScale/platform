@@ -27,10 +27,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/KafScale/platform/pkg/metadata"
 )
@@ -173,7 +175,25 @@ func TestConsumerGroupMetadataPersistsInEtcd(t *testing.T) {
 	stopBroker(t, brokerCmd)
 }
 
-func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string) (*exec.Cmd, *bytes.Buffer) {
+// brokerLogBuffer allows readiness checks while os/exec streams process output.
+type brokerLogBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *brokerLogBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(data)
+}
+
+func (b *brokerLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string, extraEnv ...string) (*exec.Cmd, *brokerLogBuffer) {
 	t.Helper()
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
 	configureProcessGroup(brokerCmd)
@@ -186,7 +206,8 @@ func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsA
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
 		fmt.Sprintf("KAFSCALE_ETCD_ENDPOINTS=%s", strings.Join(endpoints, ",")),
 	)
-	var brokerLogs bytes.Buffer
+	brokerCmd.Env = append(brokerCmd.Env, extraEnv...)
+	var brokerLogs brokerLogBuffer
 	logWriter := io.MultiWriter(&brokerLogs, mustLogFile(t, "broker-etcd.log"))
 	brokerCmd.Stdout = logWriter
 	brokerCmd.Stderr = logWriter
@@ -225,4 +246,95 @@ func freeAddr(t *testing.T) string {
 		t.Fatalf("close listener: %v", err)
 	}
 	return addr
+}
+
+// A raw protocol client creates membership without a background heartbeat loop,
+// then SIGKILL leaves it in etcd for a replacement broker to expire.
+func TestDeleteConsumerGroupAfterCoordinatorCrash(t *testing.T) {
+	if os.Getenv("KAFSCALE_E2E") != "1" {
+		t.Skip("set KAFSCALE_E2E=1 to run integration harness")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	etcd, endpoints := startEmbeddedEtcd(t)
+	defer etcd.Close()
+	brokerAddr, metricsAddr, controlAddr := freeAddr(t), freeAddr(t), freeAddr(t)
+	brokerCmd, logs := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	t.Cleanup(func() { stopBroker(t, brokerCmd) })
+	waitForBroker(t, logs, brokerAddr)
+	client, err := kgo.NewClient(kgo.SeedBrokers(brokerAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, group := range []string{"crashed", "live"} {
+		join := kmsg.NewPtrJoinGroupRequest()
+		join.Group, join.ProtocolType = group, "consumer"
+		join.SessionTimeoutMillis = 2000
+		if group == "live" {
+			join.SessionTimeoutMillis = 60000
+		}
+		join.Protocols = []kmsg.JoinGroupRequestProtocol{{Name: "range"}}
+		joined, err := join.RequestWith(ctx, client)
+		if err != nil || joined.ErrorCode != 0 {
+			t.Fatalf("join: %+v, %v", joined, err)
+		}
+		commit := kmsg.NewPtrOffsetCommitRequest()
+		commit.Group, commit.MemberID, commit.Generation = group, joined.MemberID, joined.Generation
+		commit.Topics = []kmsg.OffsetCommitRequestTopic{{Topic: "orders", Partitions: []kmsg.OffsetCommitRequestTopicPartition{{Partition: 0, Offset: 42}}}}
+		committed, err := commit.RequestWith(ctx, client)
+		if err != nil || len(committed.Topics) != 1 || len(committed.Topics[0].Partitions) != 1 || committed.Topics[0].Partitions[0].ErrorCode != 0 {
+			t.Fatalf("commit: %+v, %v", committed, err)
+		}
+	}
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	before, err := store.FetchConsumerGroup(ctx, "crashed")
+	if err != nil || before == nil || len(before.Members) != 1 {
+		t.Fatalf("persisted membership: %+v, %v", before, err)
+	}
+	if err := signalProcessGroup(brokerCmd, os.Kill); err != nil {
+		t.Fatal(err)
+	}
+	_ = brokerCmd.Wait()
+	client.Close()
+	// Wait only for the recorded member's session deadline, without joining again.
+	for _, member := range before.Members {
+		heartbeat, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if remaining := time.Until(heartbeat.Add(time.Duration(member.SessionTimeoutMs)*time.Millisecond + 5*time.Second + 20*time.Millisecond)); remaining > 0 {
+			time.Sleep(remaining)
+		}
+	}
+	brokerCmd, logs = startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	waitForBroker(t, logs, brokerAddr)
+	admin, err := kgo.NewClient(kgo.SeedBrokers(brokerAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	del := kmsg.NewPtrDeleteGroupsRequest()
+	del.Groups = []string{"crashed", "live"}
+	deleted, err := del.RequestWith(ctx, admin)
+	if err != nil || len(deleted.Groups) != 2 || deleted.Groups[0].ErrorCode != 0 || deleted.Groups[1].ErrorCode != 68 {
+		t.Fatalf("delete after crash: %+v, %v", deleted, err)
+	}
+	if group, err := store.FetchConsumerGroup(ctx, "crashed"); err != nil || group != nil {
+		t.Fatal(group, err)
+	}
+	if offsets, err := store.ListGroupConsumerOffsets(ctx, "crashed"); err != nil || len(offsets) != 0 {
+		t.Fatal(offsets, err)
+	}
+	live, err := store.FetchConsumerGroup(ctx, "live")
+	if err != nil || live == nil || len(live.Members) != 1 {
+		t.Fatal(live, err)
+	}
+	if offsets, err := store.ListGroupConsumerOffsets(ctx, "live"); err != nil || len(offsets) != 1 || offsets[0].Offset != 42 {
+		t.Fatal(offsets, err)
+	}
 }

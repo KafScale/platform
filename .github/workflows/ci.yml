@@ -69,6 +69,11 @@ jobs:
           KAFSCALE_E2E_AUTH: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^TestProxy(MTLS|PlainAutoCreate)E2E$' -v -count=1 -timeout=3m
 
+      - name: Consumer group recovery end-to-end tests
+        env:
+          KAFSCALE_E2E: "1"
+        run: go test -race -tags=e2e ./test/e2e -run '^Test(DeleteConsumerGroupAfterCoordinatorCrash|DeleteGroupsNonCoordinatorE2E|OpsAPI)$' -count=1 -timeout=3m
+
       - name: CRD and security reconciliation API tests
         env:
           KAFSCALE_E2E_AFFINITY: "1"
