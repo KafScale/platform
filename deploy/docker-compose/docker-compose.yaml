@@ -25,7 +25,7 @@
 #   - etcd:        http://localhost:2379
 #   - minio:       http://localhost:9000 (console: http://localhost:9001)
 #   - broker:      localhost:9092
-#   - lfs-proxy:   localhost:9092 (kafka), http://localhost:8080 (HTTP API)
+#   - proxy:       localhost:9093 (kafka), http://localhost:8080 (HTTP API)
 #   - console:     http://localhost:3080
 #
 # Test LFS upload:
@@ -139,6 +139,40 @@ services:
       - broker-data:/data
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - kafscale
+
+  proxy:
+    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-proxy:${TAG:-dev}
+    container_name: kafscale-proxy-dc
+    depends_on:
+      etcd:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    environment:
+      KAFSCALE_PROXY_ADDR: ":9092"
+      KAFSCALE_PROXY_ADVERTISED_HOST: "localhost"
+      KAFSCALE_PROXY_ADVERTISED_PORT: "9093"
+      KAFSCALE_PROXY_HEALTH_ADDR: ":9094"
+      KAFSCALE_PROXY_ETCD_ENDPOINTS: "http://etcd:2379"
+      KAFSCALE_PROXY_BACKENDS: "broker:9092"
+      KAFSCALE_PROXY_LFS_ENABLED: "true"
+      KAFSCALE_LFS_PROXY_HTTP_ADDR: ":8080"
+      KAFSCALE_LFS_PROXY_S3_BUCKET: "kafscale"
+      KAFSCALE_LFS_PROXY_S3_REGION: "us-east-1"
+      KAFSCALE_LFS_PROXY_S3_ENDPOINT: "http://minio:9000"
+      KAFSCALE_LFS_PROXY_S3_ACCESS_KEY: "minioadmin"
+      KAFSCALE_LFS_PROXY_S3_SECRET_KEY: "minioadmin"
+      KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE: "true"
+    ports:
+      - "9093:9092"
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9094/readyz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
