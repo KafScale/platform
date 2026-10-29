@@ -77,6 +77,13 @@ func GroupResponseErrorCode(apiKey int16, apiVersion int16, resp []byte) (int16,
 		return decodeOffsetFetchErrorCode(apiVersion, body)
 	case APIKeyDescribeGroups:
 		return decodeDescribeGroupsErrorCode(apiVersion, body)
+	case APIKeyDeleteGroups:
+		decoded := kmsg.NewPtrDeleteGroupsResponse()
+		decoded.Version = apiVersion
+		if decoded.ReadFrom(body) != nil || len(decoded.Groups) != 1 {
+			return 0, false
+		}
+		return decoded.Groups[0].ErrorCode, true
 	default:
 		return 0, false
 	}

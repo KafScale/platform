@@ -257,3 +257,21 @@ func TestGroupResponseErrorCode_UnsupportedKey(t *testing.T) {
 		t.Fatalf("expected ok=false for unsupported api key")
 	}
 }
+
+func TestDeleteGroupRetryErrorCode(t *testing.T) {
+	for _, version := range []int16{0, 1, 2} {
+		resp := kmsg.NewPtrDeleteGroupsResponse()
+		resp.Groups = []kmsg.DeleteGroupsResponseGroup{{Group: "one", ErrorCode: 16}}
+		code, ok := GroupResponseErrorCode(APIKeyDeleteGroups, version, EncodeResponse(9, version, resp))
+		if !ok || code != 16 {
+			t.Fatal(version, code, ok)
+		}
+		resp.Groups = append(resp.Groups, kmsg.DeleteGroupsResponseGroup{Group: "done"})
+		if _, ok := GroupResponseErrorCode(APIKeyDeleteGroups, version, EncodeResponse(9, version, resp)); ok {
+			t.Fatal("must not retry an entire mixed delete")
+		}
+	}
+	if _, ok := GroupResponseErrorCode(APIKeyDeleteGroups, 2, []byte{0, 0, 0, 1}); ok {
+		t.Fatal("malformed response accepted")
+	}
+}

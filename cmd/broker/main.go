@@ -224,8 +224,13 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return h.handleFetch(ctx, header, req.(*kmsg.FetchRequest))
 	case *kmsg.FindCoordinatorRequest:
 		coord := h.coordinatorBroker(ctx)
+		code := int16(protocol.NONE)
+		findReq := req.(*kmsg.FindCoordinatorRequest)
+		if findReq.CoordinatorType == 0 {
+			coord, code = h.findGroupCoordinator(ctx, findReq.CoordinatorKey)
+		}
 		resp := kmsg.NewPtrFindCoordinatorResponse()
-		resp.ErrorCode = protocol.NONE
+		resp.ErrorCode = code
 		resp.NodeID = coord.NodeID
 		resp.Host = coord.Host
 		resp.Port = coord.Port
@@ -493,8 +498,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			deleteReq := req.(*kmsg.DeleteGroupsRequest)
 			allowed := make([]string, 0, len(deleteReq.Groups))
 			denied := make(map[string]struct{})
+			leaseErrors := make(map[string]int16)
 			for _, groupID := range deleteReq.Groups {
 				if h.allowGroup(principal, groupID, acl.ActionGroupAdmin) {
+					if strings.TrimSpace(groupID) != "" {
+						if code := h.acquireGroupLease(ctx, groupID); code != protocol.NONE {
+							leaseErrors[groupID] = code
+							continue
+						}
+					}
 					allowed = append(allowed, groupID)
 				} else {
 					denied[groupID] = struct{}{}
@@ -530,6 +542,12 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 					g := kmsg.NewDeleteGroupsResponseGroup()
 					g.Group = groupID
 					g.ErrorCode = protocol.GROUP_AUTHORIZATION_FAILED
+					results = append(results, g)
+					continue
+				}
+				if code, ok := leaseErrors[groupID]; ok {
+					g := kmsg.NewDeleteGroupsResponseGroup()
+					g.Group, g.ErrorCode = groupID, code
 					results = append(results, g)
 					continue
 				}
@@ -571,6 +589,30 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 }
 
 var ErrUnsupportedAPI = fmt.Errorf("unsupported api")
+
+// FindCoordinator must agree with the exclusive group lease, even when the
+// discovery request arrives at a different broker from the current owner.
+func (h *handler) findGroupCoordinator(ctx context.Context, groupID string) (protocol.MetadataBroker, int16) {
+	if h.groupLeaseManager == nil {
+		return h.coordinatorBroker(ctx), protocol.NONE
+	}
+	owner, err := h.groupLeaseManager.CurrentOwner(ctx, groupID)
+	if err != nil {
+		return protocol.MetadataBroker{}, protocol.COORDINATOR_NOT_AVAILABLE
+	}
+	if owner == "" || owner == strconv.FormatInt(int64(h.brokerInfo.NodeID), 10) {
+		return h.coordinatorBroker(ctx), protocol.NONE
+	}
+	meta, err := h.store.Metadata(ctx, nil)
+	if err == nil && meta != nil {
+		for _, info := range meta.Brokers {
+			if strconv.FormatInt(int64(info.NodeID), 10) == owner {
+				return info, protocol.NONE
+			}
+		}
+	}
+	return protocol.MetadataBroker{}, protocol.COORDINATOR_NOT_AVAILABLE
+}
 
 func (h *handler) coordinatorBroker(ctx context.Context) protocol.MetadataBroker {
 	meta, err := h.store.Metadata(ctx, nil)
@@ -2114,6 +2156,11 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			Logger:   logger,
 		})
 	}
+	coordinatorConfig := &broker.CoordinatorConfig{}
+	if groupLeaseManager != nil {
+		coordinatorConfig.OwnsGroup = groupLeaseManager.Owns
+		coordinatorConfig.GroupDeleted = groupLeaseManager.Release
+	}
 	return &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
@@ -2132,7 +2179,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			CacheEnabled:      true,
 			Logger:            logger,
 		},
-		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
+		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, coordinatorConfig),
 		leaseManager:         leaseManager,
 		groupLeaseManager:    groupLeaseManager,
 		s3Health:             health,
