@@ -23,7 +23,7 @@ LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
 LOCAL_NODE := $(LOCAL_NODE_BIN)/node
 LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
 
-.PHONY: proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
+.PHONY: proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -57,7 +57,7 @@ KAFSQL_DEMO_RECORDS ?= 200
 KAFSQL_DEMO_TIMEOUT_SEC ?= 120
 KAFSQL_PROCESSOR_RELEASE ?= kafsql-processor-dev
 MINIO_CONTAINER ?= kafscale-minio
-MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
+MINIO_IMAGE ?= kafscale-minio:local
 MINIO_PORT ?= 9000
 MINIO_CONSOLE_PORT ?= 9001
 MINIO_REGION ?= us-east-1
@@ -303,6 +303,9 @@ $(STAMP_DIR)/mcp.image: $(MCP_SRCS)
 	@touch $(STAMP_DIR)/mcp.image
 
 E2E_CLIENT_SRCS := $(shell find cmd/e2e-client go.mod go.sum)
+docker-build-minio: ## Build the MinIO test image from test/e2e/minio.Dockerfile
+	docker build -t $(MINIO_IMAGE) -f test/e2e/minio.Dockerfile .
+
 docker-build-e2e-client: $(STAMP_DIR)/e2e-client.image ## Build e2e client container image
 $(STAMP_DIR)/e2e-client.image: $(E2E_CLIENT_SRCS)
 	@mkdir -p $(STAMP_DIR)
@@ -371,7 +374,7 @@ ensure-minio: ## Ensure the local MinIO helper container is running and reachabl
 		$(MAKE) start-minio >/dev/null; \
 	fi
 
-start-minio:
+start-minio: $(if $(filter kafscale-minio:local,$(MINIO_IMAGE)),docker-build-minio)
 	@echo "starting MinIO helper $(MINIO_CONTAINER) on port $(MINIO_PORT)"
 	@docker rm -f $(MINIO_CONTAINER) >/dev/null 2>&1 || true
 	@docker run -d --name $(MINIO_CONTAINER) -p $(MINIO_PORT):9000 -p $(MINIO_CONSOLE_PORT):9001 \
@@ -474,7 +477,7 @@ test-operator: docker-build ## Run operator envtest + kind snapshot e2e (require
 	KAFSCALE_KIND_RECREATE=1 \
 	go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v
 
-demo-platform-bootstrap: docker-build ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
+demo-platform-bootstrap: docker-build docker-build-minio ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
 	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
@@ -489,6 +492,7 @@ demo-platform-bootstrap: docker-build ## Bootstrap a full platform demo on kind 
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@if [ "$(KAFSCALE_DEMO_CONSOLE)" = "1" ]; then kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@kind load docker-image $(ETCD_TOOLS_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@kind load docker-image $(MINIO_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | \
 	  KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl apply --validate=false -f -
