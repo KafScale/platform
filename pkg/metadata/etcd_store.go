@@ -311,11 +311,14 @@ func (s *EtcdStore) ListConsumerGroups(ctx context.Context) ([]*metadatapb.Consu
 	return groups, nil
 }
 
-// DeleteConsumerGroup removes persisted consumer group metadata.
+// DeleteConsumerGroup atomically removes group metadata and all committed offsets.
 func (s *EtcdStore) DeleteConsumerGroup(ctx context.Context, groupID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, err := s.client.Delete(ctx, ConsumerGroupKey(groupID))
+	_, err := s.client.Txn(ctx).Then(
+		clientv3.OpDelete(ConsumerGroupKey(groupID)),
+		clientv3.OpDelete(fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), groupID), clientv3.WithPrefix()),
+	).Commit()
 	s.recordEtcdResult(err)
 	return err
 }

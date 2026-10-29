@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/KafScale/platform/internal/testutil"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 )
 
 func TestListGroupConsumerOffsets(t *testing.T) {
@@ -66,6 +67,49 @@ func TestListGroupConsumerOffsets(t *testing.T) {
 				}
 				if _, err := store.ListGroupConsumerOffsets(ctx, "g"); err == nil {
 					t.Fatal("corrupt offset silently ignored")
+				}
+			}
+		})
+	}
+}
+
+func TestDeleteConsumerGroupRemovesOnlyItsOffsets(t *testing.T) {
+	for _, backend := range []string{"memory", "etcd"} {
+		t.Run(backend, func(t *testing.T) {
+			ctx := context.Background()
+			var store Store = NewInMemoryStore(ClusterMetadata{})
+			if backend == "etcd" {
+				store = newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+			}
+			for _, id := range []string{"g", "g-other"} {
+				if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: id, State: "empty"}); err != nil {
+					t.Fatal(err)
+				}
+				for _, partition := range []int32{0, 1} {
+					if err := store.CommitConsumerOffset(ctx, id, "orders", partition, 42, "checkpoint"); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := store.DeleteConsumerGroup(ctx, "g"); err != nil {
+				t.Fatal(err)
+			}
+			if group, err := store.FetchConsumerGroup(ctx, "g"); err != nil || group != nil {
+				t.Fatal(group, err)
+			}
+			if offsets, err := store.ListGroupConsumerOffsets(ctx, "g"); err != nil || len(offsets) != 0 {
+				t.Fatal(offsets, err)
+			}
+			if group, err := store.FetchConsumerGroup(ctx, "g-other"); err != nil || group == nil {
+				t.Fatal(group, err)
+			}
+			offsets, err := store.ListGroupConsumerOffsets(ctx, "g-other")
+			if err != nil || len(offsets) != 2 {
+				t.Fatal(offsets, err)
+			}
+			for _, offset := range offsets {
+				if offset.Offset != 42 || offset.Metadata != "checkpoint" {
+					t.Fatal(offset)
 				}
 			}
 		})

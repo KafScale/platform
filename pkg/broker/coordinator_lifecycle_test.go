@@ -162,8 +162,8 @@ func TestCoordinatorConsumerLifecycle(t *testing.T) {
 	if resp := restarted.LeaveGroup(ctx, leave); resp.ErrorCode != protocol.NONE {
 		t.Fatalf("last member leave: %+v", resp)
 	}
-	if group, err := store.FetchConsumerGroup(ctx, "readers"); err != nil || group != nil {
-		t.Fatalf("empty group should be removed: %+v, %v", group, err)
+	if group, err := store.FetchConsumerGroup(ctx, "readers"); err != nil || group == nil || group.State != groupStateEmptyStr || len(group.Members) != 0 {
+		t.Fatalf("empty group should be retained: %+v, %v", group, err)
 	}
 }
 
@@ -336,14 +336,14 @@ func TestCoordinatorStoreFailures(t *testing.T) {
 				if resp, err := c.DeleteGroups(ctx, req); err != nil || resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
 					t.Fatalf("delete: %+v, %v", resp, err)
 				}
-				if fail == "delete" {
-					leave := kmsg.NewPtrLeaveGroupRequest()
-					leave.Group, leave.MemberID = "readers", "a"
-					if resp := c.LeaveGroup(ctx, leave); resp.ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
-						t.Fatalf("last member leave: %+v", resp)
-					}
-				}
 			case "put":
+				leave := kmsg.NewPtrLeaveGroupRequest()
+				leave.Group, leave.MemberID = "readers", "a"
+				if resp := c.LeaveGroup(ctx, leave); resp.ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
+					t.Fatalf("last member leave: %+v", resp)
+				}
+				// Reload the original persisted membership after the failed transition.
+				c = newTestCoordinator(t, coordinatorFaultStore{Store: store, fail: fail})
 				if resp := joinTestGroup(t, c, "a"); resp.ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
 					t.Fatalf("join persistence: %+v", resp)
 				}
@@ -509,11 +509,8 @@ func TestCoordinatorCleanupExpiredMembers(t *testing.T) {
 		}
 	}
 	c.cleanupGroups()
-	if group, err := store.FetchConsumerGroup(ctx, "expired"); err != nil || group != nil {
-		t.Fatalf("expired group not removed: %+v, %v", group, err)
-	}
-	if _, ok := c.groups["expired"]; ok {
-		t.Fatal("expired group remains cached")
+	if group, err := store.FetchConsumerGroup(ctx, "expired"); err != nil || group == nil || group.State != groupStateEmptyStr || len(group.Members) != 0 || group.GenerationId != 5 || group.Leader != "" {
+		t.Fatalf("expired group not Empty: %+v, %v", group, err)
 	}
 	for _, id := range []string{"mixed", "lagging"} {
 		group, err := store.FetchConsumerGroup(ctx, id)
@@ -549,10 +546,10 @@ func TestCoordinatorBackgroundCleanup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if group == nil {
+		if group != nil && group.State == groupStateEmptyStr && len(group.Members) == 0 {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("background cleanup did not remove the expired group")
+	t.Fatal("background cleanup did not empty the expired group")
 }

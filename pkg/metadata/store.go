@@ -53,7 +53,7 @@ type Store interface {
 	FetchConsumerGroup(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, error)
 	// ListConsumerGroups returns all stored consumer group metadata.
 	ListConsumerGroups(ctx context.Context) ([]*metadatapb.ConsumerGroup, error)
-	// DeleteConsumerGroup removes consumer group metadata.
+	// DeleteConsumerGroup removes consumer group metadata and all committed offsets.
 	DeleteConsumerGroup(ctx context.Context, groupID string) error
 	// FetchTopicConfig returns the stored topic configuration.
 	FetchTopicConfig(ctx context.Context, topic string) (*metadatapb.TopicConfig, error)
@@ -608,6 +608,12 @@ func (s *InMemoryStore) DeleteConsumerGroup(ctx context.Context, groupID string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.consumerGroups, groupID)
+	for key := range s.consumerOffsets {
+		if strings.HasPrefix(key, groupID+":") {
+			delete(s.consumerOffsets, key)
+			delete(s.consumerMeta, key)
+		}
+	}
 	return nil
 }
 
