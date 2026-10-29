@@ -16,10 +16,13 @@
 package metadata
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/KafScale/platform/internal/testutil"
@@ -34,17 +37,11 @@ import (
 // deletion method, even when the wrapped built-in store implements it.
 type legacyDeletionStore struct {
 	Store
-	listErr, errorOnDelete error
+	errorOnDelete error
 }
 
 var _ Store = legacyDeletionStore{}
 
-func (s legacyDeletionStore) ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error) {
-	if s.listErr != nil {
-		return nil, s.listErr
-	}
-	return s.Store.ListGroupConsumerOffsets(ctx, group)
-}
 func (s legacyDeletionStore) DeleteConsumerGroup(ctx context.Context, group string) error {
 	if s.errorOnDelete != nil {
 		return s.errorOnDelete
@@ -68,25 +65,35 @@ func TestOptionalConsumerGroupDeletion(t *testing.T) {
 	if group, _ := base.FetchConsumerGroup(ctx, "g"); group != nil {
 		t.Fatal("legacy metadata-only deletion failed")
 	}
-	if err := base.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g"}); err != nil {
-		t.Fatal(err)
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	nonAtomicDeleteWarning = sync.Once{}
+	for _, group := range []string{"g", "h"} {
+		if err := base.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: group}); err != nil {
+			t.Fatal(err)
+		}
+		if err := base.CommitConsumerOffset(ctx, group, "orders", 0, 42, "checkpoint"); err != nil {
+			t.Fatal(err)
+		}
+		if err := DeleteConsumerGroupAndOffsets(ctx, legacy, group); err != nil {
+			t.Fatal(err)
+		}
+		if g, _ := base.FetchConsumerGroup(ctx, group); g != nil {
+			t.Fatal("fallback deletion kept group", group)
+		}
+		if offsets, err := base.ListGroupConsumerOffsets(ctx, group); err != nil || len(offsets) != 0 {
+			t.Fatal("fallback deletion kept offsets", offsets, err)
+		}
 	}
-	if err := base.CommitConsumerOffset(ctx, "g", "orders", 0, 42, "checkpoint"); err != nil {
-		t.Fatal(err)
+	if n := strings.Count(logs.String(), "consumer group delete is not atomic"); n != 1 {
+		t.Fatalf("warning logged %d times: %s", n, logs.String())
 	}
-	if err := DeleteConsumerGroupAndOffsets(ctx, legacy, "g"); !errors.Is(err, ErrAtomicGroupDeletionUnsupported) {
-		t.Fatal(err)
-	}
-	if group, _ := base.FetchConsumerGroup(ctx, "g"); group == nil {
-		t.Fatal("unsupported deletion mutated group")
-	}
-	if offset, _, _ := base.FetchConsumerOffset(ctx, "g", "orders", 0); offset != 42 {
-		t.Fatal("unsupported deletion changed offsets")
+	if !strings.Contains(logs.String(), "group=g") || !strings.Contains(logs.String(), "legacyDeletionStore") {
+		t.Fatalf("warning lacks group or store type: %s", logs.String())
 	}
 	sentinel := errors.New("fixture")
-	if err := DeleteConsumerGroupAndOffsets(ctx, legacyDeletionStore{Store: base, listErr: sentinel}, "g"); !errors.Is(err, sentinel) {
-		t.Fatal(err)
-	}
 	if err := DeleteConsumerGroupAndOffsets(ctx, legacyDeletionStore{Store: base, errorOnDelete: sentinel}, "missing"); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
@@ -252,4 +259,43 @@ func ExampleConsumerGroupDeleter() {
 	_, supportsAtomicDeletion := store.(ConsumerGroupDeleter)
 	fmt.Println(supportsAtomicDeletion)
 	// Output: true
+}
+
+func TestEtcdDeletionChunksInterleavedRanges(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "big2"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		topic := fmt.Sprintf("t%03d", i)
+		nested := "big2/offsets/" + topic + "/x"
+		if err := store.CommitConsumerOffset(ctx, "big2", topic, 0, 42, ""); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: nested}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.CommitConsumerOffset(ctx, nested, "orders", 0, 99, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.DeleteConsumerGroupAndOffsets(ctx, "big2"); err != nil {
+		t.Fatal(err)
+	}
+	if group, err := store.FetchConsumerGroup(ctx, "big2"); err != nil || group != nil {
+		t.Fatal(group, err)
+	}
+	if offsets, err := store.ListGroupConsumerOffsets(ctx, "big2"); err != nil || len(offsets) != 0 {
+		t.Fatal(len(offsets), err)
+	}
+	for i := 0; i < 200; i++ {
+		nested := fmt.Sprintf("big2/offsets/t%03d/x", i)
+		if group, err := store.FetchConsumerGroup(ctx, nested); err != nil || group == nil {
+			t.Fatal("deleted nested group", nested, err)
+		}
+		if offset, _, err := store.FetchConsumerOffset(ctx, nested, "orders", 0); err != nil || offset != 99 {
+			t.Fatal("deleted nested offset", nested, offset, err)
+		}
+	}
 }

@@ -19,8 +19,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -32,25 +34,19 @@ type ConsumerGroupDeleter interface {
 	DeleteConsumerGroupAndOffsets(context.Context, string) error
 }
 
-var (
-	ErrAtomicGroupDeletionUnsupported = errors.New("store cannot atomically delete committed group offsets")
-	ErrConsumerGroupChanged           = errors.New("consumer group changed during deletion; retry")
-)
+const maxGroupDeleteOps = 120
 
-// DeleteConsumerGroupAndOffsets preserves legacy deletion for stores without
-// committed offsets. It fails without mutation when atomic deletion is needed
-// but the store does not implement the optional capability.
+var ErrConsumerGroupChanged = errors.New("consumer group changed during deletion; retry")
+
+var nonAtomicDeleteWarning sync.Once
+
 func DeleteConsumerGroupAndOffsets(ctx context.Context, store Store, groupID string) error {
 	if deleter, ok := store.(ConsumerGroupDeleter); ok {
 		return deleter.DeleteConsumerGroupAndOffsets(ctx, groupID)
 	}
-	offsets, err := store.ListGroupConsumerOffsets(ctx, groupID)
-	if err != nil {
-		return err
-	}
-	if len(offsets) > 0 {
-		return ErrAtomicGroupDeletionUnsupported
-	}
+	nonAtomicDeleteWarning.Do(func() {
+		slog.Default().Warn("consumer group delete is not atomic for this metadata store; implement metadata.ConsumerGroupDeleter to make it atomic", "store", fmt.Sprintf("%T", store), "group", groupID)
+	})
 	return store.DeleteConsumerGroup(ctx, groupID)
 }
 
@@ -82,7 +78,7 @@ func (s *EtcdStore) DeleteConsumerGroupAndOffsets(ctx context.Context, groupID s
 			s.recordEtcdResult(err)
 			return err
 		}
-		ops := []clientv3.Op{clientv3.OpDelete(ConsumerGroupKey(groupID))}
+		var ranges [][2]string
 		// Compact consecutive owned keys into ranges while leaving every existing
 		// foreign key outside the deletion ranges. This supports large groups without
 		// one transaction operation per partition.
@@ -94,27 +90,41 @@ func (s *EtcdStore) DeleteConsumerGroupAndOffsets(ctx context.Context, groupID s
 					start = key
 				}
 			} else if start != "" {
-				ops = append(ops, clientv3.OpDelete(start, clientv3.WithRange(key)))
+				ranges = append(ranges, [2]string{start, key})
 				start = ""
 			}
 		}
 		if start != "" {
-			ops = append(ops, clientv3.OpDelete(start, clientv3.WithRange(end)))
+			ranges = append(ranges, [2]string{start, end})
 		}
-		// A new foreign key could otherwise appear in a planned range after the
-		// read. Fence all offset-prefix changes and concurrent group metadata writes.
 		revision := snapshot.Header.Revision + 1
-		result, err := s.client.Txn(ctx).If(
-			clientv3.Compare(clientv3.ModRevision(prefix), "<", revision).WithRange(end),
-			clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(groupID)), "<", revision),
-		).Then(ops...).Commit()
-		if err != nil {
-			s.recordEtcdResult(err)
-			return err
-		}
-		s.recordEtcdResult(nil)
-		if result.Succeeded {
-			return nil
+		for first := 0; ; first += maxGroupDeleteOps {
+			last := min(first+maxGroupDeleteOps, len(ranges))
+			chunk := ranges[first:last]
+			ops := make([]clientv3.Op, 0, len(chunk)+1)
+			cmps := []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(groupID)), "<", revision)}
+			for _, r := range chunk {
+				ops = append(ops, clientv3.OpDelete(r[0], clientv3.WithRange(r[1])))
+			}
+			if len(chunk) > 0 {
+				cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(chunk[0][0]), "<", revision).WithRange(chunk[len(chunk)-1][1]))
+			}
+			if last == len(ranges) {
+				ops = append(ops, clientv3.OpDelete(ConsumerGroupKey(groupID)))
+				cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(prefix), "<", revision).WithRange(end))
+			}
+			result, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Commit()
+			if err != nil {
+				s.recordEtcdResult(err)
+				return err
+			}
+			s.recordEtcdResult(nil)
+			if !result.Succeeded {
+				break
+			}
+			if last == len(ranges) {
+				return nil
+			}
 		}
 	}
 	return ErrConsumerGroupChanged

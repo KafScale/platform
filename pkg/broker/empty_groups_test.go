@@ -16,6 +16,7 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
@@ -49,18 +50,47 @@ func TestDeleteGroupsWithLegacyStore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if offsets {
-			if resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
-				t.Fatal(resp)
-			}
-			if group, _ := base.FetchConsumerGroup(ctx, "readers"); group == nil {
-				t.Fatal("failed legacy deletion removed group")
-			}
-			if offset, _, _ := base.FetchConsumerOffset(ctx, "readers", "orders", 0); offset != 42 {
-				t.Fatal("failed legacy deletion removed offsets")
-			}
-		} else if resp.Groups[0].ErrorCode != 0 {
+		if resp.Groups[0].ErrorCode != 0 {
 			t.Fatal(resp)
+		}
+		if group, _ := base.FetchConsumerGroup(ctx, "readers"); group != nil {
+			t.Fatal("fallback deletion kept group")
+		}
+		if remaining, err := base.ListGroupConsumerOffsets(ctx, "readers"); err != nil || len(remaining) != 0 {
+			t.Fatal("fallback deletion kept offsets", remaining, err)
+		}
+	}
+}
+
+type retryableDeleteStore struct {
+	metadata.Store
+	err error
+}
+
+func (s retryableDeleteStore) DeleteConsumerGroupAndOffsets(context.Context, string) error {
+	return s.err
+}
+
+func TestDeleteGroupsRetryableStoreErrors(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		err  error
+		code int16
+	}{
+		{metadata.ErrConsumerGroupChanged, protocol.COORDINATOR_NOT_AVAILABLE},
+		{fmt.Errorf("txn: %w", context.DeadlineExceeded), protocol.COORDINATOR_NOT_AVAILABLE},
+		{errCoordinatorStore, protocol.UNKNOWN_SERVER_ERROR},
+	} {
+		base := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+		if err := base.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "readers", State: groupStateEmptyStr, ProtocolType: "consumer"}); err != nil {
+			t.Fatal(err)
+		}
+		c := newTestCoordinator(t, retryableDeleteStore{Store: base, err: tc.err})
+		req := kmsg.NewPtrDeleteGroupsRequest()
+		req.Groups = []string{"readers"}
+		resp, err := c.DeleteGroups(ctx, req)
+		if err != nil || resp.Groups[0].ErrorCode != tc.code {
+			t.Fatal(tc.err, resp, err)
 		}
 	}
 }
