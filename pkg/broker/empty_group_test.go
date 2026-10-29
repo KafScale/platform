@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -174,7 +175,7 @@ func (s emptyGroupFaultStore) ListGroupConsumerOffsets(context.Context, string) 
 	return nil, errCoordinatorStore
 }
 
-func (s emptyGroupFaultStore) ListConsumerOffsets(context.Context) ([]metadata.ConsumerOffset, error) {
+func (s emptyGroupFaultStore) ListConsumerGroups(context.Context) ([]*metadatapb.ConsumerGroup, error) {
 	return nil, errCoordinatorStore
 }
 
@@ -193,5 +194,43 @@ func TestEmptyGroupDiscoveryErrors(t *testing.T) {
 	del.Groups = []string{"readers"}
 	if resp, err := c.DeleteGroups(ctx, del); err != nil || resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
 		t.Fatal(resp, err)
+	}
+}
+
+func TestDeleteGroupsRejectsActiveMembers(t *testing.T) {
+	for _, source := range []string{"cached", "persisted", "cache ahead of store"} {
+		t.Run(source, func(t *testing.T) {
+			ctx := context.Background()
+			store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+			c := newTestCoordinator(t, store)
+			joined := joinTestGroup(t, c, "")
+			if err := store.CommitConsumerOffset(ctx, "readers", "orders", 0, 42, "checkpoint"); err != nil {
+				t.Fatal(err)
+			}
+			if source == "persisted" {
+				c = newTestCoordinator(t, store)
+			}
+			if source == "cache ahead of store" {
+				if err := store.PutConsumerGroup(ctx, emptyConsumerGroup("readers")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			del := kmsg.NewPtrDeleteGroupsRequest()
+			del.Groups = []string{"readers"}
+			resp, err := c.DeleteGroups(ctx, del)
+			if err != nil || len(resp.Groups) != 1 || resp.Groups[0].ErrorCode != protocol.NON_EMPTY_GROUP {
+				t.Fatalf("delete active: %+v, %v", resp, err)
+			}
+			offsets, err := store.ListGroupConsumerOffsets(ctx, "readers")
+			if err != nil || len(offsets) != 1 || offsets[0].Offset != 42 || offsets[0].Metadata != "checkpoint" {
+				t.Fatal(offsets, err)
+			}
+			if source != "cache ahead of store" {
+				group, err := store.FetchConsumerGroup(ctx, "readers")
+				if err != nil || group.Members[joined.MemberID] == nil {
+					t.Fatal(group, err)
+				}
+			}
+		})
 	}
 }

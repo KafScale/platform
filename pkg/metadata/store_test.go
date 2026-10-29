@@ -774,10 +774,10 @@ func TestCodecParseConsumerGroupID(t *testing.T) {
 		t.Fatal("expected false for empty group ID")
 	}
 
-	// Nested path
+	// A group ID may contain slashes.
 	_, ok = ParseConsumerGroupID("/kafscale/consumers/a/b/metadata")
-	if ok {
-		t.Fatal("expected false for nested path")
+	if !ok {
+		t.Fatal("expected nested group ID to parse")
 	}
 }
 

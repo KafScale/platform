@@ -331,6 +331,11 @@ func TestCoordinatorStoreFailures(t *testing.T) {
 				}
 				fallthrough
 			case "delete":
+				if fail == "delete" {
+					if err := store.PutConsumerGroup(ctx, emptyConsumerGroup("readers")); err != nil {
+						t.Fatal(err)
+					}
+				}
 				req := kmsg.NewPtrDeleteGroupsRequest()
 				req.Groups = []string{"readers"}
 				if resp, err := c.DeleteGroups(ctx, req); err != nil || resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {

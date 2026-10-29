@@ -524,24 +524,6 @@ func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsR
 		return resp, nil
 	}
 
-	// Merge legacy offset-only groups without replacing live membership metadata.
-	offsets, err := c.store.ListConsumerOffsets(ctx)
-	if err != nil {
-		resp := kmsg.NewPtrListGroupsResponse()
-		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-		return resp, nil
-	}
-	seen := make(map[string]bool, len(groups))
-	for _, group := range groups {
-		seen[group.GroupId] = true
-	}
-	for _, offset := range offsets {
-		if !seen[offset.Group] {
-			groups = append(groups, emptyConsumerGroup(offset.Group))
-			seen[offset.Group] = true
-		}
-	}
-
 	var statesFilter, typesFilter []string
 	if len(req.StatesFilter) > 0 {
 		statesFilter = req.StatesFilter
@@ -577,6 +559,7 @@ func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsR
 }
 
 func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGroupsRequest) (*kmsg.DeleteGroupsResponse, error) {
+	// Serialize membership checks and deletion with joins and cleanup.
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	resp := kmsg.NewPtrDeleteGroupsResponse()
@@ -589,6 +572,11 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
+		if state := c.groups[groupID]; state != nil && len(state.members) > 0 {
+			result.ErrorCode = protocol.NON_EMPTY_GROUP
+			resp.Groups = append(resp.Groups, result)
+			continue
+		}
 		group, err := c.fetchGroupForAdmin(ctx, groupID)
 		if err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -598,6 +586,11 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		if group == nil {
 			result.ErrorCode = protocol.GROUP_ID_NOT_FOUND
 			delete(c.groups, groupID)
+			resp.Groups = append(resp.Groups, result)
+			continue
+		}
+		if len(group.Members) > 0 {
+			result.ErrorCode = protocol.NON_EMPTY_GROUP
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
@@ -651,9 +644,6 @@ func (c *GroupCoordinator) loadGroupIfMissing(ctx context.Context, groupID strin
 }
 
 func (c *GroupCoordinator) persistGroupLocked(ctx context.Context, groupID string, state *groupState) error {
-	if state == nil {
-		return c.store.DeleteConsumerGroup(ctx, groupID)
-	}
 	group := buildConsumerGroup(groupID, state)
 	return c.store.PutConsumerGroup(ctx, group)
 }

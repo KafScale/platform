@@ -18,6 +18,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
@@ -113,5 +114,88 @@ func TestDeleteConsumerGroupRemovesOnlyItsOffsets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConsumerGroupDelimiterIsolation(t *testing.T) {
+	for _, backend := range []string{"memory", "etcd"} {
+		for _, pair := range [][2]string{{"a", "a:b"}, {"a", "a/offsets"}, {"a", "a/offsets/orders"}} {
+			for _, target := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s/%s/delete-%d", backend, pair[1], target), func(t *testing.T) {
+					ctx := context.Background()
+					var store Store = NewInMemoryStore(ClusterMetadata{})
+					if backend == "etcd" {
+						store = newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+					}
+					for _, id := range pair {
+						if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: id, State: "empty"}); err != nil {
+							t.Fatal(err)
+						}
+						// More than one transaction's worth of offsets, including topic "offsets".
+						for partition := int32(0); partition < 105; partition++ {
+							if err := store.CommitConsumerOffset(ctx, id, "offsets", partition, 42, "checkpoint"); err != nil {
+								t.Fatal(err)
+							}
+						}
+						offsets, err := store.ListGroupConsumerOffsets(ctx, id)
+						if err != nil || len(offsets) != 105 {
+							t.Fatalf("scoped discovery %q: %d, %v", id, len(offsets), err)
+						}
+						for _, offset := range offsets {
+							if offset.Group != id {
+								t.Fatal("cross-group offset", offset)
+							}
+						}
+					}
+					if err := store.DeleteConsumerGroup(ctx, pair[target]); err != nil {
+						t.Fatal(err)
+					}
+					if offsets, err := store.ListGroupConsumerOffsets(ctx, pair[target]); err != nil || len(offsets) != 0 {
+						t.Fatal(offsets, err)
+					}
+					survivor := pair[1-target]
+					offsets, err := store.ListGroupConsumerOffsets(ctx, survivor)
+					if err != nil || len(offsets) != 105 {
+						t.Fatalf("survivor %q: %d, %v", survivor, len(offsets), err)
+					}
+					for _, offset := range offsets {
+						if offset.Group != survivor || offset.Offset != 42 || offset.Metadata != "checkpoint" {
+							t.Fatal(offset)
+						}
+					}
+					groups, err := store.ListConsumerGroups(ctx)
+					if err != nil || len(groups) != 1 || groups[0].GroupId != survivor {
+						t.Fatal(groups, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestListConsumerGroupsDiscoversOffsetKeys(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	// Deliberately invalid offset values prove discovery only reads their keys.
+	for i := 0; i < 105; i++ {
+		if _, err := store.client.Put(ctx, ConsumerOffsetKey(fmt.Sprintf("group-%03d", i), "orders", 0), "not-json"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "group-000", State: "stable", Members: map[string]*metadatapb.GroupMember{"live": {}}}); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := store.ListConsumerGroups(ctx)
+	if err != nil || len(groups) != 105 {
+		t.Fatal(len(groups), err)
+	}
+	for _, group := range groups {
+		if group.GroupId == "group-000" {
+			if group.State != "stable" || len(group.Members) != 1 {
+				t.Fatal(group)
+			}
+		} else if group.State != "empty" || len(group.Members) != 0 {
+			t.Fatal(group)
+		}
 	}
 }
