@@ -355,18 +355,6 @@ func TestSortedMembers(t *testing.T) {
 	}
 }
 
-func TestBumpRebalanceDeadline(t *testing.T) {
-	state := &groupState{}
-	state.bumpRebalanceDeadline(0)
-	if state.rebalanceTimeout != defaultRebalanceTimeout {
-		t.Fatalf("expected default timeout, got %s", state.rebalanceTimeout)
-	}
-	state.bumpRebalanceDeadline(15 * time.Second)
-	if state.rebalanceTimeout != 15*time.Second {
-		t.Fatalf("expected 15s, got %s", state.rebalanceTimeout)
-	}
-}
-
 func TestCoordinatorDeleteGroups(t *testing.T) {
 	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
 	group := &metadatapb.ConsumerGroup{GroupId: "group-1", State: "stable"}

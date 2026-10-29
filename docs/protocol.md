@@ -24,16 +24,16 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | API Key | Name | Version | Notes |
 |---------|------|---------|-------|
 | 0 | Produce | 0-9 | Core produce path |
-| 1 | Fetch | 11-13 | Request-wide MaxWait and MinBytes across partitions |
+| 1 | Fetch | 4-13 | Request-wide MaxWait and MinBytes across partitions |
 | 2 | ListOffsets | 0-4 | Required for consumers |
 | 3 | Metadata | 0-12 | Topic/broker discovery |
-| 8 | OffsetCommit | 3 | Consumer group tracking (v3 only) |
-| 9 | OffsetFetch | 5 | Consumer group tracking (v5 only) |
-| 10 | FindCoordinator | 3 | Group coordinator lookup (v3 only) |
-| 11 | JoinGroup | 4 | Consumer group membership (v4 only) |
-| 12 | Heartbeat | 4 | Consumer liveness (v4 only) |
-| 13 | LeaveGroup | 4 | Graceful consumer shutdown (v4 only) |
-| 14 | SyncGroup | 4 | Partition assignment (v4 only) |
+| 8 | OffsetCommit | 1-3 | Consumer group tracking |
+| 9 | OffsetFetch | 1-5 | Consumer group tracking |
+| 10 | FindCoordinator | 0-3 | Group coordinator lookup |
+| 11 | JoinGroup | 0-4 | Consumer group membership |
+| 12 | Heartbeat | 0-4 | Consumer liveness |
+| 13 | LeaveGroup | 0-4 | Graceful consumer shutdown |
+| 14 | SyncGroup | 0-4 | Partition assignment |
 | 15 | DescribeGroups | 5 | Ops visibility |
 | 16 | ListGroups | 0-5 | Ops visibility (wide range for older admin clients) |
 | 23 | OffsetForLeaderEpoch | 3 | Safe consumer recovery |
@@ -81,3 +81,7 @@ emit warning logs with topic, partition, requested timestamp, error code, and ca
 
 Kafscale rejects SASL handshake/auth requests as unsupported
 API keys and closes the connection (no SASL-specific error payload is returned).
+
+Fetch v4 is advertised for librdkafka MsgVer2 negotiation. Produce accepts magic-2 record batches; legacy magic-0/1 MessageSets return `UNSUPPORTED_VERSION` (35), and truncated record batches return `CORRUPT_MESSAGE` (2).
+
+Classic consumer-group APIs also advertise their older supported versions for librdkafka feature detection: FindCoordinator v0-v3, JoinGroup/SyncGroup/Heartbeat/LeaveGroup v0-v4, OffsetCommit v1-v3, and OffsetFetch v1-v5.

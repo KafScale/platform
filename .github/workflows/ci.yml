@@ -77,6 +77,15 @@ jobs:
           KAFSCALE_E2E_AUTH: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^TestProxy(MTLS|PlainAutoCreate)E2E$' -v -count=1 -timeout=3m
 
+      - name: librdkafka compatibility end-to-end tests
+        env:
+          KAFSCALE_E2E: "1"
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y kcat
+          kcat -V
+          go test -race -tags=e2e ./test/e2e -run '^TestLibrdkafkaCompatibilityE2E$' -count=1 -v -timeout=3m
+
       - name: Consumer group recovery end-to-end tests
         env:
           KAFSCALE_E2E: "1"
