@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"sync"
@@ -244,8 +245,17 @@ func (t *LfsOpsTracker) eventToRecord(event TrackerEvent) (*kgo.Record, error) {
 	}, nil
 }
 
+type trackerTopicAdmin interface {
+	CreateTopics(ctx context.Context, partitions int32, replicationFactor int16, configs map[string]*string, topics ...string) (kadm.CreateTopicResponses, error)
+	ListTopics(ctx context.Context, topics ...string) (kadm.TopicDetails, error)
+	UpdatePartitions(ctx context.Context, set int, topics ...string) (kadm.CreatePartitionsResponses, error)
+}
+
 func ensureTrackerTopic(ctx context.Context, client *kgo.Client, cfg TrackerConfig, logger *slog.Logger) error {
-	admin := kadm.NewClient(client)
+	return ensureTrackerTopicWith(ctx, kadm.NewClient(client), cfg, logger)
+}
+
+func ensureTrackerTopicWith(ctx context.Context, admin trackerTopicAdmin, cfg TrackerConfig, logger *slog.Logger) error {
 	var partitions int32 = defaultTrackerPartitions
 	if cfg.Partitions > 0 && cfg.Partitions <= math.MaxInt32 {
 		partitions = int32(cfg.Partitions) //nolint:gosec // bounds checked
@@ -262,11 +272,34 @@ func ensureTrackerTopic(ctx context.Context, client *kgo.Client, cfg TrackerConf
 	if !ok {
 		return errors.New("tracker topic response missing")
 	}
-	if resp.Err == nil || errors.Is(resp.Err, kerr.TopicAlreadyExists) {
-		logger.Info("lfs ops tracker topic ready", "topic", cfg.Topic, "partitions", cfg.Partitions, "replication", cfg.ReplicationFactor)
-		return nil
+	if resp.Err != nil && !errors.Is(resp.Err, kerr.TopicAlreadyExists) {
+		return resp.Err
 	}
-	return resp.Err
+	actual := partitions
+	if resp.Err != nil {
+		details, err := admin.ListTopics(ctx, cfg.Topic)
+		if err != nil {
+			return err
+		}
+		detail, ok := details[cfg.Topic]
+		if !ok || detail.Err != nil {
+			return fmt.Errorf("describe tracker topic %s: %v", cfg.Topic, detail.Err)
+		}
+		actual = int32(len(detail.Partitions)) //nolint:gosec // partition count fits int32
+		if actual < partitions {
+			updated, err := admin.UpdatePartitions(ctx, int(partitions), cfg.Topic)
+			if err != nil {
+				return err
+			}
+			if r, ok := updated[cfg.Topic]; !ok || r.Err != nil {
+				logger.Warn("lfs ops tracker topic has fewer partitions than configured", "topic", cfg.Topic, "partitions", actual, "configured", partitions, "error", r.Err)
+			} else {
+				actual = partitions
+			}
+		}
+	}
+	logger.Info("lfs ops tracker topic ready", "topic", cfg.Topic, "partitions", actual, "replication", replication)
+	return nil
 }
 
 // Close gracefully shuts down the tracker.
