@@ -35,7 +35,7 @@ out of scope.
 |---------|---------|------|---------|-------|
 | Group visibility | 15 | DescribeGroups | v5 | Required for `kafka-consumer-groups.sh --describe`. |
 | Group visibility | 16 | ListGroups | v5 | Required to enumerate consumer groups. |
-| Group cleanup | 42 | DeleteGroups | v2 | Removes group metadata without touching topic data. |
+| Group cleanup | 42 | DeleteGroups | v2 | Removes group metadata and committed offsets without touching topic data. |
 | Recovery | 23 | OffsetForLeaderEpoch | v3 | Safe recovery after broker failover/truncation. |
 | Config read | 32 | DescribeConfigs | v4 | Read-only visibility into topic/broker configuration. |
 | Config write | 33 | AlterConfigs | v1 | Topic whitelist only; broker mutation rejected. |
@@ -138,8 +138,10 @@ To align with Kafka client expectations:
 
 Request-specific notes:
 
-- DescribeGroups/ListGroups return an empty result set on no matches rather than an error.
-- DeleteGroups returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`.
+- ListGroups returns an empty result set on no matches. DescribeGroups reports `GROUP_ID_NOT_FOUND` for each unknown group.
+- Groups remain visible with state `Empty` and no members after the last member leaves or expires. Their committed offsets remain available through OffsetFetch, including after a broker restart. Groups left with only offsets by older brokers are also listed and described as `Empty`.
+- Consumer group offsets do not currently expire automatically. Use DeleteGroups to remove an inactive group and all its committed offsets.
+- DeleteGroups returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`. Groups with active members report `NON_EMPTY_GROUP` (68), preserving their membership and offsets.
 - DescribeConfigs returns only keys from the whitelist and ignores unknown keys.
 - AlterConfigs rejects any broker resource mutation with `INVALID_CONFIG`.
 

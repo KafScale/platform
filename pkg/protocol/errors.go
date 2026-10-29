@@ -28,6 +28,7 @@ const (
 	ILLEGAL_GENERATION           int16 = 22
 	UNKNOWN_MEMBER_ID            int16 = 25
 	REBALANCE_IN_PROGRESS        int16 = 27
+	NON_EMPTY_GROUP              int16 = 68
 	GROUP_ID_NOT_FOUND           int16 = 69
 	INVALID_TOPIC_EXCEPTION      int16 = 17
 	INVALID_CONFIG               int16 = 40

@@ -241,6 +241,55 @@ func TestOpsAPI(t *testing.T) {
 		}
 	})
 
+	t.Run("DeleteActiveGroup", func(t *testing.T) {
+		if err := consumer.CommitUncommittedOffsets(ctx); err != nil {
+			t.Fatal(err)
+		}
+		del := kmsg.NewPtrDeleteGroupsRequest()
+		del.Version, del.Groups = 2, []string{groupID}
+		deleted, err := del.RequestWith(ctx, client)
+		if err != nil || len(deleted.Groups) != 1 || deleted.Groups[0].ErrorCode != 68 {
+			t.Fatalf("active group deletion: %+v, %v", deleted, err)
+		}
+		fetch := kmsg.NewPtrOffsetFetchRequest()
+		fetch.Version, fetch.Group = 5, groupID
+		fetched, err := fetch.RequestWith(ctx, client)
+		if err != nil || fetched.ErrorCode != 0 || len(fetched.Topics) != 1 || len(fetched.Topics[0].Partitions) != 1 || fetched.Topics[0].Partitions[0].Offset != 1 {
+			t.Fatalf("active offsets lost: %+v, %v", fetched, err)
+		}
+		describe := kmsg.NewPtrDescribeGroupsRequest()
+		describe.Version, describe.Groups = 5, []string{groupID}
+		described, err := describe.RequestWith(ctx, client)
+		if err != nil || len(described.Groups) != 1 || described.Groups[0].ErrorCode != 0 || len(described.Groups[0].Members) != 1 {
+			t.Fatalf("active members lost: %+v, %v", described, err)
+		}
+	})
+
+	t.Run("EmptyGroup", func(t *testing.T) {
+		if err := consumer.CommitUncommittedOffsets(ctx); err != nil {
+			t.Fatalf("commit before leaving: %v", err)
+		}
+		consumer.CloseAllowingRebalance()
+		list := kmsg.NewPtrListGroupsRequest()
+		list.Version, list.StatesFilter = 5, []string{"Empty"}
+		listed, err := list.RequestWith(ctx, client)
+		if err != nil || listed.ErrorCode != 0 || len(listed.Groups) != 1 || listed.Groups[0].Group != groupID {
+			t.Fatalf("empty group list: %+v, %v", listed, err)
+		}
+		describe := kmsg.NewPtrDescribeGroupsRequest()
+		describe.Version, describe.Groups = 5, []string{groupID}
+		described, err := describe.RequestWith(ctx, client)
+		if err != nil || len(described.Groups) != 1 || described.Groups[0].ErrorCode != 0 || described.Groups[0].State != "Empty" || len(described.Groups[0].Members) != 0 {
+			t.Fatalf("empty group describe: %+v, %v", described, err)
+		}
+		fetch := kmsg.NewPtrOffsetFetchRequest()
+		fetch.Version, fetch.Group = 5, groupID
+		fetched, err := fetch.RequestWith(ctx, client)
+		if err != nil || fetched.ErrorCode != 0 || len(fetched.Topics) != 1 || len(fetched.Topics[0].Partitions) != 1 || fetched.Topics[0].Partitions[0].ErrorCode != 0 || fetched.Topics[0].Partitions[0].Offset != 1 {
+			t.Fatalf("empty group offsets: %+v, %v", fetched, err)
+		}
+	})
+
 	t.Run("DeleteGroups", func(t *testing.T) {
 		deleteReq := kmsg.NewPtrDeleteGroupsRequest()
 		deleteReq.Version = 2

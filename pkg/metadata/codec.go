@@ -59,7 +59,7 @@ func ParseConsumerGroupID(key string) (string, bool) {
 		return "", false
 	}
 	groupID := strings.TrimSuffix(strings.TrimPrefix(key, prefix), "/metadata")
-	if groupID == "" || strings.Contains(groupID, "/") {
+	if groupID == "" {
 		return "", false
 	}
 	return groupID, true
@@ -77,19 +77,24 @@ func ParseConsumerOffsetKey(key string) (string, string, int32, bool) {
 		return "", "", 0, false
 	}
 	trimmed := strings.TrimPrefix(key, prefix)
-	parts := strings.Split(trimmed, "/")
-	if len(parts) != 4 {
+	last := strings.LastIndex(trimmed, "/")
+	if last < 0 {
 		return "", "", 0, false
 	}
-	groupID := parts[0]
-	if parts[1] != "offsets" || groupID == "" || parts[2] == "" {
+	separator := strings.LastIndex(trimmed[:last], "/")
+	if separator < 0 || !strings.HasSuffix(trimmed[:separator], "/offsets") {
 		return "", "", 0, false
 	}
-	partition, err := strconv.ParseInt(parts[3], 10, 32)
+	groupID := strings.TrimSuffix(trimmed[:separator], "/offsets")
+	topic := trimmed[separator+1 : last]
+	if groupID == "" || topic == "" {
+		return "", "", 0, false
+	}
+	partition, err := strconv.ParseInt(trimmed[last+1:], 10, 32)
 	if err != nil {
 		return "", "", 0, false
 	}
-	return groupID, parts[2], int32(partition), true
+	return groupID, topic, int32(partition), true
 }
 
 // BrokerRegistrationKey returns the etcd key for broker liveness data.

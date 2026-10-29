@@ -370,12 +370,7 @@ func (c *GroupCoordinator) LeaveGroup(ctx context.Context, req *kmsg.LeaveGroupR
 		return resp
 	}
 	// Apply one group transition for the whole batch, including mixed success.
-	if len(state.members) == 0 {
-		delete(c.groups, req.Group)
-		state = nil
-	} else {
-		state.startRebalance(0)
-	}
+	state.startRebalance(0)
 	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
@@ -484,7 +479,7 @@ func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.Describ
 	resp := kmsg.NewPtrDescribeGroupsResponse()
 	resp.Groups = make([]kmsg.DescribeGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
-		group, err := c.store.FetchConsumerGroup(ctx, groupID)
+		group, err := c.fetchGroupForAdmin(ctx, groupID)
 		if err != nil {
 			g := kmsg.NewDescribeGroupsResponseGroup()
 			g.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -502,6 +497,23 @@ func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.Describ
 		resp.Groups = append(resp.Groups, buildDescribeGroup(group, req.IncludeAuthorizedOperations))
 	}
 	return resp, nil
+}
+
+// fetchGroupForAdmin also discovers offsets left without group metadata by older brokers.
+func (c *GroupCoordinator) fetchGroupForAdmin(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, error) {
+	group, err := c.store.FetchConsumerGroup(ctx, groupID)
+	if err != nil || group != nil {
+		return group, err
+	}
+	offsets, err := c.store.ListGroupConsumerOffsets(ctx, groupID)
+	if err != nil || len(offsets) == 0 {
+		return nil, err
+	}
+	return emptyConsumerGroup(groupID), nil
+}
+
+func emptyConsumerGroup(groupID string) *metadatapb.ConsumerGroup {
+	return &metadatapb.ConsumerGroup{GroupId: groupID, State: groupStateEmptyStr, ProtocolType: "consumer"}
 }
 
 func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsRequest) (*kmsg.ListGroupsResponse, error) {
@@ -547,6 +559,9 @@ func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsR
 }
 
 func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGroupsRequest) (*kmsg.DeleteGroupsResponse, error) {
+	// Serialize membership checks and deletion with joins and cleanup.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	resp := kmsg.NewPtrDeleteGroupsResponse()
 	resp.Groups = make([]kmsg.DeleteGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
@@ -557,7 +572,12 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
-		group, err := c.store.FetchConsumerGroup(ctx, groupID)
+		if state := c.groups[groupID]; state != nil && len(state.members) > 0 {
+			result.ErrorCode = protocol.NON_EMPTY_GROUP
+			resp.Groups = append(resp.Groups, result)
+			continue
+		}
+		group, err := c.fetchGroupForAdmin(ctx, groupID)
 		if err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			resp.Groups = append(resp.Groups, result)
@@ -565,7 +585,12 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		}
 		if group == nil {
 			result.ErrorCode = protocol.GROUP_ID_NOT_FOUND
-			c.deleteGroupState(groupID)
+			delete(c.groups, groupID)
+			resp.Groups = append(resp.Groups, result)
+			continue
+		}
+		if len(group.Members) > 0 {
+			result.ErrorCode = protocol.NON_EMPTY_GROUP
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
@@ -574,17 +599,11 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
-		c.deleteGroupState(groupID)
+		delete(c.groups, groupID)
 		result.ErrorCode = protocol.NONE
 		resp.Groups = append(resp.Groups, result)
 	}
 	return resp, nil
-}
-
-func (c *GroupCoordinator) deleteGroupState(groupID string) {
-	c.mu.Lock()
-	delete(c.groups, groupID)
-	c.mu.Unlock()
 }
 
 func (c *GroupCoordinator) ensureGroup(ctx context.Context, groupID string) (*groupState, error) {
@@ -625,9 +644,6 @@ func (c *GroupCoordinator) loadGroupIfMissing(ctx context.Context, groupID strin
 }
 
 func (c *GroupCoordinator) persistGroupLocked(ctx context.Context, groupID string, state *groupState) error {
-	if state == nil || len(state.members) == 0 {
-		return c.store.DeleteConsumerGroup(ctx, groupID)
-	}
 	group := buildConsumerGroup(groupID, state)
 	return c.store.PutConsumerGroup(ctx, group)
 }
@@ -1089,11 +1105,6 @@ func (c *GroupCoordinator) cleanupGroups() {
 		removed := state.removeExpiredMembers(now)
 		lostDuringRebalance := state.dropRebalanceLaggers(now)
 
-		if len(state.members) == 0 {
-			delete(c.groups, groupID)
-			_ = c.persistGroupLocked(ctx, groupID, nil)
-			continue
-		}
 		if removed || lostDuringRebalance {
 			state.startRebalance(0)
 			_ = c.persistGroupLocked(ctx, groupID, state)
@@ -1125,7 +1136,9 @@ func (s *groupState) sortedMembers() []string {
 }
 
 func (s *groupState) startRebalance(timeout time.Duration) {
+	s.generationID++
 	if len(s.members) == 0 {
+		s.protocolName = ""
 		s.state = groupStateEmpty
 		s.assignments = make(map[string][]assignmentTopic)
 		s.rebalanceDeadline = time.Time{}
@@ -1137,7 +1150,6 @@ func (s *groupState) startRebalance(timeout time.Duration) {
 	} else if s.rebalanceTimeout == 0 {
 		s.rebalanceTimeout = defaultRebalanceTimeout
 	}
-	s.generationID++
 	s.state = groupStatePreparingRebalance
 	s.assignments = make(map[string][]assignmentTopic)
 	s.rebalanceDeadline = time.Now().Add(s.rebalanceTimeout)

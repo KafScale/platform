@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -217,15 +218,15 @@ func (s *EtcdStore) FetchConsumerOffset(ctx context.Context, group, topic string
 
 // ListConsumerOffsets returns all committed offsets stored in etcd.
 func (s *EtcdStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error) {
-	return s.listConsumerOffsets(ctx, ConsumerGroupPrefix())
+	return s.listConsumerOffsets(ctx, ConsumerGroupPrefix(), "", false)
 }
 
 // ListGroupConsumerOffsets reads only the requested group's offset prefix.
 func (s *EtcdStore) ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error) {
-	return s.listConsumerOffsets(ctx, fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), group))
+	return s.listConsumerOffsets(ctx, fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), group), group, true)
 }
 
-func (s *EtcdStore) listConsumerOffsets(ctx context.Context, prefix string) ([]ConsumerOffset, error) {
+func (s *EtcdStore) listConsumerOffsets(ctx context.Context, prefix, groupID string, filterGroup bool) ([]ConsumerOffset, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	resp, err := s.client.Get(ctx, prefix, clientv3.WithPrefix())
@@ -237,7 +238,7 @@ func (s *EtcdStore) listConsumerOffsets(ctx context.Context, prefix string) ([]C
 	offsets := make([]ConsumerOffset, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		group, topic, partition, ok := ParseConsumerOffsetKey(string(kv.Key))
-		if !ok {
+		if !ok || (filterGroup && group != groupID) {
 			continue
 		}
 		var rec consumerOffsetRecord
@@ -287,37 +288,85 @@ func (s *EtcdStore) FetchConsumerGroup(ctx context.Context, groupID string) (*me
 	return DecodeConsumerGroup(resp.Kvs[0].Value)
 }
 
-// ListConsumerGroups returns all persisted consumer groups.
+// ListConsumerGroups discovers groups from keys without reading every offset value.
 func (s *EtcdStore) ListConsumerGroups(ctx context.Context) ([]*metadatapb.ConsumerGroup, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := s.client.Get(ctx, ConsumerGroupPrefix(), clientv3.WithPrefix())
+	resp, err := s.client.Get(ctx, ConsumerGroupPrefix()+"/", clientv3.WithPrefix(), clientv3.WithKeysOnly())
 	if err != nil {
 		s.recordEtcdResult(err)
 		return nil, err
 	}
-	s.recordEtcdResult(nil)
-	groups := make([]*metadatapb.ConsumerGroup, 0, len(resp.Kvs))
+	ids := make(map[string]bool)
 	for _, kv := range resp.Kvs {
-		if _, ok := ParseConsumerGroupID(string(kv.Key)); !ok {
-			continue
+		key := string(kv.Key)
+		if id, ok := ParseConsumerGroupID(key); ok {
+			ids[id] = true
+		} else if id, _, _, ok := ParseConsumerOffsetKey(key); ok {
+			ids[id] = true
 		}
-		group, err := DecodeConsumerGroup(kv.Value)
+	}
+	groupIDs := make([]string, 0, len(ids))
+	for id := range ids {
+		groupIDs = append(groupIDs, id)
+	}
+	sort.Strings(groupIDs)
+	groups := make([]*metadatapb.ConsumerGroup, 0, len(groupIDs))
+	// Keep transactions below etcd's default 128-operation limit.
+	for start := 0; start < len(groupIDs); start += 100 {
+		end := min(start+100, len(groupIDs))
+		ops := make([]clientv3.Op, 0, end-start)
+		for _, id := range groupIDs[start:end] {
+			ops = append(ops, clientv3.OpGet(ConsumerGroupKey(id), clientv3.WithRev(resp.Header.Revision)))
+		}
+		batch, err := s.client.Txn(ctx).Then(ops...).Commit()
 		if err != nil {
+			s.recordEtcdResult(err)
 			return nil, err
 		}
-		groups = append(groups, group)
+		for i, result := range batch.Responses {
+			kvs := result.GetResponseRange().Kvs
+			group := &metadatapb.ConsumerGroup{GroupId: groupIDs[start+i], State: "empty", ProtocolType: "consumer"}
+			if len(kvs) > 0 {
+				group, err = DecodeConsumerGroup(kvs[0].Value)
+				if err != nil {
+					return nil, err
+				}
+			}
+			groups = append(groups, group)
+		}
 	}
+	s.recordEtcdResult(nil)
 	return groups, nil
 }
 
-// DeleteConsumerGroup removes persisted consumer group metadata.
+// DeleteConsumerGroup removes only keys owned by this group, including offsets.
+// Batches are retryable if a store error interrupts deletion of a large group.
 func (s *EtcdStore) DeleteConsumerGroup(ctx context.Context, groupID string) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, err := s.client.Delete(ctx, ConsumerGroupKey(groupID))
-	s.recordEtcdResult(err)
-	return err
+	resp, err := s.client.Get(ctx, fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), groupID), clientv3.WithPrefix(), clientv3.WithKeysOnly())
+	if err != nil {
+		s.recordEtcdResult(err)
+		return err
+	}
+	ops := make([]clientv3.Op, 0, len(resp.Kvs)+1)
+	for _, kv := range resp.Kvs {
+		if id, _, _, ok := ParseConsumerOffsetKey(string(kv.Key)); ok && id == groupID {
+			ops = append(ops, clientv3.OpDelete(string(kv.Key)))
+		}
+	}
+	// Remove metadata last so an interrupted deletion remains discoverable for retry.
+	ops = append(ops, clientv3.OpDelete(ConsumerGroupKey(groupID)))
+	for start := 0; start < len(ops); start += 100 {
+		_, err = s.client.Txn(ctx).Then(ops[start:min(start+100, len(ops))]...).Commit()
+		if err != nil {
+			s.recordEtcdResult(err)
+			return err
+		}
+	}
+	s.recordEtcdResult(nil)
+	return nil
 }
 
 // FetchTopicConfig loads topic configuration from etcd or falls back to defaults.

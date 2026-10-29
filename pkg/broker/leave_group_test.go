@@ -73,11 +73,11 @@ func TestLeaveGroupVersionedMembers(t *testing.T) {
 			if resp := c.LeaveGroup(context.Background(), req); resp.ErrorCode != 0 {
 				t.Fatal(resp)
 			}
-			if _, ok := c.groups["readers"]; ok {
-				t.Fatal("last member retained")
+			if state := c.groups["readers"]; state == nil || len(state.members) != 0 || state.state != groupStateEmpty || state.generationID != before+2 {
+				t.Fatalf("last member transition: %+v", state)
 			}
 			persisted, err = store.FetchConsumerGroup(context.Background(), "readers")
-			if err != nil || persisted != nil {
+			if err != nil || persisted == nil || persisted.State != groupStateEmptyStr || len(persisted.Members) != 0 {
 				t.Fatal(persisted, err)
 			}
 			resp = c.LeaveGroup(context.Background(), req)
@@ -124,10 +124,10 @@ func TestLeaveGroupRemovesWholeBatch(t *testing.T) {
 	if resp.ErrorCode != 0 || len(resp.Members) != 2 || resp.Members[0].ErrorCode != 0 || resp.Members[1].ErrorCode != 0 {
 		t.Fatal(resp)
 	}
-	if _, exists := c.groups["readers"]; exists {
-		t.Fatal("batch retained empty group")
+	if state := c.groups["readers"]; state == nil || len(state.members) != 0 || state.state != groupStateEmpty {
+		t.Fatalf("batch did not empty group: %+v", state)
 	}
-	if group, err := store.FetchConsumerGroup(context.Background(), "readers"); err != nil || group != nil {
+	if group, err := store.FetchConsumerGroup(context.Background(), "readers"); err != nil || group == nil || group.State != groupStateEmptyStr || len(group.Members) != 0 {
 		t.Fatal(group, err)
 	}
 }
