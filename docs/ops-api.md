@@ -141,7 +141,7 @@ Request-specific notes:
 - ListGroups returns an empty result set on no matches. DescribeGroups reports `GROUP_ID_NOT_FOUND` for each unknown group.
 - Groups remain visible with state `Empty` and no members after the last member leaves or expires. Their committed offsets remain available through OffsetFetch, including after a broker restart. Groups left with only offsets by older brokers are also listed and described as `Empty`.
 - Consumer group offsets do not currently expire automatically. Use DeleteGroups to remove an inactive group and all its committed offsets.
-- DeleteGroups returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`. Groups with active members report `NON_EMPTY_GROUP` (68), preserving their membership and offsets.
+- DeleteGroups returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`. Groups with active members report `NON_EMPTY_GROUP` (68), preserving their membership and offsets. After a coordinator crash, DeleteGroups applies session expiry to stored members before deciding whether the group is still active.
 - DescribeConfigs returns only keys from the whitelist and ignores unknown keys.
 - AlterConfigs rejects any broker resource mutation with `INVALID_CONFIG`.
 

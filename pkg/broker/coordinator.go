@@ -572,10 +572,17 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
-		if state := c.groups[groupID]; state != nil && len(state.members) > 0 {
-			result.ErrorCode = protocol.NON_EMPTY_GROUP
-			resp.Groups = append(resp.Groups, result)
-			continue
+		if state := c.groups[groupID]; state != nil {
+			if err := c.expireGroupMembersLocked(ctx, groupID, state, time.Now()); err != nil {
+				result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				resp.Groups = append(resp.Groups, result)
+				continue
+			}
+			if len(state.members) > 0 {
+				result.ErrorCode = protocol.NON_EMPTY_GROUP
+				resp.Groups = append(resp.Groups, result)
+				continue
+			}
 		}
 		group, err := c.fetchGroupForAdmin(ctx, groupID)
 		if err != nil {
@@ -590,9 +597,20 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			continue
 		}
 		if len(group.Members) > 0 {
-			result.ErrorCode = protocol.NON_EMPTY_GROUP
-			resp.Groups = append(resp.Groups, result)
-			continue
+			// A replacement coordinator has not seen this group's sessions yet.
+			// Cache it so any surviving members also receive normal background expiry.
+			state := restoreGroupState(group)
+			c.groups[groupID] = state
+			if err := c.expireGroupMembersLocked(ctx, groupID, state, time.Now()); err != nil {
+				result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				resp.Groups = append(resp.Groups, result)
+				continue
+			}
+			if len(state.members) > 0 {
+				result.ErrorCode = protocol.NON_EMPTY_GROUP
+				resp.Groups = append(resp.Groups, result)
+				continue
+			}
 		}
 		if err := c.store.DeleteConsumerGroup(ctx, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -1102,14 +1120,20 @@ func (c *GroupCoordinator) cleanupGroups() {
 	now := time.Now()
 	ctx := context.Background()
 	for groupID, state := range c.groups {
-		removed := state.removeExpiredMembers(now)
-		lostDuringRebalance := state.dropRebalanceLaggers(now)
-
-		if removed || lostDuringRebalance {
-			state.startRebalance(0)
-			_ = c.persistGroupLocked(ctx, groupID, state)
-		}
+		_ = c.expireGroupMembersLocked(ctx, groupID, state, now)
 	}
+}
+
+// expireGroupMembersLocked applies the same session/rebalance expiry to cached
+// groups and groups recovered from storage. Persist before permitting deletion.
+func (c *GroupCoordinator) expireGroupMembersLocked(ctx context.Context, groupID string, state *groupState, now time.Time) error {
+	removed := state.removeExpiredMembers(now)
+	lostDuringRebalance := state.dropRebalanceLaggers(now)
+	if removed || lostDuringRebalance {
+		state.startRebalance(0)
+		return c.persistGroupLocked(ctx, groupID, state)
+	}
+	return nil
 }
 
 func (s *groupState) ensureLeader() {
