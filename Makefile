@@ -494,6 +494,7 @@ demo-platform-bootstrap: docker-build $(MINIO_BUILD) ## Bootstrap a full platfor
 	@kind load docker-image $(OPERATOR_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@if [ "$(KAFSCALE_DEMO_CONSOLE)" = "1" ]; then kind load docker-image $(CONSOLE_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@kind load docker-image $(ETCD_TOOLS_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@docker image inspect $(MINIO_IMAGE) >/dev/null 2>&1 || docker pull $(MINIO_IMAGE)
 	@kind load docker-image $(MINIO_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER); fi
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) kubectl create namespace $(KAFSCALE_DEMO_NAMESPACE) --dry-run=client -o yaml | \
