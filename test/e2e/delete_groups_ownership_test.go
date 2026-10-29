@@ -231,8 +231,34 @@ func TestDeleteGroupsNonCoordinatorE2E(t *testing.T) {
 	if resp := directGroupRequest(t, aAddr, leave).(*kmsg.LeaveGroupResponse); resp.ErrorCode != 0 {
 		t.Fatal(resp)
 	}
+	for _, addr := range []string{aAddr, bAddr} {
+		list := kmsg.NewPtrListGroupsRequest()
+		list.Version, list.StatesFilter = 4, []string{"Empty"}
+		listed := directGroupRequest(t, addr, list).(*kmsg.ListGroupsResponse)
+		found := false
+		for _, g := range listed.Groups {
+			found = found || (g.Group == groupID && g.GroupState == "Empty")
+		}
+		if listed.ErrorCode != 0 || !found {
+			t.Fatalf("%s list: %+v", addr, listed)
+		}
+	}
+	for _, addr := range []string{aAddr, proxyAddr} {
+		describe := kmsg.NewPtrDescribeGroupsRequest()
+		describe.Groups = []string{groupID}
+		described := directGroupRequest(t, addr, describe).(*kmsg.DescribeGroupsResponse)
+		if described.Groups[0].ErrorCode != 0 || described.Groups[0].State != "Empty" || len(described.Groups[0].Members) != 0 {
+			t.Fatalf("%s describe: %+v", addr, described)
+		}
+	}
 	if resp := directGroupRequest(t, proxyAddr, del).(*kmsg.DeleteGroupsResponse); resp.Groups[0].ErrorCode != 0 {
 		t.Fatal(resp)
+	}
+	if offsets, err := store.ListGroupConsumerOffsets(ctx, groupID); err != nil || len(offsets) != 0 {
+		t.Fatal("delete retained offsets", offsets, err)
+	}
+	if group, err := store.FetchConsumerGroup(ctx, groupID); err != nil || group != nil {
+		t.Fatal("delete retained group", group, err)
 	}
 	lease, err := store.EtcdClient().Get(ctx, metadata.GroupLeasePrefix()+"/"+groupID)
 	if err != nil || len(lease.Kvs) != 0 {

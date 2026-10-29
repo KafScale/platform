@@ -6,7 +6,7 @@ set -euo pipefail
 # Include command packages: the general coverage gate excludes them.
 profile="${1:-coverage-auth.out}"
 if [[ $# -eq 0 ]]; then
-  go test -race -coverprofile="$profile" ./pkg/authn ./pkg/acl ./pkg/broker ./cmd/proxy ./cmd/broker ./pkg/operator
+  go test -race -coverprofile="$profile" ./pkg/authn ./pkg/acl ./pkg/metadata ./pkg/broker ./cmd/proxy ./cmd/broker ./pkg/operator
 fi
 python3 - "$profile" <<'PY'
 import sys
@@ -15,6 +15,7 @@ required = {
     'pkg/authn/forward.go',
     'pkg/authn/tls.go',
     'pkg/acl/acl.go',
+    'pkg/metadata/consumer_group_delete.go',
     'pkg/broker/conn_context.go',
     'cmd/proxy/security.go',
     'cmd/proxy/metadata_errors.go',
