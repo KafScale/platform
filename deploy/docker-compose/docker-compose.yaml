@@ -34,9 +34,6 @@
 #     -H "Content-Type: application/octet-stream" \
 #     --data-binary @myfile.bin
 
-x-registry: &registry "ghcr.io"
-x-tag: &tag "v1.6.3"
-
 services:
   # ==========================================================================
   # Infrastructure
