@@ -17,6 +17,7 @@ package metadata
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -145,5 +146,53 @@ func (s *InMemoryStore) DeleteConsumerGroupAndOffsets(ctx context.Context, group
 			delete(s.consumerMeta, key)
 		}
 	}
+	return nil
+}
+
+// ConsumerGroupOffsetCommitter is an optional capability that refuses offset
+// commits for a group whose metadata was deleted.
+type ConsumerGroupOffsetCommitter interface {
+	CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error
+}
+
+var ErrConsumerGroupDeleted = errors.New("consumer group deleted")
+
+func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group, topic string, partition int32, offset int64, metadata string) error {
+	if committer, ok := store.(ConsumerGroupOffsetCommitter); ok {
+		return committer.CommitConsumerOffsetIfGroupExists(ctx, group, topic, partition, offset, metadata)
+	}
+	return store.CommitConsumerOffset(ctx, group, topic, partition, offset, metadata)
+}
+
+func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	bytes, _ := json.Marshal(consumerOffsetRecord{Offset: offset, Metadata: metadata, CommittedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	result, err := s.client.Txn(ctx).
+		If(clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(group)), ">", 0)).
+		Then(clientv3.OpPut(consumerOffsetKey(group, topic, partition), string(bytes))).
+		Commit()
+	s.recordEtcdResult(err)
+	if err != nil {
+		return err
+	}
+	if !result.Succeeded {
+		return ErrConsumerGroupDeleted
+	}
+	return nil
+}
+
+func (s *InMemoryStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.consumerGroups[group]; !ok {
+		return ErrConsumerGroupDeleted
+	}
+	key := consumerKey(group, topic, partition)
+	s.consumerOffsets[key] = offset
+	s.consumerMeta[key] = metadata
 	return nil
 }

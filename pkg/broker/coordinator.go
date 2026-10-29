@@ -477,8 +477,11 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 				if part.Metadata != nil {
 					meta = *part.Metadata
 				}
-				if err := c.store.CommitConsumerOffset(ctx, req.Group, topic.Topic, part.Partition, part.Offset, meta); err != nil {
+				if err := metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, topic.Topic, part.Partition, part.Offset, meta); err != nil {
 					code = protocol.UNKNOWN_SERVER_ERROR
+					if errors.Is(err, metadata.ErrConsumerGroupDeleted) {
+						code = protocol.UNKNOWN_MEMBER_ID
+					}
 				}
 			}
 			partResp := kmsg.NewOffsetCommitResponseTopicPartition()
@@ -696,7 +699,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		}
 		if err := metadata.DeleteConsumerGroupAndOffsets(ctx, c.store, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-			if errors.Is(err, metadata.ErrConsumerGroupChanged) || errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, metadata.ErrConsumerGroupChanged) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				result.ErrorCode = protocol.COORDINATOR_NOT_AVAILABLE
 			}
 			resp.Groups = append(resp.Groups, result)
