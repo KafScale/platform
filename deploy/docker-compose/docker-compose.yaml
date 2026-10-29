@@ -15,7 +15,7 @@
 #
 # KafScale Local Development Platform
 # ====================================
-# Uses images from local registry at 192.168.0.131:5100
+# Uses images from ghcr.io/kafscale. Set REGISTRY and TAG to use another registry.
 #
 # Usage:
 #   cd deploy/docker-compose
@@ -34,8 +34,8 @@
 #     -H "Content-Type: application/octet-stream" \
 #     --data-binary @myfile.bin
 
-x-registry: &registry "192.168.0.131:5100"
-x-tag: &tag "dev"
+x-registry: &registry "ghcr.io"
+x-tag: &tag "v1.6.3"
 
 services:
   # ==========================================================================
@@ -109,7 +109,7 @@ services:
   # ==========================================================================
 
   broker:
-    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-broker:${TAG:-dev}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v1.6.3}
     container_name: kafscale-broker-dc
     depends_on:
       etcd:
@@ -121,9 +121,8 @@ services:
       KAFSCALE_BROKER_ADDR: ":9092"
       KAFSCALE_BROKER_HOST: "broker"
       KAFSCALE_BROKER_PORT: "9092"
-      KAFSCALE_BROKER_ETCD_ENDPOINTS: "http://etcd:2379"
-      KAFSCALE_BROKER_DATA_DIR: "/data"
-      KAFSCALE_BROKER_LOG_LEVEL: "info"
+      KAFSCALE_ETCD_ENDPOINTS: "http://etcd:2379"
+      KAFSCALE_LOG_LEVEL: "info"
       # S3 settings (broker uses KAFSCALE_S3_* not KAFSCALE_BROKER_S3_*)
       KAFSCALE_S3_BUCKET: "kafscale"
       KAFSCALE_S3_REGION: "us-east-1"
@@ -144,7 +143,7 @@ services:
       - kafscale
 
   proxy:
-    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-proxy:${TAG:-dev}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-proxy:${TAG:-v1.6.3}
     container_name: kafscale-proxy-dc
     depends_on:
       etcd:
@@ -153,6 +152,8 @@ services:
         condition: service_healthy
     environment:
       KAFSCALE_PROXY_ADDR: ":9092"
+      # The proxy advertises localhost:9093, so only host clients can use it.
+      # Clients inside the compose network connect to broker:9092.
       KAFSCALE_PROXY_ADVERTISED_HOST: "localhost"
       KAFSCALE_PROXY_ADVERTISED_PORT: "9093"
       KAFSCALE_PROXY_HEALTH_ADDR: ":9094"
@@ -160,6 +161,7 @@ services:
       KAFSCALE_PROXY_BACKENDS: "broker:9092"
       KAFSCALE_PROXY_LFS_ENABLED: "true"
       KAFSCALE_LFS_PROXY_HTTP_ADDR: ":8080"
+      KAFSCALE_LFS_PROXY_BACKENDS: "broker:9092"
       KAFSCALE_LFS_PROXY_S3_BUCKET: "kafscale"
       KAFSCALE_LFS_PROXY_S3_REGION: "us-east-1"
       KAFSCALE_LFS_PROXY_S3_ENDPOINT: "http://minio:9000"
@@ -169,6 +171,7 @@ services:
     ports:
       - "9093:9092"
       - "8080:8080"
+      - "9094:9094"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9094/readyz || exit 1"]
       interval: 10s
@@ -183,7 +186,7 @@ services:
   # See the proxy service above for configuration.
 
   console:
-    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-console:${TAG:-dev}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-console:${TAG:-v1.6.3}
     container_name: kafscale-console-dc
     depends_on:
       etcd:
@@ -194,7 +197,6 @@ services:
       KAFSCALE_CONSOLE_HTTP_ADDR: ":3080"
       KAFSCALE_CONSOLE_ETCD_ENDPOINTS: "http://etcd:2379"
       KAFSCALE_CONSOLE_BROKER_METRICS_URL: "http://broker:8080/metrics"
-      KAFSCALE_CONSOLE_LOG_LEVEL: "info"
       KAFSCALE_UI_USERNAME: "kafscaleadmin"
       KAFSCALE_UI_PASSWORD: "kafscale"
       # Traceability (LFS Console Dashboard)
@@ -210,7 +212,7 @@ services:
     ports:
       - "3080:3080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3080/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3080/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -222,8 +224,9 @@ services:
   # ==========================================================================
 
   e72-browser-demo:
-    image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-e72-browser-demo:${TAG:-dev}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-e72-browser-demo:${TAG:-v1.6.3}
     container_name: kafscale-e72-demo-dc
+    profiles: ["demo"]
     depends_on:
       proxy:
         condition: service_healthy
@@ -242,14 +245,14 @@ services:
   # ==========================================================================
 
   # operator:
-  #   image: ${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-operator:${TAG:-dev}
+  #   image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-operator:${TAG:-v1.6.3}
   #   container_name: kafscale-operator-dc
   #   depends_on:
   #     etcd:
   #       condition: service_healthy
   #   environment:
   #     KAFSCALE_OPERATOR_ETCD_ENDPOINTS: "http://etcd:2379"
-  #     KAFSCALE_OPERATOR_BROKER_IMAGE: "${REGISTRY:-192.168.0.131:5100}/kafscale/kafscale-broker:${TAG:-dev}"
+  #     KAFSCALE_OPERATOR_BROKER_IMAGE: "${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v1.6.3}"
   #     KAFSCALE_OPERATOR_LOG_LEVEL: "info"
   #   networks:
   #     - kafscale
