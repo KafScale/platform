@@ -27,11 +27,11 @@ import (
 
 var (
 	deadMinioImage = regexp.MustCompile(`quay\.io/minio/|docker\.io/minio/|bitnami/minio|(^|[^\w./-])minio/(minio|mc)([^\w.-]|$)`)
-	helmChartRef   = regexp.MustCompile(`\bhelm\s+(install|upgrade)\b`)
+	helmChartRef   = regexp.MustCompile(`\bhelm\s+(install|upgrade)\s+\S+\s+minio/minio\b`)
 )
 
 func isDeadMinioRef(line string) bool {
-	return deadMinioImage.MatchString(line) && !helmChartRef.MatchString(line)
+	return deadMinioImage.MatchString(helmChartRef.ReplaceAllString(line, ""))
 }
 
 func TestIsDeadMinioRef(t *testing.T) {
@@ -48,6 +48,7 @@ func TestIsDeadMinioRef(t *testing.T) {
 		{"  image: bitnami/minio:2024", true},
 		{`"minio/minio"`, true},
 		{"helm install minio minio/minio \\", false},
+		{"helm install x minio/minio --set image.repository=quay.io/minio/minio", true},
 		{"RUN git remote add origin https://github.com/minio/minio.git", false},
 		{"github.com/minio/minio-go/v7 v7.0.0", false},
 		{"MINIO_IMAGE ?= kafscale-minio:local", false},
