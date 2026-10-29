@@ -21,7 +21,7 @@ IMAGE ?= $(BINARY):dev
 DOCKER_BUILD_ARGS ?=
 
 MINIO_CONTAINER ?= kafsql-minio
-MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
+MINIO_IMAGE ?= kafscale-minio:local
 MINIO_PORT ?= 9000
 MINIO_CONSOLE_PORT ?= 9001
 MINIO_ROOT_USER ?= minioadmin
@@ -29,7 +29,7 @@ MINIO_ROOT_PASSWORD ?= minioadmin
 MINIO_BUCKET ?= kafsql-test
 MIN_COVERAGE ?= 60
 
-.PHONY: build test test-minio coverage clean docker-build ensure-minio start-minio stop-minio
+.PHONY: build test test-minio coverage clean docker-build ensure-minio start-minio stop-minio docker-build-minio
 
 build:
 	mkdir -p $(BUILD_DIR)
@@ -73,7 +73,10 @@ ensure-minio:
 		fi; \
 	fi
 
-start-minio:
+docker-build-minio:
+	docker build -t $(MINIO_IMAGE) -f ../../../test/e2e/minio.Dockerfile ../../..
+
+start-minio: $(if $(filter kafscale-minio:local,$(MINIO_IMAGE)),docker-build-minio)
 	@echo "starting MinIO helper $(MINIO_CONTAINER) on port $(MINIO_PORT)"
 	@docker rm -f $(MINIO_CONTAINER) >/dev/null 2>&1 || true
 	@docker run -d --name $(MINIO_CONTAINER) -p $(MINIO_PORT):9000 -p $(MINIO_CONSOLE_PORT):9001 \

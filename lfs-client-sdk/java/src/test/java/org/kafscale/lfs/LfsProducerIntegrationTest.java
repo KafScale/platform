@@ -64,7 +64,7 @@ class LfsProducerIntegrationTest {
     private static final DockerImageName KAFKA_IMAGE = DockerImageName.parse(
             System.getenv().getOrDefault("KAFSCALE_KAFKA_IMAGE", "confluentinc/cp-kafka:7.6.1"));
     private static final DockerImageName MINIO_IMAGE = DockerImageName.parse(
-            System.getenv().getOrDefault("KAFSCALE_MINIO_IMAGE", "quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z"));
+            System.getenv().getOrDefault("KAFSCALE_MINIO_IMAGE", "kafscale-minio:local"));
     private static final DockerImageName LFS_PROXY_IMAGE = DockerImageName.parse(
             System.getenv().getOrDefault("KAFSCALE_LFS_PROXY_IMAGE", "ghcr.io/kafscale/kafscale-lfs-proxy:dev"));
 

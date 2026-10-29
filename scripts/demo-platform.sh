@@ -16,7 +16,7 @@
 set -euo pipefail
 
 KAFSCALE_DEMO_NAMESPACE="${KAFSCALE_DEMO_NAMESPACE:-kafscale-demo}"
-MINIO_IMAGE="${MINIO_IMAGE:-quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z}"
+MINIO_IMAGE="${MINIO_IMAGE:-kafscale-minio:local}"
 MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
 MINIO_REGION="${MINIO_REGION:-us-east-1}"

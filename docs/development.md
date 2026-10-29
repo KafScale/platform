@@ -200,6 +200,7 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 - `KAFSCALE_E2E_OPEN_UI` – Open UI during demo test.
 - `KAFSCALE_E2E_DEBUG` – Enable debug output in e2e tests.
 - `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE` – Image overrides for kind e2e.
+- `KAFSCALE_MINIO_IMAGE` – MinIO image for kind e2e and the Java LFS integration test (default `kafscale-minio:local`, built by `make docker-build-minio`).
 - `KAFSCALE_LOCAL_FRANZ` – Use local franz-go build in tests.
 
 ### Demo workload tuning
