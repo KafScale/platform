@@ -34,7 +34,7 @@ KafScale uses S3-compatible object storage as its source of truth. While designe
 | Google Cloud Storage | ⚠️ Interop | Requires HMAC keys, XML API |
 | Oracle Cloud | ⚠️ Interop | S3 Compatibility API |
 | IBM Cloud Object Storage | ⚠️ Interop | S3-compatible API |
-| Azure Blob Storage | ❌ Proxy | Requires MinIO Gateway |
+| Azure Blob Storage | ❌ Not supported | Not S3-compatible; MinIO has no gateway mode |
 
 **Legend:**
 - ✅ Native: Standard S3 SDK works with endpoint change
@@ -312,118 +312,9 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ## Azure Blob Storage
 
-Azure Blob Storage is **not** S3-compatible. Use MinIO as a gateway proxy.
+Azure Blob Storage is **not** S3-compatible, and KafScale has no supported Azure path.
 
-### Architecture
-
-```
-KafScale Brokers → MinIO Gateway → Azure Blob Storage
-```
-
-### Deploy MinIO Gateway
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: minio-azure-gateway
-  namespace: kafscale
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: minio-gateway
-  template:
-    metadata:
-      labels:
-        app: minio-gateway
-    spec:
-      containers:
-      - name: minio
-        image: minio/minio:latest
-        args:
-          - gateway
-          - azure
-        env:
-          - name: MINIO_ROOT_USER
-            valueFrom:
-              secretKeyRef:
-                name: minio-gateway-creds
-                key: accessKey
-          - name: MINIO_ROOT_PASSWORD
-            valueFrom:
-              secretKeyRef:
-                name: minio-gateway-creds
-                key: secretKey
-          - name: AZURE_STORAGE_ACCOUNT
-            valueFrom:
-              secretKeyRef:
-                name: azure-storage-creds
-                key: accountName
-          - name: AZURE_STORAGE_KEY
-            valueFrom:
-              secretKeyRef:
-                name: azure-storage-creds
-                key: accountKey
-        ports:
-          - containerPort: 9000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: minio-gateway
-  namespace: kafscale
-spec:
-  selector:
-    app: minio-gateway
-  ports:
-    - port: 9000
-      targetPort: 9000
-```
-
-### KafScaleCluster
-
-Point KafScale at the MinIO gateway:
-
-```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
-metadata:
-  name: production
-  namespace: kafscale
-spec:
-  brokers:
-    replicas: 3
-  s3:
-    bucket: kafscale-production
-    endpoint: http://minio-gateway.kafscale.svc:9000
-    credentialsSecretRef: minio-gateway-creds
-  etcd:
-    endpoints: []
-```
-
-### Secrets
-
-```bash
-# MinIO gateway credentials (what KafScale uses)
-kubectl -n kafscale create secret generic minio-gateway-creds \
-  --from-literal=accessKey=kafscale-access \
-  --from-literal=secretKey=kafscale-secret-key
-
-# Azure storage credentials (what MinIO uses)
-kubectl -n kafscale create secret generic azure-storage-creds \
-  --from-literal=accountName=<storage-account-name> \
-  --from-literal=accountKey=<storage-account-key>
-```
-
-### Trade-offs
-
-- **Added latency:** Extra network hop through gateway
-- **Operational overhead:** Another component to manage and monitor
-- **Single point of failure:** Gateway needs HA configuration
-- **Cost:** Compute for gateway instances
-
-Consider native S3-compatible providers if Azure isn't a hard requirement.
+MinIO no longer has a gateway mode: `minio gateway` is not a subcommand in the MinIO build from `test/e2e/minio.Dockerfile`. Use one of the S3-compatible providers above.
 
 ---
 
@@ -433,10 +324,11 @@ Run your own S3-compatible storage on any infrastructure—on-prem, edge, or any
 
 ### Docker Compose (Development)
 
-The default `docker-compose.yml` includes MinIO:
+`deploy/docker-compose/docker-compose.yaml` builds MinIO from `test/e2e/minio.Dockerfile` as `kafscale-minio:local`:
 
 ```bash
-docker-compose up -d
+cd deploy/docker-compose
+docker compose up -d --build
 ```
 
 MinIO runs on port 9000 with default credentials `minioadmin:minioadmin`.
@@ -462,12 +354,16 @@ spec:
 
 ### Production MinIO
 
-For production, deploy MinIO in distributed mode with erasure coding:
+For production, deploy MinIO in distributed mode with erasure coding. The chart at `https://charts.min.io/` (latest version 5.4.0) still installs, but its default MinIO and `mc` images on quay.io are no longer publicly pullable. Push MinIO and `mc` images to a registry you control and point the chart at them:
 
 ```bash
 helm repo add minio https://charts.min.io/
 helm install minio minio/minio \
   --namespace minio-system --create-namespace \
+  --set image.repository=<registry>/minio \
+  --set image.tag=<minio-tag> \
+  --set mcImage.repository=<registry>/mc \
+  --set mcImage.tag=<mc-tag> \
   --set mode=distributed \
   --set replicas=4 \
   --set persistence.size=100Gi

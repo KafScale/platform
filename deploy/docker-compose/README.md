@@ -296,7 +296,7 @@ docker-compose logs lfs-proxy
 curl http://localhost:9000/minio/health/live
 
 # Check bucket exists
-docker-compose exec minio mc ls local/
+docker-compose exec minio ls /data
 ```
 
 ### Reset everything

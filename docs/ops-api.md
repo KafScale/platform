@@ -138,17 +138,10 @@ To align with Kafka client expectations:
 
 Request-specific notes:
 
-- ListGroups returns an empty result set on no matches. DescribeGroups reports
-  `GROUP_ID_NOT_FOUND` for unknown groups.
-- A group with committed offsets remains visible as `Empty` after its last member
-  leaves or expires, including after a coordinator restart. OffsetFetch continues
-  to return its committed offsets.
-- DeleteGroups atomically removes each group's metadata and committed offsets.
-  It returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`.
-- Built-in stores support atomic deletion through the optional
-  `metadata.ConsumerGroupDeleter` capability. The required `metadata.Store`
-  interface is unchanged. A custom store without this capability can still delete
-  metadata-only groups; deleting a group with offsets fails without mutation.
+- ListGroups returns an empty result set on no matches. DescribeGroups reports `GROUP_ID_NOT_FOUND` for each unknown group.
+- Groups remain visible with state `Empty` and no members after the last member leaves or expires. Their committed offsets remain available through OffsetFetch, including after a broker restart. Groups left with only offsets by older brokers are also listed and described as `Empty`.
+- Consumer group offsets do not currently expire automatically. Use DeleteGroups to remove an inactive group and all its committed offsets.
+- DeleteGroups returns per-group errors; a missing group reports `GROUP_ID_NOT_FOUND`. Groups with active members report `NON_EMPTY_GROUP` (68), preserving their membership and offsets. After a coordinator crash, DeleteGroups acquires the group lease before applying session expiry to stored members. A broker that cannot acquire ownership returns `NOT_COORDINATOR` without changing membership or offsets. Missing or invalid stored heartbeat times receive one local session timeout to reconnect. Recovered heartbeat timestamps receive a five-second expiry margin for clock skew; a local heartbeat clears that margin. Failed expiry writes return `COORDINATOR_NOT_AVAILABLE` and preserve cached members for retry. Successful deletion releases the group lease immediately. The proxy routes each group in a multi-group delete independently and retries only `NOT_COORDINATOR` results. Broker FindCoordinator responses identify the current lease owner.
 - DescribeConfigs returns only keys from the whitelist and ignores unknown keys.
 - AlterConfigs rejects any broker resource mutation with `INVALID_CONFIG`.
 

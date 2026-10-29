@@ -51,9 +51,9 @@ type Store interface {
 	PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error
 	// FetchConsumerGroup retrieves consumer group metadata.
 	FetchConsumerGroup(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, error)
-	// ListConsumerGroups returns all stored consumer group metadata.
+	// ListConsumerGroups returns group metadata, including Empty groups discovered from offset keys.
 	ListConsumerGroups(ctx context.Context) ([]*metadatapb.ConsumerGroup, error)
-	// DeleteConsumerGroup removes consumer group metadata.
+	// DeleteConsumerGroup removes consumer group metadata and all committed offsets.
 	DeleteConsumerGroup(ctx context.Context, groupID string) error
 	// FetchTopicConfig returns the stored topic configuration.
 	FetchTopicConfig(ctx context.Context, topic string) (*metadatapb.TopicConfig, error)
@@ -540,15 +540,19 @@ func (s *InMemoryStore) listConsumerOffsets(ctx context.Context, groupID string,
 }
 
 func parseConsumerKey(key string) (string, string, int32, bool) {
-	parts := strings.Split(key, ":")
-	if len(parts) != 3 {
+	last := strings.LastIndex(key, ":")
+	if last < 0 {
 		return "", "", 0, false
 	}
-	partition, err := strconv.ParseInt(parts[2], 10, 32)
+	separator := strings.LastIndex(key[:last], ":")
+	if separator < 0 {
+		return "", "", 0, false
+	}
+	partition, err := strconv.ParseInt(key[last+1:], 10, 32)
 	if err != nil {
 		return "", "", 0, false
 	}
-	return parts[0], parts[1], int32(partition), true
+	return key[:separator], key[separator+1 : last], int32(partition), true
 }
 
 // PutConsumerGroup implements Store.PutConsumerGroup.
@@ -592,8 +596,17 @@ func (s *InMemoryStore) ListConsumerGroups(ctx context.Context) ([]*metadatapb.C
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	groups := make([]*metadatapb.ConsumerGroup, 0, len(s.consumerGroups))
+	seen := make(map[string]bool, len(s.consumerGroups))
 	for _, group := range s.consumerGroups {
 		groups = append(groups, cloneConsumerGroup(group))
+		seen[group.GroupId] = true
+	}
+	for key := range s.consumerOffsets {
+		id, _, _, ok := parseConsumerKey(key)
+		if ok && !seen[id] {
+			groups = append(groups, &metadatapb.ConsumerGroup{GroupId: id, State: "empty", ProtocolType: "consumer"})
+			seen[id] = true
+		}
 	}
 	return groups, nil
 }
@@ -608,6 +621,12 @@ func (s *InMemoryStore) DeleteConsumerGroup(ctx context.Context, groupID string)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.consumerGroups, groupID)
+	for key := range s.consumerOffsets {
+		if id, _, _, ok := parseConsumerKey(key); ok && id == groupID {
+			delete(s.consumerOffsets, key)
+			delete(s.consumerMeta, key)
+		}
+	}
 	return nil
 }
 
