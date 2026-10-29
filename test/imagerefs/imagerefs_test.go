@@ -25,7 +25,40 @@ import (
 	"testing"
 )
 
-var deadMinioImage = regexp.MustCompile(`quay\.io/minio/|docker\.io/minio/|image:\s*["']?minio/|minio/(minio|mc):`)
+var (
+	deadMinioImage = regexp.MustCompile(`quay\.io/minio/|docker\.io/minio/|bitnami/minio|(^|[^\w./-])minio/(minio|mc)([^\w.-]|$)`)
+	helmChartRef   = regexp.MustCompile(`\bhelm\s+(install|upgrade)\s+\S+\s+minio/minio\b`)
+)
+
+func isDeadMinioRef(line string) bool {
+	return deadMinioImage.MatchString(helmChartRef.ReplaceAllString(line, ""))
+}
+
+func TestIsDeadMinioRef(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"MINIO_IMAGE ?= quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z", true},
+		{"    image: minio/minio:latest", true},
+		{"    image: minio/mc:latest", true},
+		{"docker pull minio/minio", true},
+		{"FROM minio/minio", true},
+		{"FROM docker.io/minio/minio", true},
+		{"  image: bitnami/minio:2024", true},
+		{`"minio/minio"`, true},
+		{"helm install minio minio/minio \\", false},
+		{"helm install x minio/minio --set image.repository=quay.io/minio/minio", true},
+		{"RUN git remote add origin https://github.com/minio/minio.git", false},
+		{"github.com/minio/minio-go/v7 v7.0.0", false},
+		{"MINIO_IMAGE ?= kafscale-minio:local", false},
+	}
+	for _, c := range cases {
+		if got := isDeadMinioRef(c.line); got != c.want {
+			t.Errorf("isDeadMinioRef(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}
 
 func TestNoUnpullableMinioImages(t *testing.T) {
 	root, err := filepath.Abs("../..")
@@ -41,6 +74,9 @@ func TestNoUnpullableMinioImages(t *testing.T) {
 		t.Fatal("git ls-files returned no files")
 	}
 	for _, name := range files {
+		if string(name) == "test/imagerefs/imagerefs_test.go" {
+			continue
+		}
 		path := filepath.Join(root, string(name))
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -54,7 +90,7 @@ func TestNoUnpullableMinioImages(t *testing.T) {
 		line := 0
 		for scanner.Scan() {
 			line++
-			if deadMinioImage.Match(scanner.Bytes()) {
+			if isDeadMinioRef(scanner.Text()) {
 				t.Errorf("%s:%d references a MinIO image that is no longer publicly pullable; use kafscale-minio:local built from test/e2e/minio.Dockerfile", name, line)
 			}
 		}
@@ -65,6 +101,9 @@ func TestNoUnpullableMinioImages(t *testing.T) {
 }
 
 func TestMakeBuildsMinioOnlyForDefaultImage(t *testing.T) {
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make not found on PATH")
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatal(err)

@@ -354,7 +354,7 @@ spec:
 
 ### Production MinIO
 
-For production, deploy MinIO in distributed mode with erasure coding. The chart at `https://charts.min.io/` (latest version 5.4.0) still installs, but its default images on quay.io (repositories `minio/minio` and `minio/mc`) are no longer publicly pullable. Push MinIO and `mc` images to a registry you control and point the chart at them:
+For production, deploy MinIO in distributed mode with erasure coding. The chart at `https://charts.min.io/` (latest version 5.4.0) still installs, but its default MinIO and `mc` images on quay.io are no longer publicly pullable. Push MinIO and `mc` images to a registry you control and point the chart at them:
 
 ```bash
 helm repo add minio https://charts.min.io/
