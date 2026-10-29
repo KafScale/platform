@@ -290,3 +290,36 @@ func TestDeleteExpiryLosesLeaseBeforeWrite(t *testing.T) {
 		t.Fatal(offsets, err)
 	}
 }
+
+func TestRecoveredSessionHasClockSkewMargin(t *testing.T) {
+	heartbeat := time.Now()
+	state := restoreGroupState(&metadatapb.ConsumerGroup{Members: map[string]*metadatapb.GroupMember{"member": {HeartbeatAt: heartbeat.UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 1000}}})
+	if state.removeExpiredMembers(heartbeat.Add(time.Second + recoveredSessionGrace - time.Millisecond)) {
+		t.Fatal("recovered session expired within grace")
+	}
+	if !state.removeExpiredMembers(heartbeat.Add(time.Second + recoveredSessionGrace + time.Millisecond)) {
+		t.Fatal("recovered session did not expire after grace")
+	}
+}
+
+func TestHeartbeatClearsRecoveredSessionGrace(t *testing.T) {
+	ctx := context.Background()
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	seedCoordinatorGroup(t, store, groupStateStableStr)
+	c := newTestCoordinator(t, store)
+	state, err := c.loadGroupIfMissing(ctx, "readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.members["a"].expiryGrace != recoveredSessionGrace {
+		t.Fatal("missing recovery grace")
+	}
+	heartbeat := kmsg.NewPtrHeartbeatRequest()
+	heartbeat.Group, heartbeat.MemberID, heartbeat.Generation = "readers", "a", 4
+	if resp := c.Heartbeat(ctx, heartbeat); resp.ErrorCode != 0 {
+		t.Fatal(resp)
+	}
+	if state.members["a"].expiryGrace != 0 {
+		t.Fatal("local heartbeat retained recovery grace")
+	}
+}

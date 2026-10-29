@@ -18,6 +18,7 @@ package metadata
 import (
 	"context"
 	"log/slog"
+	"sync"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -37,6 +38,9 @@ type GroupLeaseConfig struct {
 // GroupLeaseManager uses etcd leases to ensure exclusive group coordination
 // ownership. It delegates to the generic LeaseManager.
 type GroupLeaseManager struct {
+	// Coordinate local acquire/release so a request cannot reacquire a group
+	// immediately before a concurrent delete removes the same lease key.
+	mu sync.Mutex
 	lm *LeaseManager
 }
 
@@ -62,6 +66,16 @@ func GroupLeasePrefix() string {
 // owns it, it returns nil immediately. If another broker owns it, it returns
 // ErrNotOwner.
 func (m *GroupLeaseManager) Acquire(ctx context.Context, groupID string) error {
+	if m.lm.closed.Load() {
+		return ErrShuttingDown
+	}
+	// Heartbeats for owned groups must not wait behind unrelated lease I/O.
+	// A request racing with release is checked again by the coordinator.
+	if m.lm.Owns(groupID) {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.lm.Acquire(ctx, groupID)
 }
 
@@ -72,11 +86,15 @@ func (m *GroupLeaseManager) Owns(groupID string) bool {
 
 // Release explicitly gives up ownership of a single group.
 func (m *GroupLeaseManager) Release(groupID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.lm.Release(groupID)
 }
 
 // ReleaseAll releases all group leases. Called during graceful shutdown.
 func (m *GroupLeaseManager) ReleaseAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.lm.ReleaseAll()
 }
 

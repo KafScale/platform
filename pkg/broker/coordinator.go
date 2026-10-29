@@ -36,6 +36,7 @@ import (
 
 const (
 	defaultSessionTimeout   = 30 * time.Second
+	recoveredSessionGrace   = 5 * time.Second
 	defaultRebalanceTimeout = 30 * time.Second
 )
 
@@ -71,6 +72,8 @@ type CoordinatorConfig struct {
 	// OwnsGroup gates group mutation and cleanup after coordination lease loss.
 	// Nil permits standalone coordinators without an external lease manager.
 	OwnsGroup func(string) bool
+	// GroupDeleted releases external ownership while group operations remain locked.
+	GroupDeleted func(string)
 }
 
 var defaultCoordinatorConfig = CoordinatorConfig{
@@ -99,6 +102,7 @@ type memberState struct {
 	topics           []string
 	sessionTimeout   time.Duration
 	lastHeartbeat    time.Time
+	expiryGrace      time.Duration
 	joinGeneration   int32
 }
 
@@ -114,6 +118,7 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 			config.CleanupInterval = cfg.CleanupInterval
 		}
 		config.OwnsGroup = cfg.OwnsGroup
+		config.GroupDeleted = cfg.GroupDeleted
 	}
 	c := &GroupCoordinator{
 		store:  store,
@@ -142,6 +147,12 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *kmsg.JoinGroupReq
 // JoinGroupWithClient records display metadata separately from authentication.
 func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.JoinGroupRequest, clientID string) (*kmsg.JoinGroupResponse, error) {
 	c.mu.Lock()
+	if !c.ownsGroup(req.Group) {
+		c.mu.Unlock()
+		resp := kmsg.NewPtrJoinGroupResponse()
+		resp.ErrorCode = protocol.NOT_COORDINATOR
+		return resp, nil
+	}
 	state, err := c.ensureGroup(ctx, req.Group)
 	if err != nil {
 		c.mu.Unlock()
@@ -188,6 +199,7 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		}
 	}
 	member.lastHeartbeat = time.Now()
+	member.expiryGrace = 0
 
 	if len(state.members) == 1 && state.state == groupStateEmpty {
 		state.leaderID = memberID
@@ -332,6 +344,7 @@ func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *kmsg.HeartbeatReq
 		return mkResp(protocol.REBALANCE_IN_PROGRESS)
 	}
 	member.lastHeartbeat = time.Now()
+	member.expiryGrace = 0
 	resp := mkResp(protocol.NONE)
 	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -635,6 +648,9 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			continue
 		}
 		delete(c.groups, groupID)
+		if c.config.GroupDeleted != nil {
+			c.config.GroupDeleted(groupID)
+		}
 		result.ErrorCode = protocol.NONE
 		resp.Groups = append(resp.Groups, result)
 	}
@@ -810,6 +826,7 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 		if member.HeartbeatAt != "" {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
 				entry.lastHeartbeat = parsed
+				entry.expiryGrace = recoveredSessionGrace
 			}
 		}
 		state.members[memberID] = entry
@@ -1282,7 +1299,7 @@ func (s *groupState) removeExpiredMembers(now time.Time) bool {
 		if timeout == 0 {
 			timeout = defaultSessionTimeout
 		}
-		if now.Sub(member.lastHeartbeat) > timeout {
+		if now.Sub(member.lastHeartbeat) > timeout+member.expiryGrace {
 			delete(s.members, memberID)
 			delete(s.assignments, memberID)
 			if s.leaderID == memberID {

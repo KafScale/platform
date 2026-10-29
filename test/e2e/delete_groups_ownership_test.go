@@ -19,13 +19,21 @@ package e2e
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -75,15 +83,73 @@ func TestDeleteGroupsNonCoordinatorE2E(t *testing.T) {
 	etcd, endpoints := startEmbeddedEtcd(t)
 	defer etcd.Close()
 	aAddr, bAddr := freeAddr(t), freeAddr(t)
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	// Publish the operator's two-broker snapshot before starting either process.
+	snapshot := metadata.ClusterMetadata{}
+	for i, addr := range []string{aAddr, bAddr} {
+		host, portString, _ := net.SplitHostPort(addr)
+		port, _ := strconv.Atoi(portString)
+		snapshot.Brokers = append(snapshot.Brokers, protocol.MetadataBroker{NodeID: int32(i + 1), Host: host, Port: int32(port)})
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EtcdClient().Put(ctx, "/kafscale/metadata/snapshot", string(encoded)); err != nil {
+		t.Fatal(err)
+	}
+
 	a, logsA := startBrokerWithEtcd(t, ctx, aAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_BROKER_ID=1")
 	defer stopBroker(t, a)
 	waitForBroker(t, logsA, aAddr)
 	b, logsB := startBrokerWithEtcd(t, ctx, bAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_BROKER_ID=2")
 	defer stopBroker(t, b)
 	waitForBroker(t, logsB, bAddr)
+	proxyAddr := freeAddr(t)
+	_, proxyPort, _ := net.SplitHostPort(proxyAddr)
+	proxyLog, err := os.Create(filepath.Join(t.TempDir(), "proxy.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyLog.Close()
+	proxyCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "proxy"))
+	configureProcessGroup(proxyCmd)
+	proxyCmd.Env = os.Environ()
+	for _, entry := range []string{"KAFSCALE_PROXY_ADDR=" + proxyAddr, "KAFSCALE_PROXY_BACKENDS=" + aAddr + "," + bAddr, "KAFSCALE_PROXY_ETCD_ENDPOINTS=" + strings.Join(endpoints, ","), "KAFSCALE_PROXY_ADVERTISED_HOST=127.0.0.1", "KAFSCALE_PROXY_ADVERTISED_PORT=" + proxyPort, "KAFSCALE_PROXY_HEALTH_ADDR=", "KAFSCALE_PROXY_LFS_ENABLED=false", "KAFSCALE_PROXY_IDENTITY_KEY_FILE=", "KAFSCALE_PROXY_TLS_CERT_FILE=", "KAFSCALE_PROXY_TLS_KEY_FILE=", "KAFSCALE_PROXY_TLS_CLIENT_CA_FILE=", "KAFSCALE_PROXY_TLS_PRINCIPALS_FILE="} {
+		key, value, _ := strings.Cut(entry, "=")
+		proxyCmd.Env = upsertEnv(proxyCmd.Env, key, value)
+	}
+	var proxyLogs brokerLogBuffer
+	proxyWriter := io.MultiWriter(&proxyLogs, proxyLog)
+	proxyCmd.Stdout, proxyCmd.Stderr = proxyWriter, proxyWriter
+	if err := proxyCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer stopBroker(t, proxyCmd)
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		conn, err := net.DialTimeout("tcp", proxyAddr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("proxy startup: %v\n%s", err, proxyLogs.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	admin, err := kgo.NewClient(kgo.SeedBrokers(proxyAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
 	const groupID = "healthy-multibroker"
 	join := kmsg.NewPtrJoinGroupRequest()
-	join.Group, join.ProtocolType, join.SessionTimeoutMillis = groupID, "consumer", 1000
+	join.Group, join.ProtocolType, join.SessionTimeoutMillis = groupID, "consumer", 3000
 	join.Protocols = []kmsg.JoinGroupRequestProtocol{{Name: "range"}}
 	joined := directGroupRequest(t, aAddr, join).(*kmsg.JoinGroupResponse)
 	if joined.ErrorCode != 0 {
@@ -106,6 +172,14 @@ func TestDeleteGroupsNonCoordinatorE2E(t *testing.T) {
 	if resp := directGroupRequest(t, bAddr, del).(*kmsg.DeleteGroupsResponse); resp.Groups[0].ErrorCode != protocol.NOT_COORDINATOR {
 		t.Fatal(resp)
 	}
+	find := kmsg.NewPtrFindCoordinatorRequest()
+	find.Version, find.CoordinatorKey = 3, groupID
+	if resp := directGroupRequest(t, bAddr, find).(*kmsg.FindCoordinatorResponse); resp.ErrorCode != 0 || resp.NodeID != 1 {
+		t.Fatalf("wrong coordinator discovery: %+v", resp)
+	}
+	if resp := directGroupRequest(t, proxyAddr, del).(*kmsg.DeleteGroupsResponse); resp.Groups[0].ErrorCode != protocol.NON_EMPTY_GROUP {
+		t.Fatalf("proxy active delete: %+v", resp)
+	}
 	heartbeat := kmsg.NewPtrHeartbeatRequest()
 	heartbeat.Group, heartbeat.MemberID, heartbeat.Generation = groupID, joined.MemberID, joined.Generation
 	// Outlast B's five-second cleanup tick and multiple member session timeouts.
@@ -117,11 +191,6 @@ func TestDeleteGroupsNonCoordinatorE2E(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
 	group, err := store.FetchConsumerGroup(ctx, groupID)
 	if err != nil || group == nil || group.State != "stable" || group.GenerationId != joined.Generation || group.Members[joined.MemberID] == nil {
 		t.Fatal(group, err)
@@ -133,12 +202,76 @@ func TestDeleteGroupsNonCoordinatorE2E(t *testing.T) {
 	if resp := directGroupRequest(t, aAddr, del).(*kmsg.DeleteGroupsResponse); resp.Groups[0].ErrorCode != protocol.NON_EMPTY_GROUP {
 		t.Fatal(resp)
 	}
+	// Mix an idle group owned by B, an active group owned by A, and an unknown
+	// group in one proxy request. Preserve independent results in request order.
+	idleJoin := *join
+	idleJoin.Group, idleJoin.SessionTimeoutMillis = "idle-on-b", 60000
+	idleMember := directGroupRequest(t, bAddr, &idleJoin).(*kmsg.JoinGroupResponse)
+	if idleMember.ErrorCode != 0 {
+		t.Fatal(idleMember)
+	}
+	idleLeave := kmsg.NewPtrLeaveGroupRequest()
+	idleLeave.Group, idleLeave.MemberID = idleJoin.Group, idleMember.MemberID
+	if resp := directGroupRequest(t, bAddr, idleLeave).(*kmsg.LeaveGroupResponse); resp.ErrorCode != 0 {
+		t.Fatal(resp)
+	}
+	mixed := kmsg.NewPtrDeleteGroupsRequest()
+	mixed.Groups = []string{idleJoin.Group, groupID, "never-created"}
+	mixedResp, err := mixed.RequestWith(ctx, admin)
+	if err != nil || len(mixedResp.Groups) != 3 {
+		t.Fatal(mixedResp, err)
+	}
+	for i, code := range []int16{0, protocol.NON_EMPTY_GROUP, protocol.GROUP_ID_NOT_FOUND} {
+		if mixedResp.Groups[i].Group != mixed.Groups[i] || mixedResp.Groups[i].ErrorCode != code {
+			t.Fatal(mixedResp)
+		}
+	}
 	leave := kmsg.NewPtrLeaveGroupRequest()
 	leave.Group, leave.MemberID = groupID, joined.MemberID
 	if resp := directGroupRequest(t, aAddr, leave).(*kmsg.LeaveGroupResponse); resp.ErrorCode != 0 {
 		t.Fatal(resp)
 	}
-	if resp := directGroupRequest(t, aAddr, del).(*kmsg.DeleteGroupsResponse); resp.Groups[0].ErrorCode != 0 {
+	if resp := directGroupRequest(t, proxyAddr, del).(*kmsg.DeleteGroupsResponse); resp.Groups[0].ErrorCode != 0 {
 		t.Fatal(resp)
 	}
+	lease, err := store.EtcdClient().Get(ctx, metadata.GroupLeasePrefix()+"/"+groupID)
+	if err != nil || len(lease.Kvs) != 0 {
+		t.Fatal("delete retained lease", lease, err)
+	}
+	// Repeated deletion and immediate recreation on the other broker must not
+	// depend on the old coordination lease's TTL or a lucky proxy backend.
+	for i := 0; i < 5; i++ {
+		name := fmt.Sprintf("proxy-delete-%d", i)
+		first, second := aAddr, bAddr
+		if i%2 != 0 {
+			first, second = second, first
+		}
+		req := *join
+		req.Group, req.SessionTimeoutMillis = name, 60000
+		member := directGroupRequest(t, first, &req).(*kmsg.JoinGroupResponse)
+		if member.ErrorCode != 0 {
+			t.Fatal(member)
+		}
+		leave.Group, leave.MemberID = name, member.MemberID
+		if resp := directGroupRequest(t, first, leave).(*kmsg.LeaveGroupResponse); resp.ErrorCode != 0 {
+			t.Fatal(resp)
+		}
+		del.Groups = []string{name}
+		deleted, err := del.RequestWith(ctx, admin)
+		if err != nil || deleted.Groups[0].ErrorCode != 0 {
+			t.Fatalf("proxy delete %d: %+v, %v", i, deleted, err)
+		}
+		rejoined := directGroupRequest(t, second, &req).(*kmsg.JoinGroupResponse)
+		if rejoined.ErrorCode != 0 {
+			t.Fatalf("lease not released: %+v", rejoined)
+		}
+		leave.Group, leave.MemberID = name, rejoined.MemberID
+		if resp := directGroupRequest(t, second, leave).(*kmsg.LeaveGroupResponse); resp.ErrorCode != 0 {
+			t.Fatal(resp)
+		}
+		if deleted, err := del.RequestWith(ctx, admin); err != nil || deleted.Groups[0].ErrorCode != 0 {
+			t.Fatal(deleted, err)
+		}
+	}
+
 }

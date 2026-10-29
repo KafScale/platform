@@ -30,7 +30,9 @@ import (
 
 func TestDeleteGroupsRequiresCoordinatorLease(t *testing.T) {
 	ctx := context.Background()
-	store, err := metadata.NewEtcdStore(ctx, defaultMetadata(), metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
+	initial := defaultMetadata()
+	initial.Brokers = []protocol.MetadataBroker{{NodeID: 1, Host: "broker-a", Port: 19092}, {NodeID: 2, Host: "broker-b", Port: 19093}}
+	store, err := metadata.NewEtcdStore(ctx, initial, metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,6 +56,17 @@ func TestDeleteGroupsRequiresCoordinatorLease(t *testing.T) {
 			groupID := tc.name
 			if err := a.groupLeaseManager.Acquire(ctx, groupID); err != nil {
 				t.Fatal(err)
+			}
+			find := kmsg.NewPtrFindCoordinatorRequest()
+			find.Version, find.CoordinatorKey = 3, groupID
+			findHeader := &protocol.RequestHeader{APIKey: protocol.APIKeyFindCoordinator, APIVersion: 3}
+			wire, err := b.Handle(ctx, findHeader, find)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := decodeKmsgResponse(t, 3, wire, kmsg.NewPtrFindCoordinatorResponse)
+			if found.ErrorCode != 0 || found.NodeID != 1 {
+				t.Fatal(found)
 			}
 			seed := &metadatapb.ConsumerGroup{GroupId: groupID, State: "stable", GenerationId: 4, Leader: "member", ProtocolType: "consumer", Members: map[string]*metadatapb.GroupMember{"member": {HeartbeatAt: tc.heartbeat, SessionTimeoutMs: 60000}}}
 			if err := store.PutConsumerGroup(ctx, seed); err != nil {
@@ -99,9 +112,20 @@ func TestDeleteGroupsRequiresCoordinatorLease(t *testing.T) {
 				t.Fatal(err)
 			}
 			resp = decodeKmsgResponse(t, 2, payload, kmsg.NewPtrDeleteGroupsResponse)
-			if resp.Groups[0].ErrorCode != tc.takeover || !b.groupLeaseManager.Owns(groupID) {
+			if resp.Groups[0].ErrorCode != tc.takeover || b.groupLeaseManager.Owns(groupID) != (tc.takeover != protocol.NONE) {
 				t.Fatal(resp)
 			}
+			if tc.takeover != protocol.NONE {
+				wire, err := a.Handle(ctx, findHeader, find)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := decodeKmsgResponse(t, 3, wire, kmsg.NewPtrFindCoordinatorResponse)
+				if found.ErrorCode != 0 || found.NodeID != 2 {
+					t.Fatal(found)
+				}
+			}
+
 		})
 	}
 }

@@ -224,8 +224,13 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return h.handleFetch(ctx, header, req.(*kmsg.FetchRequest))
 	case *kmsg.FindCoordinatorRequest:
 		coord := h.coordinatorBroker(ctx)
+		code := int16(protocol.NONE)
+		findReq := req.(*kmsg.FindCoordinatorRequest)
+		if findReq.CoordinatorType == 0 {
+			coord, code = h.findGroupCoordinator(ctx, findReq.CoordinatorKey)
+		}
 		resp := kmsg.NewPtrFindCoordinatorResponse()
-		resp.ErrorCode = protocol.NONE
+		resp.ErrorCode = code
 		resp.NodeID = coord.NodeID
 		resp.Host = coord.Host
 		resp.Port = coord.Port
@@ -584,6 +589,30 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 }
 
 var ErrUnsupportedAPI = fmt.Errorf("unsupported api")
+
+// FindCoordinator must agree with the exclusive group lease, even when the
+// discovery request arrives at a different broker from the current owner.
+func (h *handler) findGroupCoordinator(ctx context.Context, groupID string) (protocol.MetadataBroker, int16) {
+	if h.groupLeaseManager == nil {
+		return h.coordinatorBroker(ctx), protocol.NONE
+	}
+	owner, err := h.groupLeaseManager.CurrentOwner(ctx, groupID)
+	if err != nil {
+		return protocol.MetadataBroker{}, protocol.COORDINATOR_NOT_AVAILABLE
+	}
+	if owner == "" || owner == strconv.FormatInt(int64(h.brokerInfo.NodeID), 10) {
+		return h.coordinatorBroker(ctx), protocol.NONE
+	}
+	meta, err := h.store.Metadata(ctx, nil)
+	if err == nil && meta != nil {
+		for _, info := range meta.Brokers {
+			if strconv.FormatInt(int64(info.NodeID), 10) == owner {
+				return info, protocol.NONE
+			}
+		}
+	}
+	return protocol.MetadataBroker{}, protocol.COORDINATOR_NOT_AVAILABLE
+}
 
 func (h *handler) coordinatorBroker(ctx context.Context) protocol.MetadataBroker {
 	meta, err := h.store.Metadata(ctx, nil)
@@ -2130,6 +2159,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	coordinatorConfig := &broker.CoordinatorConfig{}
 	if groupLeaseManager != nil {
 		coordinatorConfig.OwnsGroup = groupLeaseManager.Owns
+		coordinatorConfig.GroupDeleted = groupLeaseManager.Release
 	}
 	return &handler{
 		apiVersions: generateApiVersions(),
