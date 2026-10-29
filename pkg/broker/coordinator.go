@@ -158,6 +158,15 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		c.mu.Unlock()
 		return nil, err
 	}
+	memberID := req.MemberID
+	member, exists := state.members[memberID]
+	if memberID != "" && !exists {
+		c.mu.Unlock()
+		resp := kmsg.NewPtrJoinGroupResponse()
+		resp.MemberID = memberID
+		resp.ErrorCode = protocol.UNKNOWN_MEMBER_ID
+		return resp, nil
+	}
 	state.protocolType = req.ProtocolType
 	if len(req.Protocols) > 0 {
 		state.protocolName = req.Protocols[0].Name
@@ -168,9 +177,7 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		timeout = defaultRebalanceTimeout
 	}
 
-	memberID := req.MemberID
-	member, exists := state.members[memberID]
-	if memberID == "" || member == nil {
+	if memberID == "" {
 		memberID = c.newMemberID(req.Group)
 		member = &memberState{}
 		state.members[memberID] = member
@@ -208,8 +215,8 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		state.startRebalance(timeout)
 	} else if state.state == groupStateEmpty {
 		state.startRebalance(timeout)
-	} else if state.state == groupStatePreparingRebalance || state.state == groupStateCompletingRebalance {
-		state.bumpRebalanceDeadline(timeout)
+	} else if state.state == groupStateCompletingRebalance && !exists {
+		state.startRebalance(timeout)
 	}
 
 	member.joinGeneration = state.generationID
@@ -217,14 +224,56 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		state.ensureLeader()
 	}
 
-	ready := state.state == groupStateStable || state.state == groupStateCompletingRebalance
-	if !ready {
-		ready = state.completeIfReady()
+	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
+		c.mu.Unlock()
+		resp := kmsg.NewPtrJoinGroupResponse()
+		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+		return resp, nil
 	}
+	// Keep JoinGroup pending until the known members rejoin. Returning
+	// REBALANCE_IN_PROGRESS here makes classic clients restart the join loop.
+	// The deadline is fixed when the rebalance starts; retries cannot extend it.
+	for state.state == groupStatePreparingRebalance && !state.completeIfReady() {
+		if !time.Now().Before(state.rebalanceDeadline) {
+			state.dropRebalanceLaggers(time.Now())
+			state.ensureLeader()
+			state.completeIfReady()
+			break
+		}
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.stopCh:
+			return nil, context.Canceled
+		case <-time.After(50 * time.Millisecond):
+		}
+		c.mu.Lock()
+		if !c.ownsGroup(req.Group) || c.groups[req.Group] != state {
+			c.mu.Unlock()
+			resp := kmsg.NewPtrJoinGroupResponse()
+			resp.ErrorCode = protocol.NOT_COORDINATOR
+			return resp, nil
+		}
+		member = state.members[memberID]
+		if member == nil {
+			c.mu.Unlock()
+			resp := kmsg.NewPtrJoinGroupResponse()
+			resp.MemberID = memberID
+			resp.ErrorCode = protocol.UNKNOWN_MEMBER_ID
+			return resp, nil
+		}
+		// A session expiry may have started a new generation while this
+		// request was pending. It still counts as a join for that generation.
+		member.joinGeneration = state.generationID
+		member.lastHeartbeat = time.Now()
+	}
+	ready := state.state == groupStateStable || state.state == groupStateCompletingRebalance
 
 	resp := kmsg.NewPtrJoinGroupResponse()
 	resp.Generation = state.generationID
-	resp.Protocol = &state.protocolName
+	protocolName := state.protocolName
+	resp.Protocol = &protocolName
 	resp.LeaderID = state.leaderID
 	resp.MemberID = memberID
 	resp.ErrorCode = protocol.REBALANCE_IN_PROGRESS
@@ -1207,7 +1256,12 @@ func (c *GroupCoordinator) expireGroupMembersLocked(ctx context.Context, groupID
 	if removed || lostDuringRebalance {
 		// Partial expiry advances the generation even if live members still
 		// make DeleteGroups return NON_EMPTY_GROUP, just as background cleanup does.
-		candidate.startRebalance(0)
+		if removed || len(candidate.members) == 0 {
+			candidate.startRebalance(0)
+		} else {
+			candidate.ensureLeader()
+			candidate.completeIfReady()
+		}
 		if !c.ownsGroup(groupID) {
 			return metadata.ErrNotOwner
 		}
@@ -1265,16 +1319,6 @@ func (s *groupState) startRebalance(timeout time.Duration) {
 		member.joinGeneration = 0
 		member.memberAssignment = nil
 	}
-}
-
-func (s *groupState) bumpRebalanceDeadline(timeout time.Duration) {
-	if timeout > 0 {
-		s.rebalanceTimeout = timeout
-	}
-	if s.rebalanceTimeout == 0 {
-		s.rebalanceTimeout = defaultRebalanceTimeout
-	}
-	s.rebalanceDeadline = time.Now().Add(s.rebalanceTimeout)
 }
 
 func (s *groupState) completeIfReady() bool {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -29,8 +30,7 @@ func TestLeaveGroupVersionedMembers(t *testing.T) {
 		t.Run(string(rune('0'+version)), func(t *testing.T) {
 			store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
 			c := newTestCoordinator(t, store)
-			first := joinTestGroup(t, c, "")
-			second := joinTestGroup(t, c, "")
+			first, second := joinTwoTestMembers(t, c)
 			before := c.groups["readers"].generationID
 			req := kmsg.NewPtrLeaveGroupRequest()
 			req.Version, req.Group = version, "readers"
@@ -116,7 +116,7 @@ func TestLeaveGroupBatchWithoutKnownMembers(t *testing.T) {
 func TestLeaveGroupRemovesWholeBatch(t *testing.T) {
 	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
 	c := newTestCoordinator(t, store)
-	first, second := joinTestGroup(t, c, ""), joinTestGroup(t, c, "")
+	first, second := joinTwoTestMembers(t, c)
 	req := kmsg.NewPtrLeaveGroupRequest()
 	req.Version, req.Group = 4, "readers"
 	req.Members = []kmsg.LeaveGroupRequestMember{{MemberID: first.MemberID}, {MemberID: second.MemberID}}
@@ -130,4 +130,49 @@ func TestLeaveGroupRemovesWholeBatch(t *testing.T) {
 	if group, err := store.FetchConsumerGroup(context.Background(), "readers"); err != nil || group == nil || group.State != groupStateEmptyStr || len(group.Members) != 0 {
 		t.Fatal(group, err)
 	}
+}
+
+func joinTwoTestMembers(t *testing.T, c *GroupCoordinator) (*kmsg.JoinGroupResponse, *kmsg.JoinGroupResponse) {
+	t.Helper()
+	first := joinTestGroup(t, c, "")
+	syncTestGroup(t, c, first.MemberID, first.Generation, protocol.NONE)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type result struct {
+		response *kmsg.JoinGroupResponse
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		req := kmsg.NewPtrJoinGroupRequest()
+		req.Group, req.ProtocolType = "readers", "consumer"
+		req.Protocols = []kmsg.JoinGroupRequestProtocol{{Name: "range"}}
+		resp, err := c.JoinGroup(ctx, req)
+		done <- result{resp, err}
+	}()
+	for {
+		c.mu.Lock()
+		ready := len(c.groups["readers"].members) == 2
+		c.mu.Unlock()
+		if ready {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("second member did not join")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	first = joinTestGroup(t, c, first.MemberID)
+	select {
+	case joined := <-done:
+		if joined.err != nil || joined.response.ErrorCode != 0 || joined.response.Generation != first.Generation {
+			t.Fatalf("second join: %+v %v", joined.response, joined.err)
+		}
+		return first, joined.response
+	case <-ctx.Done():
+		t.Fatal("second JoinGroup did not finish")
+	}
+	return nil, nil
 }

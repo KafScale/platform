@@ -33,6 +33,7 @@ Tests have different dependency requirements. Tests will **skip gracefully** if 
 |----------|-------|--------|------|-------------|
 | Console tests | No | No | No | `go test -run Console` |
 | Consumer group tests | No | No | No | `make test-consumer-group` |
+| librdkafka/kcat tests | No | No | No | `KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestLibrdkafkaCompatibilityE2E -v` |
 | Ops API tests | No | No | No | `make test-ops-api` |
 | MCP tests | No | No | No | `make test-mcp` |
 | LFS proxy tests | No (fake S3) | No | No | `make test-lfs-proxy-broker` |
@@ -144,3 +145,13 @@ make -C lfs-client-sdk test-lfs-sdk-kind
 | `KAFSCALE_E2E_OPEN_UI` | Open console UI in browser after test |
 
 The harness installs everything into the `kafscale-e2e` namespace and removes it after the test (unless you reused a cluster).
+
+## librdkafka compatibility
+
+Install `kcat` on the test host. `TestLibrdkafkaCompatibilityE2E` starts embedded etcd, an in-memory-S3 broker, and a plain proxy, then checks produce, partition consume, group consume, and committed offsets through both endpoints. Docker and MinIO are not required. The test prints the kcat and librdkafka versions.
+
+To exercise a specific build, set `KAFSCALE_KCAT_BIN` to its absolute path:
+
+```bash
+KAFSCALE_E2E=1 KAFSCALE_KCAT_BIN=/absolute/path/to/kcat go test -race -tags=e2e ./test/e2e -run '^TestLibrdkafkaCompatibilityE2E$' -count=1 -v
+```

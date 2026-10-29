@@ -77,14 +77,40 @@ func TestCoordinatorConsumerLifecycle(t *testing.T) {
 	if err := assignment.ReadFrom(initial.MemberAssignment); err != nil || len(assignment.Topics) != 1 || len(assignment.Topics[0].Partitions) != 4 {
 		t.Fatalf("initial assignment: %+v, %v", assignment, err)
 	}
-	second := joinTestGroup(t, c, "")
-	if second.ErrorCode != protocol.REBALANCE_IN_PROGRESS || second.Generation <= first.Generation || len(second.Members) != 0 {
-		t.Fatalf("new member must trigger rebalance: %+v", second)
+	secondResult := make(chan *kmsg.JoinGroupResponse, 1)
+	go func() { secondResult <- joinTestGroup(t, c, "") }()
+	deadline := time.After(time.Second)
+	for {
+		c.mu.Lock()
+		joining := len(c.groups["readers"].members) == 2
+		c.mu.Unlock()
+		if joining {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("second member did not join")
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
-	syncTestGroup(t, c, second.MemberID, second.Generation, protocol.REBALANCE_IN_PROGRESS)
+	select {
+	case result := <-secondResult:
+		t.Fatalf("JoinGroup replied before leader rejoined: %+v", result)
+	default:
+	}
 	rejoined := joinTestGroup(t, c, first.MemberID)
 	if rejoined.ErrorCode != protocol.NONE || len(rejoined.Members) != 2 {
 		t.Fatalf("leader rejoin: %+v", rejoined)
+	}
+	var second *kmsg.JoinGroupResponse
+	select {
+	case second = <-secondResult:
+	case <-time.After(time.Second):
+		t.Fatal("second JoinGroup did not complete")
+	}
+	if second.ErrorCode != protocol.NONE || second.Generation != rejoined.Generation || second.Generation <= first.Generation {
+		t.Fatalf("members must receive the same new generation: %+v %+v", second, rejoined)
 	}
 	for _, m := range rejoined.Members {
 		if got := c.parseSubscriptionTopics([]kmsg.JoinGroupRequestProtocol{{Metadata: m.ProtocolMetadata}}); !reflect.DeepEqual(got, []string{"orders"}) {
@@ -525,8 +551,12 @@ func TestCoordinatorCleanupExpiredMembers(t *testing.T) {
 		t.Fatalf("expired group not Empty: %+v, %v", group, err)
 	}
 	for _, id := range []string{"mixed", "lagging"} {
+		generation, phase := int32(5), groupStatePreparingStr
+		if id == "lagging" {
+			generation, phase = 4, groupStateCompletingStr
+		}
 		group, err := store.FetchConsumerGroup(ctx, id)
-		if err != nil || group == nil || len(group.Members) != 1 || group.Members["b"] == nil || group.Leader != "b" || group.GenerationId != 5 || group.State != groupStatePreparingStr {
+		if err != nil || group == nil || len(group.Members) != 1 || group.Members["b"] == nil || group.Leader != "b" || group.GenerationId != generation || group.State != phase {
 			t.Fatalf("%s must evict a, elect b, and rebalance: %+v, %v", id, group, err)
 		}
 	}
@@ -564,4 +594,81 @@ func TestCoordinatorBackgroundCleanup(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("background cleanup did not empty the expired group")
+}
+
+func TestJoinGroupUnknownMemberVersions(t *testing.T) {
+	for version := int16(0); version <= 3; version++ {
+		c := newTestCoordinator(t, metadata.NewInMemoryStore(metadata.ClusterMetadata{}))
+		req := kmsg.NewPtrJoinGroupRequest()
+		req.Version, req.Group, req.MemberID = version, "readers", "unknown"
+		resp, err := c.JoinGroup(context.Background(), req)
+		if err != nil || resp.ErrorCode != protocol.UNKNOWN_MEMBER_ID {
+			t.Fatalf("v%d: %+v %v", version, resp, err)
+		}
+	}
+}
+
+func TestJoinGroupRebalanceDeadline(t *testing.T) {
+	c := newTestCoordinator(t, metadata.NewInMemoryStore(metadata.ClusterMetadata{}))
+	first := joinTestGroup(t, c, "")
+	syncTestGroup(t, c, first.MemberID, first.Generation, protocol.NONE)
+	req := kmsg.NewPtrJoinGroupRequest()
+	req.Group, req.ProtocolType, req.RebalanceTimeoutMillis = "readers", "consumer", 100
+	req.Protocols = []kmsg.JoinGroupRequestProtocol{{Name: "range"}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := c.JoinGroup(ctx, req)
+	if err != nil || resp.ErrorCode != 0 || resp.Generation != first.Generation+1 || resp.LeaderID != resp.MemberID || len(resp.Members) != 1 {
+		t.Fatalf("deadline join: %+v %v", resp, err)
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Fatal("join returned before rebalance deadline")
+	}
+}
+
+func TestJoinGroupSessionExpiryWhileWaiting(t *testing.T) {
+	c := newTestCoordinator(t, metadata.NewInMemoryStore(metadata.ClusterMetadata{}))
+	first := joinTestGroup(t, c, "")
+	syncTestGroup(t, c, first.MemberID, first.Generation, protocol.NONE)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	type result struct {
+		response *kmsg.JoinGroupResponse
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		req := kmsg.NewPtrJoinGroupRequest()
+		req.Group, req.ProtocolType, req.RebalanceTimeoutMillis = "readers", "consumer", 1000
+		req.Protocols = []kmsg.JoinGroupRequestProtocol{{Name: "range"}}
+		resp, err := c.JoinGroup(ctx, req)
+		done <- result{resp, err}
+	}()
+	for {
+		c.mu.Lock()
+		ready := len(c.groups["readers"].members) == 2
+		if ready {
+			c.groups["readers"].members[first.MemberID].lastHeartbeat = time.Now().Add(-time.Hour)
+		}
+		c.mu.Unlock()
+		if ready {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("second member did not join")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	c.cleanupGroups()
+	select {
+	case joined := <-done:
+		if joined.err != nil || joined.response.ErrorCode != 0 || joined.response.Generation != first.Generation+2 || len(joined.response.Members) != 1 {
+			t.Fatalf("pending join must survive session expiry: %+v %v", joined.response, joined.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("pending join did not finish after session expiry")
+	}
 }

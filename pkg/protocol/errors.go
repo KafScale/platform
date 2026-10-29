@@ -18,6 +18,7 @@ package protocol
 const (
 	NONE                         int16 = 0
 	OFFSET_OUT_OF_RANGE          int16 = 1
+	CORRUPT_MESSAGE              int16 = 2
 	UNKNOWN_TOPIC_OR_PARTITION   int16 = 3
 	UNKNOWN_TOPIC_ID             int16 = 100
 	UNKNOWN_SERVER_ERROR         int16 = -1

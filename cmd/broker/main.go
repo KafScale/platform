@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1110,6 +1111,13 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				}
 				continue
 			}
+			batches, recordError := validateProduceRecordSet(part.Records)
+			if recordError != protocol.NONE {
+				p := kmsg.NewProduceResponseTopicPartition()
+				p.Partition, p.ErrorCode = part.Partition, recordError
+				partitionResponses = append(partitionResponses, p)
+				continue
+			}
 			plog, err := h.getPartitionLog(ctx, topic.Topic, part.Partition)
 			if err != nil {
 				h.logger.Error("partition log init failed", "error", err, "topic", topic.Topic, "partition", part.Partition)
@@ -1119,18 +1127,21 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				partitionResponses = append(partitionResponses, p)
 				continue
 			}
-			batch, err := storage.NewRecordBatchFromBytes(part.Records)
-			if err != nil {
-				p := kmsg.NewProduceResponseTopicPartition()
-				p.Partition = part.Partition
-				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-				partitionResponses = append(partitionResponses, p)
-				if h.traceKafka {
-					h.logger.Debug("produce record batch decode failed", "topic", topic.Topic, "partition", part.Partition, "error", err)
+			var result *storage.AppendResult
+			var messageCount int32
+			for _, batch := range batches {
+				var appended *storage.AppendResult
+				appended, err = plog.AppendBatch(ctx, batch)
+				if err != nil {
+					break
 				}
-				continue
+				if result == nil {
+					result = appended
+				} else {
+					result.LastOffset = appended.LastOffset
+				}
+				messageCount += batch.MessageCount
 			}
-			result, err := plog.AppendBatch(ctx, batch)
 			if err != nil {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
@@ -1158,7 +1169,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			p.LogAppendTime = now
 			p.LogStartOffset = 0
 			partitionResponses = append(partitionResponses, p)
-			producedMessages += int64(batch.MessageCount)
+			producedMessages += int64(messageCount)
 			if h.traceKafka {
 				h.logger.Debug("produce append success", "topic", topic.Topic, "partition", part.Partition, "base_offset", result.BaseOffset, "last_offset", result.LastOffset)
 			}
@@ -1180,6 +1191,33 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	resp := kmsg.NewPtrProduceResponse()
 	resp.Topics = topicResponses
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+}
+
+// validateProduceRecordSet validates every frame before any offsets are reserved.
+func validateProduceRecordSet(records []byte) ([]storage.RecordBatch, int16) {
+	var batches []storage.RecordBatch
+	for len(records) > 0 {
+		if len(records) < 17 {
+			return nil, protocol.CORRUPT_MESSAGE
+		}
+		if records[16] != 2 {
+			return nil, protocol.UNSUPPORTED_VERSION
+		}
+		length := int64(int32(binary.BigEndian.Uint32(records[8:12]))) + 12
+		if length < 61 || length > int64(len(records)) {
+			return nil, protocol.CORRUPT_MESSAGE
+		}
+		batch, err := storage.NewRecordBatchFromBytes(records[:int(length)])
+		if err != nil {
+			return nil, protocol.CORRUPT_MESSAGE
+		}
+		batches = append(batches, batch)
+		records = records[int(length):]
+	}
+	if len(batches) == 0 {
+		return nil, protocol.CORRUPT_MESSAGE
+	}
+	return batches, protocol.NONE
 }
 
 func (h *handler) handleCreateTopics(ctx context.Context, header *protocol.RequestHeader, req *kmsg.CreateTopicsRequest) ([]byte, error) {
@@ -2002,6 +2040,9 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			p.LastStableOffset = highWatermark
 			p.LogStartOffset = 0
 			p.PreferredReadReplica = -1
+			if recordSet == nil {
+				recordSet = []byte{}
+			}
 			p.RecordBatches = recordSet
 			partitionResponses = append(partitionResponses, p)
 		}
@@ -2805,15 +2846,17 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: protocol.ApiVersionsMaxVersion},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
-		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},
-		{key: protocol.APIKeyFindCoordinator, minVersion: 3, maxVersion: 3},
+		// librdkafka probes Fetch v4 before enabling magic-2 record batches.
+		{key: protocol.APIKeyFetch, minVersion: 4, maxVersion: 13},
+		// Classic group feature probes require the original API versions too.
+		{key: protocol.APIKeyFindCoordinator, minVersion: 0, maxVersion: 3},
 		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 4},
-		{key: protocol.APIKeyJoinGroup, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeySyncGroup, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeyHeartbeat, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeyLeaveGroup, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeyOffsetCommit, minVersion: 3, maxVersion: 3},
-		{key: protocol.APIKeyOffsetFetch, minVersion: 5, maxVersion: 5},
+		{key: protocol.APIKeyJoinGroup, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeySyncGroup, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyHeartbeat, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyLeaveGroup, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyOffsetCommit, minVersion: 1, maxVersion: 3},
+		{key: protocol.APIKeyOffsetFetch, minVersion: 1, maxVersion: 5},
 		{key: protocol.APIKeyDescribeGroups, minVersion: 5, maxVersion: 5},
 		// Older Kafka admin clients negotiate LIST_GROUPS in range [0,4].
 		// Narrow 5-5 advertisement breaks `kafka-consumer-groups --list` even
