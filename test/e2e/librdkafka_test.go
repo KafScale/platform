@@ -1,0 +1,140 @@
+// Copyright 2026 KafScale team.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//go:build e2e
+
+package e2e
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
+
+func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
+	if os.Getenv("KAFSCALE_E2E") != "1" {
+		t.Skip("set KAFSCALE_E2E=1")
+	}
+	binary := os.Getenv("KAFSCALE_KCAT_BIN")
+	if binary == "" {
+		binary = "kcat"
+	}
+	path, err := exec.LookPath(binary)
+	if err != nil {
+		t.Fatalf("kcat is required for this test: %v", err)
+	}
+	version, err := exec.Command(path, "-V").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("client: %s", version)
+	options, err := exec.Command(path, "-F", os.DevNull, "-X", "list").CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var classicOption []string
+	for _, line := range strings.Split(string(options), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == "group.protocol" {
+			classicOption = []string{"-X", "group.protocol=classic"}
+			break
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	etcd, endpoints := startEmbeddedEtcd(t)
+	defer etcd.Close()
+	brokerAddr, proxyAddr := freeAddr(t), freeAddr(t)
+	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints)
+	defer stopBroker(t, brokerCmd)
+	waitForBroker(t, brokerLogs, brokerAddr)
+	_, proxyPort, _ := net.SplitHostPort(proxyAddr)
+	logFile, err := os.Create(filepath.Join(t.TempDir(), "proxy.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logFile.Close()
+	proxyCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "proxy"))
+	configureProcessGroup(proxyCmd)
+	proxyCmd.Env = os.Environ()
+	for _, entry := range []string{"KAFSCALE_PROXY_ADDR=" + proxyAddr, "KAFSCALE_PROXY_BACKENDS=" + brokerAddr, "KAFSCALE_PROXY_ETCD_ENDPOINTS=" + strings.Join(endpoints, ","), "KAFSCALE_PROXY_ADVERTISED_HOST=127.0.0.1", "KAFSCALE_PROXY_ADVERTISED_PORT=" + proxyPort, "KAFSCALE_PROXY_HEALTH_ADDR=", "KAFSCALE_PROXY_LFS_ENABLED=false", "KAFSCALE_PROXY_IDENTITY_KEY_FILE=", "KAFSCALE_PROXY_TLS_CERT_FILE=", "KAFSCALE_PROXY_TLS_KEY_FILE=", "KAFSCALE_PROXY_TLS_CLIENT_CA_FILE=", "KAFSCALE_PROXY_TLS_PRINCIPALS_FILE="} {
+		key, value, _ := strings.Cut(entry, "=")
+		proxyCmd.Env = upsertEnv(proxyCmd.Env, key, value)
+	}
+	var proxyLogs brokerLogBuffer
+	writer := io.MultiWriter(logFile, &proxyLogs)
+	proxyCmd.Stdout, proxyCmd.Stderr = writer, writer
+	if err := proxyCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer stopBroker(t, proxyCmd)
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		conn, err := net.DialTimeout("tcp", proxyAddr, 200*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("proxy startup: %v\n%s", err, proxyLogs.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	run := func(t *testing.T, addr, input string, args ...string) string {
+		t.Helper()
+		commandCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		args = append([]string{"-F", os.DevNull, "-b", addr, "-X", "socket.timeout.ms=5000"}, args...)
+		cmd := exec.CommandContext(commandCtx, path, args...)
+		cmd.Stdin = strings.NewReader(input)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("kcat %v: %v\n%s", args, err, stderr.String())
+		}
+		return stdout.String()
+	}
+	for _, target := range []struct{ name, addr string }{{"broker", brokerAddr}, {"proxy", proxyAddr}} {
+		t.Run(target.name, func(t *testing.T) {
+			topic := fmt.Sprintf("kcat-%s-%d", target.name, time.Now().UnixNano())
+			const messages = "first\nsecond\nthird\n"
+			run(t, target.addr, messages, "-P", "-q", "-t", topic, "-p", "0", "-X", "enable.idempotence=false", "-X", "message.timeout.ms=5000")
+			if got := run(t, target.addr, "", "-C", "-q", "-t", topic, "-p", "0", "-o", "beginning", "-c", "3", "-e"); got != messages {
+				t.Fatalf("partition consume: %q", got)
+			}
+			group := "group-" + topic
+			groupArgs := []string{"-q", "-c", "3", "-o", "beginning", "-X", "auto.offset.reset=earliest", "-X", "auto.commit.interval.ms=100"}
+			groupArgs = append(groupArgs, classicOption...)
+			groupArgs = append(groupArgs, "-G", group, topic)
+			if got := run(t, target.addr, "", groupArgs...); got != messages {
+				t.Fatalf("group consume: %q", got)
+			}
+			fetch := kmsg.NewPtrOffsetFetchRequest()
+			fetch.Version, fetch.Group = 5, group
+			fetched := directGroupRequest(t, target.addr, fetch).(*kmsg.OffsetFetchResponse)
+			if fetched.ErrorCode != 0 || len(fetched.Topics) != 1 || len(fetched.Topics[0].Partitions) != 1 || fetched.Topics[0].Partitions[0].Offset != 3 {
+				t.Fatalf("group checkpoint: %+v", fetched)
+			}
+		})
+	}
+}

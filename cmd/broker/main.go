@@ -1110,6 +1110,20 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				}
 				continue
 			}
+			// Both legacy MessageSets and v2 record batches put the magic byte
+			// at offset 16. Only record batches are supported by storage.
+			recordError := int16(protocol.NONE)
+			if len(part.Records) < 17 {
+				recordError = protocol.CORRUPT_MESSAGE
+			} else if part.Records[16] != 2 {
+				recordError = protocol.UNSUPPORTED_VERSION
+			}
+			if recordError != protocol.NONE {
+				p := kmsg.NewProduceResponseTopicPartition()
+				p.Partition, p.ErrorCode = part.Partition, recordError
+				partitionResponses = append(partitionResponses, p)
+				continue
+			}
 			plog, err := h.getPartitionLog(ctx, topic.Topic, part.Partition)
 			if err != nil {
 				h.logger.Error("partition log init failed", "error", err, "topic", topic.Topic, "partition", part.Partition)
@@ -1123,7 +1137,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			if err != nil {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
-				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				p.ErrorCode = protocol.CORRUPT_MESSAGE
 				partitionResponses = append(partitionResponses, p)
 				if h.traceKafka {
 					h.logger.Debug("produce record batch decode failed", "topic", topic.Topic, "partition", part.Partition, "error", err)
@@ -2805,15 +2819,17 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: protocol.ApiVersionsMaxVersion},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
-		{key: protocol.APIKeyFetch, minVersion: 11, maxVersion: 13},
-		{key: protocol.APIKeyFindCoordinator, minVersion: 3, maxVersion: 3},
+		// librdkafka probes Fetch v4 before enabling magic-2 record batches.
+		{key: protocol.APIKeyFetch, minVersion: 4, maxVersion: 13},
+		// Classic group feature probes require the original API versions too.
+		{key: protocol.APIKeyFindCoordinator, minVersion: 0, maxVersion: 3},
 		{key: protocol.APIKeyListOffsets, minVersion: 0, maxVersion: 4},
-		{key: protocol.APIKeyJoinGroup, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeySyncGroup, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeyHeartbeat, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeyLeaveGroup, minVersion: 4, maxVersion: 4},
-		{key: protocol.APIKeyOffsetCommit, minVersion: 3, maxVersion: 3},
-		{key: protocol.APIKeyOffsetFetch, minVersion: 5, maxVersion: 5},
+		{key: protocol.APIKeyJoinGroup, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeySyncGroup, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyHeartbeat, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyLeaveGroup, minVersion: 0, maxVersion: 4},
+		{key: protocol.APIKeyOffsetCommit, minVersion: 1, maxVersion: 3},
+		{key: protocol.APIKeyOffsetFetch, minVersion: 1, maxVersion: 5},
 		{key: protocol.APIKeyDescribeGroups, minVersion: 5, maxVersion: 5},
 		// Older Kafka admin clients negotiate LIST_GROUPS in range [0,4].
 		// Narrow 5-5 advertisement breaks `kafka-consumer-groups --list` even
