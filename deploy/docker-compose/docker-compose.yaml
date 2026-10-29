@@ -92,18 +92,6 @@ services:
     networks:
       - kafscale
 
-  minio-init:
-    image: kafscale-minio:local
-    container_name: kafscale-minio-init-dc
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c", "mkdir -p /data/kafscale && echo 'Bucket kafscale created'"]
-    volumes:
-      - minio-data:/data
-    networks:
-      - kafscale
-
   # ==========================================================================
   # KafScale Platform
   # ==========================================================================
@@ -114,8 +102,8 @@ services:
     depends_on:
       etcd:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
     environment:
       KAFSCALE_BROKER_ID: "0"
       KAFSCALE_BROKER_ADDR: ":9092"

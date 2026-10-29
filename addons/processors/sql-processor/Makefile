@@ -22,6 +22,7 @@ DOCKER_BUILD_ARGS ?=
 
 MINIO_CONTAINER ?= kafsql-minio
 MINIO_IMAGE ?= kafscale-minio:local
+MINIO_BUILD = $(if $(filter kafscale-minio:local,$(MINIO_IMAGE)),docker-build-minio)
 MINIO_PORT ?= 9000
 MINIO_CONSOLE_PORT ?= 9001
 MINIO_ROOT_USER ?= minioadmin
@@ -76,7 +77,7 @@ ensure-minio:
 docker-build-minio:
 	docker build -t $(MINIO_IMAGE) -f ../../../test/e2e/minio.Dockerfile ../../..
 
-start-minio: $(if $(filter kafscale-minio:local,$(MINIO_IMAGE)),docker-build-minio)
+start-minio: $(MINIO_BUILD)
 	@echo "starting MinIO helper $(MINIO_CONTAINER) on port $(MINIO_PORT)"
 	@docker rm -f $(MINIO_CONTAINER) >/dev/null 2>&1 || true
 	@docker run -d --name $(MINIO_CONTAINER) -p $(MINIO_PORT):9000 -p $(MINIO_CONSOLE_PORT):9001 \
