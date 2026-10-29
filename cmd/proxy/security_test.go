@@ -189,8 +189,8 @@ func TestProxyMTLSIdentityIsolation(t *testing.T) {
 	}
 	server, raw := net.Pipe()
 	done := make(chan struct{})
-	go func() { p.handleConnection(context.Background(), server); close(done) }()
 	raw.Close()
+	go func() { p.handleConnection(context.Background(), server); close(done) }()
 	<-done
 	recorder := httptest.NewRecorder()
 	security.metricsHandler().ServeHTTP(recorder, httptest.NewRequest("GET", "/metrics", nil))
