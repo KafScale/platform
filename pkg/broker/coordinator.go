@@ -618,6 +618,9 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		if group == nil {
 			result.ErrorCode = protocol.GROUP_ID_NOT_FOUND
 			delete(c.groups, groupID)
+			if c.config.GroupDeleted != nil {
+				c.config.GroupDeleted(groupID)
+			}
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}

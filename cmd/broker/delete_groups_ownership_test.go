@@ -79,16 +79,22 @@ func TestDeleteGroupsRequiresCoordinatorLease(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := kmsg.NewPtrDeleteGroupsRequest()
-			req.Groups = []string{groupID, "empty", ""}
+			req.Groups = []string{groupID, "empty", "absent", ""}
 			header := &protocol.RequestHeader{APIKey: protocol.APIKeyDeleteGroups, APIVersion: 2}
 			payload, err := b.Handle(ctx, header, req)
 			if err != nil {
 				t.Fatal(err)
 			}
 			resp := decodeKmsgResponse(t, 2, payload, kmsg.NewPtrDeleteGroupsResponse)
-			for i, code := range []int16{protocol.NOT_COORDINATOR, protocol.NONE, protocol.INVALID_REQUEST} {
-				if len(resp.Groups) != 3 || resp.Groups[i].Group != req.Groups[i] || resp.Groups[i].ErrorCode != code {
+			for i, code := range []int16{protocol.NOT_COORDINATOR, protocol.NONE, protocol.GROUP_ID_NOT_FOUND, protocol.INVALID_REQUEST} {
+				if len(resp.Groups) != 4 || resp.Groups[i].Group != req.Groups[i] || resp.Groups[i].ErrorCode != code {
 					t.Fatal(resp)
+				}
+			}
+			for _, id := range []string{"empty", "absent"} {
+				owner, err := b.groupLeaseManager.CurrentOwner(ctx, id)
+				if err != nil || owner != "" || b.groupLeaseManager.Owns(id) {
+					t.Fatalf("delete left lease for %q: owner=%q, error=%v", id, owner, err)
 				}
 			}
 			// Defense in depth: bypassing the handler still cannot mutate another owner's group.
