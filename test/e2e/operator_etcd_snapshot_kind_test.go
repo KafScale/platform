@@ -69,8 +69,11 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		}
 	})
 
+	minioImage := envOrDefault("KAFSCALE_MINIO_IMAGE", "kafscale-minio:local")
+	requireImage(t, ctx, minioImage)
+	loadImage(t, ctx, clusterName, minioImage)
 	ensureNamespace(t, ctx, kindNamespace)
-	applyMinio(t, ctx, kindNamespace)
+	applyMinio(t, ctx, kindNamespace, minioImage)
 	waitForRollout(t, ctx, kindNamespace, "deployment/minio", 2*time.Minute)
 
 	brokerImage := envOrDefault("KAFSCALE_BROKER_IMAGE", "ghcr.io/kafscale/kafscale-broker:dev")
@@ -830,7 +833,7 @@ func ensureNamespace(t *testing.T, ctx context.Context, namespace string) {
 	runCmdWithInput(t, ctx, "kubectl", string(manifest), "apply", "-f", "-")
 }
 
-func applyMinio(t *testing.T, ctx context.Context, namespace string) {
+func applyMinio(t *testing.T, ctx context.Context, namespace, image string) {
 	t.Helper()
 	manifest := fmt.Sprintf(`
 apiVersion: apps/v1
@@ -850,7 +853,7 @@ spec:
     spec:
       containers:
         - name: minio
-          image: quay.io/minio/minio:RELEASE.2024-09-22T00-33-43Z
+          image: %s
           args: ["server", "/data", "--console-address", ":9001"]
           env:
             - name: MINIO_ROOT_USER
@@ -872,7 +875,7 @@ spec:
     - name: api
       port: 9000
       targetPort: 9000
-`, namespace, namespace)
+`, namespace, image, namespace)
 	runCmdWithInput(t, ctx, "kubectl", manifest, "apply", "-f", "-")
 }
 
@@ -1175,7 +1178,7 @@ func splitImage(image string) (string, string) {
 func requireImage(t *testing.T, ctx context.Context, image string) {
 	t.Helper()
 	if !dockerImageExists(ctx, image) {
-		t.Fatalf("docker image %s not found; run `make docker-build` or set KAFSCALE_*_IMAGE envs", image)
+		t.Fatalf("docker image %s not found; run `make docker-build docker-build-minio` or set KAFSCALE_*_IMAGE envs", image)
 	}
 }
 
