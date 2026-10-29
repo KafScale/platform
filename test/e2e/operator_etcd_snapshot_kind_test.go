@@ -1178,7 +1178,7 @@ func splitImage(image string) (string, string) {
 func requireImage(t *testing.T, ctx context.Context, image string) {
 	t.Helper()
 	if !dockerImageExists(ctx, image) {
-		t.Fatalf("docker image %s not found; run `make docker-build` or set KAFSCALE_*_IMAGE envs", image)
+		t.Fatalf("docker image %s not found; run `make docker-build docker-build-minio` or set KAFSCALE_*_IMAGE envs", image)
 	}
 }
 

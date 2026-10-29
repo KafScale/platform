@@ -63,3 +63,36 @@ func TestNoUnpullableMinioImages(t *testing.T) {
 		}
 	}
 }
+
+func TestMakeBuildsMinioOnlyForDefaultImage(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		target string
+		image  string
+		build  bool
+	}{
+		{"start-minio", "", true},
+		{"test-operator", "", true},
+		{"demo-platform-bootstrap", "", true},
+		{"start-minio", "example.com/minio:custom", false},
+		{"test-operator", "example.com/minio:custom", false},
+		{"demo-platform-bootstrap", "example.com/minio:custom", false},
+	}
+	for _, c := range cases {
+		args := []string{"-C", root, "--dry-run", "--no-print-directory", c.target}
+		if c.image != "" {
+			args = append(args, "MINIO_IMAGE="+c.image)
+		}
+		out, err := exec.Command("make", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("make %s: %v\n%s", c.target, err, out)
+		}
+		built := bytes.Contains(out, []byte("-f test/e2e/minio.Dockerfile"))
+		if built != c.build {
+			t.Errorf("make %s MINIO_IMAGE=%q: builds MinIO = %v, want %v", c.target, c.image, built, c.build)
+		}
+	}
+}

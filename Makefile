@@ -58,6 +58,7 @@ KAFSQL_DEMO_TIMEOUT_SEC ?= 120
 KAFSQL_PROCESSOR_RELEASE ?= kafsql-processor-dev
 MINIO_CONTAINER ?= kafscale-minio
 MINIO_IMAGE ?= kafscale-minio:local
+MINIO_BUILD = $(if $(filter kafscale-minio:local,$(MINIO_IMAGE)),docker-build-minio)
 MINIO_PORT ?= 9000
 MINIO_CONSOLE_PORT ?= 9001
 MINIO_REGION ?= us-east-1
@@ -374,7 +375,7 @@ ensure-minio: ## Ensure the local MinIO helper container is running and reachabl
 		$(MAKE) start-minio >/dev/null; \
 	fi
 
-start-minio: $(if $(filter kafscale-minio:local,$(MINIO_IMAGE)),docker-build-minio)
+start-minio: $(MINIO_BUILD)
 	@echo "starting MinIO helper $(MINIO_CONTAINER) on port $(MINIO_PORT)"
 	@docker rm -f $(MINIO_CONTAINER) >/dev/null 2>&1 || true
 	@docker run -d --name $(MINIO_CONTAINER) -p $(MINIO_PORT):9000 -p $(MINIO_CONSOLE_PORT):9001 \
@@ -445,7 +446,7 @@ test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test-multi-segment-durability
 	$(MAKE) test-produce-consume
 
-test-operator: docker-build ## Run operator envtest + kind snapshot e2e (requires kind/kubectl/helm for kind).
+test-operator: docker-build $(MINIO_BUILD) ## Run operator envtest + kind snapshot e2e (requires kind/kubectl/helm for kind).
 	@$(MAKE) clean-kind-e2e
 	@SETUP_ENVTEST=$$(command -v setup-envtest || true); \
 	if [ -z "$$SETUP_ENVTEST" ]; then \
@@ -475,9 +476,10 @@ test-operator: docker-build ## Run operator envtest + kind snapshot e2e (require
 	KAFSCALE_E2E=1 \
 	KAFSCALE_E2E_KIND=1 \
 	KAFSCALE_KIND_RECREATE=1 \
+	KAFSCALE_MINIO_IMAGE=$(MINIO_IMAGE) \
 	go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v
 
-demo-platform-bootstrap: docker-build docker-build-minio ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
+demo-platform-bootstrap: docker-build $(MINIO_BUILD) ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
 	@command -v kind >/dev/null 2>&1 || { echo "kind is required"; exit 1; }
 	@command -v kubectl >/dev/null 2>&1 || { echo "kubectl is required"; exit 1; }
