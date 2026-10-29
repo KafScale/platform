@@ -24,6 +24,7 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestDeleteGroupsExpiresStaleMembers(t *testing.T) {
@@ -54,8 +55,8 @@ func TestDeleteGroupsExpiresStaleMembers(t *testing.T) {
 					{name: "default timeout expired", age: time.Hour},
 					{name: "default timeout fresh", want: protocol.NON_EMPTY_GROUP},
 					{name: "long session still alive", age: time.Hour, timeout: int32((2 * time.Hour) / time.Millisecond), want: protocol.NON_EMPTY_GROUP},
-					{name: "missing heartbeat", heartbeat: "missing"},
-					{name: "malformed heartbeat", heartbeat: "not-a-time"},
+					{name: "missing heartbeat", heartbeat: "missing", want: protocol.NON_EMPTY_GROUP},
+					{name: "malformed heartbeat", heartbeat: "not-a-time", want: protocol.NON_EMPTY_GROUP},
 				} {
 					name := "stored/"
 					if cached {
@@ -145,12 +146,21 @@ func TestDeleteStaleGroupPersistenceFailures(t *testing.T) {
 			req := kmsg.NewPtrDeleteGroupsRequest()
 			req.Groups = []string{"stale"}
 			resp, err := c.DeleteGroups(ctx, req)
-			if err != nil || resp.Groups[0].ErrorCode != protocol.UNKNOWN_SERVER_ERROR {
+			want := int16(protocol.UNKNOWN_SERVER_ERROR)
+			if fail == "put" {
+				want = protocol.COORDINATOR_NOT_AVAILABLE
+			}
+			if err != nil || resp.Groups[0].ErrorCode != want {
 				t.Fatal(resp, err)
 			}
 			offsets, err := store.ListGroupConsumerOffsets(ctx, "stale")
 			if err != nil || len(offsets) != 1 || offsets[0].Offset != 42 {
 				t.Fatal(offsets, err)
+			}
+			if fail == "put" {
+				if state := c.groups["stale"]; state == nil || len(state.members) != 1 || state.generationID != 4 {
+					t.Fatal("failed expiry changed cached membership", state)
+				}
 			}
 			if fail == "delete" {
 				group, err := store.FetchConsumerGroup(ctx, "stale")
@@ -170,5 +180,113 @@ func TestDeleteStaleGroupPersistenceFailures(t *testing.T) {
 				t.Fatal(offsets, err)
 			}
 		})
+	}
+}
+
+func TestGroupCleanupDropsLostOwnership(t *testing.T) {
+	ctx := context.Background()
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	seedCoordinatorGroup(t, store, groupStateStableStr)
+	c := NewGroupCoordinator(store, protocol.MetadataBroker{}, &CoordinatorConfig{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { return false }})
+	t.Cleanup(c.Stop)
+	state, err := c.loadGroupIfMissing(ctx, "readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.members["a"].lastHeartbeat = time.Now().Add(-time.Hour)
+	before, err := store.FetchConsumerGroup(ctx, "readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := kmsg.NewPtrDeleteGroupsRequest()
+	req.Groups = []string{"readers"}
+	resp, err := c.DeleteGroups(ctx, req)
+	if err != nil || resp.Groups[0].ErrorCode != protocol.NOT_COORDINATOR {
+		t.Fatal(resp, err)
+	}
+	c.cleanupGroups()
+	if c.groups["readers"] != nil {
+		t.Fatal("lost ownership retained cached group")
+	}
+	after, err := store.FetchConsumerGroup(ctx, "readers")
+	if err != nil || !proto.Equal(before, after) {
+		t.Fatal("non-owner changed membership", after, err)
+	}
+}
+
+func TestLegacyHeartbeatGetsOneLocalSession(t *testing.T) {
+	ctx := context.Background()
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "legacy", GenerationId: 4, State: groupStateStableStr, Members: map[string]*metadatapb.GroupMember{"old": {SessionTimeoutMs: 1000}}}); err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCoordinator(t, store)
+	req := kmsg.NewPtrDeleteGroupsRequest()
+	req.Groups = []string{"legacy"}
+	resp, err := c.DeleteGroups(ctx, req)
+	if err != nil || resp.Groups[0].ErrorCode != protocol.NON_EMPTY_GROUP {
+		t.Fatal(resp, err)
+	}
+	state := c.groups["legacy"]
+	recovered := state.members["old"].lastHeartbeat
+	if recovered.IsZero() {
+		t.Fatal("legacy member did not receive a local session")
+	}
+	if err := c.expireGroupMembersLocked(ctx, "legacy", state, recovered.Add(time.Second-time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.members) != 1 {
+		t.Fatal("legacy session expired early")
+	}
+	if err := c.expireGroupMembersLocked(ctx, "legacy", state, recovered.Add(time.Second+time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.members) != 0 {
+		t.Fatal("legacy session never expired")
+	}
+	resp, err = c.DeleteGroups(ctx, req)
+	if err != nil || resp.Groups[0].ErrorCode != 0 {
+		t.Fatal(resp, err)
+	}
+}
+
+func TestDeleteExpiryLosesLeaseBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	seedCoordinatorGroup(t, store, groupStateStableStr)
+	group, err := store.FetchConsumerGroup(ctx, "readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.Members["a"].HeartbeatAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := store.PutConsumerGroup(ctx, group); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitConsumerOffset(ctx, "readers", "orders", 0, 42, "checkpoint"); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	c := NewGroupCoordinator(store, protocol.MetadataBroker{}, &CoordinatorConfig{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { checks++; return checks < 3 }})
+	t.Cleanup(c.Stop)
+	state, err := c.loadGroupIfMissing(ctx, "readers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := kmsg.NewPtrDeleteGroupsRequest()
+	req.Groups = []string{"readers"}
+	resp, err := c.DeleteGroups(ctx, req)
+	if err != nil || resp.Groups[0].ErrorCode != protocol.NOT_COORDINATOR {
+		t.Fatal(resp, err)
+	}
+	if len(state.members) != 1 || state.generationID != group.GenerationId {
+		t.Fatal("lost lease changed cached group", state)
+	}
+	stored, err := store.FetchConsumerGroup(ctx, "readers")
+	if err != nil || !proto.Equal(stored, group) {
+		t.Fatal("lost lease persisted expiry", stored, err)
+	}
+	offsets, err := store.ListGroupConsumerOffsets(ctx, "readers")
+	if err != nil || len(offsets) != 1 || offsets[0].Offset != 42 {
+		t.Fatal(offsets, err)
 	}
 }

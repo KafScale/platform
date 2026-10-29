@@ -193,7 +193,7 @@ func (b *brokerLogBuffer) String() string {
 	return b.buffer.String()
 }
 
-func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string) (*exec.Cmd, *brokerLogBuffer) {
+func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string, extraEnv ...string) (*exec.Cmd, *brokerLogBuffer) {
 	t.Helper()
 	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
 	configureProcessGroup(brokerCmd)
@@ -206,6 +206,7 @@ func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsA
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
 		fmt.Sprintf("KAFSCALE_ETCD_ENDPOINTS=%s", strings.Join(endpoints, ",")),
 	)
+	brokerCmd.Env = append(brokerCmd.Env, extraEnv...)
 	var brokerLogs brokerLogBuffer
 	logWriter := io.MultiWriter(&brokerLogs, mustLogFile(t, "broker-etcd.log"))
 	brokerCmd.Stdout = logWriter

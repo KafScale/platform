@@ -493,8 +493,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			deleteReq := req.(*kmsg.DeleteGroupsRequest)
 			allowed := make([]string, 0, len(deleteReq.Groups))
 			denied := make(map[string]struct{})
+			leaseErrors := make(map[string]int16)
 			for _, groupID := range deleteReq.Groups {
 				if h.allowGroup(principal, groupID, acl.ActionGroupAdmin) {
+					if strings.TrimSpace(groupID) != "" {
+						if code := h.acquireGroupLease(ctx, groupID); code != protocol.NONE {
+							leaseErrors[groupID] = code
+							continue
+						}
+					}
 					allowed = append(allowed, groupID)
 				} else {
 					denied[groupID] = struct{}{}
@@ -530,6 +537,12 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 					g := kmsg.NewDeleteGroupsResponseGroup()
 					g.Group = groupID
 					g.ErrorCode = protocol.GROUP_AUTHORIZATION_FAILED
+					results = append(results, g)
+					continue
+				}
+				if code, ok := leaseErrors[groupID]; ok {
+					g := kmsg.NewDeleteGroupsResponseGroup()
+					g.Group, g.ErrorCode = groupID, code
 					results = append(results, g)
 					continue
 				}
@@ -2114,6 +2127,10 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			Logger:   logger,
 		})
 	}
+	coordinatorConfig := &broker.CoordinatorConfig{}
+	if groupLeaseManager != nil {
+		coordinatorConfig.OwnsGroup = groupLeaseManager.Owns
+	}
 	return &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
@@ -2132,7 +2149,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			CacheEnabled:      true,
 			Logger:            logger,
 		},
-		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, nil),
+		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, coordinatorConfig),
 		leaseManager:         leaseManager,
 		groupLeaseManager:    groupLeaseManager,
 		s3Health:             health,

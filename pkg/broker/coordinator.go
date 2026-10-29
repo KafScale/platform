@@ -18,6 +18,7 @@ package broker
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -67,6 +68,9 @@ type GroupCoordinator struct {
 
 type CoordinatorConfig struct {
 	CleanupInterval time.Duration
+	// OwnsGroup gates group mutation and cleanup after coordination lease loss.
+	// Nil permits standalone coordinators without an external lease manager.
+	OwnsGroup func(string) bool
 }
 
 var defaultCoordinatorConfig = CoordinatorConfig{
@@ -105,8 +109,11 @@ type assignmentTopic struct {
 
 func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, cfg *CoordinatorConfig) *GroupCoordinator {
 	config := defaultCoordinatorConfig
-	if cfg != nil && cfg.CleanupInterval > 0 {
-		config.CleanupInterval = cfg.CleanupInterval
+	if cfg != nil {
+		if cfg.CleanupInterval > 0 {
+			config.CleanupInterval = cfg.CleanupInterval
+		}
+		config.OwnsGroup = cfg.OwnsGroup
 	}
 	c := &GroupCoordinator{
 		store:  store,
@@ -572,9 +579,14 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
+		if !c.ownsGroup(groupID) {
+			result.ErrorCode = protocol.NOT_COORDINATOR
+			resp.Groups = append(resp.Groups, result)
+			continue
+		}
 		if state := c.groups[groupID]; state != nil {
 			if err := c.expireGroupMembersLocked(ctx, groupID, state, time.Now()); err != nil {
-				result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				result.ErrorCode = groupExpiryErrorCode(err)
 				resp.Groups = append(resp.Groups, result)
 				continue
 			}
@@ -602,7 +614,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			state := restoreGroupState(group)
 			c.groups[groupID] = state
 			if err := c.expireGroupMembersLocked(ctx, groupID, state, time.Now()); err != nil {
-				result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				result.ErrorCode = groupExpiryErrorCode(err)
 				resp.Groups = append(resp.Groups, result)
 				continue
 			}
@@ -611,6 +623,11 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 				resp.Groups = append(resp.Groups, result)
 				continue
 			}
+		}
+		if !c.ownsGroup(groupID) {
+			result.ErrorCode = protocol.NOT_COORDINATOR
+			resp.Groups = append(resp.Groups, result)
+			continue
 		}
 		if err := c.store.DeleteConsumerGroup(ctx, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -773,6 +790,7 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 		assignments:      make(map[string][]assignmentTopic),
 		rebalanceTimeout: rebalanceTimeout,
 	}
+	now := time.Now()
 	for memberID, member := range group.Members {
 		sessionTimeout := defaultSessionTimeout
 		if member.SessionTimeoutMs > 0 {
@@ -784,7 +802,10 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 			protocolMetadata: append([]byte(nil), member.ProtocolMetadata...),
 			memberAssignment: append([]byte(nil), member.MemberAssignment...),
 			sessionTimeout:   sessionTimeout,
-			joinGeneration:   group.GenerationId,
+			// Older brokers did not persist heartbeats. Give recovered members
+			// one local session to reconnect rather than expiring them immediately.
+			lastHeartbeat:  now,
+			joinGeneration: group.GenerationId,
 		}
 		if member.HeartbeatAt != "" {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
@@ -1120,18 +1141,57 @@ func (c *GroupCoordinator) cleanupGroups() {
 	now := time.Now()
 	ctx := context.Background()
 	for groupID, state := range c.groups {
+		if !c.ownsGroup(groupID) {
+			delete(c.groups, groupID)
+			continue
+		}
 		_ = c.expireGroupMembersLocked(ctx, groupID, state, now)
 	}
 }
 
-// expireGroupMembersLocked applies the same session/rebalance expiry to cached
-// groups and groups recovered from storage. Persist before permitting deletion.
+func (c *GroupCoordinator) ownsGroup(groupID string) bool {
+	return c.config.OwnsGroup == nil || c.config.OwnsGroup(groupID)
+}
+
+func groupExpiryErrorCode(err error) int16 {
+	if errors.Is(err, metadata.ErrNotOwner) {
+		return protocol.NOT_COORDINATOR
+	}
+	return protocol.COORDINATOR_NOT_AVAILABLE
+}
+
+// expireGroupMembersLocked persists a candidate before changing cached state.
+// Losing the lease or a failed write must not erase members from local memory.
 func (c *GroupCoordinator) expireGroupMembersLocked(ctx context.Context, groupID string, state *groupState, now time.Time) error {
-	removed := state.removeExpiredMembers(now)
-	lostDuringRebalance := state.dropRebalanceLaggers(now)
+	if !c.ownsGroup(groupID) {
+		return metadata.ErrNotOwner
+	}
+	if len(state.members) == 0 {
+		return nil
+	}
+	candidate := *state
+	candidate.members = make(map[string]*memberState, len(state.members))
+	for id, member := range state.members {
+		memberCopy := *member
+		candidate.members[id] = &memberCopy
+	}
+	candidate.assignments = make(map[string][]assignmentTopic, len(state.assignments))
+	for id, assignments := range state.assignments {
+		candidate.assignments[id] = assignments
+	}
+	removed := candidate.removeExpiredMembers(now)
+	lostDuringRebalance := candidate.dropRebalanceLaggers(now)
 	if removed || lostDuringRebalance {
-		state.startRebalance(0)
-		return c.persistGroupLocked(ctx, groupID, state)
+		// Partial expiry advances the generation even if live members still
+		// make DeleteGroups return NON_EMPTY_GROUP, just as background cleanup does.
+		candidate.startRebalance(0)
+		if !c.ownsGroup(groupID) {
+			return metadata.ErrNotOwner
+		}
+		if err := c.persistGroupLocked(ctx, groupID, &candidate); err != nil {
+			return err
+		}
+		*state = candidate
 	}
 	return nil
 }
