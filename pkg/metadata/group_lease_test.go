@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func newGroupLeaseManager(t *testing.T, endpoints []string, brokerID string, ttlSeconds int) *GroupLeaseManager {
@@ -273,5 +274,69 @@ func TestGroupLeaseMultipleGroups(t *testing.T) {
 	}
 	if brokerB.Owns("group-1") {
 		t.Fatalf("broker-b should not own group-1")
+	}
+}
+
+func TestGroupReleaseDoesNotDeleteReplacementLease(t *testing.T) {
+	ctx := context.Background()
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	for _, successorID := range []string{"broker-a", "broker-b"} {
+		old := newGroupLeaseManager(t, endpoints, "broker-a", 30)
+		next := newGroupLeaseManager(t, endpoints, successorID, 30)
+		group := "replacement-" + successorID
+		if err := old.Acquire(ctx, group); err != nil {
+			t.Fatal(err)
+		}
+		if successorID == "broker-b" {
+			// Replace the lease record while the old process still has a stale local map.
+			oldOwner, err := old.EtcdClient().Get(ctx, GroupLeasePrefix()+"/"+group)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := old.EtcdClient().Put(ctx, GroupLeasePrefix()+"/"+group, successorID, clientv3.WithLease(clientv3.LeaseID(oldOwner.Kvs[0].Lease))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := next.Acquire(ctx, group); err != nil {
+			t.Fatal(err)
+		}
+		old.Release(group)
+		owner, err := next.CurrentOwner(ctx, group)
+		if err != nil || owner != successorID {
+			t.Fatal("old release removed replacement owner", owner, err)
+		}
+		next.ReleaseAll()
+		old.ReleaseAll()
+	}
+}
+
+func TestConcurrentGroupAcquireAndReleaseAgreeWithEtcd(t *testing.T) {
+	ctx := context.Background()
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	a := newGroupLeaseManager(t, endpoints, "broker-a", 30)
+	b := newGroupLeaseManager(t, endpoints, "broker-b", 30)
+	defer a.ReleaseAll()
+	defer b.ReleaseAll()
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); errs <- a.Acquire(ctx, "recreated") }()
+		go func() { defer wg.Done(); a.Release("recreated") }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner, err := a.CurrentOwner(ctx, "recreated")
+	if err != nil || a.Owns("recreated") != (owner == "broker-a") {
+		t.Fatal("local ownership disagrees with etcd", owner, err)
+	}
+	a.Release("recreated")
+	if err := b.Acquire(ctx, "recreated"); err != nil {
+		t.Fatal("released group cannot move to another broker", err)
 	}
 }

@@ -678,6 +678,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			protocol.APIKeyLeaveGroup,
 			protocol.APIKeyOffsetCommit,
 			protocol.APIKeyOffsetFetch,
+			protocol.APIKeyDeleteGroups,
 			protocol.APIKeyDescribeGroups:
 			resp, err := p.handleGroupRouting(ctx, header, frame.Payload, pool)
 			if err != nil {
@@ -1708,6 +1709,16 @@ func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr
 // retrying on NOT_COORDINATOR. DescribeGroups is forwarded once without retry
 // since it may span multiple groups on different brokers.
 func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
+	if header.APIKey == protocol.APIKeyDeleteGroups {
+		_, parsed, err := protocol.ParseRequest(payload)
+		if err != nil {
+			return nil, err
+		}
+		req := parsed.(*kmsg.DeleteGroupsRequest)
+		if len(req.Groups) != 1 {
+			return p.handleMultiGroupDelete(ctx, header, req, pool)
+		}
+	}
 	groupID := p.extractGroupID(header.APIKey, payload)
 
 	maxAttempts := 3
@@ -1737,10 +1748,12 @@ func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.Request
 			continue
 		}
 
-		if p.groupRouter != nil && groupID != "" {
+		if groupID != "" {
 			if ec, ok := protocol.GroupResponseErrorCode(header.APIKey, header.APIVersion, resp); ok && ec == protocol.NOT_COORDINATOR {
 				pool.Return(actualAddr, conn)
-				p.groupRouter.Invalidate(groupID)
+				if p.groupRouter != nil {
+					p.groupRouter.Invalidate(groupID)
+				}
 				p.logger.Debug("NOT_COORDINATOR, retrying group request",
 					"group", groupID, "attempt", attempt+1, "broker", actualAddr)
 				continue
@@ -1752,6 +1765,32 @@ func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.Request
 	}
 
 	return nil, fmt.Errorf("group request for %q failed after %d attempts", groupID, maxAttempts)
+}
+
+// Route each deletion independently: groups in one admin request can have
+// different owners, and retrying the whole batch could repeat successful deletes.
+func (p *proxy) handleMultiGroupDelete(ctx context.Context, header *protocol.RequestHeader, req *kmsg.DeleteGroupsRequest, pool *connPool) ([]byte, error) {
+	resp := kmsg.NewPtrDeleteGroupsResponse()
+	for _, groupID := range req.Groups {
+		sub := *req
+		sub.Groups = []string{groupID}
+		formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientIDStr(header.ClientID)))
+		wire := formatter.AppendRequest(nil, &sub, header.CorrelationID)
+		result := kmsg.NewDeleteGroupsResponseGroup()
+		result.Group, result.ErrorCode = groupID, protocol.REQUEST_TIMED_OUT
+		payload, err := p.handleGroupRouting(ctx, header, wire[4:], pool)
+		if err == nil {
+			body, ok := protocol.SkipResponseHeader(header.APIKey, header.APIVersion, payload)
+			decoded := kmsg.NewPtrDeleteGroupsResponse()
+			decoded.Version = header.APIVersion
+			if ok && decoded.ReadFrom(body) == nil && len(decoded.Groups) == 1 && decoded.Groups[0].Group == groupID {
+				result = decoded.Groups[0]
+				resp.ThrottleMillis = max(resp.ThrottleMillis, decoded.ThrottleMillis)
+			}
+		}
+		resp.Groups = append(resp.Groups, result)
+	}
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
 func (p *proxy) extractGroupID(apiKey int16, payload []byte) string {
@@ -1772,6 +1811,11 @@ func (p *proxy) extractGroupID(apiKey int16, payload []byte) string {
 		return r.Group
 	case *kmsg.OffsetFetchRequest:
 		return r.Group
+	case *kmsg.DeleteGroupsRequest:
+		if len(r.Groups) == 1 {
+			return r.Groups[0]
+		}
+		return ""
 	case *kmsg.DescribeGroupsRequest:
 		if len(r.Groups) > 0 {
 			return r.Groups[0]

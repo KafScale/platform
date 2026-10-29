@@ -309,7 +309,7 @@ func waitForPortClosed(t *testing.T, addr string) {
 	}
 }
 
-func waitForBroker(t *testing.T, logs *bytes.Buffer, addr string) {
+func waitForBroker(t *testing.T, logs fmt.Stringer, addr string) {
 	t.Helper()
 	deadline := time.After(10 * time.Second)
 	msg := fmt.Sprintf("broker listening on %s", addr)
