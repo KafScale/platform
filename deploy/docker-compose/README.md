@@ -17,36 +17,23 @@ limitations under the License.
 
 # KafScale Docker Compose
 
-Local development platform using Docker Compose with images from a local registry.
+Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v1.6.3` images.
 
 ## Prerequisites
 
-1. Docker and Docker Compose installed
-2. Images pushed to local registry (`192.168.0.131:5100`)
-3. Docker configured for insecure registry (see below)
+You need Docker and Docker Compose v2.
 
-### Configure Insecure Registry
+By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v1.6.3`. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
 
-Docker Desktop → Settings → Docker Engine:
+### Use a Local Registry
 
-```json
-{
-  "insecure-registries": ["192.168.0.131:5100"]
-}
-```
-
-### Push Images to Local Registry
+Push images to your own registry, then set `REGISTRY` and `TAG`. Images are pulled from `<registry>/kafscale/<image>:<tag>`.
 
 ```bash
-# From repository root
-make stage-release STAGE_REGISTRY=192.168.0.131:5100 STAGE_TAG=dev
+REGISTRY=<registry> TAG=<tag> docker compose up -d
 ```
 
-### Verify Images
-
-```bash
-curl http://192.168.0.131:5100/v2/_catalog
-```
+If the registry uses plain HTTP, add it to `insecure-registries` in the Docker daemon config.
 
 ## Quick Start
 
@@ -70,9 +57,9 @@ docker-compose down
 | **etcd** | 2379 | Coordination store |
 | **minio** | 9000, 9001 | S3 storage (API, Console) |
 | **broker** | 9092 | KafScale Kafka broker |
-| **lfs-proxy** | 8080, 9093 | LFS HTTP API, Kafka protocol |
+| **proxy** | 8080, 9093, 9094 | LFS HTTP API, Kafka protocol, health |
 | **console** | 3080 | Web management console |
-| **e72-browser-demo** | 3072 | Browser LFS demo (optional) |
+| **e72-browser-demo** | 3072 | Browser LFS demo, `demo` profile only |
 
 ## Access Points
 
@@ -82,7 +69,6 @@ docker-compose down
 | MinIO Console | http://localhost:9001 |
 | KafScale Console | http://localhost:3080 |
 | E72 Browser Demo | http://localhost:3072 |
-| Prometheus Metrics | http://localhost:9095/metrics |
 | Health Check | http://localhost:9094/readyz |
 
 ## Testing
@@ -94,6 +80,10 @@ Docker Compose sets:
 
 - `KAFSCALE_BROKER_HOST=broker`
 - `KAFSCALE_BROKER_PORT=9092`
+
+### Proxy Kafka Port
+
+The proxy advertises `localhost:9093`. Use it from the host only. Clients inside the compose network connect to `broker:9092`.
 
 ### Health Check
 
@@ -118,18 +108,6 @@ curl -X POST http://localhost:8080/lfs/produce \
   --data-binary @video.mp4
 ```
 
-### Large Uploads (Beast Mode)
-
-Docker Compose ships with a large-upload profile:
-
-- `KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE=7516192768` (7 GB)
-- `KAFSCALE_LFS_PROXY_CHUNK_SIZE=16777216` (16 MB parts)
-- `KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC=1800`
-- `KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC=1800`
-- `KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC=120`
-
-These settings allow 6+ GB streaming uploads without hitting default limits.
-
 ### LFS Download
 
 ```bash
@@ -153,7 +131,7 @@ curl -X POST http://localhost:8080/lfs/download \
 ## Traceability
 
 Traceability is enabled in the compose file by default. It consists of:
-- **LFS Ops Tracker** events emitted by the LFS proxy to `__lfs_ops_state`
+- **LFS Ops Tracker** events emitted by the proxy to `__lfs_ops_state`
 - **Console LFS Dashboard** consuming those events and exposing APIs/UI
 
 ### Where to see it
@@ -169,14 +147,9 @@ kcat -b localhost:9092 -C -t __lfs_ops_state -o beginning
 
 ### Key settings (compose)
 
-LFS proxy tracker:
-- `KAFSCALE_LFS_TRACKER_ENABLED=true`
-- `KAFSCALE_LFS_TRACKER_TOPIC=__lfs_ops_state`
-- `KAFSCALE_LFS_TRACKER_BATCH_SIZE=100`
-- `KAFSCALE_LFS_TRACKER_FLUSH_MS=100`
-- `KAFSCALE_LFS_TRACKER_ENSURE_TOPIC=true`
-- `KAFSCALE_LFS_TRACKER_PARTITIONS=3`
-- `KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR=1`
+Proxy tracker:
+- `KAFSCALE_LFS_PROXY_BACKENDS=broker:9092` turns the tracker on. Without it the proxy logs `lfs ops tracker: no brokers configured, tracker disabled`.
+- The tracker writes to `__lfs_ops_state`, the default `KAFSCALE_LFS_TRACKER_TOPIC`.
 
 Console LFS dashboard:
 - `KAFSCALE_CONSOLE_LFS_ENABLED=true`
@@ -204,8 +177,8 @@ Edit `.env` to customize:
 
 ```bash
 # Registry settings
-REGISTRY=192.168.0.131:5100
-TAG=dev
+REGISTRY=ghcr.io
+TAG=v1.6.3
 
 # MinIO credentials
 MINIO_ROOT_USER=minioadmin
@@ -224,6 +197,16 @@ The console UI requires credentials. Compose sets:
 - `KAFSCALE_UI_PASSWORD=kafscale`
 
 Override these in `docker-compose.yaml` or via your own `.env.local` if needed.
+
+### Run the E72 Browser Demo
+
+`e72-browser-demo` runs only with the `demo` profile. Its image `kafscale-e72-browser-demo` is not published and the repository has no Dockerfile for it. Push it to your registry first, then run:
+
+```bash
+REGISTRY=<registry> TAG=<tag> docker compose --profile demo up -d
+```
+
+`<registry>` and `<tag>` must hold all KafScale images, including `kafscale-e72-browser-demo`. Without the profile, `docker compose up -d` starts every service except the demo.
 
 ### Override Registry/Tag
 
@@ -245,9 +228,9 @@ REGISTRY=my-registry.local:5000 TAG=v1.6.3 docker-compose up -d
 │       └───────────────┼───────────────┘                         │
 │                       │                                          │
 │               ┌───────┴───────┐                                  │
-│               │   lfs-proxy   │                                  │
+│               │     proxy     │                                  │
 │               │ :8080 (HTTP)  │                                  │
-│               │ :9093 (Kafka) │                                  │
+│               │ :9092 (Kafka) │                                  │
 │               └───────────────┘                                  │
 └─────────────────────────────────────────────────────────────────┘
                         │
@@ -256,6 +239,7 @@ REGISTRY=my-registry.local:5000 TAG=v1.6.3 docker-compose up -d
               │                   │
               │ localhost:8080    │ ← LFS HTTP API
               │ localhost:9092    │ ← Kafka Broker
+              │ localhost:9093    │ ← Kafka Proxy
               │ localhost:9001    │ ← MinIO Console
               │ localhost:3080    │ ← KafScale Console
               └───────────────────┘
@@ -270,27 +254,27 @@ REGISTRY=my-registry.local:5000 TAG=v1.6.3 docker-compose up -d
 docker-compose ps
 
 # View logs for specific service
-docker-compose logs lfs-proxy
+docker-compose logs proxy
 
 # Restart a service
-docker-compose restart lfs-proxy
+docker-compose restart proxy
 ```
 
 ### Image pull fails
 
 ```bash
-# Verify registry is accessible
-curl http://192.168.0.131:5100/v2/_catalog
+# Check that the default image pulls
+docker pull ghcr.io/kafscale/kafscale-broker:v1.6.3
 
-# Check Docker daemon config
+# For a local registry, check the Docker daemon config
 docker info | grep -A5 "Insecure Registries"
 ```
 
 ### LFS upload fails
 
 ```bash
-# Check LFS proxy logs
-docker-compose logs lfs-proxy
+# Check proxy logs
+docker-compose logs proxy
 
 # Verify MinIO is healthy
 curl http://localhost:9000/minio/health/live

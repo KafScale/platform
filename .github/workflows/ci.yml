@@ -35,6 +35,14 @@ jobs:
       - name: Validate Apache 2.0 headers
         run: python3 hack/check_license_headers.py
 
+  compose-config:
+    name: Docker Compose Config Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Validate docker-compose.yaml
+        run: docker compose -f deploy/docker-compose/docker-compose.yaml config --quiet
+
   go-test:
     name: Go Test Suite
     runs-on: ubuntu-latest
