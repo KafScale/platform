@@ -242,20 +242,20 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | API Key | Name | Kafka 3.7 Version | Kafscale Status |
 |---------|------|-------------------|-----------------|
 | 0 | Produce | 9 | ✅ Implemented |
-| 1 | Fetch | 13 | ✅ Implemented |
+| 1 | Fetch | 13 | ✅ Implemented (v4-13) |
 | 2 | ListOffsets | 7 | ✅ Implemented (v0-4) |
 | 3 | Metadata | 12 | ✅ Implemented |
 | 4 | LeaderAndIsr | 5 | ❌ Not needed (internal) |
 | 5 | StopReplica | 3 | ❌ Not needed (internal) |
 | 6 | UpdateMetadata | 7 | ❌ Not needed (internal) |
 | 7 | ControlledShutdown | 3 | ❌ Replaced by Kubernetes rollouts |
-| 8 | OffsetCommit | 3 | ✅ Implemented |
-| 9 | OffsetFetch | 5 | ✅ Implemented |
-| 10 | FindCoordinator | 3 | ✅ Implemented |
-| 11 | JoinGroup | 4 | ✅ Implemented |
-| 12 | Heartbeat | 4 | ✅ Implemented |
-| 13 | LeaveGroup | 4 | ✅ Implemented |
-| 14 | SyncGroup | 4 | ✅ Implemented |
+| 8 | OffsetCommit | 3 | ✅ Implemented (v1-3) |
+| 9 | OffsetFetch | 5 | ✅ Implemented (v1-5) |
+| 10 | FindCoordinator | 3 | ✅ Implemented (v0-3) |
+| 11 | JoinGroup | 4 | ✅ Implemented (v0-4) |
+| 12 | Heartbeat | 4 | ✅ Implemented (v0-4) |
+| 13 | LeaveGroup | 4 | ✅ Implemented (v0-4) |
+| 14 | SyncGroup | 4 | ✅ Implemented (v0-4) |
 | 15 | DescribeGroups | 5 | ✅ Implemented |
 | 16 | ListGroups | 5 | ✅ Implemented |
 | 17 | SaslHandshake | 1 | ❌ Not supported |

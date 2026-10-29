@@ -97,6 +97,7 @@ func TestDescribeGroupMemberDetailsSurviveRestart(t *testing.T) {
 			// Rebalancing must not report the old assignment as current ownership.
 			other := kmsg.NewPtrJoinGroupRequest()
 			other.Group, other.ProtocolType = "readers", "consumer"
+			other.RebalanceTimeoutMillis = 1
 			other.Protocols = []kmsg.JoinGroupRequestProtocol{{Name: "range", Metadata: expected}}
 			if _, err := c.JoinGroup(ctx, other); err != nil {
 				t.Fatal(err)
