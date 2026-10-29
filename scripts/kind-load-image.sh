@@ -22,6 +22,12 @@ fi
 
 image="$1"
 cluster="$2"
+
+if ! docker save --help | grep -q -- '--platform'; then
+  kind load docker-image "$image" --name "$cluster"
+  exit 0
+fi
+
 arch="$(docker info -f '{{.Architecture}}' | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 archive="$(mktemp)"
 trap 'rm -f "$archive"' EXIT
