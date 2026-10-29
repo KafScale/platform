@@ -66,6 +66,10 @@ func TestFetchCompatibilityWireVersions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			decoded, ok := parsed.(*kmsg.FetchRequest)
+			if !ok || decoded.Version != version || decoded.ReplicaID != -1 || decoded.MinBytes != 1 || decoded.MaxBytes != 1<<20 || len(decoded.Topics) != 1 || len(decoded.Topics[0].Partitions) != 1 || decoded.Topics[0].Partitions[0].PartitionMaxBytes != 1<<20 {
+				t.Fatalf("Fetch v%d request round trip: %+v", version, parsed)
+			}
 			wire, err := h.Handle(ctx, header, parsed)
 			if err != nil {
 				t.Fatal(err)
@@ -120,26 +124,110 @@ func TestProduceRejectsLegacyMessageSets(t *testing.T) {
 	}
 }
 
-func TestProduceRejectsTruncatedRecordBatches(t *testing.T) {
-	for _, size := range []int{0, 16, 60} {
-		t.Run(fmt.Sprint(size), func(t *testing.T) {
+func TestProduceRejectsInvalidRecordSets(t *testing.T) {
+	valid := testBatchBytes(0, 0, 1)
+	legacy := append([]byte(nil), valid...)
+	legacy[16] = 1
+	cases := []struct {
+		name    string
+		records []byte
+		code    int16
+	}{
+		{"empty", nil, protocol.CORRUPT_MESSAGE},
+		{"short-header", valid[:16], protocol.CORRUPT_MESSAGE},
+		{"short-batch", valid[:60], protocol.CORRUPT_MESSAGE},
+		{"valid-then-truncated", append(append([]byte(nil), valid...), valid[:65]...), protocol.CORRUPT_MESSAGE},
+		{"valid-then-legacy", append(append([]byte(nil), valid...), legacy...), protocol.UNSUPPORTED_VERSION},
+		{"trailing-bytes", append(append([]byte(nil), valid...), 0), protocol.CORRUPT_MESSAGE},
+	}
+	for size := 61; size < len(valid); size++ {
+		cases = append(cases, struct {
+			name    string
+			records []byte
+			code    int16
+		}{fmt.Sprintf("truncated-%d", size), valid[:size], protocol.CORRUPT_MESSAGE})
+	}
+	for _, length := range []uint32{0, 48, 0xffffffff, 0x7fffffff} {
+		record := append([]byte(nil), valid...)
+		binary.BigEndian.PutUint32(record[8:12], length)
+		cases = append(cases, struct {
+			name    string
+			records []byte
+			code    int16
+		}{fmt.Sprintf("length-%d", length), record, protocol.CORRUPT_MESSAGE})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			store := metadata.NewInMemoryStore(defaultMetadata())
 			h := newTestHandler(store)
 			t.Cleanup(h.coordinator.Stop)
-			records := testBatchBytes(0, 0, 1)[:size]
 			req := kmsg.NewPtrProduceRequest()
 			req.Version, req.Acks = 9, -1
-			req.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: records}}}}
+			req.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: tc.records}}}}
 			wire, err := h.handleProduce(context.Background(), &protocol.RequestHeader{APIVersion: 9}, req)
 			if err != nil {
 				t.Fatal(err)
 			}
 			resp := decodeKmsgResponse(t, 9, wire, kmsg.NewPtrProduceResponse)
-			if resp.Topics[0].Partitions[0].ErrorCode != protocol.CORRUPT_MESSAGE {
+			if resp.Topics[0].Partitions[0].ErrorCode != tc.code {
 				t.Fatal(resp)
 			}
 			if next, err := store.NextOffset(context.Background(), "orders", 0); err != nil || next != 0 {
 				t.Fatal(next, err)
+			}
+		})
+	}
+}
+
+func TestProduceMultipleRecordBatches(t *testing.T) {
+	h := newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))
+	t.Cleanup(h.coordinator.Stop)
+	req := kmsg.NewPtrProduceRequest()
+	req.Version, req.Acks = 9, -1
+	records := append(testBatchBytes(0, 0, 1), testBatchBytes(0, 0, 1)...)
+	req.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Records: records}}}}
+	wire, err := h.handleProduce(context.Background(), &protocol.RequestHeader{APIVersion: 9}, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := decodeKmsgResponse(t, 9, wire, kmsg.NewPtrProduceResponse)
+	if resp.Topics[0].Partitions[0].ErrorCode != 0 {
+		t.Fatal(resp)
+	}
+	fetch := kmsg.NewPtrFetchRequest()
+	fetch.Version, fetch.ReplicaID, fetch.MaxBytes = 13, -1, 1<<20
+	fetch.Topics = []kmsg.FetchRequestTopic{{TopicID: metadata.TopicIDForName("orders"), Partitions: []kmsg.FetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
+	wire, err = h.Handle(context.Background(), &protocol.RequestHeader{APIKey: protocol.APIKeyFetch, APIVersion: 13}, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := decodeKmsgResponse(t, 13, wire, kmsg.NewPtrFetchResponse).Topics[0].Partitions[0]
+	if part.HighWatermark != 2 || len(part.RecordBatches) != 140 || binary.BigEndian.Uint64(part.RecordBatches[70:78]) != 1 {
+		t.Fatalf("bad multi-batch offsets: %+v", part)
+	}
+}
+
+func TestFetchEmptyRecordsWireVersions(t *testing.T) {
+	for version := int16(4); version <= 13; version++ {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			h := newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))
+			t.Cleanup(h.coordinator.Stop)
+			req := kmsg.NewPtrFetchRequest()
+			req.Version, req.ReplicaID, req.MaxBytes = version, -1, 1<<20
+			req.Topics = []kmsg.FetchRequestTopic{{Topic: "orders", TopicID: metadata.TopicIDForName("orders"), Partitions: []kmsg.FetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
+			formatter := kmsg.NewRequestFormatter()
+			header, parsed, err := protocol.ParseRequest(formatter.AppendRequest(nil, req, 42)[4:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := h.Handle(context.Background(), header, parsed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			part := decodeKmsgResponse(t, version, wire, kmsg.NewPtrFetchResponse).Topics[0].Partitions[0]
+			// kmsg decodes length -1 as nil and length zero as a non-nil empty slice.
+			if part.ErrorCode != 0 || part.RecordBatches == nil || len(part.RecordBatches) != 0 {
+				t.Fatalf("empty partition must encode length 0: %+v", part)
 			}
 		})
 	}

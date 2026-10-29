@@ -135,6 +135,75 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 			if fetched.ErrorCode != 0 || len(fetched.Topics) != 1 || len(fetched.Topics[0].Partitions) != 1 || fetched.Topics[0].Partitions[0].Offset != 3 {
 				t.Fatalf("group checkpoint: %+v", fetched)
 			}
+			t.Run("two-members", func(t *testing.T) {
+				multiTopic, multiGroup := topic+"-two", group+"-two"
+				create := kmsg.NewPtrCreateTopicsRequest()
+				create.Version, create.TimeoutMillis = 2, 5000
+				create.Topics = []kmsg.CreateTopicsRequestTopic{{Topic: multiTopic, NumPartitions: 2, ReplicationFactor: 1}}
+				if resp := directGroupRequest(t, target.addr, create).(*kmsg.CreateTopicsResponse); len(resp.Topics) != 1 || resp.Topics[0].ErrorCode != 0 {
+					t.Fatalf("create topic: %+v", resp)
+				}
+				var outputs [2]brokerLogBuffer
+				var errors [2]brokerLogBuffer
+				startConsumer := func(index int) {
+					args := []string{"-F", os.DevNull, "-b", target.addr, "-q", "-u", "-f", "%p:%s\n", "-X", "auto.offset.reset=earliest", "-X", "session.timeout.ms=6000", "-X", "max.poll.interval.ms=15000"}
+					args = append(args, classicOption...)
+					args = append(args, "-G", multiGroup, multiTopic)
+					cmd := exec.CommandContext(ctx, path, args...)
+					configureProcessGroup(cmd)
+					cmd.Stdout, cmd.Stderr = &outputs[index], &errors[index]
+					if err := cmd.Start(); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { stopBroker(t, cmd) })
+				}
+				waitMembers := func(count int) {
+					deadline := time.Now().Add(25 * time.Second)
+					for time.Now().Before(deadline) {
+						describe := kmsg.NewPtrDescribeGroupsRequest()
+						describe.Version, describe.Groups = 3, []string{multiGroup}
+						resp := directGroupRequest(t, target.addr, describe).(*kmsg.DescribeGroupsResponse)
+						if len(resp.Groups) == 1 && resp.Groups[0].ErrorCode == 0 && resp.Groups[0].State == "Stable" && len(resp.Groups[0].Members) == count {
+							seen := map[int32]bool{}
+							valid := true
+							for _, member := range resp.Groups[0].Members {
+								var assignment kmsg.ConsumerMemberAssignment
+								if err := assignment.ReadFrom(member.MemberAssignment); err != nil || len(assignment.Topics) != 1 || len(assignment.Topics[0].Partitions) == 0 {
+									valid = false
+									break
+								}
+								for _, partition := range assignment.Topics[0].Partitions {
+									if seen[partition] {
+										valid = false
+									}
+									seen[partition] = true
+								}
+							}
+							if valid && len(seen) == 2 {
+								return
+							}
+						}
+						time.Sleep(100 * time.Millisecond)
+					}
+					t.Fatalf("group never assigned partitions to %d members: %s %s", count, errors[0].String(), errors[1].String())
+				}
+				startConsumer(0)
+				waitMembers(1)
+				startConsumer(1)
+				waitMembers(2)
+				for partition := 0; partition < 2; partition++ {
+					run(t, target.addr, fmt.Sprintf("partition-%d\n", partition), "-P", "-q", "-t", multiTopic, "-p", fmt.Sprint(partition), "-X", "enable.idempotence=false")
+				}
+				deadline := time.Now().Add(15 * time.Second)
+				for time.Now().Before(deadline) && (outputs[0].String() == "" || outputs[1].String() == "") {
+					time.Sleep(100 * time.Millisecond)
+				}
+				first, second := outputs[0].String(), outputs[1].String()
+				if first == "" || second == "" || first == second || !strings.Contains(first+second, "0:partition-0") || !strings.Contains(first+second, "1:partition-1") {
+					t.Fatalf("both members must consume distinct assigned partitions: %q %q; %s %s", first, second, errors[0].String(), errors[1].String())
+				}
+			})
+
 		})
 	}
 }
