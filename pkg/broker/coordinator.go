@@ -647,7 +647,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		}
 		if err := metadata.DeleteConsumerGroupAndOffsets(ctx, c.store, groupID); err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-			if errors.Is(err, metadata.ErrConsumerGroupChanged) || errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, metadata.ErrConsumerGroupChanged) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				result.ErrorCode = protocol.COORDINATOR_NOT_AVAILABLE
 			}
 			resp.Groups = append(resp.Groups, result)

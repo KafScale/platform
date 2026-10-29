@@ -79,6 +79,7 @@ func TestDeleteGroupsRetryableStoreErrors(t *testing.T) {
 	}{
 		{metadata.ErrConsumerGroupChanged, protocol.COORDINATOR_NOT_AVAILABLE},
 		{fmt.Errorf("txn: %w", context.DeadlineExceeded), protocol.COORDINATOR_NOT_AVAILABLE},
+		{fmt.Errorf("txn: %w", context.Canceled), protocol.COORDINATOR_NOT_AVAILABLE},
 		{errCoordinatorStore, protocol.UNKNOWN_SERVER_ERROR},
 	} {
 		base := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
