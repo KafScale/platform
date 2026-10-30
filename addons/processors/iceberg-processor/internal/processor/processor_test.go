@@ -243,3 +243,46 @@ func TestProcessorPinsLeaseToSinglePartition(t *testing.T) {
 func offsetKey(topic string, partition int32) string {
 	return fmt.Sprintf("%s:%d", topic, partition)
 }
+
+func TestProcessorCheckpointsRecreatedTopicByStorageName(t *testing.T) {
+	segments := []discovery.SegmentRef{{Topic: "orders", StorageTopic: "orders@1", SegmentKey: "segment-0", IndexKey: "index-0"}}
+	records := map[string][]decoder.Record{"segment-0": {
+		{Topic: "orders", Partition: 0, Offset: 0, Timestamp: 1},
+		{Topic: "orders", Partition: 0, Offset: 1, Timestamp: 1},
+	}}
+	store := &testStore{offsets: map[string]int64{offsetKey("orders", 0): 100}}
+	sinkWriter := &testSink{writes: make(chan struct{}, 1)}
+	p := &Processor{
+		cfg:      config.Config{Processor: config.ProcessorConfig{PollIntervalSeconds: 1}},
+		discover: &testLister{segments: segments},
+		decode:   &testDecoder{records: records},
+		store:    store,
+		sink:     sinkWriter,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	select {
+	case <-sinkWriter.writes:
+		cancel()
+	case <-ctx.Done():
+		t.Fatal("re-created topic records were not written")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.claimed[0].Topic != "orders@1" {
+		t.Fatalf("lease claimed on %q", store.claimed[0].Topic)
+	}
+	if store.offsets[offsetKey("orders@1", 0)] != 1 || store.offsets[offsetKey("orders", 0)] != 100 {
+		t.Fatalf("unexpected checkpoints %v", store.offsets)
+	}
+	sinkWriter.mu.Lock()
+	defer sinkWriter.mu.Unlock()
+	if len(sinkWriter.all) != 2 || sinkWriter.all[0].Topic != "orders" {
+		t.Fatalf("unexpected writes %+v", sinkWriter.all)
+	}
+}

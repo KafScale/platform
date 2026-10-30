@@ -157,7 +157,7 @@ func (p *Processor) Run(ctx context.Context) error {
 
 			if !hasLease {
 				for _, seg := range segments {
-					lease, err := p.store.ClaimLease(ctx, seg.Topic, seg.Partition, ownerID)
+					lease, err := p.store.ClaimLease(ctx, seg.CheckpointTopic(), seg.Partition, ownerID)
 					if err != nil {
 						metrics.ErrorsTotal.WithLabelValues("checkpoint").Inc()
 						continue
@@ -174,11 +174,11 @@ func (p *Processor) Run(ctx context.Context) error {
 			}
 
 			for _, seg := range segments {
-				if seg.Topic != activeLease.Topic || seg.Partition != activeLease.Partition {
+				if seg.CheckpointTopic() != activeLease.Topic || seg.Partition != activeLease.Partition {
 					continue
 				}
 
-				state, err := p.store.LoadOffset(ctx, seg.Topic, seg.Partition)
+				state, err := p.store.LoadOffset(ctx, seg.CheckpointTopic(), seg.Partition)
 				if err != nil {
 					metrics.ErrorsTotal.WithLabelValues("checkpoint").Inc()
 					continue
@@ -231,7 +231,7 @@ func (p *Processor) Run(ctx context.Context) error {
 
 				last := records[len(records)-1]
 				if err := p.store.CommitOffset(ctx, checkpoint.OffsetState{
-					Topic:     last.Topic,
+					Topic:     seg.CheckpointTopic(),
 					Partition: last.Partition,
 					Offset:    last.Offset,
 					Timestamp: time.Now().UnixMilli(),

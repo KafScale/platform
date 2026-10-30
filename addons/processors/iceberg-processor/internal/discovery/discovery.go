@@ -39,11 +39,12 @@ const metadataSnapshotKey = "/kafscale/metadata/snapshot"
 
 // SegmentRef identifies a completed segment and its index.
 type SegmentRef struct {
-	Topic      string
-	Partition  int32
-	BaseOffset int64
-	SegmentKey string
-	IndexKey   string
+	Topic        string
+	StorageTopic string
+	Partition    int32
+	BaseOffset   int64
+	SegmentKey   string
+	IndexKey     string
 }
 
 // Lister discovers completed segments for topics/partitions.
@@ -140,7 +141,7 @@ func (l *s3Lister) listCompleted(ctx context.Context, filter map[string]map[int3
 			if !ok {
 				continue
 			}
-			if filter != nil && !filterAllows(filter, parsed.topic, parsed.partition) {
+			if filter != nil && !filterAllows(filter, topicName(parsed.topic), parsed.partition) {
 				continue
 			}
 
@@ -168,18 +169,12 @@ func (l *s3Lister) listCompleted(ctx context.Context, filter map[string]map[int3
 			continue
 		}
 
-		segments = append(segments, SegmentRef{
-			Topic:      key.topic,
-			Partition:  key.partition,
-			BaseOffset: key.baseOffset,
-			SegmentKey: entry.kfsKey,
-			IndexKey:   entry.indexKey,
-		})
+		segments = append(segments, newSegmentRef(key, entry))
 	}
 
 	sort.Slice(segments, func(i, j int) bool {
-		if segments[i].Topic != segments[j].Topic {
-			return segments[i].Topic < segments[j].Topic
+		if segments[i].StorageTopic != segments[j].StorageTopic {
+			return segments[i].StorageTopic < segments[j].StorageTopic
 		}
 		if segments[i].Partition != segments[j].Partition {
 			return segments[i].Partition < segments[j].Partition
@@ -385,4 +380,35 @@ func parseSegmentFile(filename string) (int64, string, bool) {
 	}
 
 	return baseOffset, kind, true
+}
+
+func topicName(storageTopic string) string {
+	i := strings.LastIndexByte(storageTopic, '@')
+	if i <= 0 || i == len(storageTopic)-1 {
+		return storageTopic
+	}
+	for _, c := range storageTopic[i+1:] {
+		if c < '0' || c > '9' {
+			return storageTopic
+		}
+	}
+	return storageTopic[:i]
+}
+
+func (s SegmentRef) CheckpointTopic() string {
+	if s.StorageTopic != "" {
+		return s.StorageTopic
+	}
+	return s.Topic
+}
+
+func newSegmentRef(key segmentKey, entry *segmentEntry) SegmentRef {
+	return SegmentRef{
+		Topic:        topicName(key.topic),
+		StorageTopic: key.topic,
+		Partition:    key.partition,
+		BaseOffset:   key.baseOffset,
+		SegmentKey:   entry.kfsKey,
+		IndexKey:     entry.indexKey,
+	}
 }
