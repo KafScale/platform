@@ -118,3 +118,67 @@ func TestTopicChangesRefreshListedTopics(t *testing.T) {
 		}
 	}
 }
+
+type blockingMetadataStore struct {
+	metadata.Store
+	calls   chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingMetadataStore) Metadata(ctx context.Context, topics []string) (*metadata.ClusterMetadata, error) {
+	s.calls <- struct{}{}
+	<-s.release
+	return s.Store.Metadata(ctx, topics)
+}
+
+func TestTopicChangeDoesNotShareEarlierRefresh(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		frame, err := protocol.ReadFrame(conn)
+		if err != nil {
+			return
+		}
+		header, _, err := protocol.ParseRequestHeader(frame.Payload)
+		if err != nil {
+			return
+		}
+		resp := kmsg.NewPtrCreateTopicsResponse()
+		resp.SetVersion(header.APIVersion)
+		_ = protocol.WriteFrame(conn, protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp))
+	}()
+	store := &blockingMetadataStore{Store: metadata.NewInMemoryStore(metadata.ClusterMetadata{}), calls: make(chan struct{}, 2), release: make(chan struct{})}
+	p := &proxy{store: store, backends: []string{listener.Addr().String()}, backendRetries: 1, dialTimeout: time.Second, cacheTTL: time.Minute, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.setReady(true)
+	earlier := make(chan struct{})
+	go func() { defer close(earlier); p.refreshMetadataCache(context.Background()) }()
+	<-store.calls
+	server, client := net.Pipe()
+	defer client.Close()
+	go p.handleConnection(context.Background(), server)
+	req := kmsg.NewPtrCreateTopicsRequest()
+	req.Version = 2
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := client.Write(kmsg.NewRequestFormatter(kmsg.FormatterClientID("client")).AppendRequest(nil, req, 1)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-store.calls:
+		close(store.release)
+	case <-time.After(2 * time.Second):
+		close(store.release)
+		t.Fatal("refresh after CreateTopics reused the refresh that started before it")
+	}
+	if _, err := protocol.ReadFrame(client); err != nil {
+		t.Fatal(err)
+	}
+	<-earlier
+}
