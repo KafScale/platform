@@ -311,6 +311,28 @@ Operational semantics:
 - Offsets are preserved inside the recovered topic so replay, validation, and downstream cutover can happen without rewriting the source topic.
 - The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
 
+### Pruning Deleted Topic Data
+
+DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`:
+
+```bash
+kafscale-cli prune
+kafscale-cli prune --topic orders --older-than 7d
+kafscale-cli prune --topic orders --older-than 7d --force
+```
+
+- `--topic` limits the run to deleted incarnations of one topic. `--older-than` limits it to incarnations deleted longer ago than the given age, such as `7d` or `24h`.
+- The output has one line per deleted incarnation with the topic, generation, S3 prefix, object count, bytes and `deleted_at`, then the totals. A dry run says that nothing was deleted.
+- Prune uses the same environment as `kafscale-cli restore`. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.
+- Each incarnation is matched by its exact prefix with a trailing slash, such as `default/orders@1/`, so it never matches `orders@10` or `orders-x`.
+- Prune only counts and deletes partition segment and index files, `<prefix><partition>/segment-<offset>.kfs` and `.index`. It skips every other key under the prefix, including LFS objects under `<prefix>lfs/`, which the LFS proxy writes for every generation of the topic.
+- Prune checks that the bucket exists before it lists anything, and fails instead of creating it.
+- Before deleting a prefix, prune reads the topic's current generation and the topic snapshot from etcd again. It refuses a prefix that belongs to the current generation or to a live topic.
+- Prune deletes the S3 objects first and removes the etcd record only after that succeeds. If listing or deleting fails for an incarnation, prune keeps its record, carries on with the others, and exits with an error. Running prune again finishes the job.
+- Prune is safe while brokers run, because brokers only write to the current generation's prefix.
+- On a bucket with versioning enabled, prune only adds delete markers. Add a lifecycle rule that expires noncurrent versions to free the space.
+- Prune does not delete LFS objects. Topics deleted before the upgrade that added generations have no record, so prune does not cover their data.
+
 ### Consumer Offsets After Restore
 
 Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:

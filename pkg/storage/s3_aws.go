@@ -122,6 +122,16 @@ func (c *awsS3Client) EnsureBucket(ctx context.Context) error {
 
 var errBucketMissing = errors.New("bucket missing")
 
+func (c *awsS3Client) CheckBucket(ctx context.Context) error {
+	if err := c.headBucket(ctx); err != nil {
+		if errors.Is(err, errBucketMissing) {
+			return fmt.Errorf("bucket %s does not exist", c.bucket)
+		}
+		return err
+	}
+	return nil
+}
+
 func (c *awsS3Client) headBucket(ctx context.Context) error {
 	_, err := c.api.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(c.bucket),
