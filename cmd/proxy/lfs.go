@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"github.com/KafScale/platform/pkg/metadata"
 	"log/slog"
@@ -383,6 +384,32 @@ func (m *lfsModule) topicStorageName(ctx context.Context, topic string) (string,
 		return "", fmt.Errorf("lookup topic generation: %w", err)
 	}
 	return metadata.TopicStorageName(topic, gen), nil
+}
+
+var errLFSGenerationChanged = errors.New("topic generation changed during upload")
+
+func (m *lfsModule) recheckStorageName(ctx context.Context, topic, storageName string) error {
+	current, err := m.topicStorageName(ctx, topic)
+	if err != nil {
+		return err
+	}
+	if current != storageName {
+		return fmt.Errorf("%w: %s is now %s", errLFSGenerationChanged, storageName, current)
+	}
+	return nil
+}
+
+func (m *lfsModule) discardUploads(ctx context.Context, uploads []orphanInfo) {
+	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var failed []orphanInfo
+	for _, upload := range uploads {
+		if err := m.s3Uploader.DeleteObject(deleteCtx, upload.Key); err != nil {
+			upload.Reason = "generation_changed_delete_failed"
+			failed = append(failed, upload)
+		}
+	}
+	m.trackOrphans(failed)
 }
 
 func (m *lfsModule) objectKeyFor(storageName string) string {

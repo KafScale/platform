@@ -240,6 +240,12 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 	if !modified {
 		return lfsRewriteResult{modified: false}, nil
 	}
+	for name, storage := range storageNames {
+		if err := m.recheckStorageName(ctx, name, storage); err != nil {
+			m.discardUploads(ctx, orphans)
+			return lfsRewriteResult{}, err
+		}
+	}
 
 	// Records have been modified in-place on the parsed ProduceRequest.
 	// The caller sets payload=nil which forces the proxy's fan-out to

@@ -23,10 +23,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -216,8 +218,8 @@ func TestRewriteProduceResolvesGenerationsBeforeUpload(t *testing.T) {
 	if _, err := m.rewriteProduceRecords(context.Background(), header, lfsProduceRequest(t, map[string]int{"orders": 2, "payments": 1, "plain": 1})); err != nil {
 		t.Fatal(err)
 	}
-	if calls.Load() != 2 {
-		t.Fatalf("expected 2 lookups, got %d", calls.Load())
+	if calls.Load() != 4 {
+		t.Fatalf("expected 2 lookups and 2 rechecks, got %d", calls.Load())
 	}
 	if len(fs3.objects) != 6 {
 		t.Fatalf("expected 6 uploads, got %d", len(fs3.objects))
@@ -267,5 +269,122 @@ func TestValidateObjectKeyShapes(t *testing.T) {
 		if err := m.lfsValidateObjectKey(key); err == nil {
 			t.Fatalf("%s accepted", key)
 		}
+	}
+}
+
+func bumpingGeneration() func(context.Context, string) (int64, error) {
+	var mu sync.Mutex
+	calls := map[string]int64{}
+	return func(ctx context.Context, topic string) (int64, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		gen := calls[topic]
+		calls[topic]++
+		return gen, nil
+	}
+}
+
+func countingBackend(t *testing.T, m *lfsModule) *atomic.Int32 {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var accepted atomic.Int32
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Add(1)
+			_ = c.Close()
+		}
+	}()
+	m.backends = []string{listener.Addr().String()}
+	m.dialTimeout = time.Second
+	m.backendRetries = 1
+	return &accepted
+}
+
+func TestRewriteProduceGenerationChangedDiscardsUploads(t *testing.T) {
+	m, fs3 := testLFSModule(t)
+	m.topicGeneration = bumpingGeneration()
+	header := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9}
+	req := lfsProduceRequest(t, map[string]int{"orders": 1})
+	_, err := m.rewriteProduceRecords(context.Background(), header, req)
+	if !errors.Is(err, errLFSGenerationChanged) {
+		t.Fatalf("expected generation changed error, got %v", err)
+	}
+	if len(fs3.objects) != 0 || len(fs3.deleted) != 2 {
+		t.Fatalf("uploads not discarded: objects=%v deleted=%v", fs3.objects, fs3.deleted)
+	}
+	for _, key := range fs3.deleted {
+		if !strings.HasPrefix(key, "test-ns/@lfs/orders/") {
+			t.Fatalf("unexpected deleted key %s", key)
+		}
+	}
+}
+
+func TestHTTPProduceGenerationChangedDiscardsUpload(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.topicGeneration = bumpingGeneration()
+	accepted := countingBackend(t, m)
+	fs3 := m.s3Uploader.api.(*fakeS3)
+	req := httptest.NewRequest(http.MethodPost, "/lfs/produce", bytes.NewReader([]byte("payload")))
+	req.Header.Set(lfsHeaderTopic, "orders")
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rr := httptest.NewRecorder()
+	m.handleHTTPProduce(rr, req)
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "metadata_unavailable") {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+	if len(fs3.objects) != 0 || len(fs3.deleted) != 1 || !strings.HasPrefix(fs3.deleted[0], "test-ns/@lfs/orders/") {
+		t.Fatalf("upload not discarded: objects=%v deleted=%v", fs3.objects, fs3.deleted)
+	}
+	if accepted.Load() != 0 {
+		t.Fatal("record was produced")
+	}
+}
+
+func TestHTTPMultipartGenerationChangedDiscardsUpload(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.topicGeneration = bumpingGeneration()
+	accepted := countingBackend(t, m)
+	fs3 := m.s3Uploader.api.(*fakeS3)
+	rr := httptest.NewRecorder()
+	m.handleHTTPUploadInit(rr, httptest.NewRequest(http.MethodPost, "/lfs/uploads", bytes.NewBufferString(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("init: %d %s", rr.Code, rr.Body.String())
+	}
+	var session *uploadSession
+	for _, s := range m.uploadSessions {
+		session = s
+	}
+	if session == nil || !strings.HasPrefix(session.S3Key, "test-ns/@lfs/orders/") {
+		t.Fatalf("unexpected session %+v", session)
+	}
+	rr = httptest.NewRecorder()
+	m.handleHTTPUploadPart(rr, httptest.NewRequest(http.MethodPut, "/", bytes.NewReader([]byte("payload"))), "part", session.ID, 1)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("part: %d %s", rr.Code, rr.Body.String())
+	}
+	fs3.objects[session.S3Key] = []byte("payload")
+	rr = httptest.NewRecorder()
+	m.handleHTTPUploadComplete(rr, httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"parts":[{"part_number":1,"etag":"test-etag"}]}`)), "complete", session.ID)
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "metadata_unavailable") {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+	if len(fs3.objects) != 0 || len(fs3.deleted) != 1 || fs3.deleted[0] != session.S3Key {
+		t.Fatalf("upload not discarded: objects=%v deleted=%v", fs3.objects, fs3.deleted)
+	}
+	if _, ok := m.lfsGetUploadSession(session.ID); ok {
+		t.Fatal("session kept")
+	}
+	if accepted.Load() != 0 {
+		t.Fatal("record was produced")
 	}
 }

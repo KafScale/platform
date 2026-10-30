@@ -125,6 +125,7 @@ type uploadSession struct {
 	ID             string
 	Topic          string
 	S3Key          string
+	StorageName    string
 	UploadID       string
 	ContentType    string
 	SizeBytes      int64
@@ -292,11 +293,12 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusBadRequest, "invalid_checksum", "checksum provided but checksum algorithm is none")
 		return
 	}
-	objectKey, err := m.buildObjectKey(r.Context(), topic)
+	storageName, err := m.topicStorageName(r.Context(), topic)
 	if err != nil {
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
+	objectKey := m.objectKeyFor(storageName)
 	clientIP := lfsGetClientIP(r)
 	contentType := r.Header.Get("Content-Type")
 
@@ -323,6 +325,14 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		m.metrics.IncRequests(topic, "error", "lfs")
 		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "checksum_mismatch", (&lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}).Error(), "validation", size, time.Since(start))
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusBadRequest, "checksum_mismatch", (&lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}).Error())
+		return
+	}
+
+	if err := m.recheckStorageName(r.Context(), topic, storageName); err != nil {
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}})
+		m.metrics.IncRequests(topic, "error", "lfs")
+		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "metadata_unavailable", err.Error(), "generation_check", size, time.Since(start))
+		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
 
@@ -766,11 +776,12 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	objectKey, err := m.buildObjectKey(r.Context(), req.Topic)
+	storageName, err := m.topicStorageName(r.Context(), req.Topic)
 	if err != nil {
 		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
+	objectKey := m.objectKeyFor(storageName)
 	uploadID, err := m.s3Uploader.StartMultipartUpload(r.Context(), objectKey, req.ContentType)
 	if err != nil {
 		m.metrics.IncS3Errors()
@@ -784,6 +795,7 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		ID:           newLFSUUID(),
 		Topic:        req.Topic,
 		S3Key:        objectKey,
+		StorageName:  storageName,
 		UploadID:     uploadID,
 		ContentType:  req.ContentType,
 		SizeBytes:    req.SizeBytes,
@@ -1022,6 +1034,14 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	if session.Checksum != "" && checksum != "" && !strings.EqualFold(session.Checksum, checksum) {
 		_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "checksum_mismatch", "checksum mismatch")
+		return
+	}
+
+	if err := m.recheckStorageName(r.Context(), session.Topic, session.StorageName); err != nil {
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}})
+		m.lfsDeleteUploadSession(sessionID)
+		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "metadata_unavailable", err.Error(), "generation_check", session.TotalUploaded, 0)
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
 

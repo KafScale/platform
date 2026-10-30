@@ -169,7 +169,7 @@ func TestLFSHTTPMultipartBrokerRejection(t *testing.T) {
 		r.Topics = []kmsg.ProduceResponseTopic{{Topic: "allowed", Partitions: []kmsg.ProduceResponseTopicPartition{{Partition: 0, ErrorCode: 29}}}}
 		_ = protocol.WriteFrame(c, protocol.EncodeResponse(header.CorrelationID, 9, r))
 	}()
-	session := &uploadSession{ID: "session", Topic: "allowed", S3Key: "object", UploadID: "upload", SizeBytes: 1, TotalUploaded: 1, ExpiresAt: time.Now().Add(time.Hour), Parts: map[int32]string{1: "etag"}, sha256Hasher: sha256.New(), ChecksumAlg: lfs.ChecksumNone}
+	session := &uploadSession{ID: "session", Topic: "allowed", StorageName: "allowed", S3Key: "object", UploadID: "upload", SizeBytes: 1, TotalUploaded: 1, ExpiresAt: time.Now().Add(time.Hour), Parts: map[int32]string{1: "etag"}, sha256Hasher: sha256.New(), ChecksumAlg: lfs.ChecksumNone}
 	m.lfsStoreUploadSession(session)
 	request := httptest.NewRequest("POST", "/lfs/uploads/session/complete", bytes.NewBufferString(`{"parts":[{"part_number":1,"etag":"etag"}]}`))
 	recorder := httptest.NewRecorder()
