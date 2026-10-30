@@ -621,6 +621,7 @@ LoadBalancer annotations or an external TCP gateway (see
 Recommended settings:
 - Run 2+ proxy replicas behind a LoadBalancer service.
 - Point the proxy at etcd via `KAFSCALE_PROXY_ETCD_ENDPOINTS` so it can read the cluster snapshot.
+- After the proxy forwards CreateTopics, CreatePartitions or DeleteTopics, it reads the snapshot again, so the next topic list shows the change. Only the proxy replica that forwarded the request does this. Other replicas pick up the change from the etcd watch, usually within milliseconds but not instantly, so a topic list through another replica right after a create or delete can briefly be stale.
 - Set `KAFSCALE_PROXY_ADVERTISED_HOST`/`KAFSCALE_PROXY_ADVERTISED_PORT` to the public DNS + port clients should use.
 
 Helm values to enable:
