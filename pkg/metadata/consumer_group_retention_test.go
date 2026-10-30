@@ -125,7 +125,7 @@ func TestConsumerGroupRetentionClockReset(t *testing.T) {
 			if emptySince(saved).Before(time.Now().Add(-time.Minute)) {
 				t.Fatal("raw commit did not reset clock")
 			}
-			if err := CommitConsumerOffsetIfGroupExists(ctx, store, "clock", "orders", 0, 8, ""); err != nil {
+			if err := CommitConsumerOffsetIfGroupExists(ctx, store, "clock", 0, "orders", 0, 8, ""); err != nil {
 				t.Fatal(err)
 			}
 			saved, _ = store.FetchConsumerGroup(ctx, "clock")
@@ -270,7 +270,7 @@ func TestRetentionCommitFencesAndStoreErrors(t *testing.T) {
 			}
 			defer client.Close()
 			store := &EtcdStore{client: client}
-			err = store.CommitConsumerOffsetIfGroupExists(ctx, id, "orders", 0, 99, "")
+			err = store.CommitConsumerOffsetIfGroupExists(ctx, id, 0, "orders", 0, 99, "")
 			if mode == "changed" {
 				if !errors.Is(err, ErrConsumerGroupChanged) || attempts != 3 {
 					t.Fatalf("unbounded or unfenced retry: attempts=%d err=%v", attempts, err)

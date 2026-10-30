@@ -42,20 +42,31 @@ func (s pausedCommitStore) CommitConsumerOffset(ctx context.Context, group, topi
 	return s.EtcdStore.CommitConsumerOffset(ctx, group, topic, partition, offset, meta)
 }
 
-func (s pausedCommitStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, meta string) error {
+func (s pausedCommitStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, meta string) error {
 	s.pause()
-	return s.EtcdStore.CommitConsumerOffsetIfGroupExists(ctx, group, topic, partition, offset, meta)
+	return s.EtcdStore.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, topic, partition, offset, meta)
 }
 
 func TestOffsetCommitAfterDeleteGroupsFails(t *testing.T) {
+	for _, recreate := range []bool{false, true} {
+		t.Run(map[bool]string{false: "deleted", true: "recreated"}[recreate], func(t *testing.T) {
+			testOffsetCommitAfterDeleteGroups(t, recreate)
+		})
+	}
+}
+
+func testOffsetCommitAfterDeleteGroups(t *testing.T, recreate bool) {
 	ctx := context.Background()
 	etcd, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = etcd.Close() })
-	members := map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: time.Now().UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000}}
-	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
+	group := func() *metadatapb.ConsumerGroup {
+		members := map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: time.Now().UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000}}
+		return &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}
+	}
+	if err := etcd.PutConsumerGroup(ctx, group()); err != nil {
 		t.Fatal(err)
 	}
 	store := pausedCommitStore{EtcdStore: etcd, reached: make(chan struct{}), release: make(chan struct{})}
@@ -89,13 +100,18 @@ func TestOffsetCommitAfterDeleteGroupsFails(t *testing.T) {
 	if resp, err := c.DeleteGroups(ctx, del); err != nil || resp.Groups[0].ErrorCode != 0 {
 		t.Fatal(resp, err)
 	}
+	if recreate {
+		if err := etcd.PutConsumerGroup(ctx, group()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	close(store.release)
 	resp := <-done
 	if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.UNKNOWN_MEMBER_ID {
 		t.Fatalf("late commit returned %d", code)
 	}
-	if group, err := etcd.FetchConsumerGroup(ctx, "g"); err != nil || group != nil {
-		t.Fatal("group came back", group, err)
+	if saved, err := etcd.FetchConsumerGroup(ctx, "g"); err != nil || (saved != nil) != recreate {
+		t.Fatal("unexpected group", saved, err)
 	}
 	if offsets, err := etcd.ListGroupConsumerOffsets(ctx, "g"); err != nil || len(offsets) != 0 {
 		t.Fatal("offset survived", offsets, err)

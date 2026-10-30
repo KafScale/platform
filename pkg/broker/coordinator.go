@@ -100,6 +100,7 @@ type groupState struct {
 
 	rebalanceTimeout  time.Duration
 	rebalanceDeadline time.Time
+	createRevision    int64
 }
 
 type pendingJoin struct {
@@ -546,12 +547,15 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 	}
 
 	groupErr := int16(protocol.NONE)
+	createRevision := int64(0)
 	if state == nil {
 		groupErr = protocol.UNKNOWN_MEMBER_ID
 	} else if _, ok := state.members[req.MemberID]; !ok {
 		groupErr = protocol.UNKNOWN_MEMBER_ID
 	} else if req.Generation != state.generationID {
 		groupErr = protocol.ILLEGAL_GENERATION
+	} else {
+		createRevision = state.createRevision
 	}
 	c.mu.Unlock()
 
@@ -568,7 +572,7 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 				if part.Metadata != nil {
 					meta = *part.Metadata
 				}
-				if err := metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, topic.Topic, part.Partition, part.Offset, meta); err != nil {
+				if err := metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, topic.Topic, part.Partition, part.Offset, meta); err != nil {
 					code = protocol.UNKNOWN_SERVER_ERROR
 					if errors.Is(err, metadata.ErrConsumerGroupDeleted) {
 						code = protocol.UNKNOWN_MEMBER_ID
@@ -831,7 +835,7 @@ func (c *GroupCoordinator) loadGroupIfMissing(ctx context.Context, groupID strin
 	if state, ok := c.groups[groupID]; ok {
 		return state, nil
 	}
-	group, err := c.store.FetchConsumerGroup(ctx, groupID)
+	group, createRevision, err := metadata.FetchConsumerGroupRevision(ctx, c.store, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -839,13 +843,18 @@ func (c *GroupCoordinator) loadGroupIfMissing(ctx context.Context, groupID strin
 		return nil, nil
 	}
 	state := restoreGroupState(group)
+	state.createRevision = createRevision
 	c.groups[groupID] = state
 	return state, nil
 }
 
 func (c *GroupCoordinator) persistGroupLocked(ctx context.Context, groupID string, state *groupState) error {
-	group := buildConsumerGroup(groupID, state)
-	return c.store.PutConsumerGroup(ctx, group)
+	createRevision, err := metadata.PutConsumerGroupRevision(ctx, c.store, buildConsumerGroup(groupID, state))
+	if err != nil {
+		return err
+	}
+	state.createRevision = createRevision
+	return nil
 }
 
 func buildConsumerGroup(groupID string, state *groupState) *metadatapb.ConsumerGroup {
