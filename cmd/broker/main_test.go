@@ -906,8 +906,8 @@ func TestProduceBackpressureUnavailable(t *testing.T) {
 	}
 	produceResp := decodeKmsgResponse(t, 0, resp, kmsg.NewPtrProduceResponse)
 	code := produceResp.Topics[0].Partitions[0].ErrorCode
-	if code != protocol.UNKNOWN_SERVER_ERROR {
-		t.Fatalf("expected unknown server error, got %d", code)
+	if code != protocol.KAFKA_STORAGE_ERROR {
+		t.Fatalf("expected kafka storage error, got %d", code)
 	}
 }
 
@@ -959,8 +959,8 @@ func TestFetchBackpressureUnavailable(t *testing.T) {
 	}
 	fetchResp := decodeKmsgResponse(t, 11, resp, kmsg.NewPtrFetchResponse)
 	code := fetchResp.Topics[0].Partitions[0].ErrorCode
-	if code != protocol.UNKNOWN_SERVER_ERROR {
-		t.Fatalf("expected unknown server error, got %d", code)
+	if code != protocol.KAFKA_STORAGE_ERROR {
+		t.Fatalf("expected kafka storage error, got %d", code)
 	}
 }
 
@@ -1720,5 +1720,72 @@ func TestOffsetsRetentionConfiguration(t *testing.T) {
 				t.Fatalf("got %s want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestProduceBackpressureErrorMessages(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(h *handler)
+		code    int16
+		message string
+	}{
+		{"degraded", func(h *handler) { h.s3Health.RecordUpload(2*time.Millisecond, nil) }, protocol.REQUEST_TIMED_OUT, "object storage degraded, retry later"},
+		{"unavailable", func(h *handler) {
+			for i := 0; i < 2; i++ {
+				h.s3Health.RecordOperation("upload", time.Millisecond, errors.New("boom"))
+			}
+		}, protocol.KAFKA_STORAGE_ERROR, "object storage unavailable, retry later"},
+		{"append failure", func(*handler) {}, protocol.KAFKA_STORAGE_ERROR, "object storage request failed, retry later"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "degraded" {
+				t.Setenv("KAFSCALE_S3_LATENCY_WARN_MS", "1")
+				t.Setenv("KAFSCALE_S3_LATENCY_CRIT_MS", "60000")
+				t.Setenv("KAFSCALE_S3_ERROR_RATE_CRIT", "2.0")
+			} else {
+				t.Setenv("KAFSCALE_S3_ERROR_RATE_CRIT", "0.1")
+			}
+			store := metadata.NewInMemoryStore(defaultMetadata())
+			h := newHandler(store, &failingS3Client{}, protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+			tc.setup(h)
+			req := &kmsg.ProduceRequest{
+				Version:       9,
+				Acks:          -1,
+				TimeoutMillis: 100,
+				Topics: []kmsg.ProduceRequestTopic{{
+					Topic:      "orders",
+					Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: testBatchBytes(0, 0, 1)}},
+				}},
+			}
+			resp, err := h.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 20, APIVersion: 9}, req)
+			if err != nil {
+				t.Fatalf("handleProduce: %v", err)
+			}
+			part := decodeKmsgResponse(t, 9, resp, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+			if part.ErrorCode != tc.code || part.ErrorMessage == nil || *part.ErrorMessage != tc.message {
+				t.Fatalf("got code %d message %v, want %d %q", part.ErrorCode, part.ErrorMessage, tc.code, tc.message)
+			}
+		})
+	}
+}
+
+func TestFetchRestoreFailureReturnsStorageError(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newHandler(store, &failingS3Client{}, protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+	req := &kmsg.FetchRequest{
+		Topics: []kmsg.FetchRequestTopic{{
+			Topic:      "orders",
+			Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 0, PartitionMaxBytes: 1024}},
+		}},
+	}
+	resp, err := h.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 21, APIVersion: 11}, req)
+	if err != nil {
+		t.Fatalf("handleFetch: %v", err)
+	}
+	code := decodeKmsgResponse(t, 11, resp, kmsg.NewPtrFetchResponse).Topics[0].Partitions[0].ErrorCode
+	if code != protocol.KAFKA_STORAGE_ERROR {
+		t.Fatalf("expected kafka storage error, got %d", code)
 	}
 }
