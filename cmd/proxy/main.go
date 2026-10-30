@@ -761,6 +761,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			}
 		}
 		if changesTopics(header.APIKey) {
+			p.metaFlight.Forget("refresh")
 			p.refreshMetadataCache(ctx)
 		}
 		writeResponse(resp)
