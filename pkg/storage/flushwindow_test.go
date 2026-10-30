@@ -23,21 +23,11 @@ import (
 	"github.com/KafScale/platform/pkg/cache"
 )
 
-// TestPartitionLogFlushWindowOffsetReadable documents and guards the flush
-// window: prepareFlush drains the buffer and builds a segment artifact, but the
-// segment is not registered in l.segments until uploadFlush commits it after the
-// S3 upload completes. Between those two steps an acknowledged offset is in
-// neither the buffer (drained) nor a committed segment.
-//
-// This test drives that exact window by calling prepareFlush directly and then
-// reading a drained offset before uploadFlush commits. It asserts the drained
-// batches stay readable during the window so an in-flight flush never makes an
-// acknowledged record briefly unreadable.
+// An explicit Flush must keep acknowledged buffered offsets readable for the
+// entire upload, before publishing the staged segment.
 func TestPartitionLogFlushWindowOffsetReadable(t *testing.T) {
-	s3 := NewMemoryS3Client()
+	s3 := &slowUploadS3{MemoryS3Client: NewMemoryS3Client(), started: make(chan struct{}), release: make(chan struct{})}
 	c := cache.NewSegmentCache(1 << 20)
-	// Thresholds that never auto-trip; we drive prepareFlush by hand to land
-	// precisely in the window.
 	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
 		Buffer:  WriteBufferConfig{MaxBytes: 1 << 30},
 		Segment: SegmentWriterConfig{IndexIntervalMessages: 1},
@@ -54,17 +44,16 @@ func TestPartitionLogFlushWindowOffsetReadable(t *testing.T) {
 		}
 	}
 
-	// Enter the flush window: drain the buffer into an artifact, mark flushing,
-	// but do NOT yet commit the segment to l.segments (that is uploadFlush's job).
-	log.mu.Lock()
-	artifact, err := log.prepareFlush()
-	log.mu.Unlock()
-	if err != nil {
-		t.Fatalf("prepareFlush: %v", err)
-	}
-	if artifact == nil {
-		t.Fatalf("prepareFlush returned no artifact; nothing was buffered")
-	}
+	done := make(chan error, 1)
+	go func() { done <- log.Flush(context.Background()) }()
+	<-s3.started
+	defer func() {
+		select {
+		case <-s3.release:
+		default:
+			close(s3.release)
+		}
+	}()
 
 	// During the window every acknowledged offset must still be readable.
 	for off := int64(0); off < n; off++ {
@@ -72,7 +61,7 @@ func TestPartitionLogFlushWindowOffsetReadable(t *testing.T) {
 		if err != nil {
 			if errors.Is(err, ErrOffsetOutOfRange) {
 				t.Fatalf("flush window: acknowledged offset %d is unreadable while a flush is in flight "+
-					"(drained from buffer, segment not yet committed)", off)
+					"(segment not yet committed)", off)
 			}
 			t.Fatalf("Read offset %d during flush window: %v", off, err)
 		}
@@ -82,8 +71,9 @@ func TestPartitionLogFlushWindowOffsetReadable(t *testing.T) {
 	}
 
 	// Complete the flush; the offsets must remain readable afterwards.
-	if err := log.uploadFlush(context.Background(), artifact); err != nil {
-		t.Fatalf("uploadFlush: %v", err)
+	close(s3.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Flush: %v", err)
 	}
 	for off := int64(0); off < n; off++ {
 		data, err := log.Read(context.Background(), off, 1<<20)

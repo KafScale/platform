@@ -319,9 +319,11 @@ func TestPartitionLogFlushWaitsForInflight(t *testing.T) {
 
 	// Append batch 1 while the first flush is in progress.
 	batch1, _ := NewRecordBatchFromBytes(makeBatchBytes(1, 0, 1, 0x02))
-	if _, err := log.AppendBatch(context.Background(), batch1); err != nil {
-		t.Fatalf("AppendBatch 1: %v", err)
-	}
+	appendDone := make(chan error, 1)
+	go func() {
+		_, err := log.AppendBatch(context.Background(), batch1)
+		appendDone <- err
+	}()
 
 	// Start second Flush — it must block until first completes.
 	errCh2 := make(chan error, 1)
@@ -338,6 +340,15 @@ func TestPartitionLogFlushWaitsForInflight(t *testing.T) {
 	}
 	if err := <-errCh2; err != nil {
 		t.Fatalf("second Flush: %v", err)
+	}
+
+	if err := <-appendDone; err != nil {
+		t.Fatal(err)
+	}
+	// The waiting append and second Flush may acquire the writer lock in either
+	// order. Flush once more to persist a batch that arrived after that Flush.
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 
 	// Both batches must have been flushed (two onFlush callbacks).
@@ -366,7 +377,7 @@ func (s *slowUploadS3) UploadSegment(ctx context.Context, key string, body []byt
 	return s.MemoryS3Client.UploadSegment(ctx, key, body)
 }
 
-func TestPartitionLogFlushErrorClearsFlushing(t *testing.T) {
+func TestPartitionLogFlushErrorPreservesBuffer(t *testing.T) {
 	failingS3 := &failingUploadS3{MemoryS3Client: NewMemoryS3Client()}
 	log := NewPartitionLog("default", "orders", 0, 0, failingS3, nil, PartitionLogConfig{
 		Buffer: WriteBufferConfig{
@@ -388,12 +399,19 @@ func TestPartitionLogFlushErrorClearsFlushing(t *testing.T) {
 		t.Fatalf("expected flush to fail")
 	}
 
-	// flushing flag should be cleared so a subsequent flush can proceed.
-	log.mu.Lock()
-	if log.flushing {
-		t.Fatalf("expected flushing flag to be false after failed upload")
+	if next := log.BufferedHighWatermark(); next != 1 {
+		t.Fatal(next)
 	}
-	log.mu.Unlock()
+	if data, err := log.Read(context.Background(), 0, 1<<20); err != nil || len(data) != len(batchData) {
+		t.Fatalf("failed flush lost buffered data: %x, %v", data, err)
+	}
+	log.s3 = failingS3.MemoryS3Client
+	if err := log.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := log.Read(context.Background(), 0, 1<<20); err != nil || len(data) != len(batchData) {
+		t.Fatalf("flush retry lost buffered data: %x, %v", data, err)
+	}
 }
 
 // failingUploadS3 wraps MemoryS3Client but fails all uploads.

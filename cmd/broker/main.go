@@ -1128,21 +1128,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				partitionResponses = append(partitionResponses, p)
 				continue
 			}
-			var result *storage.AppendResult
-			var messageCount int32
-			for _, batch := range batches {
-				var appended *storage.AppendResult
-				appended, err = plog.AppendBatch(ctx, batch)
-				if err != nil {
-					break
-				}
-				if result == nil {
-					result = appended
-				} else {
-					result.LastOffset = appended.LastOffset
-				}
-				messageCount += batch.MessageCount
-			}
+			result, err := plog.AppendBatches(ctx, batches, req.Acks != 0 && h.flushOnAck)
 			if err != nil {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
@@ -1153,16 +1139,6 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				}
 				continue
 			}
-			if req.Acks != 0 && h.flushOnAck {
-				if err := plog.Flush(ctx); err != nil {
-					h.logger.Error("flush failed", "error", err, "topic", topic.Topic, "partition", part.Partition)
-					p := kmsg.NewProduceResponseTopicPartition()
-					p.Partition = part.Partition
-					p.ErrorCode = h.backpressureErrorCode()
-					partitionResponses = append(partitionResponses, p)
-					continue
-				}
-			}
 			p := kmsg.NewProduceResponseTopicPartition()
 			p.Partition = part.Partition
 			p.ErrorCode = 0
@@ -1170,7 +1146,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			p.LogAppendTime = now
 			p.LogStartOffset = 0
 			partitionResponses = append(partitionResponses, p)
-			producedMessages += int64(messageCount)
+			for _, batch := range batches {
+				producedMessages += int64(batch.MessageCount)
+			}
 			if h.traceKafka {
 				h.logger.Debug("produce append success", "topic", topic.Topic, "partition", part.Partition, "base_offset", result.BaseOffset, "last_offset", result.LastOffset)
 			}
