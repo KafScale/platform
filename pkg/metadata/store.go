@@ -478,7 +478,7 @@ func (s *InMemoryStore) DeleteTopic(ctx context.Context, name string) error {
 
 // CommitConsumerOffset implements Store.CommitConsumerOffset.
 func (s *InMemoryStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false)
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false, false)
 }
 
 // FetchConsumerOffset implements Store.FetchConsumerOffset.
