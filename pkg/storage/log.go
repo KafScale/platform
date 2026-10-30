@@ -73,6 +73,7 @@ type segmentRange struct {
 
 // ErrOffsetOutOfRange is returned when the requested offset is outside persisted data.
 var ErrOffsetOutOfRange = errors.New("offset out of range")
+var ErrObjectStorage = errors.New("object storage request failed")
 
 // NewPartitionLog constructs a log for a topic partition.
 func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
@@ -309,7 +310,7 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		return nil, err
 	}
 	if err := l.discardFailedUpload(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrObjectStorage, err)
 	}
 	l.mu.Lock()
 	baseOffset := l.nextOffset
@@ -347,7 +348,7 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		// Produce deadline expired. The successful path incurs no DELETEs.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		return nil, errors.Join(err, l.discardFailedUpload(cleanupCtx))
+		return nil, fmt.Errorf("%w: %w", ErrObjectStorage, errors.Join(err, l.discardFailedUpload(cleanupCtx)))
 	}
 	if l.cache != nil && l.cfg.CacheEnabled {
 		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)

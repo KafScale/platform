@@ -638,7 +638,12 @@ func brokerByID(brokers []protocol.MetadataBroker, id int32) (protocol.MetadataB
 	return protocol.MetadataBroker{}, false
 }
 
-var errObjectStorage = errors.New("object storage request failed")
+func downConvertStorageError(code int16) int16 {
+	if code == protocol.KAFKA_STORAGE_ERROR {
+		return protocol.NOT_LEADER_OR_FOLLOWER
+	}
+	return code
+}
 
 func (h *handler) backpressureErrorCode() int16 {
 	code, _ := h.backpressureError()
@@ -1135,7 +1140,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 				if errors.Is(err, metadata.ErrInvalidTopic) {
 					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
-				} else if errors.Is(err, errObjectStorage) {
+				} else if errors.Is(err, storage.ErrObjectStorage) {
 					code, message := h.backpressureError()
 					p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
 				}
@@ -1146,8 +1151,11 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			if err != nil {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
-				code, message := h.backpressureError()
-				p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
+				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				if errors.Is(err, storage.ErrObjectStorage) {
+					code, message := h.backpressureError()
+					p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
+				}
 				partitionResponses = append(partitionResponses, p)
 				if h.traceKafka {
 					h.logger.Debug("produce append failed", "topic", topic.Topic, "partition", part.Partition, "error", err)
@@ -1182,6 +1190,14 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 		return nil, nil
 	}
 
+	if header.APIVersion < 4 {
+		for i := range topicResponses {
+			for j := range topicResponses[i].Partitions {
+				p := &topicResponses[i].Partitions[j]
+				p.ErrorCode = downConvertStorageError(p.ErrorCode)
+			}
+		}
+	}
 	resp := kmsg.NewPtrProduceResponse()
 	resp.Topics = topicResponses
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
@@ -1816,6 +1832,8 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
 				case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 					p.ErrorCode = protocol.REQUEST_TIMED_OUT
+				case errors.Is(err, storage.ErrObjectStorage):
+					p.ErrorCode = protocol.KAFKA_STORAGE_ERROR
 				default:
 					p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 				}
@@ -1973,7 +1991,7 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 					errorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, metadata.ErrInvalidTopic) {
 					errorCode = protocol.INVALID_TOPIC_EXCEPTION
-				} else if errors.Is(err, errObjectStorage) {
+				} else if errors.Is(err, storage.ErrObjectStorage) {
 					errorCode = h.backpressureErrorCode()
 				}
 				p := kmsg.NewFetchResponseTopicPartition()
@@ -2069,6 +2087,14 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 		topicResponses = append(topicResponses, t)
 	}
 
+	if header.APIVersion <= 5 {
+		for i := range topicResponses {
+			for j := range topicResponses[i].Partitions {
+				p := &topicResponses[i].Partitions[j]
+				p.ErrorCode = downConvertStorageError(p.ErrorCode)
+			}
+		}
+	}
 	resp := kmsg.NewPtrFetchResponse()
 	resp.Topics = topicResponses
 	return resp, fetchedMessages, nil
@@ -2143,7 +2169,7 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			lastOffset, err := plog.RestoreFromS3(ctx)
 			if err != nil {
 				h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
-				return nil, fmt.Errorf("%w: %w", errObjectStorage, err)
+				return nil, fmt.Errorf("%w: %w", storage.ErrObjectStorage, err)
 			}
 			if lastOffset >= nextOffset {
 				if err := h.store.UpdateOffsets(ctx, topic, partition, lastOffset); err != nil {

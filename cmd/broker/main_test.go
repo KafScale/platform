@@ -889,6 +889,7 @@ func TestProduceBackpressureUnavailable(t *testing.T) {
 	handler := newHandler(store, &failingS3Client{}, brokerInfo, testLogger())
 
 	req := &kmsg.ProduceRequest{
+		Version:       9,
 		Acks:          -1,
 		TimeoutMillis: 100,
 		Topics: []kmsg.ProduceRequestTopic{
@@ -900,11 +901,11 @@ func TestProduceBackpressureUnavailable(t *testing.T) {
 			},
 		},
 	}
-	resp, err := handler.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 10}, req)
+	resp, err := handler.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 10, APIVersion: 9}, req)
 	if err != nil {
 		t.Fatalf("handleProduce: %v", err)
 	}
-	produceResp := decodeKmsgResponse(t, 0, resp, kmsg.NewPtrProduceResponse)
+	produceResp := decodeKmsgResponse(t, 9, resp, kmsg.NewPtrProduceResponse)
 	code := produceResp.Topics[0].Partitions[0].ErrorCode
 	if code != protocol.KAFKA_STORAGE_ERROR {
 		t.Fatalf("expected kafka storage error, got %d", code)
@@ -1787,5 +1788,121 @@ func TestFetchRestoreFailureReturnsStorageError(t *testing.T) {
 	code := decodeKmsgResponse(t, 11, resp, kmsg.NewPtrFetchResponse).Topics[0].Partitions[0].ErrorCode
 	if code != protocol.KAFKA_STORAGE_ERROR {
 		t.Fatalf("expected kafka storage error, got %d", code)
+	}
+}
+
+func produceStorageFailure(t *testing.T, version int16) int16 {
+	t.Helper()
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newHandler(store, &failingS3Client{}, protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+	req := &kmsg.ProduceRequest{
+		Version:       version,
+		Acks:          -1,
+		TimeoutMillis: 100,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic:      "orders",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: testBatchBytes(0, 0, 1)}},
+		}},
+	}
+	resp, err := h.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 30, APIVersion: version}, req)
+	if err != nil {
+		t.Fatalf("handleProduce: %v", err)
+	}
+	return decodeKmsgResponse(t, version, resp, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0].ErrorCode
+}
+
+func fetchStorageFailure(t *testing.T, version int16) int16 {
+	t.Helper()
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newHandler(store, &failingS3Client{}, protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+	req := &kmsg.FetchRequest{
+		Version: version,
+		Topics: []kmsg.FetchRequestTopic{{
+			Topic:      "orders",
+			Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 0, PartitionMaxBytes: 1024}},
+		}},
+	}
+	resp, err := h.handleFetch(context.Background(), &protocol.RequestHeader{CorrelationID: 31, APIVersion: version}, req)
+	if err != nil {
+		t.Fatalf("handleFetch: %v", err)
+	}
+	return decodeKmsgResponse(t, version, resp, kmsg.NewPtrFetchResponse).Topics[0].Partitions[0].ErrorCode
+}
+
+func TestStorageErrorDownConvertsForOldVersions(t *testing.T) {
+	for _, tc := range []struct {
+		api     string
+		version int16
+		want    int16
+	}{
+		{"produce", 0, protocol.NOT_LEADER_OR_FOLLOWER},
+		{"produce", 3, protocol.NOT_LEADER_OR_FOLLOWER},
+		{"produce", 4, protocol.KAFKA_STORAGE_ERROR},
+		{"produce", 9, protocol.KAFKA_STORAGE_ERROR},
+		{"fetch", 4, protocol.NOT_LEADER_OR_FOLLOWER},
+		{"fetch", 5, protocol.NOT_LEADER_OR_FOLLOWER},
+		{"fetch", 6, protocol.KAFKA_STORAGE_ERROR},
+		{"fetch", 11, protocol.KAFKA_STORAGE_ERROR},
+	} {
+		t.Run(fmt.Sprintf("%s-v%d", tc.api, tc.version), func(t *testing.T) {
+			var got int16
+			if tc.api == "produce" {
+				got = produceStorageFailure(t, tc.version)
+			} else {
+				got = fetchStorageFailure(t, tc.version)
+			}
+			if got != tc.want {
+				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestListOffsetsEarliestStorageFailure(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newHandler(store, &failingS3Client{}, protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+	for _, version := range []int16{0, 1, 4} {
+		req := &kmsg.ListOffsetsRequest{
+			Version: version,
+			Topics: []kmsg.ListOffsetsRequestTopic{{
+				Topic:      "orders",
+				Partitions: []kmsg.ListOffsetsRequestTopicPartition{{Partition: 0, Timestamp: -2, CurrentLeaderEpoch: -1}},
+			}},
+		}
+		resp, err := h.handleListOffsets(context.Background(), &protocol.RequestHeader{CorrelationID: 32, APIVersion: version}, req)
+		if err != nil {
+			t.Fatalf("handleListOffsets: %v", err)
+		}
+		code := decodeKmsgResponse(t, version, resp, kmsg.NewPtrListOffsetsResponse).Topics[0].Partitions[0].ErrorCode
+		if code != protocol.KAFKA_STORAGE_ERROR {
+			t.Fatalf("v%d: got %d, want %d", version, code, protocol.KAFKA_STORAGE_ERROR)
+		}
+	}
+}
+
+func TestProduceAppendNonStorageErrorStaysUnknown(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newHandler(store, storage.NewMemoryS3Client(), protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+	if _, err := h.getPartitionLog(context.Background(), "orders", 0); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := &kmsg.ProduceRequest{
+		Version:       9,
+		Acks:          -1,
+		TimeoutMillis: 100,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic:      "orders",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: testBatchBytes(0, 0, 1)}},
+		}},
+	}
+	resp, err := h.handleProduce(ctx, &protocol.RequestHeader{CorrelationID: 33, APIVersion: 9}, req)
+	if err != nil {
+		t.Fatalf("handleProduce: %v", err)
+	}
+	part := decodeKmsgResponse(t, 9, resp, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+	if part.ErrorCode != protocol.UNKNOWN_SERVER_ERROR || part.ErrorMessage != nil {
+		t.Fatalf("got code %d message %v, want %d and no message", part.ErrorCode, part.ErrorMessage, protocol.UNKNOWN_SERVER_ERROR)
 	}
 }

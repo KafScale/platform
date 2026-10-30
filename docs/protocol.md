@@ -48,7 +48,9 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 `ListOffsets` does not auto-create topics, regardless of the broker's auto-create
 setting. Earliest and latest lookups return `UNKNOWN_TOPIC_OR_PARTITION` for
 missing topics or partitions. Deadline/cancellation errors return
-`REQUEST_TIMED_OUT`; other failures return `UNKNOWN_SERVER_ERROR`. Failed lookups
+`REQUEST_TIMED_OUT`. An earliest lookup that cannot load the partition from S3
+returns `KAFKA_STORAGE_ERROR` on every version, as Kafka does. Other failures
+return `UNKNOWN_SERVER_ERROR`. Failed lookups
 emit warning logs with topic, partition, requested timestamp, error code, and cause.
 
 ## Explicitly Unsupported
