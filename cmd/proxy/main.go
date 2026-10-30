@@ -760,8 +760,19 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				return
 			}
 		}
+		if changesTopics(header.APIKey) {
+			p.refreshMetadataCache(ctx)
+		}
 		writeResponse(resp)
 	}
+}
+
+func changesTopics(apiKey int16) bool {
+	switch apiKey {
+	case protocol.APIKeyCreateTopics, protocol.APIKeyDeleteTopics, protocol.APIKeyCreatePartitions:
+		return true
+	}
+	return false
 }
 
 // connPool is a per-client-connection pool of backend TCP connections, keyed by
