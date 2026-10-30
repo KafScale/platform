@@ -137,7 +137,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		if h.autoCreateTopics && len(topicNames) > 0 {
 			for _, name := range topicNames {
-				if strings.TrimSpace(name) == "" {
+				if metadata.ValidateTopicName(name) != nil {
 					continue
 				}
 				if !h.allowTopic(principal, name, acl.ActionProduce) && !h.allowAdmin(principal) {
@@ -1125,6 +1125,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				if errors.Is(err, metadata.ErrInvalidTopic) {
+					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				}
 				partitionResponses = append(partitionResponses, p)
 				continue
 			}
@@ -1327,7 +1330,10 @@ func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.Reque
 }
 
 func (h *handler) validateCreateTopic(ctx context.Context, topic kmsg.CreateTopicsRequestTopic) error {
-	if topic.Topic == "" || topic.NumPartitions <= 0 {
+	if err := metadata.ValidateTopicName(topic.Topic); err != nil {
+		return err
+	}
+	if topic.NumPartitions <= 0 {
 		return metadata.ErrInvalidTopic
 	}
 	replicationFactor := topic.ReplicationFactor
@@ -1953,6 +1959,8 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				errorCode := int16(protocol.UNKNOWN_SERVER_ERROR)
 				if !h.etcdAvailable() {
 					errorCode = protocol.REQUEST_TIMED_OUT
+				} else if errors.Is(err, metadata.ErrInvalidTopic) {
+					errorCode = protocol.INVALID_TOPIC_EXCEPTION
 				}
 				p := kmsg.NewFetchResponseTopicPartition()
 				p.Partition = part.Partition

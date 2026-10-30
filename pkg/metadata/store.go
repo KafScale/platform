@@ -295,7 +295,10 @@ func (s *InMemoryStore) CreateTopic(ctx context.Context, spec TopicSpec) (*proto
 		return nil, ctx.Err()
 	default:
 	}
-	if spec.Name == "" || spec.NumPartitions <= 0 {
+	if err := ValidateTopicName(spec.Name); err != nil {
+		return nil, err
+	}
+	if spec.NumPartitions <= 0 {
 		return nil, ErrInvalidTopic
 	}
 	if spec.ReplicationFactor <= 0 {

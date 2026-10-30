@@ -612,3 +612,32 @@ func TestExecuteRestoreUsesTopicGenerations(t *testing.T) {
 		t.Fatalf("restored segment not under the target generation prefix: %v", err)
 	}
 }
+
+func TestExecuteRestoreRejectsInvalidTargetName(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "broker-0", Port: 9092}},
+		ControllerID: 1,
+		Topics: []protocol.MetadataTopic{{
+			Topic:      kmsg.StringPtr("orders"),
+			Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1, Replicas: []int32{1}, ISR: []int32{1}}},
+		}},
+	}, testutil.StartEmbeddedEtcd(t))
+	err := executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders@1",
+		TargetNamespace: "default",
+		RestoreTo:       time.Now().UTC(),
+	}, storage.NewMemoryS3Client(), store)
+	if !errors.Is(err, metadata.ErrInvalidTopic) {
+		t.Fatalf("expected invalid topic error, got %v", err)
+	}
+	meta, err := store.Metadata(ctx, []string{"orders@1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == protocol.NONE {
+		t.Fatalf("target topic was created: %+v", meta.Topics)
+	}
+}

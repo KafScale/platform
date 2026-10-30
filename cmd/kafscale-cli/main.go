@@ -168,6 +168,9 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	if s3Client == nil {
 		return fmt.Errorf("s3 client required")
 	}
+	if err := metadata.ValidateTopicName(cfg.TargetTopic); err != nil {
+		return err
+	}
 
 	sourceMeta, err := store.Metadata(ctx, []string{cfg.SourceTopic})
 	if err != nil {
