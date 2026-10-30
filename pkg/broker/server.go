@@ -128,18 +128,20 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}
 	// One reader owns the socket, including while a handler waits. Read-ahead
 	// is bounded and handlers still run serially in request order.
+	clientGone := make(chan struct{})
+	ctx = protocol.ContextWithClientGone(ctx, clientGone)
 	frames := make(chan *protocol.Frame, 1)
 	readerDone = make(chan struct{})
 	go func() {
 		defer close(readerDone)
 		defer close(frames)
+		defer close(clientGone)
 		for {
 			frame, err := protocol.ReadFrame(conn)
 			if err != nil {
 				if !errors.Is(err, io.EOF) && ctx.Err() == nil {
 					log.Printf("read frame: %v", err)
 				}
-				cancel()
 				return
 			}
 			select {
@@ -168,6 +170,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if ctx.Err() != nil {
 			return
 		}
+		select {
+		case <-clientGone:
+			continue
+		default:
+		}
 		if err != nil {
 			log.Printf("handle request api=%d v=%d: %v", header.APIKey, header.APIVersion, err)
 			// Send an UNKNOWN_SERVER_ERROR response instead of dropping the
@@ -182,7 +189,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 		if err := protocol.WriteFrame(conn, respPayload); err != nil {
 			log.Printf("write frame: %v", err)
-			return
+			_ = conn.Close()
+			// Drain complete requests that were read before the failed response.
+			continue
 		}
 	}
 }

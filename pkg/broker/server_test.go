@@ -456,3 +456,66 @@ func TestServerAlwaysSuppliesPeerAddress(t *testing.T) {
 		})
 	}
 }
+
+// Wait for EOF inside the first handler so this also covers a request already
+// running when the client closes, followed by a complete queued Produce.
+type ackZeroCloseHandler struct {
+	seen    []byte
+	err     error
+	started chan struct{}
+}
+
+func (h *ackZeroCloseHandler) Handle(ctx context.Context, _ *protocol.RequestHeader, request kmsg.Request) ([]byte, error) {
+	if len(h.seen) == 0 {
+		close(h.started)
+		select {
+		case <-protocol.ClientGone(ctx):
+		case <-ctx.Done():
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		h.err = err
+		return nil, err
+	}
+	produce := request.(*kmsg.ProduceRequest)
+	if produce.Acks != 0 {
+		h.err = errors.New("expected acks=0")
+		return nil, h.err
+	}
+	h.seen = append(h.seen, produce.Topics[0].Partitions[0].Records[0])
+	return nil, nil
+}
+
+func TestServerDrainsAckZeroProducesAfterEOF(t *testing.T) {
+	server, client := net.Pipe()
+	defer client.Close()
+	handler := &ackZeroCloseHandler{started: make(chan struct{})}
+	s := &Server{Handler: handler}
+	done := make(chan struct{})
+	go func() { defer close(done); s.handleConnection(server) }()
+	for _, marker := range []byte{1, 2} {
+		request := kmsg.NewPtrProduceRequest()
+		request.Version, request.Acks = 7, 0
+		request.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Records: []byte{marker}}}}}
+		frame := kmsg.NewRequestFormatter().AppendRequest(nil, request, int32(marker))
+		if _, err := client.Write(frame); err != nil {
+			t.Fatal(err)
+		}
+		if marker == 1 {
+			select {
+			case <-handler.started:
+			case <-time.After(time.Second):
+				t.Fatal("first Produce did not enter handler")
+			}
+		}
+	}
+	client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("EOF did not drain the pending requests")
+	}
+	if handler.err != nil || !bytes.Equal(handler.seen, []byte{1, 2}) {
+		t.Fatalf("acks=0 requests were canceled or dropped after EOF: got %v, %v", handler.seen, handler.err)
+	}
+}

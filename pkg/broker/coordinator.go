@@ -152,7 +152,7 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *kmsg.JoinGroupReq
 // JoinGroupWithClient records display metadata separately from authentication.
 func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.JoinGroupRequest, clientID string) (response *kmsg.JoinGroupResponse, resultErr error) {
 	c.mu.Lock()
-	if err := ctx.Err(); err != nil {
+	if err := joinContextErr(ctx); err != nil {
 		c.mu.Unlock()
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 	// Every return below releases c.mu before this cleanup reacquires it.
 	defer func() {
 		cleanupErr := c.finishJoin(req.Group, state, memberID, pending)
-		if err := ctx.Err(); err != nil {
+		if err := joinContextErr(ctx); err != nil {
 			response, resultErr = nil, errors.Join(err, cleanupErr)
 		}
 	}()
@@ -252,7 +252,7 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 	// REBALANCE_IN_PROGRESS here makes classic clients restart the join loop.
 	// The deadline is fixed when the rebalance starts; retries cannot extend it.
 	for state.state == groupStatePreparingRebalance {
-		if err := ctx.Err(); err != nil {
+		if err := joinContextErr(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err
 		}
@@ -269,12 +269,14 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-protocol.ClientGone(ctx):
+			return nil, context.Canceled
 		case <-c.stopCh:
 			return nil, context.Canceled
 		case <-time.After(50 * time.Millisecond):
 		}
 		c.mu.Lock()
-		if err := ctx.Err(); err != nil {
+		if err := joinContextErr(ctx); err != nil {
 			c.mu.Unlock()
 			return nil, err
 		}
@@ -323,6 +325,20 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 	return resp, nil
 }
 
+// Only JoinGroup treats connection EOF as cancellation. Other requests retain
+// their live context so buffered and in-flight produces can complete.
+func joinContextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-protocol.ClientGone(ctx):
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
 // finishJoin removes only the canceled request's membership. A replacement join
 // for the same member or a new coordinator must not be changed by old cleanup.
 func (c *GroupCoordinator) finishJoin(groupID string, state *groupState, memberID string, pending *pendingJoin) error {
@@ -336,7 +352,7 @@ func (c *GroupCoordinator) finishJoin(groupID string, state *groupState, memberI
 		return nil
 	}
 	member.pendingJoin = nil
-	if pending.ctx.Err() == nil {
+	if joinContextErr(pending.ctx) == nil {
 		return nil
 	}
 	delete(state.members, memberID)
