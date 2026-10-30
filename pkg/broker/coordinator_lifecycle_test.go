@@ -475,10 +475,22 @@ func TestCoordinatorGroupDiscovery(t *testing.T) {
 			t.Fatalf("filters %v/%v: got %v, want %v", tc.states, tc.types, got, tc.want)
 		}
 	}
-	describe := kmsg.NewPtrDescribeGroupsRequest()
-	describe.Groups = []string{"missing"}
-	if resp, err := c.DescribeGroups(ctx, describe); err != nil || resp.Groups[0].ErrorCode != protocol.GROUP_ID_NOT_FOUND {
-		t.Fatalf("missing group: %+v, %v", resp, err)
+	for _, version := range []int16{0, 5, 6} {
+		describe := kmsg.NewPtrDescribeGroupsRequest()
+		describe.Version = version
+		describe.Groups = []string{"missing"}
+		resp, err := c.DescribeGroups(ctx, describe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := resp.Groups[0]
+		want := int16(0)
+		if version >= 6 {
+			want = protocol.GROUP_ID_NOT_FOUND
+		}
+		if got.ErrorCode != want || got.Group != "missing" || got.State != "Dead" || got.ProtocolType != "" || got.Protocol != "" || len(got.Members) != 0 {
+			t.Fatalf("missing group v%d: %+v", version, got)
+		}
 	}
 	del := kmsg.NewPtrDeleteGroupsRequest()
 	del.Groups = []string{" \t"}

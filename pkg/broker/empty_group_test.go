@@ -103,7 +103,7 @@ func TestEmptyConsumerGroupLifecycle(t *testing.T) {
 					describe := kmsg.NewPtrDescribeGroupsRequest()
 					describe.Groups = []string{"readers", "missing"}
 					described, err := restarted.DescribeGroups(ctx, describe)
-					if err != nil || len(described.Groups) != 2 || described.Groups[0].ErrorCode != 0 || described.Groups[0].State != "Empty" || len(described.Groups[0].Members) != 0 || described.Groups[1].ErrorCode != protocol.GROUP_ID_NOT_FOUND {
+					if err != nil || len(described.Groups) != 2 || described.Groups[0].ErrorCode != 0 || described.Groups[0].State != "Empty" || len(described.Groups[0].Members) != 0 || described.Groups[1].ErrorCode != 0 || described.Groups[1].State != "Dead" {
 						t.Fatalf("describe: %+v, %v", described, err)
 					}
 					for _, state := range []string{"", "Empty", "Stable"} {
@@ -158,7 +158,7 @@ func TestEmptyConsumerGroupLifecycle(t *testing.T) {
 						t.Fatalf("deleted offsets: %+v, %v", offsets, err)
 					}
 					described, err = restarted.DescribeGroups(ctx, describe)
-					if err != nil || described.Groups[0].ErrorCode != protocol.GROUP_ID_NOT_FOUND {
+					if err != nil || described.Groups[0].ErrorCode != 0 || described.Groups[0].State != "Dead" {
 						t.Fatalf("deleted describe: %+v, %v", described, err)
 					}
 				})

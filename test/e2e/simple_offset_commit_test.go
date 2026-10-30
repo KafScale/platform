@@ -111,6 +111,11 @@ func TestSimpleOffsetCommitE2E(t *testing.T) {
 			if got := cliCurrentOffset(t, ctx, image, addr, group); got != "0" {
 				t.Fatalf("describe after reset: %q", got)
 			}
+			fresh := group + "-never-seen"
+			runKafkaCLI(t, ctx, image, fmt.Sprintf("/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server %s --group %s --topic %s --reset-offsets --to-earliest --execute", addr, fresh, topic))
+			if got := cliCurrentOffset(t, ctx, image, addr, fresh); got != "0" {
+				t.Fatalf("describe after reset of a new group: %q", got)
+			}
 		})
 	}
 }
