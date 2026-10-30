@@ -57,10 +57,13 @@ type PartitionLog struct {
 	segments     []segmentRange
 	indexEntries map[int64][]*IndexEntry
 	prefetchMu   sync.Mutex
-	mu           sync.Mutex
-	flushCond    *sync.Cond
-	s3sem        *semaphore.Weighted
-	flushing     bool
+	// Multi-batch appends exclude legacy append/flush operations while staging.
+	// Legacy operations retain their existing concurrent flush behavior.
+	appendMu  sync.RWMutex
+	mu        sync.Mutex
+	flushCond *sync.Cond
+	s3sem     *semaphore.Weighted
+	flushing  bool
 	// flushingBatches holds the batches drained by prepareFlush but not yet
 	// committed to a segment by uploadFlush. During that window an acknowledged
 	// offset is in neither the live buffer (drained) nor l.segments (not yet
@@ -293,6 +296,8 @@ func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object, nextOff
 
 // AppendBatch writes a record batch to the log, updating offsets and flushing as needed.
 func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*AppendResult, error) {
+	l.appendMu.RLock()
+	defer l.appendMu.RUnlock()
 	l.mu.Lock()
 	baseOffset := l.nextOffset
 	PatchRecordBatchBaseOffset(&batch, baseOffset)
@@ -323,6 +328,84 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 			l.onFlush(ctx, artifact)
 		}
 	}
+	return result, nil
+}
+
+// AppendBatches stages a partition's complete Produce record set as one write.
+// A failed build or upload leaves the live buffer and offsets unchanged.
+// forceFlush makes the whole set durable before returning; otherwise the normal
+// buffer thresholds apply. Concurrent readers see only previously accepted data.
+func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch, forceFlush bool) (*AppendResult, error) {
+	l.appendMu.Lock()
+	defer l.appendMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(batches) == 0 {
+		return nil, fmt.Errorf("no batches to append")
+	}
+	l.mu.Lock()
+	baseOffset := l.nextOffset
+	nextOffset := baseOffset
+	staged := l.buffer.clone()
+	l.mu.Unlock()
+	for _, batch := range batches {
+		if len(batch.Bytes) < recordBatchHeaderMinSize || batch.LastOffsetDelta < 0 {
+			return nil, fmt.Errorf("invalid record batch")
+		}
+		batch.Bytes = append([]byte(nil), batch.Bytes...)
+		PatchRecordBatchBaseOffset(&batch, nextOffset)
+		nextOffset += int64(batch.LastOffsetDelta) + 1
+		staged.Append(batch)
+	}
+	result := &AppendResult{BaseOffset: baseOffset, LastOffset: nextOffset - 1}
+	if !forceFlush && !staged.ShouldFlush(time.Now()) {
+		l.mu.Lock()
+		l.buffer, l.nextOffset = staged, nextOffset
+		l.mu.Unlock()
+		return result, nil
+	}
+	artifact, err := BuildSegment(l.cfg.Segment, staged.Drain(), time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("build segment: %w", err)
+	}
+	// Publish the index first. The segment object is the recovery commit point;
+	// a failed index upload must never leave a discoverable segment behind.
+	for _, upload := range []struct {
+		op   string
+		key  string
+		body []byte
+		put  func(context.Context, string, []byte) error
+	}{
+		{"upload_index", l.indexKey(artifact.BaseOffset), artifact.IndexBytes, l.s3.UploadIndex},
+		{"upload_segment", l.segmentKey(artifact.BaseOffset), artifact.SegmentBytes, l.s3.UploadSegment},
+	} {
+		if err := l.acquireS3(ctx); err != nil {
+			return nil, err
+		}
+		start := time.Now()
+		err := upload.put(ctx, upload.key, upload.body)
+		l.releaseS3()
+		if l.onS3Op != nil {
+			l.onS3Op(upload.op, time.Since(start), err)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if l.cache != nil && l.cfg.CacheEnabled {
+		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
+	}
+	l.mu.Lock()
+	l.buffer, l.nextOffset = staged, nextOffset
+	l.segments = append(l.segments, segmentRange{baseOffset: artifact.BaseOffset, lastOffset: artifact.LastOffset, size: int64(len(artifact.SegmentBytes))})
+	l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
+	lastSegIdx := len(l.segments) - 1
+	l.mu.Unlock()
+	if l.onFlush != nil {
+		l.onFlush(ctx, artifact)
+	}
+	l.startPrefetch(ctx, lastSegIdx)
 	return result, nil
 }
 
@@ -357,6 +440,8 @@ func (l *PartitionLog) EarliestOffset() int64 {
 // If another flush is already in progress on this partition, Flush waits for
 // it to complete and then flushes any data that accumulated in the meantime.
 func (l *PartitionLog) Flush(ctx context.Context) error {
+	l.appendMu.RLock()
+	defer l.appendMu.RUnlock()
 	l.mu.Lock()
 	for l.flushing {
 		if ctx.Err() != nil {

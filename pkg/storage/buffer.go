@@ -55,6 +55,16 @@ func (b *WriteBuffer) Append(batch RecordBatch) {
 	b.messageCount += int(batch.MessageCount)
 }
 
+// clone stages changes without exposing them to readers of the live buffer.
+func (b *WriteBuffer) clone() *WriteBuffer {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return &WriteBuffer{
+		cfg: b.cfg, batches: append([]RecordBatch(nil), b.batches...),
+		sizeBytes: b.sizeBytes, messageCount: b.messageCount, lastFlush: b.lastFlush,
+	}
+}
+
 // ShouldFlush checks if size thresholds or time elapsed require a flush.
 func (b *WriteBuffer) ShouldFlush(now time.Time) bool {
 	b.mu.Lock()
