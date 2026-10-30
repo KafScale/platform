@@ -73,6 +73,7 @@ message ConsumerGroup {
   int32 generation_id = 6;
   map<string, GroupMember> members = 7;
   int32 rebalance_timeout_ms = 8;
+  string empty_since = 9;
 }
 
 message CommittedOffset {

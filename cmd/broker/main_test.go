@@ -1708,3 +1708,17 @@ func TestBrokerApiVersionsNegotiation(t *testing.T) {
 	defer conn.Close()
 	testutil.AssertApiVersionsNegotiation(t, conn)
 }
+
+func TestOffsetsRetentionConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{{"", 7 * 24 * time.Hour}, {"60", time.Hour}, {"0", -1}, {"-1", -1}, {"invalid", 7 * 24 * time.Hour}, {"9223372036854775807", time.Duration(1<<63 - 1)}} {
+		t.Run(tc.value, func(t *testing.T) {
+			t.Setenv("KAFSCALE_OFFSETS_RETENTION_MINUTES", tc.value)
+			if got := offsetsRetentionFromEnv(); got != tc.want {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}

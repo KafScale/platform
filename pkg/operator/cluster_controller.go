@@ -284,6 +284,10 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 			Value: fmt.Sprintf("%d", cluster.Spec.Config.SegmentBytes),
 		})
 	}
+	if value := cluster.Spec.Config.OffsetsRetentionMinutes; value != nil {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_OFFSETS_RETENTION_MINUTES", Value: fmt.Sprintf("%d", *value)})
+	}
+
 	if cluster.Spec.Config.FlushIntervalMs > 0 {
 		env = append(env, corev1.EnvVar{
 			Name:  "KAFSCALE_FLUSH_INTERVAL_MS",

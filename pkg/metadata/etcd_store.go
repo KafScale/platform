@@ -180,20 +180,7 @@ func consumerOffsetKey(group, topic string, partition int32) string {
 
 // CommitConsumerOffset implements Store.CommitConsumerOffset.
 func (s *EtcdStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	rec := consumerOffsetRecord{
-		Offset:      offset,
-		Metadata:    metadata,
-		CommittedAt: time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	bytes, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
-	_, err = s.client.Put(ctx, consumerOffsetKey(group, topic, partition), string(bytes))
-	s.recordEtcdResult(err)
-	return err
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false)
 }
 
 // FetchConsumerOffset implements Store.FetchConsumerOffset.
@@ -258,18 +245,7 @@ func (s *EtcdStore) listConsumerOffsets(ctx context.Context, prefix, groupID str
 
 // PutConsumerGroup persists consumer group metadata in etcd.
 func (s *EtcdStore) PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error {
-	if group == nil || group.GroupId == "" {
-		return errors.New("consumer group id required")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	payload, err := EncodeConsumerGroup(group)
-	if err != nil {
-		return err
-	}
-	_, err = s.client.Put(ctx, ConsumerGroupKey(group.GroupId), string(payload))
-	s.recordEtcdResult(err)
-	return err
+	return s.putConsumerGroup(ctx, group)
 }
 
 // FetchConsumerGroup loads consumer group metadata from etcd.
