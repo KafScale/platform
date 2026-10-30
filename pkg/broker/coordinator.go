@@ -548,13 +548,16 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 
 	groupErr := int16(protocol.NONE)
 	createRevision := int64(0)
-	if state == nil {
+	simple := req.Generation < 0 && req.MemberID == "" && (state == nil || len(state.members) == 0)
+	switch {
+	case simple:
+	case state == nil:
 		groupErr = protocol.UNKNOWN_MEMBER_ID
-	} else if _, ok := state.members[req.MemberID]; !ok {
+	case state.members[req.MemberID] == nil:
 		groupErr = protocol.UNKNOWN_MEMBER_ID
-	} else if req.Generation != state.generationID {
+	case req.Generation != state.generationID:
 		groupErr = protocol.ILLEGAL_GENERATION
-	} else {
+	default:
 		createRevision = state.createRevision
 	}
 	c.mu.Unlock()
@@ -572,9 +575,15 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 				if part.Metadata != nil {
 					meta = *part.Metadata
 				}
-				if err := metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, topic.Topic, part.Partition, part.Offset, meta); err != nil {
+				var err error
+				if simple {
+					err = metadata.CommitSimpleConsumerOffset(ctx, c.store, req.Group, topic.Topic, part.Partition, part.Offset, meta)
+				} else {
+					err = metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, topic.Topic, part.Partition, part.Offset, meta)
+				}
+				if err != nil {
 					code = protocol.UNKNOWN_SERVER_ERROR
-					if errors.Is(err, metadata.ErrConsumerGroupDeleted) {
+					if errors.Is(err, metadata.ErrConsumerGroupDeleted) || errors.Is(err, metadata.ErrConsumerGroupNotEmpty) {
 						code = protocol.UNKNOWN_MEMBER_ID
 					} else if errors.Is(err, metadata.ErrConsumerGroupChanged) {
 						code = protocol.COORDINATOR_NOT_AVAILABLE

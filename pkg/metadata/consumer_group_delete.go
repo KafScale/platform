@@ -170,6 +170,27 @@ type ConsumerGroupOffsetCommitter interface {
 
 var ErrConsumerGroupDeleted = errors.New("consumer group deleted")
 
+var ErrConsumerGroupNotEmpty = errors.New("consumer group has active members")
+
+type ConsumerGroupSimpleOffsetCommitter interface {
+	CommitSimpleConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error
+}
+
+func CommitSimpleConsumerOffset(ctx context.Context, store Store, group, topic string, partition int32, offset int64, metadata string) error {
+	if committer, ok := store.(ConsumerGroupSimpleOffsetCommitter); ok {
+		return committer.CommitSimpleConsumerOffset(ctx, group, topic, partition, offset, metadata)
+	}
+	return store.CommitConsumerOffset(ctx, group, topic, partition, offset, metadata)
+}
+
+func (s *EtcdStore) CommitSimpleConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
+	return s.commitConsumerOffset(ctx, group, 0, topic, partition, offset, metadata, false, true)
+}
+
+func (s *InMemoryStore) CommitSimpleConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false, true)
+}
+
 type ConsumerGroupRevisioner interface {
 	FetchConsumerGroupRevision(context.Context, string) (*metadatapb.ConsumerGroup, int64, error)
 	PutConsumerGroupRevision(context.Context, *metadatapb.ConsumerGroup) (int64, error)
@@ -198,14 +219,14 @@ func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group s
 }
 
 func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, createRevision, topic, partition, offset, metadata, true)
+	return s.commitConsumerOffset(ctx, group, createRevision, topic, partition, offset, metadata, true, false)
 }
 
 func (s *InMemoryStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, _ int64, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true)
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true, false)
 }
 
-func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, meta string, requireGroup bool) error {
+func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	for range 3 {
@@ -215,6 +236,9 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		}
 		if current == nil && requireGroup {
 			return ErrConsumerGroupDeleted
+		}
+		if current != nil && simple && len(current.Members) > 0 {
+			return ErrConsumerGroupNotEmpty
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		payload, _ := json.Marshal(consumerOffsetRecord{Offset: offset, Metadata: meta, CommittedAt: now})
@@ -248,7 +272,7 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 	return ErrConsumerGroupChanged
 }
 
-func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string, requireGroup bool) error {
+func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -257,6 +281,9 @@ func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, topic s
 	current := s.consumerGroups[group]
 	if current == nil && requireGroup {
 		return ErrConsumerGroupDeleted
+	}
+	if current != nil && simple && len(current.Members) > 0 {
+		return ErrConsumerGroupNotEmpty
 	}
 	if current != nil && len(current.Members) == 0 {
 		current.EmptySince = time.Now().UTC().Format(time.RFC3339Nano)

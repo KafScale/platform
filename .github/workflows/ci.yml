@@ -91,6 +91,11 @@ jobs:
           KAFSCALE_E2E: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^Test(DeleteConsumerGroupAfterCoordinatorCrash|DeleteGroupsNonCoordinatorE2E|ConsumerGroupRetentionE2E|OpsAPI)$' -count=1 -timeout=3m
 
+      - name: Kafka CLI simple consumer group end-to-end test
+        env:
+          KAFSCALE_E2E: "1"
+        run: go test -race -tags=e2e ./test/e2e -run '^TestSimpleOffsetCommitE2E$' -v -count=1 -timeout=5m
+
       - name: CRD and security reconciliation API tests
         env:
           KAFSCALE_E2E_AFFINITY: "1"
