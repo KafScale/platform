@@ -49,6 +49,10 @@ type S3Client interface {
 	EnsureBucket(ctx context.Context) error
 }
 
+type BucketChecker interface {
+	CheckBucket(ctx context.Context) error
+}
+
 // S3Object describes a stored segment object.
 type S3Object struct {
 	Key  string

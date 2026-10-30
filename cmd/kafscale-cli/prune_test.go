@@ -114,12 +114,12 @@ func siblingFixture(t *testing.T) *pruneFixture {
 	f.retire(t, "orders")
 	f.createTopic(t, "orders")
 	f.put(t,
-		"default/orders/0/segment-0.kfs",
-		"default/orders@1/0/segment-0.kfs",
-		"default/orders@1/0/segment-1.kfs",
-		"default/orders@2/0/segment-0.kfs",
-		"default/orders@10/0/segment-0.kfs",
-		"default/orders-x/0/segment-0.kfs",
+		"default/orders/0/segment-00000000000000000000.kfs",
+		"default/orders@1/0/segment-00000000000000000000.kfs",
+		"default/orders@1/0/segment-00000000000000000001.kfs",
+		"default/orders@2/0/segment-00000000000000000000.kfs",
+		"default/orders@10/0/segment-00000000000000000000.kfs",
+		"default/orders-x/0/segment-00000000000000000000.kfs",
 	)
 	return f
 }
@@ -141,7 +141,7 @@ func TestPruneDryRunDeletesNothing(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
 	}
-	if !f.exists("default/orders/0/segment-0.kfs") || !f.exists("default/orders@1/0/segment-1.kfs") || len(f.records(t)) != 2 {
+	if !f.exists("default/orders/0/segment-00000000000000000000.kfs") || !f.exists("default/orders@1/0/segment-00000000000000000001.kfs") || len(f.records(t)) != 2 {
 		t.Fatal("dry run deleted data")
 	}
 }
@@ -155,12 +155,12 @@ func TestPruneForceDeletesOnlyDeletedPrefixes(t *testing.T) {
 	if !strings.Contains(out, "prune (deleting)") || !strings.Contains(out, "pruned topic=orders generation=1") || strings.Contains(out, "dry run:") {
 		t.Fatalf("unexpected output:\n%s", out)
 	}
-	for _, key := range []string{"default/orders/0/segment-0.kfs", "default/orders@1/0/segment-0.kfs", "default/orders@1/0/segment-1.kfs"} {
+	for _, key := range []string{"default/orders/0/segment-00000000000000000000.kfs", "default/orders@1/0/segment-00000000000000000000.kfs", "default/orders@1/0/segment-00000000000000000001.kfs"} {
 		if f.exists(key) {
 			t.Fatalf("%s not deleted", key)
 		}
 	}
-	for _, key := range []string{"default/orders@2/0/segment-0.kfs", "default/orders@10/0/segment-0.kfs", "default/orders-x/0/segment-0.kfs"} {
+	for _, key := range []string{"default/orders@2/0/segment-00000000000000000000.kfs", "default/orders@10/0/segment-00000000000000000000.kfs", "default/orders-x/0/segment-00000000000000000000.kfs"} {
 		if !f.exists(key) {
 			t.Fatalf("%s was deleted", key)
 		}
@@ -183,7 +183,7 @@ func TestPruneRefusesLiveData(t *testing.T) {
 	f.createTopic(t, "orders")
 	f.retire(t, "orders")
 	f.createTopic(t, "orders")
-	f.put(t, "default/orders@1/0/segment-0.kfs", "default/legacy@1/0/segment-0.kfs")
+	f.put(t, "default/orders@1/0/segment-00000000000000000000.kfs", "default/legacy@1/0/segment-00000000000000000000.kfs")
 	now := time.Now().UTC().Format(time.RFC3339)
 	f.putRecord(t, metadata.DeletedTopic{Name: "orders", Generation: 1, Prefix: "default/orders@1/", DeletedAt: now})
 	f.putRecord(t, metadata.DeletedTopic{Name: "legacy", Generation: 1, Prefix: "default/legacy@1/", DeletedAt: now})
@@ -198,8 +198,8 @@ func TestPruneRefusesLiveData(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "live topic legacy@1") {
 		t.Fatalf("expected live topic refusal, got %v\n%s", err, out)
 	}
-	if !f.exists("default/orders@1/0/segment-0.kfs") || !f.exists("default/legacy@1/0/segment-0.kfs") || len(f.records(t)) != 2 {
-		t.Fatalf("live data was deleted: %v %v %v", f.exists("default/orders@1/0/segment-0.kfs"), f.exists("default/legacy@1/0/segment-0.kfs"), f.records(t))
+	if !f.exists("default/orders@1/0/segment-00000000000000000000.kfs") || !f.exists("default/legacy@1/0/segment-00000000000000000000.kfs") || len(f.records(t)) != 2 {
+		t.Fatalf("live data was deleted: %v %v %v", f.exists("default/orders@1/0/segment-00000000000000000000.kfs"), f.exists("default/legacy@1/0/segment-00000000000000000000.kfs"), f.records(t))
 	}
 }
 
@@ -253,24 +253,24 @@ func TestPrunePartialFailureThenRerun(t *testing.T) {
 	f := newPruneFixture(t)
 	f.createTopic(t, "orders")
 	f.retire(t, "orders")
-	f.put(t, "default/orders/0/a.kfs", "default/orders/0/b.kfs")
-	if err := f.s3.UploadIndex(f.ctx, "default/orders/0/a.index", []byte("i")); err != nil {
+	f.put(t, "default/orders/0/segment-00000000000000000000.kfs", "default/orders/0/segment-00000000000000000001.kfs")
+	if err := f.s3.UploadIndex(f.ctx, "default/orders/0/segment-00000000000000000000.index", []byte("i")); err != nil {
 		t.Fatal(err)
 	}
-	flaky := &flakyDeleteS3{MemoryS3Client: f.s3, failKey: "default/orders/0/b.kfs"}
+	flaky := &flakyDeleteS3{MemoryS3Client: f.s3, failKey: "default/orders/0/segment-00000000000000000001.kfs"}
 	var out bytes.Buffer
 	err := executePrune(f.ctx, &out, pruneConfig{Force: true, Now: time.Now()}, flaky, f.store)
 	if err == nil || !strings.Contains(err.Error(), "rerun to finish") {
 		t.Fatalf("expected partial failure, got %v", err)
 	}
-	if !f.exists("default/orders/0/b.kfs") || len(f.records(t)) != 1 {
+	if !f.exists("default/orders/0/segment-00000000000000000001.kfs") || len(f.records(t)) != 1 {
 		t.Fatal("record removed before S3 delete finished")
 	}
 	got, err := f.run(t, pruneConfig{Force: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, "pruned topic=orders generation=0") || f.exists("default/orders/0/b.kfs") || len(f.records(t)) != 0 {
+	if !strings.Contains(got, "pruned topic=orders generation=0") || f.exists("default/orders/0/segment-00000000000000000001.kfs") || len(f.records(t)) != 0 {
 		t.Fatalf("rerun did not finish:\n%s", got)
 	}
 	if got, err := f.run(t, pruneConfig{Force: true}); err != nil || !strings.Contains(got, "total incarnations=0") {
@@ -283,7 +283,7 @@ func TestPruneListError(t *testing.T) {
 	f.putRecord(t, metadata.DeletedTopic{Name: "orders", Generation: 0, Prefix: "default/orders/", DeletedAt: "2026-01-01T00:00:00Z"})
 	var out bytes.Buffer
 	failing := &failingListS3{MemoryS3Client: f.s3, err: errors.New("list down")}
-	if err := executePrune(f.ctx, &out, pruneConfig{}, failing, f.store); err == nil || !strings.Contains(err.Error(), "list down") {
+	if err := executePrune(f.ctx, &out, pruneConfig{}, failing, f.store); err == nil || !strings.Contains(err.Error(), "list down") || !strings.Contains(err.Error(), "rerun to finish") {
 		t.Fatalf("expected list error, got %v", err)
 	}
 	if _, err := f.store.EtcdClient().Put(f.ctx, metadata.DeletedTopicKey("orders", 0), "{"); err != nil {
@@ -319,7 +319,7 @@ func TestRunPruneCommand(t *testing.T) {
 	f := newPruneFixture(t)
 	f.createTopic(t, "orders")
 	f.retire(t, "orders")
-	f.put(t, "default/orders/0/a.kfs")
+	f.put(t, "default/orders/0/segment-00000000000000000000.kfs")
 	prevStore, prevS3 := newEtcdStore, newMemoryS3
 	t.Cleanup(func() { newEtcdStore, newMemoryS3 = prevStore, prevS3 })
 	t.Setenv("KAFSCALE_USE_MEMORY_S3", "true")
@@ -331,14 +331,14 @@ func TestRunPruneCommand(t *testing.T) {
 	if err := run(f.ctx, []string{"prune", "--topic", "orders", "--older-than", "0d"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "dry run") || !f.exists("default/orders/0/a.kfs") {
+	if !strings.Contains(stdout.String(), "dry run") || !f.exists("default/orders/0/segment-00000000000000000000.kfs") {
 		t.Fatalf("dry run output:\n%s", stdout.String())
 	}
 	stdout.Reset()
 	if err := run(f.ctx, []string{"prune", "--force"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if f.exists("default/orders/0/a.kfs") || len(f.records(t)) != 0 {
+	if f.exists("default/orders/0/segment-00000000000000000000.kfs") || len(f.records(t)) != 0 {
 		t.Fatalf("force did not prune:\n%s", stdout.String())
 	}
 	if err := run(f.ctx, []string{"prune", "--older-than", "later"}, &stdout, &stderr); err == nil {
@@ -352,5 +352,91 @@ func TestRunPruneCommand(t *testing.T) {
 	}
 	if err := run(f.ctx, []string{"prune"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "etcd down") {
 		t.Fatalf("expected etcd error, got %v", err)
+	}
+}
+
+func TestPruneSkipsLFSAndUnknownKeys(t *testing.T) {
+	f := newPruneFixture(t)
+	f.createTopic(t, "orders")
+	f.retire(t, "orders")
+	f.createTopic(t, "orders")
+	f.retire(t, "orders")
+	f.createTopic(t, "orders")
+	f.put(t,
+		"default/orders/0/segment-00000000000000000000.kfs",
+		"default/orders/lfs/2026/10/30/obj-live-gen2",
+		"default/orders/0/notes.txt",
+		"default/orders/0/segment-1.kfs",
+		"default/orders/x/segment-00000000000000000000.kfs",
+	)
+	out, err := f.run(t, pruneConfig{Topic: "orders"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "topic=orders generation=0 prefix=default/orders/ objects=1 bytes=4") {
+		t.Fatalf("dry run counted non segment keys:\n%s", out)
+	}
+	if _, err := f.run(t, pruneConfig{Topic: "orders", Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if f.exists("default/orders/0/segment-00000000000000000000.kfs") {
+		t.Fatal("segment not deleted")
+	}
+	for _, key := range []string{"default/orders/lfs/2026/10/30/obj-live-gen2", "default/orders/0/notes.txt", "default/orders/0/segment-1.kfs", "default/orders/x/segment-00000000000000000000.kfs"} {
+		if !f.exists(key) {
+			t.Fatalf("%s was deleted", key)
+		}
+	}
+}
+
+type prefixListFailS3 struct {
+	*storage.MemoryS3Client
+	failPrefix string
+}
+
+func (f *prefixListFailS3) ListSegments(ctx context.Context, prefix string) ([]storage.S3Object, error) {
+	if prefix == f.failPrefix {
+		return nil, errors.New("list down")
+	}
+	return f.MemoryS3Client.ListSegments(ctx, prefix)
+}
+
+func TestPruneListFailureContinues(t *testing.T) {
+	f := newPruneFixture(t)
+	f.createTopic(t, "orders")
+	f.createTopic(t, "payments")
+	f.retire(t, "orders")
+	f.retire(t, "payments")
+	f.put(t, "default/orders/0/segment-00000000000000000000.kfs", "default/payments/0/segment-00000000000000000000.kfs")
+	flaky := &prefixListFailS3{MemoryS3Client: f.s3, failPrefix: "default/orders/"}
+	var out bytes.Buffer
+	err := executePrune(f.ctx, &out, pruneConfig{Force: true, Now: time.Now()}, flaky, f.store)
+	if err == nil || !strings.Contains(err.Error(), "rerun to finish") || !strings.Contains(err.Error(), "list down") {
+		t.Fatalf("expected rerun error, got %v", err)
+	}
+	if f.exists("default/payments/0/segment-00000000000000000000.kfs") || !f.exists("default/orders/0/segment-00000000000000000000.kfs") {
+		t.Fatalf("expected payments pruned and orders kept:\n%s", out.String())
+	}
+	if got, err := f.run(t, pruneConfig{Force: true}); err != nil || f.exists("default/orders/0/segment-00000000000000000000.kfs") {
+		t.Fatalf("rerun: %v\n%s", err, got)
+	}
+}
+
+type checkedS3 struct {
+	*storage.MemoryS3Client
+	err error
+}
+
+func (c *checkedS3) CheckBucket(context.Context) error { return c.err }
+
+func TestPruneFailsWhenBucketCheckFails(t *testing.T) {
+	f := newPruneFixture(t)
+	var out bytes.Buffer
+	err := executePrune(f.ctx, &out, pruneConfig{}, &checkedS3{MemoryS3Client: f.s3, err: errors.New("bucket b does not exist")}, f.store)
+	if err == nil || !strings.Contains(err.Error(), "does not exist") || out.Len() != 0 {
+		t.Fatalf("expected bucket error before any output, got %v\n%s", err, out.String())
+	}
+	if err := executePrune(f.ctx, &out, pruneConfig{}, &checkedS3{MemoryS3Client: f.s3}, f.store); err != nil {
+		t.Fatal(err)
 	}
 }

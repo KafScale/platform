@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ type pruneConfig struct {
 	Force     bool
 	Now       time.Time
 }
+
+var segmentObject = regexp.MustCompile(`^[0-9]+/segment-[0-9]{20}\.(kfs|index)$`)
 
 type pruneEntry struct {
 	record  metadata.DeletedTopic
@@ -92,6 +95,11 @@ func parseAge(raw string) (time.Duration, error) {
 }
 
 func executePrune(ctx context.Context, stdout io.Writer, cfg pruneConfig, s3Client storage.S3Client, store *metadata.EtcdStore) error {
+	if checker, ok := s3Client.(storage.BucketChecker); ok {
+		if err := checker.CheckBucket(ctx); err != nil {
+			return err
+		}
+	}
 	records, err := listDeletedTopics(ctx, store.EtcdClient(), cfg)
 	if err != nil {
 		return err
@@ -108,7 +116,8 @@ func executePrune(ctx context.Context, stdout io.Writer, cfg pruneConfig, s3Clie
 	for _, record := range records {
 		entry, err := inspectDeletedTopic(ctx, s3Client, record)
 		if err != nil {
-			return err
+			failed = append(failed, fmt.Sprintf("%s generation %d: %v", record.Name, record.Generation, err))
+			continue
 		}
 		_, _ = fmt.Fprintf(stdout, "topic=%s generation=%d prefix=%s objects=%d bytes=%d deleted_at=%s\n",
 			record.Name, record.Generation, record.Prefix, len(entry.objects), entry.bytes, record.DeletedAt)
@@ -192,7 +201,8 @@ func inspectDeletedTopic(ctx context.Context, s3Client storage.S3Client, record 
 	}
 	entry := pruneEntry{record: record}
 	for _, obj := range objects {
-		if !strings.HasPrefix(obj.Key, record.Prefix) {
+		rest, ok := strings.CutPrefix(obj.Key, record.Prefix)
+		if !ok || !segmentObject.MatchString(rest) {
 			continue
 		}
 		entry.objects = append(entry.objects, obj)

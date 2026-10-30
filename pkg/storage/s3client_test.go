@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,15 +29,16 @@ import (
 )
 
 type fakeS3 struct {
-	putInputs []*s3.PutObjectInput
-	getInput  *s3.GetObjectInput
-	getData   []byte
-	deleteKey *string
-	putErr    error
-	getErr    error
-	headErr   error
-	createErr error
-	listErr   error
+	putInputs    []*s3.PutObjectInput
+	getInput     *s3.GetObjectInput
+	getData      []byte
+	deleteKey    *string
+	putErr       error
+	getErr       error
+	headErr      error
+	createErr    error
+	listErr      error
+	createCalled bool
 }
 
 func (f *fakeS3) PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -64,6 +66,7 @@ func (f *fakeS3) HeadBucket(ctx context.Context, params *s3.HeadBucketInput, opt
 }
 
 func (f *fakeS3) CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
+	f.createCalled = true
 	return &s3.CreateBucketOutput{}, f.createErr
 }
 
@@ -399,5 +402,25 @@ func TestMemoryS3Client_DeleteSegmentAndIndex(t *testing.T) {
 	}
 	if _, err := m.DownloadIndex(context.Background(), "topic/0/seg-0.index"); err == nil {
 		t.Fatal("expected deleted index to be missing")
+	}
+}
+
+func TestAWSS3ClientCheckBucket(t *testing.T) {
+	ctx := context.Background()
+	ok := &awsS3Client{bucket: "b", api: &fakeS3{}}
+	if err := ok.CheckBucket(ctx); err != nil {
+		t.Fatalf("CheckBucket: %v", err)
+	}
+	missing := &fakeS3{headErr: &fakeAPIError{code: "NoSuchBucket"}}
+	c := &awsS3Client{bucket: "b", api: missing}
+	if err := c.CheckBucket(ctx); err == nil || !strings.Contains(err.Error(), "bucket b does not exist") {
+		t.Fatalf("expected missing bucket error, got %v", err)
+	}
+	if missing.createCalled {
+		t.Fatal("CheckBucket created the bucket")
+	}
+	denied := &awsS3Client{bucket: "b", api: &fakeS3{headErr: &fakeAPIError{code: "Forbidden"}}}
+	if err := denied.CheckBucket(ctx); err == nil || !strings.Contains(err.Error(), "head bucket b") {
+		t.Fatalf("expected head error, got %v", err)
 	}
 }
