@@ -221,11 +221,19 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
+	sourceGeneration, err := store.TopicGeneration(ctx, cfg.SourceTopic)
+	if err != nil {
+		return err
+	}
+	targetGeneration, err := store.TopicGeneration(ctx, cfg.TargetTopic)
+	if err != nil {
+		return err
+	}
 	result, err := storage.RecoverTopicToTimestamp(ctx, s3Client, storage.TopicRecoveryConfig{
 		SourceNamespace: cfg.SourceNamespace,
-		SourceTopic:     cfg.SourceTopic,
+		SourceTopic:     metadata.TopicStorageName(cfg.SourceTopic, sourceGeneration),
 		TargetNamespace: cfg.TargetNamespace,
-		TargetTopic:     cfg.TargetTopic,
+		TargetTopic:     metadata.TopicStorageName(cfg.TargetTopic, targetGeneration),
 		RestoreTo:       cfg.RestoreTo,
 		Partitions:      cfg.Partitions,
 	})

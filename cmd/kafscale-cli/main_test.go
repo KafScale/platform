@@ -563,3 +563,52 @@ func encodeStorageRecoveryVarint(value int64) []byte {
 		}
 	}
 }
+
+func TestExecuteRestoreUsesTopicGenerations(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "broker-0", Port: 9092}},
+		ControllerID: 1,
+	}, endpoints)
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cli.Close() }()
+	for topic, generation := range map[string]string{"orders": "1", "orders-restored": "2"} {
+		if _, err := cli.Put(ctx, metadata.TopicGenerationKey(topic), generation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s3 := storage.NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, created.UnixMilli(), []int64{0}),
+	}, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s3.UploadSegment(ctx, "default/orders@1/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3.UploadIndex(ctx, "default/orders@1/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := executeRestore(ctx, &stdout, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       created.Add(5 * time.Minute),
+	}, s3, store); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3.DownloadSegment(ctx, "default/orders-restored@2/0/segment-00000000000000000000.kfs", nil); err != nil {
+		t.Fatalf("restored segment not under the target generation prefix: %v", err)
+	}
+}

@@ -1310,7 +1310,7 @@ func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.Reque
 	for _, name := range req.TopicNames {
 		t := kmsg.NewDeleteTopicsResponseTopic()
 		t.Topic = kmsg.StringPtr(name)
-		if err := h.store.DeleteTopic(ctx, name); err != nil {
+		if err := h.deleteTopic(ctx, name); err != nil {
 			switch {
 			case errors.Is(err, metadata.ErrUnknownTopic):
 				t.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
@@ -2109,7 +2109,11 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			if err != nil {
 				return nil, err
 			}
-			plog := storage.NewPartitionLog(h.s3Namespace, topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
+			storageName, err := h.topicStorageName(ctx, topic)
+			if err != nil {
+				return nil, err
+			}
+			plog := storage.NewPartitionLog(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
 				if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
 					h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
 				}
@@ -2317,6 +2321,7 @@ func main() {
 		os.Exit(1)
 	}
 	handler.startConsumerLagSampler(ctx)
+	handler.startTopicDeleteWatch(ctx)
 	metricsAddr := envOrDefault("KAFSCALE_METRICS_ADDR", defaultMetricsAddr)
 	controlAddr := envOrDefault("KAFSCALE_CONTROL_ADDR", defaultControlAddr)
 	startMetricsServer(ctx, metricsAddr, handler, logger)
