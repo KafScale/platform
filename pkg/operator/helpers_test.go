@@ -1727,3 +1727,23 @@ func TestLfsProxyContainerAllOptions(t *testing.T) {
 		t.Fatalf("expected at least 3 ports (kafka, http, health), got %d", len(container.Ports))
 	}
 }
+
+func TestBrokerContainerOffsetsRetention(t *testing.T) {
+	for _, value := range []int64{0, -1, 60, 10080} {
+		cluster := &kafscalev1alpha1.KafscaleCluster{}
+		cluster.Spec.Config.OffsetsRetentionMinutes = &value
+		container := (&ClusterReconciler{}).brokerContainer(cluster, []string{"http://etcd:2379"})
+		found := false
+		for _, env := range container.Env {
+			if env.Name == "KAFSCALE_OFFSETS_RETENTION_MINUTES" {
+				found = true
+				if env.Value != fmt.Sprint(value) {
+					t.Fatalf("retention %d rendered as %q", value, env.Value)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("retention %d omitted", value)
+		}
+	}
+}

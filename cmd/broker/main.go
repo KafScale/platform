@@ -2147,6 +2147,19 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 	}
 }
 
+func offsetsRetentionFromEnv() time.Duration {
+	minutes := parseEnvInt("KAFSCALE_OFFSETS_RETENTION_MINUTES", 10080)
+	if minutes <= 0 {
+		return -1
+	}
+	// Avoid duration overflow turning an intentionally long retention negative.
+	maxMinutes := int64((1<<63 - 1) / int64(time.Minute))
+	if int64(minutes) > maxMinutes {
+		return time.Duration(1<<63 - 1)
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
 func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo protocol.MetadataBroker, logger *slog.Logger) *handler {
 	readAhead := parseEnvInt("KAFSCALE_READAHEAD_SEGMENTS", 2)
 	cacheSize := parseEnvInt("KAFSCALE_CACHE_BYTES", 0)
@@ -2191,9 +2204,11 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			Logger:   logger,
 		})
 	}
-	coordinatorConfig := &broker.CoordinatorConfig{}
+	coordinatorConfig := &broker.CoordinatorConfig{OffsetsRetention: offsetsRetentionFromEnv()}
 	if groupLeaseManager != nil {
 		coordinatorConfig.OwnsGroup = groupLeaseManager.Owns
+		coordinatorConfig.AcquireGroup = groupLeaseManager.Acquire
+		coordinatorConfig.ReleaseGroup = groupLeaseManager.Release
 		coordinatorConfig.GroupDeleted = groupLeaseManager.Release
 	}
 	return &handler{

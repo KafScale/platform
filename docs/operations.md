@@ -431,6 +431,7 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
 - `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
 - `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
+- `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes`; omission uses the broker default. Retention is checked once per minute under the group coordination lease.
 - `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
 - `KAFSCALE_LOG_LEVEL` – Log level (`debug`, `info`, `warn`, `error`).
 - `KAFSCALE_TRACE_KAFKA` – Enable protocol tracing (`true/false`).

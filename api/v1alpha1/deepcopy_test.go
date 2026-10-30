@@ -160,3 +160,13 @@ func TestAffinityJSONPresence(t *testing.T) {
 		})
 	}
 }
+
+func TestOffsetsRetentionDeepCopy(t *testing.T) {
+	value := int64(0)
+	original := &KafscaleClusterSpec{Config: ClusterConfigSpec{OffsetsRetentionMinutes: &value}}
+	copied := original.DeepCopy()
+	*copied.Config.OffsetsRetentionMinutes = 60
+	if *original.Config.OffsetsRetentionMinutes != 0 {
+		t.Fatal("retention pointer shared across deep copy")
+	}
+}

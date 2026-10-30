@@ -59,16 +59,22 @@ const (
 )
 
 type GroupCoordinator struct {
-	store  metadata.Store
-	broker protocol.MetadataBroker
-	config CoordinatorConfig
-	stopCh chan struct{}
-	mu     sync.Mutex
-	groups map[string]*groupState
+	store              metadata.Store
+	broker             protocol.MetadataBroker
+	config             CoordinatorConfig
+	stopCh             chan struct{}
+	mu                 sync.Mutex
+	groups             map[string]*groupState
+	lastRetentionSweep time.Time
 }
 
 type CoordinatorConfig struct {
 	CleanupInterval time.Duration
+	// Zero uses the seven-day default; a negative value disables retention.
+	OffsetsRetention       time.Duration
+	RetentionCheckInterval time.Duration
+	AcquireGroup           func(context.Context, string) error
+	ReleaseGroup           func(string)
 	// OwnsGroup gates group mutation and cleanup after coordination lease loss.
 	// Nil permits standalone coordinators without an external lease manager.
 	OwnsGroup func(string) bool
@@ -77,7 +83,9 @@ type CoordinatorConfig struct {
 }
 
 var defaultCoordinatorConfig = CoordinatorConfig{
-	CleanupInterval: 5 * time.Second,
+	CleanupInterval:        5 * time.Second,
+	OffsetsRetention:       7 * 24 * time.Hour,
+	RetentionCheckInterval: time.Minute,
 }
 
 type groupState struct {
@@ -122,6 +130,13 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 		if cfg.CleanupInterval > 0 {
 			config.CleanupInterval = cfg.CleanupInterval
 		}
+		if cfg.OffsetsRetention != 0 {
+			config.OffsetsRetention = cfg.OffsetsRetention
+		}
+		if cfg.RetentionCheckInterval > 0 {
+			config.RetentionCheckInterval = cfg.RetentionCheckInterval
+		}
+		config.AcquireGroup, config.ReleaseGroup = cfg.AcquireGroup, cfg.ReleaseGroup
 		config.OwnsGroup = cfg.OwnsGroup
 		config.GroupDeleted = cfg.GroupDeleted
 	}
@@ -1287,7 +1302,6 @@ func (c *GroupCoordinator) Stop() {
 
 func (c *GroupCoordinator) cleanupGroups() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	now := time.Now()
 	ctx := context.Background()
@@ -1298,6 +1312,8 @@ func (c *GroupCoordinator) cleanupGroups() {
 		}
 		_ = c.expireGroupMembersLocked(ctx, groupID, state, now)
 	}
+	c.mu.Unlock()
+	c.cleanupRetainedGroups(now)
 }
 
 func (c *GroupCoordinator) ownsGroup(groupID string) bool {
