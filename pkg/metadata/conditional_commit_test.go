@@ -116,6 +116,7 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 		t.Fatal(group, revision, err)
 	}
 }
+<<<<<<< HEAD
 
 func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
 	ctx := context.Background()
@@ -153,3 +154,5 @@ func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
 		t.Fatalf("%d of 200 commits failed", failed)
 	}
 }
+=======
+>>>>>>> origin/main
