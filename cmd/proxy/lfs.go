@@ -40,6 +40,7 @@ const (
 	defaultLFSMaxBlob              = int64(5 << 30)
 	defaultLFSChunkSize            = int64(5 << 20)
 	defaultLFSDialTimeoutMs        = 5000
+	defaultLFSMetadataTimeoutMs    = 3000
 	defaultLFSBackendBackoffMs     = 500
 	defaultLFSS3HealthIntervalSec  = 30
 	defaultLFSHTTPReadTimeoutSec   = 30
@@ -59,6 +60,7 @@ const (
 // values with JSON envelopes — all before the existing partition-aware fan-out.
 type lfsModule struct {
 	topicGeneration      func(context.Context, string) (int64, error)
+	metadataTimeout      time.Duration
 	authorizer           *acl.Authorizer
 	identityDial         func(context.Context, string) (net.Conn, error)
 	logger               *slog.Logger
@@ -223,6 +225,7 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	}
 
 	m := &lfsModule{
+		metadataTimeout:      time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", defaultLFSMetadataTimeoutMs)) * time.Millisecond,
 		logger:               logger,
 		s3Uploader:           uploader,
 		s3Bucket:             s3Bucket,
@@ -365,21 +368,38 @@ func (m *lfsModule) startS3HealthCheck(ctx context.Context, interval time.Durati
 
 const lfsPrefix = "@lfs"
 
-func (m *lfsModule) buildObjectKey(ctx context.Context, topic string) (string, error) {
+func (m *lfsModule) topicStorageName(ctx context.Context, topic string) (string, error) {
+	if m.topicGeneration == nil {
+		return topic, nil
+	}
+	timeout := m.metadataTimeout
+	if timeout <= 0 {
+		timeout = time.Duration(defaultLFSMetadataTimeoutMs) * time.Millisecond
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	gen, err := m.topicGeneration(lookupCtx, topic)
+	if err != nil {
+		return "", fmt.Errorf("lookup topic generation: %w", err)
+	}
+	return metadata.TopicStorageName(topic, gen), nil
+}
+
+func (m *lfsModule) objectKeyFor(storageName string) string {
 	ns := strings.TrimSpace(m.s3Namespace)
 	if ns == "" {
 		ns = "default"
 	}
-	var generation int64
-	if m.topicGeneration != nil {
-		gen, err := m.topicGeneration(ctx, topic)
-		if err != nil {
-			return "", fmt.Errorf("lookup topic generation: %w", err)
-		}
-		generation = gen
-	}
 	now := time.Now().UTC()
-	return fmt.Sprintf("%s/%s/%s/%04d/%02d/%02d/obj-%s", ns, lfsPrefix, metadata.TopicStorageName(topic, generation), now.Year(), now.Month(), now.Day(), newLFSUUID()), nil
+	return fmt.Sprintf("%s/%s/%s/%04d/%02d/%02d/obj-%s", ns, lfsPrefix, storageName, now.Year(), now.Month(), now.Day(), newLFSUUID())
+}
+
+func (m *lfsModule) buildObjectKey(ctx context.Context, topic string) (string, error) {
+	storage, err := m.topicStorageName(ctx, topic)
+	if err != nil {
+		return "", err
+	}
+	return m.objectKeyFor(storage), nil
 }
 
 func (m *lfsModule) resolveChecksumAlg(raw string) (lfs.ChecksumAlg, error) {

@@ -533,9 +533,9 @@ S3 storage:
 
 Object keys:
 
-- New LFS objects are written to `<namespace>/@lfs/<topic>/<yyyy>/<mm>/<dd>/obj-<uuid>`. After the Nth delete of a topic, the topic part is `<topic>@<N>`, the same name its segments use, so LFS objects of a deleted incarnation stay apart from the current one. The proxy reads the generation from etcd. Without etcd it uses generation 0, and if the etcd lookup fails the upload fails.
+- New LFS objects are written to `<namespace>/@lfs/<topic>/<yyyy>/<mm>/<dd>/obj-<uuid>`. After the Nth delete of a topic, the topic part is `<topic>@<N>`, the same name its segments use, so LFS objects of a deleted incarnation stay apart from the current one. When etcd is configured, the proxy reads the generation from etcd before it uploads anything, once per topic per request, so etcd must be reachable for LFS produce. The lookup times out after `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` (default `3000`). If it fails or times out, `/lfs/produce` and `/lfs/uploads` return 503 `metadata_unavailable` and a Kafka produce with LFS records fails, and nothing is uploaded. Without etcd the proxy uses generation 0.
 - `@` is not allowed in Kafka topic names, so `@lfs` never clashes with a topic prefix.
-- Proxies before this change wrote to `<namespace>/<topic>/lfs/<yyyy>/<mm>/<dd>/obj-<uuid>`. Those objects are not moved. The envelope stores the full key, so consumers, SDKs and `/lfs/download` still read them.
+- Proxies before this change wrote to `<namespace>/<topic>/lfs/<yyyy>/<mm>/<dd>/obj-<uuid>`. Those objects are not moved. The envelope stores the full key, so consumers, SDKs and `/lfs/download` still read them. `/lfs/download` only accepts keys that start with `<namespace>/@lfs/` or have the old `<namespace>/<topic>/lfs/` shape.
 
 Blobs and checksums:
 
@@ -544,6 +544,7 @@ Blobs and checksums:
 - `KAFSCALE_LFS_PROXY_CHECKSUM_ALGO` – Checksum algorithm (default `sha256`).
 - `KAFSCALE_LFS_PROXY_ID` – Proxy identifier recorded in tracker events (no default).
 - `KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH` – Maximum topic name length (default `249`).
+- `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` – Timeout for the etcd topic generation lookup before an LFS upload (default `3000`).
 
 HTTP API:
 

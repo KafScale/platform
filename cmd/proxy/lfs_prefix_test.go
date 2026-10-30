@@ -22,10 +22,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -118,5 +122,150 @@ func TestDownloadOldPathStillReadable(t *testing.T) {
 	}
 	if !bytes.Equal(rr.Body.Bytes(), payload) {
 		t.Fatalf("unexpected body %q", rr.Body.String())
+	}
+}
+
+func blockingGeneration(ctx context.Context, topic string) (int64, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func TestHTTPGenerationLookupTimesOut(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.metadataTimeout = 100 * time.Millisecond
+	m.topicGeneration = blockingGeneration
+
+	produce := httptest.NewRequest(http.MethodPost, "/lfs/produce", bytes.NewReader([]byte("payload")))
+	produce.Header.Set(lfsHeaderTopic, "orders")
+	produce.Header.Set("Content-Type", "application/octet-stream")
+	uploads := httptest.NewRequest(http.MethodPost, "/lfs/uploads", bytes.NewBufferString(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`))
+	cases := []struct {
+		name    string
+		req     *http.Request
+		handler func(http.ResponseWriter, *http.Request)
+	}{
+		{"produce", produce, m.handleHTTPProduce},
+		{"uploads", uploads, m.handleHTTPUploadInit},
+	}
+	for _, c := range cases {
+		start := time.Now()
+		rr := httptest.NewRecorder()
+		c.handler(rr, c.req)
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("%s took %s", c.name, elapsed)
+		}
+		if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "metadata_unavailable") {
+			t.Fatalf("%s: got %d %s", c.name, rr.Code, rr.Body.String())
+		}
+	}
+	if len(m.s3Uploader.api.(*fakeS3).objects) != 0 || len(m.uploadSessions) != 0 {
+		t.Fatal("timed out request had side effects")
+	}
+}
+
+func lfsProduceRequest(t *testing.T, topics map[string]int) *kmsg.ProduceRequest {
+	t.Helper()
+	req := &kmsg.ProduceRequest{Acks: 1, TimeoutMillis: 5000}
+	for _, name := range []string{"orders", "payments", "plain"} {
+		count, ok := topics[name]
+		if !ok {
+			continue
+		}
+		topic := kmsg.ProduceRequestTopic{Topic: name}
+		for p := 0; p < count; p++ {
+			payload := []byte(fmt.Sprintf("%s-%d", name, p))
+			sum := sha256.Sum256(payload)
+			rec := kmsg.Record{Value: payload}
+			if name != "plain" {
+				rec.Headers = []kmsg.Header{{Key: "LFS_BLOB", Value: []byte(hex.EncodeToString(sum[:]))}}
+			}
+			topic.Partitions = append(topic.Partitions, kmsg.ProduceRequestTopicPartition{Partition: int32(p), Records: buildTestBatch([]kmsg.Record{rec, rec})})
+		}
+		req.Topics = append(req.Topics, topic)
+	}
+	return req
+}
+
+func TestRewriteProduceGenerationLookupTimesOut(t *testing.T) {
+	m, fs3 := testLFSModule(t)
+	m.metadataTimeout = 100 * time.Millisecond
+	m.topicGeneration = blockingGeneration
+	header := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9}
+	start := time.Now()
+	_, err := m.rewriteProduceRecords(context.Background(), header, lfsProduceRequest(t, map[string]int{"orders": 1}))
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline error, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("took %s", elapsed)
+	}
+	if len(fs3.objects) != 0 {
+		t.Fatal("blob uploaded after lookup failure")
+	}
+}
+
+func TestRewriteProduceResolvesGenerationsBeforeUpload(t *testing.T) {
+	m, fs3 := testLFSModule(t)
+	var calls atomic.Int32
+	m.topicGeneration = func(ctx context.Context, topic string) (int64, error) {
+		calls.Add(1)
+		return 3, nil
+	}
+	header := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9}
+	if _, err := m.rewriteProduceRecords(context.Background(), header, lfsProduceRequest(t, map[string]int{"orders": 2, "payments": 1, "plain": 1})); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 lookups, got %d", calls.Load())
+	}
+	if len(fs3.objects) != 6 {
+		t.Fatalf("expected 6 uploads, got %d", len(fs3.objects))
+	}
+	for key := range fs3.objects {
+		if !strings.HasPrefix(key, "test-ns/@lfs/orders@3/") && !strings.HasPrefix(key, "test-ns/@lfs/payments@3/") {
+			t.Fatalf("unexpected key %s", key)
+		}
+	}
+
+	m, fs3 = testLFSModule(t)
+	m.topicGeneration = func(ctx context.Context, topic string) (int64, error) {
+		if topic == "payments" {
+			return 0, errors.New("etcd down")
+		}
+		return 0, nil
+	}
+	if _, err := m.rewriteProduceRecords(context.Background(), header, lfsProduceRequest(t, map[string]int{"orders": 2, "payments": 1})); err == nil {
+		t.Fatal("expected error")
+	}
+	if len(fs3.objects) != 0 {
+		t.Fatalf("uploads before lookup failure: %v", fs3.objects)
+	}
+}
+
+func TestValidateObjectKeyShapes(t *testing.T) {
+	m := testHTTPModule(t)
+	for _, key := range []string{
+		"test-ns/@lfs/orders/2026/10/30/obj-a",
+		"test-ns/@lfs/orders@2/2026/10/30/obj-a",
+		"test-ns/orders/lfs/2026/10/30/obj-a",
+	} {
+		if err := m.lfsValidateObjectKey(key); err != nil {
+			t.Fatalf("%s rejected: %v", key, err)
+		}
+	}
+	for _, key := range []string{
+		"test-ns/anything/@lfs/x",
+		"test-ns/a/b/lfs/x",
+		"test-ns/orders/0/segment-00000000000000000000.kfs",
+		"test-ns/@lfs/",
+		"test-ns/orders/lfs/",
+		"test-ns/bad topic/lfs/x",
+		"test-ns/@lfsx/orders/obj",
+		"other/@lfs/orders/obj",
+	} {
+		if err := m.lfsValidateObjectKey(key); err == nil {
+			t.Fatalf("%s accepted", key)
+		}
 	}
 }

@@ -1202,13 +1202,21 @@ func (m *lfsModule) lfsValidateObjectKey(key string) error {
 		return errors.New("key must not contain '..'")
 	}
 	ns := strings.TrimSpace(m.s3Namespace)
-	if ns != "" && !strings.HasPrefix(key, ns+"/") {
+	if ns == "" {
+		ns = "default"
+	}
+	if !strings.HasPrefix(key, ns+"/") {
 		return errors.New("key outside namespace")
 	}
-	if !strings.Contains(key, "/"+lfsPrefix+"/") && !strings.Contains(key, "/lfs/") {
-		return errors.New("key must include /lfs/ or /@lfs/ segment")
+	rest := strings.TrimPrefix(key, ns+"/")
+	if strings.HasPrefix(rest, lfsPrefix+"/") && len(rest) > len(lfsPrefix)+1 {
+		return nil
 	}
-	return nil
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) == 3 && lfsValidTopicPattern.MatchString(parts[0]) && parts[1] == "lfs" && parts[2] != "" {
+		return nil
+	}
+	return errors.New("key must start with <namespace>/@lfs/ or <namespace>/<topic>/lfs/")
 }
 
 func (m *lfsModule) lfsIsValidTopicName(topic string) bool {

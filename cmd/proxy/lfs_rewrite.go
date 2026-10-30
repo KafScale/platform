@@ -86,6 +86,18 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 	topics := make(map[string]struct{})
 	orphans := make([]orphanInfo, 0, 4)
 
+	type decodedBatch struct {
+		records []kmsg.Record
+		codec   kgo.CompressionCodecType
+	}
+	type decodedPartition struct {
+		topic     string
+		partition *kmsg.ProduceRequestTopicPartition
+		batches   []lfsRecordBatch
+		decoded   []decodedBatch
+	}
+	parts := make([]decodedPartition, 0, 4)
+	storageNames := make(map[string]string)
 	for ti := range req.Topics {
 		topic := &req.Topics[ti]
 		if m.authorizer != nil && !m.authorizer.Allows(authn.Principal(ctx), acl.ActionProduce, acl.ResourceTopic, topic.Topic) {
@@ -100,106 +112,130 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 			if err != nil {
 				return lfsRewriteResult{}, err
 			}
-			batchModified := false
+			dp := decodedPartition{topic: topic.Topic, partition: partition, batches: batches, decoded: make([]decodedBatch, len(batches))}
+			hasLFS := false
 			for bi := range batches {
-				batch := &batches[bi]
-				records, codec, err := lfsDecodeBatchRecords(batch, decompressor)
+				records, codec, err := lfsDecodeBatchRecords(&batches[bi], decompressor)
 				if err != nil {
 					return lfsRewriteResult{}, err
 				}
-				if len(records) == 0 {
-					continue
-				}
-				recordChanged := false
+				dp.decoded[bi] = decodedBatch{records: records, codec: codec}
 				for ri := range records {
-					rec := &records[ri]
-					headers := rec.Headers
-					lfsValue, ok := lfsFindHeaderValue(headers, "LFS_BLOB")
-					if !ok {
-						continue
+					if _, ok := lfsFindHeaderValue(records[ri].Headers, "LFS_BLOB"); ok {
+						hasLFS = true
 					}
-					recordChanged = true
-					modified = true
-					topics[topic.Topic] = struct{}{}
-					checksumHeader := strings.TrimSpace(string(lfsValue))
-					algHeader, _ := lfsFindHeaderValue(headers, "LFS_BLOB_ALG")
-					alg, err := m.resolveChecksumAlg(string(algHeader))
-					if err != nil {
-						return lfsRewriteResult{}, err
-					}
-					if checksumHeader != "" && alg == lfs.ChecksumNone {
-						return lfsRewriteResult{}, errors.New("checksum provided but checksum algorithm is none")
-					}
-					payload := rec.Value
-					m.logger.Info("LFS blob detected", "topic", topic.Topic, "size", len(payload))
-					if int64(len(payload)) > m.maxBlob {
-						m.logger.Error("blob exceeds max size", "size", len(payload), "max", m.maxBlob)
-						return lfsRewriteResult{}, fmt.Errorf("blob size %d exceeds max %d", len(payload), m.maxBlob)
-					}
-					key, err := m.buildObjectKey(ctx, topic.Topic)
-					if err != nil {
-						return lfsRewriteResult{}, err
-					}
-					sha256Hex, checksum, checksumAlg, err := m.s3Uploader.Upload(ctx, key, payload, alg)
-					if err != nil {
-						m.metrics.IncS3Errors()
-						return lfsRewriteResult{}, err
-					}
-					if checksumHeader != "" && checksum != "" && !strings.EqualFold(checksumHeader, checksum) {
-						if err := m.s3Uploader.DeleteObject(ctx, key); err != nil {
-							m.trackOrphans([]orphanInfo{{Topic: topic.Topic, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
-							return lfsRewriteResult{}, fmt.Errorf("checksum mismatch; delete failed: %w", err)
-						}
-						return lfsRewriteResult{}, &lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}
-					}
-					env := lfs.Envelope{
-						Version:         1,
-						Bucket:          m.s3Bucket,
-						Key:             key,
-						Size:            int64(len(payload)),
-						SHA256:          sha256Hex,
-						Checksum:        checksum,
-						ChecksumAlg:     checksumAlg,
-						ContentType:     lfsHeaderValue(headers, "content-type"),
-						OriginalHeaders: lfsHeadersToMap(headers),
-						CreatedAt:       time.Now().UTC().Format(time.RFC3339),
-						ProxyID:         m.proxyID,
-					}
-					encoded, err := lfs.EncodeEnvelope(env)
-					if err != nil {
-						return lfsRewriteResult{}, err
-					}
-					rec.Value = encoded
-					rec.Headers = lfsDropHeader(headers, "LFS_BLOB")
-					uploadBytes += int64(len(payload))
-					orphans = append(orphans, orphanInfo{Topic: topic.Topic, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
 				}
-				if !recordChanged {
-					continue
-				}
-				newRecords := lfsEncodeRecords(records)
-				compressedRecords, usedCodec, err := lfsCompressRecords(codec, newRecords)
-				if err != nil {
-					return lfsRewriteResult{}, err
-				}
-				batch.Records = compressedRecords
-				batch.NumRecords = int32(len(records))
-				batch.Attributes = (batch.Attributes &^ 0x0007) | int16(usedCodec)
-				batch.Length = 0
-				batch.CRC = 0
-				batchBytes := batch.AppendTo(nil)
-				batch.Length = int32(len(batchBytes) - 12)
-				batchBytes = batch.AppendTo(nil)
-				batch.CRC = int32(crc32.Checksum(batchBytes[21:], lfsCRC32cTable))
-				batchBytes = batch.AppendTo(nil)
-				batch.Raw = batchBytes
-				batchModified = true
 			}
-			if !batchModified {
+			if !hasLFS {
 				continue
 			}
-			partition.Records = lfsJoinRecordBatches(batches)
+			storageNames[topic.Topic] = ""
+			parts = append(parts, dp)
 		}
+	}
+	for name := range storageNames {
+		storage, err := m.topicStorageName(ctx, name)
+		if err != nil {
+			return lfsRewriteResult{}, err
+		}
+		storageNames[name] = storage
+	}
+
+	for _, dp := range parts {
+		batches := dp.batches
+		batchModified := false
+		for bi := range batches {
+			batch := &batches[bi]
+			records, codec := dp.decoded[bi].records, dp.decoded[bi].codec
+			if len(records) == 0 {
+				continue
+			}
+			recordChanged := false
+			for ri := range records {
+				rec := &records[ri]
+				headers := rec.Headers
+				lfsValue, ok := lfsFindHeaderValue(headers, "LFS_BLOB")
+				if !ok {
+					continue
+				}
+				recordChanged = true
+				modified = true
+				topics[dp.topic] = struct{}{}
+				checksumHeader := strings.TrimSpace(string(lfsValue))
+				algHeader, _ := lfsFindHeaderValue(headers, "LFS_BLOB_ALG")
+				alg, err := m.resolveChecksumAlg(string(algHeader))
+				if err != nil {
+					return lfsRewriteResult{}, err
+				}
+				if checksumHeader != "" && alg == lfs.ChecksumNone {
+					return lfsRewriteResult{}, errors.New("checksum provided but checksum algorithm is none")
+				}
+				payload := rec.Value
+				m.logger.Info("LFS blob detected", "topic", dp.topic, "size", len(payload))
+				if int64(len(payload)) > m.maxBlob {
+					m.logger.Error("blob exceeds max size", "size", len(payload), "max", m.maxBlob)
+					return lfsRewriteResult{}, fmt.Errorf("blob size %d exceeds max %d", len(payload), m.maxBlob)
+				}
+				key := m.objectKeyFor(storageNames[dp.topic])
+				sha256Hex, checksum, checksumAlg, err := m.s3Uploader.Upload(ctx, key, payload, alg)
+				if err != nil {
+					m.metrics.IncS3Errors()
+					return lfsRewriteResult{}, err
+				}
+				if checksumHeader != "" && checksum != "" && !strings.EqualFold(checksumHeader, checksum) {
+					if err := m.s3Uploader.DeleteObject(ctx, key); err != nil {
+						m.trackOrphans([]orphanInfo{{Topic: dp.topic, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
+						return lfsRewriteResult{}, fmt.Errorf("checksum mismatch; delete failed: %w", err)
+					}
+					return lfsRewriteResult{}, &lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}
+				}
+				env := lfs.Envelope{
+					Version:         1,
+					Bucket:          m.s3Bucket,
+					Key:             key,
+					Size:            int64(len(payload)),
+					SHA256:          sha256Hex,
+					Checksum:        checksum,
+					ChecksumAlg:     checksumAlg,
+					ContentType:     lfsHeaderValue(headers, "content-type"),
+					OriginalHeaders: lfsHeadersToMap(headers),
+					CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+					ProxyID:         m.proxyID,
+				}
+				encoded, err := lfs.EncodeEnvelope(env)
+				if err != nil {
+					return lfsRewriteResult{}, err
+				}
+				rec.Value = encoded
+				rec.Headers = lfsDropHeader(headers, "LFS_BLOB")
+				uploadBytes += int64(len(payload))
+				orphans = append(orphans, orphanInfo{Topic: dp.topic, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
+			}
+			if !recordChanged {
+				continue
+			}
+			newRecords := lfsEncodeRecords(records)
+			compressedRecords, usedCodec, err := lfsCompressRecords(codec, newRecords)
+			if err != nil {
+				return lfsRewriteResult{}, err
+			}
+			batch.Records = compressedRecords
+			batch.NumRecords = int32(len(records))
+			batch.Attributes = (batch.Attributes &^ 0x0007) | int16(usedCodec)
+			batch.Length = 0
+			batch.CRC = 0
+			batchBytes := batch.AppendTo(nil)
+			batch.Length = int32(len(batchBytes) - 12)
+			batchBytes = batch.AppendTo(nil)
+			batch.CRC = int32(crc32.Checksum(batchBytes[21:], lfsCRC32cTable))
+			batchBytes = batch.AppendTo(nil)
+			batch.Raw = batchBytes
+			batchModified = true
+		}
+		if !batchModified {
+			continue
+		}
+		dp.partition.Records = lfsJoinRecordBatches(batches)
 	}
 	if !modified {
 		return lfsRewriteResult{modified: false}, nil
