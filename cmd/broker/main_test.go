@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log/slog"
 	"net"
@@ -1021,6 +1022,7 @@ func testBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32)
 	binary.BigEndian.PutUint64(data[0:8], uint64(baseOffset))
 	binary.BigEndian.PutUint32(data[23:27], uint32(lastOffsetDelta))
 	binary.BigEndian.PutUint32(data[57:61], uint32(messageCount))
+	binary.BigEndian.PutUint32(data[17:21], crc32.Checksum(data[21:], crc32.MakeTable(crc32.Castagnoli)))
 	return data
 }
 

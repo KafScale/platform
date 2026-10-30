@@ -19,6 +19,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -29,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -36,11 +38,11 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 	if os.Getenv("KAFSCALE_E2E") != "1" {
 		t.Skip("set KAFSCALE_E2E=1")
 	}
-	binary := os.Getenv("KAFSCALE_KCAT_BIN")
-	if binary == "" {
-		binary = "kcat"
+	kcatBinary := os.Getenv("KAFSCALE_KCAT_BIN")
+	if kcatBinary == "" {
+		kcatBinary = "kcat"
 	}
-	path, err := exec.LookPath(binary)
+	path, err := exec.LookPath(kcatBinary)
 	if err != nil {
 		t.Fatalf("kcat is required for this test: %v", err)
 	}
@@ -119,6 +121,43 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 			topic := fmt.Sprintf("kcat-%s-%d", target.name, time.Now().UnixNano())
 			const messages = "first\nsecond\nthird\n"
 			run(t, target.addr, messages, "-P", "-q", "-t", topic, "-p", "0", "-X", "enable.idempotence=false", "-X", "message.timeout.ms=5000")
+			t.Run("reject-corrupt-produce", func(t *testing.T) {
+				fetch := kmsg.NewPtrFetchRequest()
+				fetch.Version, fetch.ReplicaID, fetch.MaxBytes = 4, -1, 1<<20
+				fetch.Topics = []kmsg.FetchRequestTopic{{Topic: topic, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1 << 20}}}}
+				before := directGroupRequest(t, target.addr, fetch).(*kmsg.FetchResponse).Topics[0].Partitions[0]
+				if before.ErrorCode != 0 || before.HighWatermark != 3 || len(before.RecordBatches) < 61 {
+					t.Fatalf("initial records: %+v", before)
+				}
+				badCRC := bytes.Clone(before.RecordBatches)
+				binary.BigEndian.PutUint32(badCRC[17:21], 0)
+				badPayload := bytes.Clone(before.RecordBatches)
+				badPayload[len(badPayload)-1] ^= 1
+				for _, version := range []int16{7, 9} {
+					for _, tc := range []struct {
+						name    string
+						records []byte
+					}{
+						{"zero-crc", badCRC},
+						{"corrupt-payload", badPayload},
+						{"valid-then-bad-crc", append(bytes.Clone(before.RecordBatches), badCRC...)},
+					} {
+						t.Run(fmt.Sprintf("v%d/%s", version, tc.name), func(t *testing.T) {
+							req := kmsg.NewPtrProduceRequest()
+							req.Version, req.Acks, req.TimeoutMillis = version, -1, 5000
+							req.Topics = []kmsg.ProduceRequestTopic{{Topic: topic, Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: tc.records}}}}
+							resp := directGroupRequest(t, target.addr, req).(*kmsg.ProduceResponse)
+							if part := resp.Topics[0].Partitions[0]; part.ErrorCode != protocol.CORRUPT_MESSAGE {
+								t.Fatalf("corrupt produce: %+v", part)
+							}
+							after := directGroupRequest(t, target.addr, fetch).(*kmsg.FetchResponse).Topics[0].Partitions[0]
+							if after.ErrorCode != 0 || after.HighWatermark != before.HighWatermark || !bytes.Equal(after.RecordBatches, before.RecordBatches) {
+								t.Fatalf("corrupt produce changed stored records: %+v", after)
+							}
+						})
+					}
+				}
+			})
 			if got := run(t, target.addr, "", "-C", "-q", "-t", topic, "-p", "0", "-o", "beginning", "-c", "3", "-e"); got != messages {
 				t.Fatalf("partition consume: %q", got)
 			}

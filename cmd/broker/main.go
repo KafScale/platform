@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"log/slog"
 	"net"
 	"net/http"
@@ -1193,6 +1194,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
+var produceCRC32CTable = crc32.MakeTable(crc32.Castagnoli)
+
 // validateProduceRecordSet validates every frame before any offsets are reserved.
 func validateProduceRecordSet(records []byte) ([]storage.RecordBatch, int16) {
 	var batches []storage.RecordBatch
@@ -1205,6 +1208,10 @@ func validateProduceRecordSet(records []byte) ([]storage.RecordBatch, int16) {
 		}
 		length := int64(int32(binary.BigEndian.Uint32(records[8:12]))) + 12
 		if length < 61 || length > int64(len(records)) {
+			return nil, protocol.CORRUPT_MESSAGE
+		}
+		// Kafka's CRC32C covers attributes through the end of this batch.
+		if crc32.Checksum(records[21:int(length)], produceCRC32CTable) != binary.BigEndian.Uint32(records[17:21]) {
 			return nil, protocol.CORRUPT_MESSAGE
 		}
 		batch, err := storage.NewRecordBatchFromBytes(records[:int(length)])
