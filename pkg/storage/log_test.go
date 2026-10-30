@@ -395,8 +395,8 @@ func TestPartitionLogFlushErrorPreservesBuffer(t *testing.T) {
 	}
 
 	err := log.Flush(context.Background())
-	if err == nil {
-		t.Fatalf("expected flush to fail")
+	if !errors.Is(err, ErrObjectStorage) {
+		t.Fatalf("expected an object storage error, got %v", err)
 	}
 
 	if next := log.BufferedHighWatermark(); next != 1 {

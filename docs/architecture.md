@@ -54,7 +54,7 @@ If caches miss, the broker fetches from S3.
 
 ## S3 Health Backpressure
 
-When the broker detects degraded or unavailable S3 health, it rejects Produce and Fetch requests with retriable error codes: `REQUEST_TIMED_OUT` (7) while S3 is degraded and `KAFKA_STORAGE_ERROR` (56) while it is unavailable or a request to it fails. Produce v8 and later also return a message such as "object storage unavailable, retry later". Clients retry until S3 recovers or their delivery timeout runs out.
+When the broker detects degraded or unavailable S3 health, it rejects Produce and Fetch requests with retriable error codes: `REQUEST_TIMED_OUT` (7) while S3 is degraded and `KAFKA_STORAGE_ERROR` (56) while it is unavailable or a request to it fails. Produce v8 and later also return a message such as "object storage unavailable, retry later". Produce below v4 and Fetch v5 or below receive `NOT_LEADER_OR_FOLLOWER` (6) instead of `KAFKA_STORAGE_ERROR`, because those versions predate it, matching Kafka. Errors that do not come from S3 still return `UNKNOWN_SERVER_ERROR`. Clients retry until S3 recovers or their delivery timeout runs out.
 
 ## Multi-Region S3 Reads (CRR)
 
