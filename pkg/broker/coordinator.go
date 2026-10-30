@@ -576,6 +576,8 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 					code = protocol.UNKNOWN_SERVER_ERROR
 					if errors.Is(err, metadata.ErrConsumerGroupDeleted) {
 						code = protocol.UNKNOWN_MEMBER_ID
+					} else if errors.Is(err, metadata.ErrConsumerGroupChanged) {
+						code = protocol.COORDINATOR_NOT_AVAILABLE
 					}
 				}
 			}
@@ -646,7 +648,7 @@ func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.Describ
 	resp := kmsg.NewPtrDescribeGroupsResponse()
 	resp.Groups = make([]kmsg.DescribeGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
-		group, err := c.fetchGroupForAdmin(ctx, groupID)
+		group, _, err := c.fetchGroupForAdmin(ctx, groupID)
 		if err != nil {
 			g := kmsg.NewDescribeGroupsResponseGroup()
 			g.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
@@ -667,16 +669,16 @@ func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.Describ
 }
 
 // fetchGroupForAdmin also discovers offsets left without group metadata by older brokers.
-func (c *GroupCoordinator) fetchGroupForAdmin(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, error) {
-	group, err := c.store.FetchConsumerGroup(ctx, groupID)
+func (c *GroupCoordinator) fetchGroupForAdmin(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, int64, error) {
+	group, createRevision, err := metadata.FetchConsumerGroupRevision(ctx, c.store, groupID)
 	if err != nil || group != nil {
-		return group, err
+		return group, createRevision, err
 	}
 	offsets, err := c.store.ListGroupConsumerOffsets(ctx, groupID)
 	if err != nil || len(offsets) == 0 {
-		return nil, err
+		return nil, 0, err
 	}
-	return emptyConsumerGroup(groupID), nil
+	return emptyConsumerGroup(groupID), 0, nil
 }
 
 func emptyConsumerGroup(groupID string) *metadatapb.ConsumerGroup {
@@ -756,7 +758,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 				continue
 			}
 		}
-		group, err := c.fetchGroupForAdmin(ctx, groupID)
+		group, createRevision, err := c.fetchGroupForAdmin(ctx, groupID)
 		if err != nil {
 			result.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			resp.Groups = append(resp.Groups, result)
@@ -775,6 +777,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			// A replacement coordinator has not seen this group's sessions yet.
 			// Cache it so any surviving members also receive normal background expiry.
 			state := restoreGroupState(group)
+			state.createRevision = createRevision
 			c.groups[groupID] = state
 			if err := c.expireGroupMembersLocked(ctx, groupID, state, time.Now()); err != nil {
 				result.ErrorCode = groupExpiryErrorCode(err)
