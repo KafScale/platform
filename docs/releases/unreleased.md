@@ -23,6 +23,8 @@ limitations under the License.
 
 ## Bug fixes
 
+- Produce and Fetch return `KAFKA_STORAGE_ERROR` (56) instead of `UNKNOWN_SERVER_ERROR` (-1) when S3 is unavailable, when a write or read to S3 fails, and when a partition cannot be restored from S3. Clients such as librdkafka now retry instead of failing the message. Degraded S3 still returns `REQUEST_TIMED_OUT` (7). Produce v8 and later include a message such as "object storage unavailable, retry later" (#255).
+
 - Expire Empty consumer groups and their committed offsets after seven days by default. Configure `KAFSCALE_OFFSETS_RETENTION_MINUTES` or `spec.config.offsetsRetentionMinutes` on KafscaleCluster; zero or negative disables expiry. Joins and commits reset the retention clock, and leased, revision-fenced deletion protects active groups and concurrent writes (#238).
 
 - Remove members that disconnect during a pending JoinGroup through the broker or proxy from the rebalance and persisted group state, so survivors can receive their partitions without waiting for the dead member's session timeout (#251).

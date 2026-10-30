@@ -41,4 +41,5 @@ const (
 	UNSUPPORTED_VERSION          int16 = 35
 	NOT_LEADER_OR_FOLLOWER       int16 = 6
 	NOT_COORDINATOR              int16 = 16
+	KAFKA_STORAGE_ERROR          int16 = 56
 )

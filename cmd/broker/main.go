@@ -638,14 +638,21 @@ func brokerByID(brokers []protocol.MetadataBroker, id int32) (protocol.MetadataB
 	return protocol.MetadataBroker{}, false
 }
 
+var errObjectStorage = errors.New("object storage request failed")
+
 func (h *handler) backpressureErrorCode() int16 {
+	code, _ := h.backpressureError()
+	return code
+}
+
+func (h *handler) backpressureError() (int16, string) {
 	switch h.s3Health.State() {
 	case broker.S3StateDegraded:
-		return protocol.REQUEST_TIMED_OUT
+		return protocol.REQUEST_TIMED_OUT, "object storage degraded, retry later"
 	case broker.S3StateUnavailable:
-		return protocol.UNKNOWN_SERVER_ERROR
+		return protocol.KAFKA_STORAGE_ERROR, "object storage unavailable, retry later"
 	default:
-		return protocol.UNKNOWN_SERVER_ERROR
+		return protocol.KAFKA_STORAGE_ERROR, "object storage request failed, retry later"
 	}
 }
 
@@ -1105,7 +1112,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			if h.s3Health.State() != broker.S3StateHealthy {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
-				p.ErrorCode = h.backpressureErrorCode()
+				code, message := h.backpressureError()
+				p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
 				partitionResponses = append(partitionResponses, p)
 				if h.traceKafka {
 					h.logger.Debug("produce rejected due to S3 health", "topic", topic.Topic, "partition", part.Partition, "s3_state", h.s3Health.State())
@@ -1127,6 +1135,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 				if errors.Is(err, metadata.ErrInvalidTopic) {
 					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				} else if errors.Is(err, errObjectStorage) {
+					code, message := h.backpressureError()
+					p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
 				}
 				partitionResponses = append(partitionResponses, p)
 				continue
@@ -1135,7 +1146,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			if err != nil {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
-				p.ErrorCode = h.backpressureErrorCode()
+				code, message := h.backpressureError()
+				p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
 				partitionResponses = append(partitionResponses, p)
 				if h.traceKafka {
 					h.logger.Debug("produce append failed", "topic", topic.Topic, "partition", part.Partition, "error", err)
@@ -1961,6 +1973,8 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 					errorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, metadata.ErrInvalidTopic) {
 					errorCode = protocol.INVALID_TOPIC_EXCEPTION
+				} else if errors.Is(err, errObjectStorage) {
+					errorCode = h.backpressureErrorCode()
 				}
 				p := kmsg.NewFetchResponseTopicPartition()
 				p.Partition = part.Partition
@@ -2129,7 +2143,7 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			lastOffset, err := plog.RestoreFromS3(ctx)
 			if err != nil {
 				h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", errObjectStorage, err)
 			}
 			if lastOffset >= nextOffset {
 				if err := h.store.UpdateOffsets(ctx, topic, partition, lastOffset); err != nil {
