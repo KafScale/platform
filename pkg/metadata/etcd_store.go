@@ -35,10 +35,11 @@ import (
 
 // EtcdStoreConfig defines how we connect to etcd for metadata/offsets.
 type EtcdStoreConfig struct {
-	Endpoints   []string
-	Username    string
-	Password    string
-	DialTimeout time.Duration
+	Endpoints        []string
+	Username         string
+	Password         string
+	DialTimeout      time.Duration
+	StorageNamespace string
 }
 
 // etcdError wraps an error for storage in an atomic.Value, which requires a
@@ -53,6 +54,8 @@ type EtcdStore struct {
 	available int32
 	lastError atomic.Value // stores etcdError
 	persistMu sync.Mutex   // serializes snapshot read/write to avoid out-of-order etcd puts
+
+	storageNamespace string
 }
 
 func (s *EtcdStore) EtcdClient() *clientv3.Client {
@@ -86,6 +89,11 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 		client:    cli,
 		metadata:  NewInMemoryStore(snapshot),
 		available: 1,
+
+		storageNamespace: cfg.StorageNamespace,
+	}
+	if store.storageNamespace == "" {
+		store.storageNamespace = "default"
 	}
 	_ = store.refreshSnapshot(ctx) // best-effort; snapshot may not exist yet
 	store.startWatchers()
@@ -509,35 +517,7 @@ func (s *EtcdStore) partitionExists(ctx context.Context, topic string, partition
 
 // DeleteTopic updates the local snapshot so admin APIs behave consistently.
 func (s *EtcdStore) DeleteTopic(ctx context.Context, name string) error {
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
-
-	metaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	state, err := s.metadata.Metadata(metaCtx, []string{name})
-	if err != nil {
-		return err
-	}
-	var found bool
-	for _, topic := range state.Topics {
-		if *topic.Topic == name {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return ErrUnknownTopic
-	}
-	if err := s.metadata.DeleteTopic(ctx, name); err != nil {
-		return err
-	}
-	if err := s.deleteTopicOffsets(ctx, name); err != nil {
-		return err
-	}
-	if err := s.deleteConsumerOffsets(ctx, name); err != nil {
-		return err
-	}
-	return s.persistSnapshotLocked(ctx)
+	return s.RetireTopic(ctx, name, s.storageNamespace)
 }
 
 func (s *EtcdStore) startWatchers() {
@@ -618,38 +598,4 @@ func (s *EtcdStore) persistSnapshotLocked(ctx context.Context) error {
 	_, err = s.client.Put(putCtx, snapshotKey(), string(payload))
 	s.recordEtcdResult(err)
 	return err
-}
-
-func (s *EtcdStore) deleteTopicOffsets(ctx context.Context, topic string) error {
-	delCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	prefix := fmt.Sprintf("/kafscale/topics/%s/", topic)
-	_, err := s.client.Delete(delCtx, prefix, clientv3.WithPrefix())
-	s.recordEtcdResult(err)
-	return err
-}
-
-func (s *EtcdStore) deleteConsumerOffsets(ctx context.Context, topic string) error {
-	getCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	resp, err := s.client.Get(getCtx, "/kafscale/consumers/", clientv3.WithPrefix())
-	if err != nil {
-		s.recordEtcdResult(err)
-		return err
-	}
-	s.recordEtcdResult(nil)
-	for _, kv := range resp.Kvs {
-		key := string(kv.Key)
-		if strings.Contains(key, fmt.Sprintf("/offsets/%s/", topic)) {
-			delCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, delErr := s.client.Delete(delCtx, key)
-			cancel()
-			if delErr != nil {
-				s.recordEtcdResult(delErr)
-				return delErr
-			}
-			s.recordEtcdResult(nil)
-		}
-	}
-	return nil
 }

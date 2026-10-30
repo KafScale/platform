@@ -137,7 +137,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		if h.autoCreateTopics && len(topicNames) > 0 {
 			for _, name := range topicNames {
-				if strings.TrimSpace(name) == "" {
+				if metadata.ValidateTopicName(name) != nil {
 					continue
 				}
 				if !h.allowTopic(principal, name, acl.ActionProduce) && !h.allowAdmin(principal) {
@@ -1125,6 +1125,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
+				if errors.Is(err, metadata.ErrInvalidTopic) {
+					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				}
 				partitionResponses = append(partitionResponses, p)
 				continue
 			}
@@ -1310,7 +1313,7 @@ func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.Reque
 	for _, name := range req.TopicNames {
 		t := kmsg.NewDeleteTopicsResponseTopic()
 		t.Topic = kmsg.StringPtr(name)
-		if err := h.store.DeleteTopic(ctx, name); err != nil {
+		if err := h.deleteTopic(ctx, name); err != nil {
 			switch {
 			case errors.Is(err, metadata.ErrUnknownTopic):
 				t.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
@@ -1327,7 +1330,10 @@ func (h *handler) handleDeleteTopics(ctx context.Context, header *protocol.Reque
 }
 
 func (h *handler) validateCreateTopic(ctx context.Context, topic kmsg.CreateTopicsRequestTopic) error {
-	if topic.Topic == "" || topic.NumPartitions <= 0 {
+	if err := metadata.ValidateTopicName(topic.Topic); err != nil {
+		return err
+	}
+	if topic.NumPartitions <= 0 {
 		return metadata.ErrInvalidTopic
 	}
 	replicationFactor := topic.ReplicationFactor
@@ -1953,6 +1959,8 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				errorCode := int16(protocol.UNKNOWN_SERVER_ERROR)
 				if !h.etcdAvailable() {
 					errorCode = protocol.REQUEST_TIMED_OUT
+				} else if errors.Is(err, metadata.ErrInvalidTopic) {
+					errorCode = protocol.INVALID_TOPIC_EXCEPTION
 				}
 				p := kmsg.NewFetchResponseTopicPartition()
 				p.Partition = part.Partition
@@ -2109,7 +2117,11 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			if err != nil {
 				return nil, err
 			}
-			plog := storage.NewPartitionLog(h.s3Namespace, topic, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
+			storageName, err := h.topicStorageName(ctx, topic)
+			if err != nil {
+				return nil, err
+			}
+			plog := storage.NewPartitionLog(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
 				if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
 					h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
 				}
@@ -2317,6 +2329,7 @@ func main() {
 		os.Exit(1)
 	}
 	handler.startConsumerLagSampler(ctx)
+	handler.startTopicDeleteWatch(ctx)
 	metricsAddr := envOrDefault("KAFSCALE_METRICS_ADDR", defaultMetricsAddr)
 	controlAddr := envOrDefault("KAFSCALE_CONTROL_ADDR", defaultControlAddr)
 	startMetricsServer(ctx, metricsAddr, handler, logger)
@@ -2633,6 +2646,8 @@ func etcdConfigFromEnv() (metadata.EtcdStoreConfig, bool) {
 		Endpoints: strings.Split(endpoints, ","),
 		Username:  os.Getenv("KAFSCALE_ETCD_USERNAME"),
 		Password:  os.Getenv("KAFSCALE_ETCD_PASSWORD"),
+
+		StorageNamespace: envOrDefault("KAFSCALE_S3_NAMESPACE", "default"),
 	}, true
 }
 

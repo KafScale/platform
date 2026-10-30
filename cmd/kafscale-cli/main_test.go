@@ -410,7 +410,7 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 		SourceTopic:     "orders",
 		SourceNamespace: "default",
 		TargetTopic:     "orders-restored",
-		TargetNamespace: "default",
+		TargetNamespace: "restore-ns",
 		RestoreTo:       time.Now().UTC(),
 	}, s3, store)
 	if err == nil || !strings.Contains(err.Error(), "list failed") {
@@ -423,6 +423,13 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 	}
 	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == 0 {
 		t.Fatalf("expected rolled back target topic to be absent, got %+v", meta.Topics)
+	}
+	record, err := store.EtcdClient().Get(ctx, metadata.DeletedTopicKey("orders-restored", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Kvs) != 1 || !strings.Contains(string(record.Kvs[0].Value), `"prefix":"restore-ns/orders-restored/"`) {
+		t.Fatalf("expected deleted topic record for rolled back target, got %+v", record.Kvs)
 	}
 }
 
@@ -561,5 +568,83 @@ func encodeStorageRecoveryVarint(value int64) []byte {
 		if zigzag == 0 {
 			return out
 		}
+	}
+}
+
+func TestExecuteRestoreUsesTopicGenerations(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "broker-0", Port: 9092}},
+		ControllerID: 1,
+	}, endpoints)
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cli.Close() }()
+	for topic, generation := range map[string]string{"orders": "1", "orders-restored": "2"} {
+		if _, err := cli.Put(ctx, metadata.TopicGenerationKey(topic), generation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s3 := storage.NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, created.UnixMilli(), []int64{0}),
+	}, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s3.UploadSegment(ctx, "default/orders@1/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3.UploadIndex(ctx, "default/orders@1/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	if err := executeRestore(ctx, &stdout, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       created.Add(5 * time.Minute),
+	}, s3, store); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3.DownloadSegment(ctx, "default/orders-restored@2/0/segment-00000000000000000000.kfs", nil); err != nil {
+		t.Fatalf("restored segment not under the target generation prefix: %v", err)
+	}
+}
+
+func TestExecuteRestoreRejectsInvalidTargetName(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers:      []protocol.MetadataBroker{{NodeID: 1, Host: "broker-0", Port: 9092}},
+		ControllerID: 1,
+		Topics: []protocol.MetadataTopic{{
+			Topic:      kmsg.StringPtr("orders"),
+			Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1, Replicas: []int32{1}, ISR: []int32{1}}},
+		}},
+	}, testutil.StartEmbeddedEtcd(t))
+	err := executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders@1",
+		TargetNamespace: "default",
+		RestoreTo:       time.Now().UTC(),
+	}, storage.NewMemoryS3Client(), store)
+	if !errors.Is(err, metadata.ErrInvalidTopic) {
+		t.Fatalf("expected invalid topic error, got %v", err)
+	}
+	meta, err := store.Metadata(ctx, []string{"orders@1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == protocol.NONE {
+		t.Fatalf("target topic was created: %+v", meta.Topics)
 	}
 }

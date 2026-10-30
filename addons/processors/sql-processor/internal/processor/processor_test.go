@@ -214,3 +214,65 @@ func (r *recordSink) Write(ctx context.Context, records []sink.Record) error {
 func (r *recordSink) Close(ctx context.Context) error {
 	return nil
 }
+
+type offsetStore struct {
+	mockStore
+	mu      sync.Mutex
+	offsets map[string]int64
+}
+
+func (m *offsetStore) LoadOffset(ctx context.Context, topic string, partition int32) (checkpoint.OffsetState, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	offset, ok := m.offsets[topic]
+	if !ok {
+		offset = -1
+	}
+	return checkpoint.OffsetState{Topic: topic, Partition: partition, Offset: offset}, nil
+}
+
+func (m *offsetStore) CommitOffset(ctx context.Context, state checkpoint.OffsetState) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.offsets[state.Topic] = state.Offset
+	return nil
+}
+
+func TestRunCheckpointsRecreatedTopicByStorageName(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	segment := discovery.SegmentRef{Topic: "orders", StorageTopic: "orders@1", SegmentKey: "seg-1", IndexKey: "idx-1"}
+	records := []decoder.Record{
+		{Topic: "orders", Partition: 0, Offset: 0, Value: []byte("a")},
+		{Topic: "orders", Partition: 0, Offset: 1, Value: []byte("b")},
+	}
+	store := &offsetStore{offsets: map[string]int64{"orders": 100}}
+	writer := &recordSink{written: make(chan []sink.Record, 1)}
+	p := &Processor{
+		discover: &mockDiscovery{segments: []discovery.SegmentRef{segment}},
+		decode:   &mockDecoder{records: map[string][]decoder.Record{"seg-1": records}},
+		store:    store,
+		sink:     writer,
+		locks:    newTopicLocker(),
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = p.Run(ctx)
+		close(done)
+	}()
+	select {
+	case written := <-writer.written:
+		if len(written) != 2 {
+			t.Fatalf("expected 2 records, got %d", len(written))
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("re-created topic records were not written")
+	}
+	cancel()
+	<-done
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.offsets["orders@1"] != 1 || store.offsets["orders"] != 100 {
+		t.Fatalf("unexpected checkpoints %v", store.offsets)
+	}
+}

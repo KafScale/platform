@@ -37,6 +37,7 @@ const segmentFooterMagic = "END!"
 
 type SegmentRef struct {
 	Topic        string
+	StorageTopic string
 	Partition    int32
 	BaseOffset   int64
 	SegmentKey   string
@@ -160,7 +161,8 @@ func (l *s3Lister) ListCompleted(ctx context.Context) ([]SegmentRef, error) {
 			continue
 		}
 		segment := SegmentRef{
-			Topic:        key.topic,
+			Topic:        topicName(key.topic),
+			StorageTopic: key.topic,
 			Partition:    key.partition,
 			BaseOffset:   key.baseOffset,
 			SegmentKey:   entry.kfsKey,
@@ -176,8 +178,8 @@ func (l *s3Lister) ListCompleted(ctx context.Context) ([]SegmentRef, error) {
 	}
 
 	sort.Slice(segments, func(i, j int) bool {
-		if segments[i].Topic != segments[j].Topic {
-			return segments[i].Topic < segments[j].Topic
+		if segments[i].StorageTopic != segments[j].StorageTopic {
+			return segments[i].StorageTopic < segments[j].StorageTopic
 		}
 		if segments[i].Partition != segments[j].Partition {
 			return segments[i].Partition < segments[j].Partition
@@ -374,4 +376,24 @@ func normalizePrefix(prefix string) string {
 		return ""
 	}
 	return clean + "/"
+}
+
+func topicName(storageTopic string) string {
+	i := strings.LastIndexByte(storageTopic, '@')
+	if i <= 0 || i == len(storageTopic)-1 {
+		return storageTopic
+	}
+	for _, c := range storageTopic[i+1:] {
+		if c < '0' || c > '9' {
+			return storageTopic
+		}
+	}
+	return storageTopic[:i]
+}
+
+func (s SegmentRef) CheckpointTopic() string {
+	if s.StorageTopic != "" {
+		return s.StorageTopic
+	}
+	return s.Topic
 }

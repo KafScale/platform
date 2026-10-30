@@ -168,6 +168,9 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 	if s3Client == nil {
 		return fmt.Errorf("s3 client required")
 	}
+	if err := metadata.ValidateTopicName(cfg.TargetTopic); err != nil {
+		return err
+	}
 
 	sourceMeta, err := store.Metadata(ctx, []string{cfg.SourceTopic})
 	if err != nil {
@@ -198,7 +201,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		if restoreCommitted || !targetCreated {
 			return
 		}
-		if err := store.DeleteTopic(context.Background(), cfg.TargetTopic); err != nil {
+		if err := store.RetireTopic(context.Background(), cfg.TargetTopic, cfg.TargetNamespace); err != nil {
 			if !errors.Is(err, metadata.ErrUnknownTopic) {
 				fmt.Fprintf(os.Stderr, "warning: failed to roll back target topic %s: %v\n", cfg.TargetTopic, err)
 			}
@@ -221,11 +224,19 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
+	sourceGeneration, err := store.TopicGeneration(ctx, cfg.SourceTopic)
+	if err != nil {
+		return err
+	}
+	targetGeneration, err := store.TopicGeneration(ctx, cfg.TargetTopic)
+	if err != nil {
+		return err
+	}
 	result, err := storage.RecoverTopicToTimestamp(ctx, s3Client, storage.TopicRecoveryConfig{
 		SourceNamespace: cfg.SourceNamespace,
-		SourceTopic:     cfg.SourceTopic,
+		SourceTopic:     metadata.TopicStorageName(cfg.SourceTopic, sourceGeneration),
 		TargetNamespace: cfg.TargetNamespace,
-		TargetTopic:     cfg.TargetTopic,
+		TargetTopic:     metadata.TopicStorageName(cfg.TargetTopic, targetGeneration),
 		RestoreTo:       cfg.RestoreTo,
 		Partitions:      cfg.Partitions,
 	})

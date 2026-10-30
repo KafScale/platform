@@ -94,7 +94,7 @@ jobs:
       - name: Kafka CLI simple consumer group end-to-end test
         env:
           KAFSCALE_E2E: "1"
-        run: go test -race -tags=e2e ./test/e2e -run '^TestSimpleOffsetCommitE2E$' -v -count=1 -timeout=5m
+        run: go test -race -tags=e2e ./test/e2e -run '^(TestSimpleOffsetCommitE2E|TestTopicRecreateE2E)$' -v -count=1 -timeout=5m
 
       - name: CRD and security reconciliation API tests
         env:

@@ -158,8 +158,12 @@ func manifestEntriesToSegments(prefix string, entries []manifestEntry) []Segment
 		parsed, _, ok := parseSegmentKey(prefix, segmentKey)
 		baseOffset, _ := parseBaseOffsetFromKey(segmentKey)
 		topic := entry.Topic
-		if topic == "" && ok {
-			topic = parsed.topic
+		storageTopic := entry.Topic
+		if ok {
+			storageTopic = parsed.topic
+		}
+		if topic == "" {
+			topic = topicName(storageTopic)
 		}
 		partition := int32(0)
 		if entry.Partition != nil {
@@ -174,6 +178,7 @@ func manifestEntriesToSegments(prefix string, entries []manifestEntry) []Segment
 
 		segment := SegmentRef{
 			Topic:        topic,
+			StorageTopic: storageTopic,
 			Partition:    partition,
 			BaseOffset:   baseOffset,
 			SegmentKey:   segmentKey,
