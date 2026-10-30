@@ -69,6 +69,12 @@ func ownedConsumerOffsetKey(key, prefix string) bool {
 
 // DeleteConsumerGroupAndOffsets atomically removes only this group's keys.
 func (s *EtcdStore) DeleteConsumerGroupAndOffsets(ctx context.Context, groupID string) error {
+	return s.deleteConsumerGroupAndOffsets(ctx, groupID, 0, 0)
+}
+
+// Fixed revisions fence retention against a join or commit after its eligibility
+// check. Explicit DeleteGroups keeps its existing retryable snapshot semantics.
+func (s *EtcdStore) deleteConsumerGroupAndOffsets(ctx context.Context, groupID string, groupRevision, offsetRevision int64) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	prefix := fmt.Sprintf("%s/%s/offsets/", ConsumerGroupPrefix(), groupID)
@@ -99,11 +105,17 @@ func (s *EtcdStore) DeleteConsumerGroupAndOffsets(ctx context.Context, groupID s
 			ranges = append(ranges, [2]string{start, end})
 		}
 		revision := snapshot.Header.Revision + 1
+		if offsetRevision > 0 {
+			revision = offsetRevision + 1
+		}
 		for first := 0; ; first += maxGroupDeleteOps {
 			last := min(first+maxGroupDeleteOps, len(ranges))
 			chunk := ranges[first:last]
 			ops := make([]clientv3.Op, 0, len(chunk)+1)
 			cmps := []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(groupID)), "<", revision)}
+			if groupRevision > 0 {
+				cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(groupID)), "=", groupRevision))
+			}
 			for _, r := range chunk {
 				ops = append(ops, clientv3.OpDelete(r[0], clientv3.WithRange(r[1])))
 			}
@@ -165,34 +177,60 @@ func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group, 
 }
 
 func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	bytes, _ := json.Marshal(consumerOffsetRecord{Offset: offset, Metadata: metadata, CommittedAt: time.Now().UTC().Format(time.RFC3339Nano)})
-	result, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(group)), ">", 0)).
-		Then(clientv3.OpPut(consumerOffsetKey(group, topic, partition), string(bytes))).
-		Commit()
-	s.recordEtcdResult(err)
-	if err != nil {
-		return err
-	}
-	if !result.Succeeded {
-		return ErrConsumerGroupDeleted
-	}
-	return nil
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true)
 }
 
 func (s *InMemoryStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true)
+}
+
+func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string, requireGroup bool) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for range 3 {
+		current, revision, _, err := s.groupSnapshot(ctx, group)
+		if err != nil {
+			return err
+		}
+		if current == nil && requireGroup {
+			return ErrConsumerGroupDeleted
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		payload, _ := json.Marshal(consumerOffsetRecord{Offset: offset, Metadata: meta, CommittedAt: now})
+		ops := []clientv3.Op{clientv3.OpPut(consumerOffsetKey(group, topic, partition), string(payload))}
+		if current != nil && len(current.Members) == 0 {
+			current.EmptySince = now
+			// The snapshot was decoded successfully; changing only its ASCII
+			// timestamp preserves protobuf encodability.
+			encoded, _ := EncodeConsumerGroup(current)
+			ops = append(ops, clientv3.OpPut(ConsumerGroupKey(group), string(encoded)))
+		}
+		result, err := s.client.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision)).Then(ops...).Commit()
+		s.recordEtcdResult(err)
+		if err != nil {
+			return err
+		}
+		if result.Succeeded {
+			return nil
+		}
+	}
+	return ErrConsumerGroupChanged
+}
+
+func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string, requireGroup bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.consumerGroups[group]; !ok {
+	current := s.consumerGroups[group]
+	if current == nil && requireGroup {
 		return ErrConsumerGroupDeleted
 	}
+	if current != nil && len(current.Members) == 0 {
+		current.EmptySince = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	key := consumerKey(group, topic, partition)
-	s.consumerOffsets[key] = offset
-	s.consumerMeta[key] = metadata
+	s.consumerOffsets[key], s.consumerMeta[key] = offset, meta
 	return nil
 }

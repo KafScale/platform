@@ -478,17 +478,7 @@ func (s *InMemoryStore) DeleteTopic(ctx context.Context, name string) error {
 
 // CommitConsumerOffset implements Store.CommitConsumerOffset.
 func (s *InMemoryStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := consumerKey(group, topic, partition)
-	s.consumerOffsets[key] = offset
-	s.consumerMeta[key] = metadata
-	return nil
+	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false)
 }
 
 // FetchConsumerOffset implements Store.FetchConsumerOffset.
@@ -567,7 +557,7 @@ func (s *InMemoryStore) PutConsumerGroup(ctx context.Context, group *metadatapb.
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.consumerGroups[group.GroupId] = cloneConsumerGroup(group)
+	s.consumerGroups[group.GroupId] = retainedGroup(group, s.consumerGroups[group.GroupId], time.Now())
 	return nil
 }
 

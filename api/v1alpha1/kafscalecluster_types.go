@@ -99,6 +99,11 @@ type EtcdSpec struct {
 }
 
 type ClusterConfigSpec struct {
+	// OffsetsRetentionMinutes defaults to seven days. Zero or negative disables
+	// automatic expiry of Empty consumer groups and their offsets.
+	// +optional
+	OffsetsRetentionMinutes *int64 `json:"offsetsRetentionMinutes,omitempty"`
+
 	SegmentBytes    int32  `json:"segmentBytes,omitempty"`
 	FlushIntervalMs int32  `json:"flushIntervalMs,omitempty"`
 	CacheSize       string `json:"cacheSize,omitempty"`
@@ -459,6 +464,10 @@ func (in *KafscaleClusterSpec) DeepCopyInto(out *KafscaleClusterSpec) {
 	out.S3 = in.S3
 	in.Etcd.DeepCopyInto(&out.Etcd)
 	out.Config = in.Config
+	if in.Config.OffsetsRetentionMinutes != nil {
+		value := *in.Config.OffsetsRetentionMinutes
+		out.Config.OffsetsRetentionMinutes = &value
+	}
 	in.LfsProxy.DeepCopyInto(&out.LfsProxy)
 }
 
