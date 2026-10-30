@@ -667,8 +667,11 @@ func (c *GroupCoordinator) DescribeGroups(ctx context.Context, req *kmsg.Describ
 		}
 		if group == nil {
 			g := kmsg.NewDescribeGroupsResponseGroup()
-			g.ErrorCode = protocol.GROUP_ID_NOT_FOUND
 			g.Group = groupID
+			g.State = "Dead"
+			if req.Version >= 6 {
+				g.ErrorCode = protocol.GROUP_ID_NOT_FOUND
+			}
 			resp.Groups = append(resp.Groups, g)
 			continue
 		}
