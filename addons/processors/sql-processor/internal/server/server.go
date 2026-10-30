@@ -63,6 +63,11 @@ type Server struct {
 	decoder     decoder.Decoder
 	decoderInit bool
 	decoderErr  error
+
+	generationsMu   sync.Mutex
+	generations     generationSource
+	generationsInit bool
+	generationsErr  error
 }
 
 func New(cfg config.Config, logger *log.Logger) *Server {
@@ -900,7 +905,7 @@ func (s *Server) explainQuery(ctx context.Context, parsed kafsql.Query) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	segments, err := lister.ListCompleted(ctx)
+	segments, err := s.listCurrentSegments(ctx, lister)
 	if err != nil {
 		return nil, err
 	}
@@ -1360,7 +1365,7 @@ func (s *Server) handleSelect(ctx context.Context, backend *pgproto3.Backend, pa
 		return queryResult{}, err
 	}
 
-	segments, err := lister.ListCompleted(ctx)
+	segments, err := s.listCurrentSegments(ctx, lister)
 	if err != nil {
 		return queryResult{}, err
 	}
@@ -2350,7 +2355,7 @@ func (s *Server) handleJoinSelect(ctx context.Context, backend *pgproto3.Backend
 		return queryResult{}, err
 	}
 
-	segments, err := lister.ListCompleted(ctx)
+	segments, err := s.listCurrentSegments(ctx, lister)
 	if err != nil {
 		return queryResult{}, err
 	}

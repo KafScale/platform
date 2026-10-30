@@ -14,6 +14,7 @@
 // limitations under the License.
 
 package discovery
+
 import "testing"
 
 func TestRecreatedTopicSegmentsKeepStorageTopic(t *testing.T) {
