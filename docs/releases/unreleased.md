@@ -19,7 +19,7 @@ limitations under the License.
 
 ## New features
 
-- `kafscale-cli prune` lists the S3 data that deleted topics keep and deletes it with `--force`. It filters by `--topic` and `--older-than`, refuses live topics and the current generation, and is safe while brokers run. Access is controlled by the etcd and S3 credentials. It does not cover LFS objects or topics deleted before the upgrade (#262).
+- `kafscale-cli prune` lists the S3 data that deleted topics keep and deletes it with `--force`. It filters by `--topic` and `--older-than`, deletes only partition segment and index files, refuses live topics and the current generation, fails when the bucket does not exist, and is safe while brokers run. Access is controlled by the etcd and S3 credentials. It does not cover LFS objects or topics deleted before the upgrade (#262).
 
 ## Bug fixes
 
