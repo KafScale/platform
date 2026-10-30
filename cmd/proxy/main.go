@@ -173,6 +173,9 @@ func main() {
 			os.Exit(1)
 		}
 		p.lfs = lfsmod
+		if etcdStore, ok := store.(*metadata.EtcdStore); ok {
+			lfsmod.topicGeneration = etcdStore.TopicGeneration
+		}
 		lfsmod.identityDial = p.dialBackend
 		if security != nil {
 			lfsmod.authorizer = security.lfsACL

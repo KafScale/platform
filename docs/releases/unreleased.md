@@ -21,6 +21,8 @@ limitations under the License.
 
 - `kafscale-cli prune` lists the S3 data that deleted topics keep and deletes it with `--force`. It filters by `--topic` and `--older-than`, deletes only partition segment and index files, refuses live topics and the current generation, fails when the bucket does not exist, and is safe while brokers run. Access is controlled by the etcd and S3 credentials. It does not cover LFS objects or topics deleted before the upgrade (#262).
 
+- The LFS proxy writes new objects under their own prefix, `<namespace>/@lfs/<topic>/` or `<namespace>/@lfs/<topic>@<N>/` after the Nth delete, instead of inside the topic's segment folder. Objects written before stay where they are and remain readable, because the envelope stores the full key.
+
 ## Bug fixes
 
 - Produce and Fetch return `KAFKA_STORAGE_ERROR` (56) instead of `UNKNOWN_SERVER_ERROR` (-1) when S3 is unavailable, when a write or read to S3 fails, and when a partition cannot be restored from S3. Clients such as librdkafka now retry instead of failing the message. Degraded S3 still returns `REQUEST_TIMED_OUT` (7). Produce v8 and later include a message such as "object storage unavailable, retry later" (#255). Produce below v4 and Fetch v5 or below receive `NOT_LEADER_OR_FOLLOWER` (6) instead, as Kafka does for versions that predate the storage error. ListOffsets returns `KAFKA_STORAGE_ERROR` when an earliest lookup cannot load the partition from S3. Produce append errors that do not come from S3 still return `UNKNOWN_SERVER_ERROR`.

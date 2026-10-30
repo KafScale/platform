@@ -136,7 +136,10 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 						m.logger.Error("blob exceeds max size", "size", len(payload), "max", m.maxBlob)
 						return lfsRewriteResult{}, fmt.Errorf("blob size %d exceeds max %d", len(payload), m.maxBlob)
 					}
-					key := m.buildObjectKey(topic.Topic)
+					key, err := m.buildObjectKey(ctx, topic.Topic)
+					if err != nil {
+						return lfsRewriteResult{}, err
+					}
 					sha256Hex, checksum, checksumAlg, err := m.s3Uploader.Upload(ctx, key, payload, alg)
 					if err != nil {
 						m.metrics.IncS3Errors()

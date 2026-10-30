@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/KafScale/platform/pkg/metadata"
 	"log/slog"
 	"net"
 	"os"
@@ -57,6 +58,7 @@ const (
 // to detect LFS_BLOB headers, uploads payloads to S3, and replaces record
 // values with JSON envelopes — all before the existing partition-aware fan-out.
 type lfsModule struct {
+	topicGeneration      func(context.Context, string) (int64, error)
 	authorizer           *acl.Authorizer
 	identityDial         func(context.Context, string) (net.Conn, error)
 	logger               *slog.Logger
@@ -361,13 +363,23 @@ func (m *lfsModule) startS3HealthCheck(ctx context.Context, interval time.Durati
 	}()
 }
 
-func (m *lfsModule) buildObjectKey(topic string) string {
+const lfsPrefix = "@lfs"
+
+func (m *lfsModule) buildObjectKey(ctx context.Context, topic string) (string, error) {
 	ns := strings.TrimSpace(m.s3Namespace)
 	if ns == "" {
 		ns = "default"
 	}
+	var generation int64
+	if m.topicGeneration != nil {
+		gen, err := m.topicGeneration(ctx, topic)
+		if err != nil {
+			return "", fmt.Errorf("lookup topic generation: %w", err)
+		}
+		generation = gen
+	}
 	now := time.Now().UTC()
-	return fmt.Sprintf("%s/%s/lfs/%04d/%02d/%02d/obj-%s", ns, topic, now.Year(), now.Month(), now.Day(), newLFSUUID())
+	return fmt.Sprintf("%s/%s/%s/%04d/%02d/%02d/obj-%s", ns, lfsPrefix, metadata.TopicStorageName(topic, generation), now.Year(), now.Month(), now.Day(), newLFSUUID()), nil
 }
 
 func (m *lfsModule) resolveChecksumAlg(raw string) (lfs.ChecksumAlg, error) {

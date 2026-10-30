@@ -292,7 +292,11 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusBadRequest, "invalid_checksum", "checksum provided but checksum algorithm is none")
 		return
 	}
-	objectKey := m.buildObjectKey(topic)
+	objectKey, err := m.buildObjectKey(r.Context(), topic)
+	if err != nil {
+		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
+		return
+	}
 	clientIP := lfsGetClientIP(r)
 	contentType := r.Header.Get("Content-Type")
 
@@ -762,7 +766,11 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	objectKey := m.buildObjectKey(req.Topic)
+	objectKey, err := m.buildObjectKey(r.Context(), req.Topic)
+	if err != nil {
+		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
+		return
+	}
 	uploadID, err := m.s3Uploader.StartMultipartUpload(r.Context(), objectKey, req.ContentType)
 	if err != nil {
 		m.metrics.IncS3Errors()
@@ -1197,8 +1205,8 @@ func (m *lfsModule) lfsValidateObjectKey(key string) error {
 	if ns != "" && !strings.HasPrefix(key, ns+"/") {
 		return errors.New("key outside namespace")
 	}
-	if !strings.Contains(key, "/lfs/") {
-		return errors.New("key must include /lfs/ segment")
+	if !strings.Contains(key, "/"+lfsPrefix+"/") && !strings.Contains(key, "/lfs/") {
+		return errors.New("key must include /lfs/ or /@lfs/ segment")
 	}
 	return nil
 }

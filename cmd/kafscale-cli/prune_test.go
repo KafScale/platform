@@ -365,6 +365,8 @@ func TestPruneSkipsLFSAndUnknownKeys(t *testing.T) {
 	f.put(t,
 		"default/orders/0/segment-00000000000000000000.kfs",
 		"default/orders/lfs/2026/10/30/obj-live-gen2",
+		"default/@lfs/orders/2026/10/30/obj-gen0",
+		"default/@lfs/orders@1/2026/10/30/obj-gen1",
 		"default/orders/0/notes.txt",
 		"default/orders/0/segment-1.kfs",
 		"default/orders/x/segment-00000000000000000000.kfs",
@@ -382,7 +384,7 @@ func TestPruneSkipsLFSAndUnknownKeys(t *testing.T) {
 	if f.exists("default/orders/0/segment-00000000000000000000.kfs") {
 		t.Fatal("segment not deleted")
 	}
-	for _, key := range []string{"default/orders/lfs/2026/10/30/obj-live-gen2", "default/orders/0/notes.txt", "default/orders/0/segment-1.kfs", "default/orders/x/segment-00000000000000000000.kfs"} {
+	for _, key := range []string{"default/orders/lfs/2026/10/30/obj-live-gen2", "default/@lfs/orders/2026/10/30/obj-gen0", "default/@lfs/orders@1/2026/10/30/obj-gen1", "default/orders/0/notes.txt", "default/orders/0/segment-1.kfs", "default/orders/x/segment-00000000000000000000.kfs"} {
 		if !f.exists(key) {
 			t.Fatalf("%s was deleted", key)
 		}

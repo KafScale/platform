@@ -107,7 +107,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 
 - **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
-- **Topic deletion** – DeleteTopics keeps the topic's data in S3. Each broker drops its cached partition logs for the topic, and a topic re-created with the same name starts empty at offset 0 under a new prefix. A topic that was never deleted stores segments under `<namespace>/<topic>/<partition>/`. After the Nth delete, the next topic with that name stores them under `<namespace>/<topic>@<N>/<partition>/`. `<namespace>` is `KAFSCALE_S3_NAMESPACE`. LFS objects stay under `<namespace>/<topic>/lfs/`.
+- **Topic deletion** – DeleteTopics keeps the topic's data in S3. Each broker drops its cached partition logs for the topic, and a topic re-created with the same name starts empty at offset 0 under a new prefix. A topic that was never deleted stores segments under `<namespace>/<topic>/<partition>/`. After the Nth delete, the next topic with that name stores them under `<namespace>/<topic>@<N>/<partition>/`. `<namespace>` is `KAFSCALE_S3_NAMESPACE`. LFS objects live under their own prefix, `<namespace>/@lfs/<topic>/` for generation 0 and `<namespace>/@lfs/<topic>@<N>/` after the Nth delete. See [LFS proxy](#lfs-proxy).
 - **Find retained topic data** – Each delete writes a record to etcd at `/kafscale/deleted-topics/<topic>/<generation>` with `name`, `topic_id`, `generation`, `prefix` and `deleted_at`. The current generation of a topic name is at `/kafscale/topic-generations/<topic>`. List the records with `etcdctl get --prefix /kafscale/deleted-topics/`. The data under each `prefix` stays in S3 until you remove it.
 - **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
 - **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
@@ -325,7 +325,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 - The output has one line per deleted incarnation with the topic, generation, S3 prefix, object count, bytes and `deleted_at`, then the totals. A dry run says that nothing was deleted.
 - Prune uses the same environment as `kafscale-cli restore`. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.
 - Each incarnation is matched by its exact prefix with a trailing slash, such as `default/orders@1/`, so it never matches `orders@10` or `orders-x`.
-- Prune only counts and deletes partition segment and index files, `<prefix><partition>/segment-<offset>.kfs` and `.index`. It skips every other key under the prefix, including LFS objects under `<prefix>lfs/`, which the LFS proxy writes for every generation of the topic.
+- Prune only counts and deletes partition segment and index files, `<prefix><partition>/segment-<offset>.kfs` and `.index`. It skips every other key under the prefix, including LFS objects that older proxies wrote under `<namespace>/<topic>/lfs/`. LFS objects written now live under `<namespace>/@lfs/`, outside every topic prefix.
 - Prune checks that the bucket exists before it lists anything, and fails instead of creating it.
 - Before deleting a prefix, prune reads the topic's current generation and the topic snapshot from etcd again. It refuses a prefix that belongs to the current generation or to a live topic.
 - Prune deletes the S3 objects first and removes the etcd record only after that succeeds. If listing or deleting fails for an incarnation, prune keeps its record, carries on with the others, and exits with an error. Running prune again finishes the job.
@@ -530,6 +530,12 @@ S3 storage:
 - `KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET` – Create the bucket at startup (default `false`).
 - `KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC` – S3 health check interval (default `30`).
 - `KAFSCALE_S3_NAMESPACE` – Object key prefix (default `default` for the LFS module).
+
+Object keys:
+
+- New LFS objects are written to `<namespace>/@lfs/<topic>/<yyyy>/<mm>/<dd>/obj-<uuid>`. After the Nth delete of a topic, the topic part is `<topic>@<N>`, the same name its segments use, so LFS objects of a deleted incarnation stay apart from the current one. The proxy reads the generation from etcd. Without etcd it uses generation 0, and if the etcd lookup fails the upload fails.
+- `@` is not allowed in Kafka topic names, so `@lfs` never clashes with a topic prefix.
+- Proxies before this change wrote to `<namespace>/<topic>/lfs/<yyyy>/<mm>/<dd>/obj-<uuid>`. Those objects are not moved. The envelope stores the full key, so consumers, SDKs and `/lfs/download` still read them.
 
 Blobs and checksums:
 

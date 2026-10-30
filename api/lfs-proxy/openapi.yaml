@@ -153,7 +153,7 @@ paths:
               example:
                 kfs_lfs: 1
                 bucket: my-bucket
-                key: default/video-uploads/lfs/2026/02/05/abc123
+                key: default/@lfs/video-uploads/2026/02/05/abc123
                 size: 10485760
                 sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
                 checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -446,7 +446,7 @@ paths:
                 summary: Stream content with integrity check (default)
                 value:
                   bucket: my-bucket
-                  key: default/video-uploads/lfs/2026/02/05/abc123
+                  key: default/@lfs/video-uploads/2026/02/05/abc123
                   mode: stream
                   integrity:
                     sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -456,7 +456,7 @@ paths:
                 summary: Get presigned URL (requires KAFSCALE_LFS_PROXY_PRESIGN_ENABLED=true)
                 value:
                   bucket: my-bucket
-                  key: default/video-uploads/lfs/2026/02/05/abc123
+                  key: default/@lfs/video-uploads/2026/02/05/abc123
                   mode: presign
                   expires_seconds: 300
                   integrity:
@@ -571,7 +571,7 @@ components:
         key:
           type: string
           description: S3 object key
-          example: default/video-uploads/lfs/2026/02/05/abc123
+          example: default/@lfs/video-uploads/2026/02/05/abc123
         size:
           type: integer
           format: int64
@@ -615,7 +615,7 @@ components:
         key:
           type: string
           description: S3 object key from the LFS envelope
-          example: default/video-uploads/lfs/2026/02/05/abc123
+          example: default/@lfs/video-uploads/2026/02/05/abc123
         mode:
           type: string
           enum: [stream, presign]
