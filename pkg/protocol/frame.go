@@ -19,6 +19,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
+	"time"
 )
 
 // Frame represents a Kafka request or response frame.
@@ -59,4 +61,20 @@ func WriteFrame(w io.Writer, payload []byte) error {
 		return fmt.Errorf("write frame payload: %w", err)
 	}
 	return nil
+}
+
+// DefaultResponseWriteTimeout bounds a client that stops reading responses.
+const DefaultResponseWriteTimeout = 30 * time.Second
+
+// WriteFrameWithDeadline bounds one complete response and clears the deadline
+// afterward so a successful write does not constrain a later response.
+func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = DefaultResponseWriteTimeout
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	defer conn.SetWriteDeadline(time.Time{})
+	return WriteFrame(conn, payload)
 }

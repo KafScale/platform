@@ -177,6 +177,7 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 				t.Fatalf("group checkpoint: %+v", fetched)
 			}
 			t.Run("ack-zero-close", func(t *testing.T) { testAckZeroClose(t, target.addr, topic, run) })
+			t.Run("disconnect-during-fetch", func(t *testing.T) { testFetchDisconnect(t, target.addr, topic) })
 			t.Run("disconnect-during-join", func(t *testing.T) { testJoinDisconnect(t, target.addr, topic) })
 			t.Run("two-members", func(t *testing.T) {
 				multiTopic, multiGroup := topic+"-two", group+"-two"

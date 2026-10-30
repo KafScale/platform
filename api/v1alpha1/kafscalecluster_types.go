@@ -107,6 +107,8 @@ type ClusterConfigSpec struct {
 	SegmentBytes    int32  `json:"segmentBytes,omitempty"`
 	FlushIntervalMs int32  `json:"flushIntervalMs,omitempty"`
 	CacheSize       string `json:"cacheSize,omitempty"`
+	// ResponseWriteTimeoutMs bounds Kafka response writes; zero uses 30 seconds.
+	ResponseWriteTimeoutMs int32 `json:"responseWriteTimeoutMs,omitempty"`
 }
 
 type LfsProxySpec struct {

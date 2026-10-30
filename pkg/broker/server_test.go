@@ -519,3 +519,65 @@ func TestServerDrainsAckZeroProducesAfterEOF(t *testing.T) {
 		t.Fatalf("acks=0 requests were canceled or dropped after EOF: got %v, %v", handler.seen, handler.err)
 	}
 }
+
+type stalledResponseHandler struct {
+	produce int
+	err     error
+	fail    bool
+	ready   <-chan struct{}
+}
+
+func (h *stalledResponseHandler) Handle(ctx context.Context, _ *protocol.RequestHeader, request kmsg.Request) ([]byte, error) {
+	if _, ok := request.(*kmsg.ProduceRequest); ok {
+		h.err = ctx.Err()
+		h.produce++
+		return nil, nil
+	}
+	<-h.ready
+	if h.fail {
+		return nil, errors.New("fixture handler error")
+	}
+	return make([]byte, 1<<20), nil
+}
+
+func TestServerResponseDeadlineDrainsRequests(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "normal-response", true: "error-response"}[fail], func(t *testing.T) {
+			server, client := net.Pipe()
+			defer client.Close()
+			ready := make(chan struct{})
+			defer func() {
+				select {
+				case <-ready:
+				default:
+					close(ready)
+				}
+			}()
+			handler := &stalledResponseHandler{fail: fail, ready: ready}
+			s := &Server{Handler: handler, WriteTimeout: 25 * time.Millisecond}
+			done := make(chan struct{})
+			go func() { defer close(done); s.handleConnection(server) }()
+			if err := protocol.WriteFrame(client, buildApiVersionsRequest()); err != nil {
+				t.Fatal(err)
+			}
+			produce := kmsg.NewPtrProduceRequest()
+			produce.Version, produce.Acks = 7, 0
+			produce.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Records: []byte{1}}}}}
+			if _, err := client.Write(kmsg.NewRequestFormatter().AppendRequest(nil, produce, 1)); err != nil {
+				t.Fatal(err)
+			}
+			// Start the response only after the queued request has been read.
+			close(ready)
+			// Stay connected and never read the response. The write deadline must
+			// close the socket and still process the queued acks=0 Produce.
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("non-reading peer blocked response indefinitely")
+			}
+			if handler.err != nil || handler.produce != 1 {
+				t.Fatalf("deadline dropped queued Produce: %d, %v", handler.produce, handler.err)
+			}
+		})
+	}
+}

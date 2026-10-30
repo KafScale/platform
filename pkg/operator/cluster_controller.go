@@ -300,6 +300,10 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 			Value: cluster.Spec.Config.CacheSize,
 		})
 	}
+	if cluster.Spec.Config.ResponseWriteTimeoutMs > 0 {
+		env = append(env, corev1.EnvVar{Name: "KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", Value: fmt.Sprintf("%d", cluster.Spec.Config.ResponseWriteTimeoutMs)})
+	}
+
 	if val := strings.TrimSpace(os.Getenv("KAFSCALE_ACL_ENABLED")); val != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_ACL_ENABLED", Value: val})
 	}

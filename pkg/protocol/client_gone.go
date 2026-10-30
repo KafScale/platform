@@ -30,3 +30,23 @@ func ClientGone(ctx context.Context) <-chan struct{} {
 	gone, _ := ctx.Value(clientGoneKey{}).(<-chan struct{})
 	return gone
 }
+
+// ContextUntilClientGone is for waits that have no work to preserve after EOF.
+// Produce must retain the original handler context to finish already-read data.
+func ContextUntilClientGone(ctx context.Context) (context.Context, context.CancelFunc) {
+	gone := ClientGone(ctx)
+	if gone == nil {
+		return ctx, func() {}
+	}
+	waiting, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-gone:
+			cancel()
+		case <-waiting.Done():
+		}
+	}()
+	return waiting, func() { cancel(); <-done }
+}
