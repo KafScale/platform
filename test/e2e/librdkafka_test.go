@@ -174,6 +174,7 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 			if fetched.ErrorCode != 0 || len(fetched.Topics) != 1 || len(fetched.Topics[0].Partitions) != 1 || fetched.Topics[0].Partitions[0].Offset != 3 {
 				t.Fatalf("group checkpoint: %+v", fetched)
 			}
+			t.Run("disconnect-during-join", func(t *testing.T) { testJoinDisconnect(t, target.addr, topic) })
 			t.Run("two-members", func(t *testing.T) {
 				multiTopic, multiGroup := topic+"-two", group+"-two"
 				create := kmsg.NewPtrCreateTopicsRequest()

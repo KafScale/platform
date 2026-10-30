@@ -99,8 +99,14 @@ func (s *Server) ListenAddress() string {
 
 func (s *Server) handleConnection(conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	defer func() { _ = conn.Close() }()
+	var readerDone chan struct{}
+	defer func() {
+		cancel()
+		_ = conn.Close()
+		if readerDone != nil {
+			<-readerDone
+		}
+	}()
 	// Socket metadata is available even when no authentication hook is configured.
 	ctx = ContextWithConnInfo(ctx, &ConnContext{RemoteAddr: conn.RemoteAddr().String()})
 	if s.ConnContextFunc != nil {
@@ -120,13 +126,37 @@ func (s *Server) handleConnection(conn net.Conn) {
 			ctx = ContextWithConnInfo(ctx, &copy)
 		}
 	}
-	for {
-		frame, err := protocol.ReadFrame(conn)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
+	// One reader owns the socket, including while a handler waits. Read-ahead
+	// is bounded and handlers still run serially in request order.
+	frames := make(chan *protocol.Frame, 1)
+	readerDone = make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer close(frames)
+		for {
+			frame, err := protocol.ReadFrame(conn)
+			if err != nil {
+				if !errors.Is(err, io.EOF) && ctx.Err() == nil {
+					log.Printf("read frame: %v", err)
+				}
+				cancel()
 				return
 			}
-			log.Printf("read frame: %v", err)
+			select {
+			case frames <- frame:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	for {
+		var frame *protocol.Frame
+		select {
+		case frame = <-frames:
+			if frame == nil || ctx.Err() != nil {
+				return
+			}
+		case <-ctx.Done():
 			return
 		}
 		header, req, err := protocol.ParseRequest(frame.Payload)
@@ -135,6 +165,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 			return
 		}
 		respPayload, err := s.Handler.Handle(ctx, header, req)
+		if ctx.Err() != nil {
+			return
+		}
 		if err != nil {
 			log.Printf("handle request api=%d v=%d: %v", header.APIKey, header.APIVersion, err)
 			// Send an UNKNOWN_SERVER_ERROR response instead of dropping the

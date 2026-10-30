@@ -557,7 +557,13 @@ func (p *proxy) startHealthServer(ctx context.Context, addr string) {
 }
 
 func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+	var readerDone chan struct{}
+	defer func() {
+		_ = conn.Close()
+		if readerDone != nil {
+			<-readerDone
+		}
+	}()
 	if p.security != nil {
 		secured, authenticatedCtx, err := p.security.authenticate(ctx, conn)
 		if err != nil {
@@ -566,6 +572,8 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 		conn, ctx = secured, authenticatedCtx
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var backendConn net.Conn
 	var backendAddr string
 	defer func() {
@@ -577,9 +585,34 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	pool.dial = p.dialBackend
 	defer pool.Close()
 
+	// Keep detecting client EOF while a routed request is waiting on a broker.
+	// A single reader preserves framing and bounds pipelined read-ahead.
+	frames := make(chan *protocol.Frame, 1)
+	readerDone = make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer close(frames)
+		for {
+			frame, err := protocol.ReadFrame(conn)
+			if err != nil {
+				cancel()
+				return
+			}
+			select {
+			case frames <- frame:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	for {
-		frame, err := protocol.ReadFrame(conn)
-		if err != nil {
+		var frame *protocol.Frame
+		select {
+		case frame = <-frames:
+			if frame == nil || ctx.Err() != nil {
+				return
+			}
+		case <-ctx.Done():
 			return
 		}
 		header, body, err := protocol.ParseRequestHeader(frame.Payload)
@@ -1697,6 +1730,19 @@ func (p *proxy) resolveTopicID(ctx context.Context, id [16]byte) string {
 }
 
 func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr string, payload []byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Close an in-flight backend connection on cancellation so the broker sees
+	// the disconnect too. Wait for an already-started close before pooling reuse.
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(closed) })
+	defer func() {
+		if !stop() {
+			<-closed
+		}
+	}()
+
 	if err := protocol.WriteFrame(conn, payload); err != nil {
 		return nil, err
 	}
@@ -1731,6 +1777,9 @@ func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.Request
 	triedBackends := make(map[string]bool)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		targetAddr := ""
 		if p.groupRouter != nil && groupID != "" {
 			if ownerID := p.groupRouter.LookupOwner(groupID); ownerID != "" {
