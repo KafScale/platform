@@ -57,20 +57,12 @@ type PartitionLog struct {
 	segments     []segmentRange
 	indexEntries map[int64][]*IndexEntry
 	prefetchMu   sync.Mutex
-	// Multi-batch appends exclude legacy append/flush operations while staging.
-	// Legacy operations retain their existing concurrent flush behavior.
-	appendMu  sync.RWMutex
-	mu        sync.Mutex
-	flushCond *sync.Cond
-	s3sem     *semaphore.Weighted
-	flushing  bool
-	// flushingBatches holds the batches drained by prepareFlush but not yet
-	// committed to a segment by uploadFlush. During that window an acknowledged
-	// offset is in neither the live buffer (drained) nor l.segments (not yet
-	// registered); Read consults this slice so the record stays readable. Set
-	// under l.mu by prepareFlush, cleared under l.mu by uploadFlush on commit or
-	// on the upload-failure reset.
-	flushingBatches []RecordBatch
+	appendMu     sync.Mutex
+	mu           sync.Mutex
+	s3sem        *semaphore.Weighted
+	// failedUploadBase is guarded by appendMu and fences retries until orphaned
+	// objects from a failed upload have been removed.
+	failedUploadBase *int64
 }
 
 type segmentRange struct {
@@ -102,7 +94,6 @@ func NewPartitionLog(namespace string, topic string, partition int32, startOffse
 		indexEntries: make(map[int64][]*IndexEntry),
 		s3sem:        sem,
 	}
-	pl.flushCond = sync.NewCond(&pl.mu)
 	return pl
 }
 
@@ -294,41 +285,9 @@ func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object, nextOff
 	return &restoredSegment{segment: segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size}, entries: entries}, nil
 }
 
-// AppendBatch writes a record batch to the log, updating offsets and flushing as needed.
+// AppendBatch appends one batch through the atomic record-set path.
 func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*AppendResult, error) {
-	l.appendMu.RLock()
-	defer l.appendMu.RUnlock()
-	l.mu.Lock()
-	baseOffset := l.nextOffset
-	PatchRecordBatchBaseOffset(&batch, baseOffset)
-	l.nextOffset = baseOffset + int64(batch.LastOffsetDelta) + 1
-
-	l.buffer.Append(batch)
-	result := &AppendResult{
-		BaseOffset: baseOffset,
-		LastOffset: l.nextOffset - 1,
-	}
-
-	var artifact *SegmentArtifact
-	if l.buffer.ShouldFlush(time.Now()) {
-		var err error
-		artifact, err = l.prepareFlush()
-		if err != nil {
-			l.mu.Unlock()
-			return nil, err
-		}
-	}
-	l.mu.Unlock()
-
-	if artifact != nil {
-		if err := l.uploadFlush(ctx, artifact); err != nil {
-			return nil, err
-		}
-		if l.onFlush != nil {
-			l.onFlush(ctx, artifact)
-		}
-	}
-	return result, nil
+	return l.AppendBatches(ctx, []RecordBatch{batch}, false)
 }
 
 // AppendBatches stages a partition's complete Produce record set as one write.
@@ -336,13 +295,21 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 // forceFlush makes the whole set durable before returning; otherwise the normal
 // buffer thresholds apply. Concurrent readers see only previously accepted data.
 func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch, forceFlush bool) (*AppendResult, error) {
+	if len(batches) == 0 {
+		return nil, fmt.Errorf("no batches to append")
+	}
+	return l.appendBatches(ctx, batches, forceFlush)
+}
+
+// appendBatches also accepts an empty set for an explicit Flush.
+func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch, forceFlush bool) (*AppendResult, error) {
 	l.appendMu.Lock()
 	defer l.appendMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(batches) == 0 {
-		return nil, fmt.Errorf("no batches to append")
+	if err := l.discardFailedUpload(ctx); err != nil {
+		return nil, err
 	}
 	l.mu.Lock()
 	baseOffset := l.nextOffset
@@ -365,33 +332,22 @@ func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch,
 		l.mu.Unlock()
 		return result, nil
 	}
-	artifact, err := BuildSegment(l.cfg.Segment, staged.Drain(), time.Now())
+	stagedBatches := staged.Drain()
+	if len(stagedBatches) == 0 {
+		return result, nil
+	}
+	artifact, err := BuildSegment(l.cfg.Segment, stagedBatches, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("build segment: %w", err)
 	}
-	// Publish the index first. The segment object is the recovery commit point;
-	// a failed index upload must never leave a discoverable segment behind.
-	for _, upload := range []struct {
-		op   string
-		key  string
-		body []byte
-		put  func(context.Context, string, []byte) error
-	}{
-		{"upload_index", l.indexKey(artifact.BaseOffset), artifact.IndexBytes, l.s3.UploadIndex},
-		{"upload_segment", l.segmentKey(artifact.BaseOffset), artifact.SegmentBytes, l.s3.UploadSegment},
-	} {
-		if err := l.acquireS3(ctx); err != nil {
-			return nil, err
-		}
-		start := time.Now()
-		err := upload.put(ctx, upload.key, upload.body)
-		l.releaseS3()
-		if l.onS3Op != nil {
-			l.onS3Op(upload.op, time.Since(start), err)
-		}
-		if err != nil {
-			return nil, err
-		}
+	if err := l.uploadStaged(ctx, artifact); err != nil {
+		base := artifact.BaseOffset
+		l.failedUploadBase = &base
+		// Finish both PUTs before cleanup, using a fresh context even if the
+		// Produce deadline expired. The successful path incurs no DELETEs.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return nil, errors.Join(err, l.discardFailedUpload(cleanupCtx))
 	}
 	if l.cache != nil && l.cfg.CacheEnabled {
 		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
@@ -436,134 +392,71 @@ func (l *PartitionLog) EarliestOffset() int64 {
 	return l.segments[0].baseOffset
 }
 
-// Flush forces buffered batches to be written to S3 immediately.
-// If another flush is already in progress on this partition, Flush waits for
-// it to complete and then flushes any data that accumulated in the meantime.
+// Flush persists the current buffer through the atomic record-set path.
+// The live buffer stays readable and retryable until both uploads succeed.
 func (l *PartitionLog) Flush(ctx context.Context) error {
-	l.appendMu.RLock()
-	defer l.appendMu.RUnlock()
-	l.mu.Lock()
-	for l.flushing {
-		if ctx.Err() != nil {
-			l.mu.Unlock()
-			return ctx.Err()
-		}
-		l.flushCond.Wait()
-	}
-	artifact, err := l.prepareFlush()
-	l.mu.Unlock()
-	if err != nil {
-		return err
-	}
+	_, err := l.appendBatches(ctx, nil, true)
+	return err
+}
 
-	if artifact != nil {
-		if err := l.uploadFlush(ctx, artifact); err != nil {
-			return err
-		}
-	}
-	if l.onFlush != nil {
-		target := artifact
-		if target == nil {
-			l.mu.Lock()
-			current := l.nextOffset - 1
-			l.mu.Unlock()
-			if current >= 0 {
-				target = &SegmentArtifact{LastOffset: current}
+// uploadStaged overlaps the segment and index PUTs. Both must finish before a
+// caller can publish state or remove objects after an error.
+func (l *PartitionLog) uploadStaged(ctx context.Context, artifact *SegmentArtifact) error {
+	var g errgroup.Group
+	for _, upload := range []struct {
+		op   string
+		key  string
+		body []byte
+		put  func(context.Context, string, []byte) error
+	}{
+		{"upload_index", l.indexKey(artifact.BaseOffset), artifact.IndexBytes, l.s3.UploadIndex},
+		{"upload_segment", l.segmentKey(artifact.BaseOffset), artifact.SegmentBytes, l.s3.UploadSegment},
+	} {
+		g.Go(func() error {
+			if err := l.acquireS3(ctx); err != nil {
+				return err
 			}
-		}
-		if target != nil {
-			l.onFlush(ctx, target)
-		}
+			defer l.releaseS3()
+			start := time.Now()
+			err := upload.put(ctx, upload.key, upload.body)
+			if l.onS3Op != nil {
+				l.onS3Op(upload.op, time.Since(start), err)
+			}
+			return err
+		})
 	}
-	return nil
+	return g.Wait()
 }
 
-// prepareFlush drains the buffer and builds a segment artifact under l.mu.
-// It sets l.flushing = true to prevent concurrent flushes on the same
-// partition. Returns (nil, nil) if the buffer is empty or a flush is already
-// in progress (the data stays in the buffer for the next flush).
-// Caller must hold l.mu.
-func (l *PartitionLog) prepareFlush() (*SegmentArtifact, error) {
-	if l.flushing {
-		return nil, nil
+func (l *PartitionLog) discardFailedUpload(ctx context.Context) error {
+	if l.failedUploadBase == nil {
+		return nil
 	}
-	batches := l.buffer.Drain()
-	if len(batches) == 0 {
-		return nil, nil
-	}
-	artifact, err := BuildSegment(l.cfg.Segment, batches, time.Now())
-	if err != nil {
-		return nil, fmt.Errorf("build segment: %w", err)
-	}
-	l.flushing = true
-	// Keep the drained batches readable until uploadFlush commits the segment to
-	// l.segments. Without this, an acknowledged offset is unreadable for the
-	// duration of the S3 upload (in neither the buffer nor a committed segment).
-	l.flushingBatches = batches
-	return artifact, nil
-}
-
-// uploadFlush uploads the segment and index to S3 (with semaphore gating),
-// then re-acquires l.mu to commit segment metadata. Called without l.mu held.
-func (l *PartitionLog) uploadFlush(ctx context.Context, artifact *SegmentArtifact) error {
-	segmentKey := l.segmentKey(artifact.BaseOffset)
-	indexKey := l.indexKey(artifact.BaseOffset)
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		if err := l.acquireS3(gctx); err != nil {
+	base := *l.failedUploadBase
+	var g errgroup.Group
+	for _, deletion := range []struct {
+		key    string
+		remove func(context.Context, string) error
+	}{
+		{l.segmentKey(base), l.s3.DeleteSegment},
+		{l.indexKey(base), l.s3.DeleteIndex},
+	} {
+		g.Go(func() error {
+			if err := l.acquireS3(ctx); err != nil {
+				return err
+			}
+			defer l.releaseS3()
+			err := deletion.remove(ctx, deletion.key)
+			if errors.Is(err, ErrNotFound) {
+				return nil
+			}
 			return err
-		}
-		defer l.releaseS3()
-		start := time.Now()
-		err := l.s3.UploadSegment(gctx, segmentKey, artifact.SegmentBytes)
-		if l.onS3Op != nil {
-			l.onS3Op("upload_segment", time.Since(start), err)
-		}
-		return err
-	})
-	g.Go(func() error {
-		if err := l.acquireS3(gctx); err != nil {
-			return err
-		}
-		defer l.releaseS3()
-		start := time.Now()
-		err := l.s3.UploadIndex(gctx, indexKey, artifact.IndexBytes)
-		if l.onS3Op != nil {
-			l.onS3Op("upload_index", time.Since(start), err)
-		}
-		return err
-	})
+		})
+	}
 	if err := g.Wait(); err != nil {
-		l.mu.Lock()
-		l.flushing = false
-		l.flushingBatches = nil
-		l.flushCond.Broadcast()
-		l.mu.Unlock()
-		return err
+		return fmt.Errorf("remove failed upload: %w", err)
 	}
-
-	if l.cache != nil && l.cfg.CacheEnabled {
-		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
-	}
-
-	l.mu.Lock()
-	l.segments = append(l.segments, segmentRange{
-		baseOffset: artifact.BaseOffset,
-		lastOffset: artifact.LastOffset,
-		size:       int64(len(artifact.SegmentBytes)),
-	})
-	if artifact.RelativeIndex != nil {
-		l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
-	}
-	l.flushing = false
-	// The segment is now in l.segments; the in-flight copy is no longer needed.
-	l.flushingBatches = nil
-	l.flushCond.Broadcast()
-	lastSegIdx := len(l.segments) - 1
-	l.mu.Unlock()
-
-	l.startPrefetch(ctx, lastSegIdx)
+	l.failedUploadBase = nil
 	return nil
 }
 
@@ -633,30 +526,10 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 		}
 	}
 	if !found {
-		// Not in any flushed segment. The offset may still be in the in-memory
-		// write buffer (acked but not yet flushed: flush is append-triggered, so
-		// a partition that goes quiet below the flush threshold keeps its tail
-		// buffered). Serve it so acked records are consumable (Kafka
-		// read-after-ack) instead of returning ErrOffsetOutOfRange.
-		//
-		// Hold l.mu across both fallbacks so an in-flight flush cannot move
-		// batches from the buffer into flushingBatches (or commit a segment)
-		// between the two checks.
+		// Staged flushes leave accepted data in the live buffer until commit.
 		body := l.buffer.RecordsFrom(offset, maxBytes)
-		fromFlushWindow := false
-		if len(body) == 0 {
-			body = recordsFromBatches(l.flushingBatches, offset, maxBytes)
-			fromFlushWindow = len(body) > 0
-		}
 		l.mu.Unlock()
 		if len(body) > 0 {
-			if fromFlushWindow {
-				l.logger().Debug("read served from in-flight flush batches (flush window)",
-					"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
-			} else {
-				l.logger().Debug("read served from write buffer (acked-but-unflushed)",
-					"topic", l.topic, "partition", l.partition, "offset", offset, "bytes", len(body))
-			}
 			return body, nil
 		}
 		return nil, ErrOffsetOutOfRange

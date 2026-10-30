@@ -20,32 +20,74 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type atomicAppendS3 struct {
 	*MemoryS3Client
-	fail string
+	fail            string
+	failDelete      bool
+	cancelOnFailure context.CancelFunc
+	puts            atomic.Int32
 }
 
 func (s *atomicAppendS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	s.puts.Add(1)
 	if s.fail == "index" {
 		return errors.New("index upload failed")
 	}
-	return s.MemoryS3Client.UploadIndex(ctx, key, body)
+	if err := s.MemoryS3Client.UploadIndex(ctx, key, body); err != nil {
+		return err
+	}
+	if s.fail == "index-after-write" {
+		return errors.New("index response lost")
+	}
+	return nil
 }
 
 func (s *atomicAppendS3) UploadSegment(ctx context.Context, key string, body []byte) error {
+	s.puts.Add(1)
 	if s.fail == "segment" {
+		if s.cancelOnFailure != nil {
+			s.cancelOnFailure()
+		}
 		return errors.New("segment upload failed")
 	}
-	return s.MemoryS3Client.UploadSegment(ctx, key, body)
+	if err := s.MemoryS3Client.UploadSegment(ctx, key, body); err != nil {
+		return err
+	}
+	if s.fail == "segment-after-write" {
+		return errors.New("segment response lost")
+	}
+	return nil
+}
+
+func (s *atomicAppendS3) DeleteIndex(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.failDelete {
+		return errors.New("delete index failed")
+	}
+	return s.MemoryS3Client.DeleteIndex(ctx, key)
+}
+
+func (s *atomicAppendS3) DeleteSegment(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.failDelete {
+		return errors.New("delete segment failed")
+	}
+	return s.MemoryS3Client.DeleteSegment(ctx, key)
 }
 
 func TestAppendBatchesFailureAndRetry(t *testing.T) {
 	ctx := context.Background()
 	for _, force := range []bool{false, true} {
-		for _, fail := range []string{"index", "segment"} {
+		for _, fail := range []string{"index", "segment", "index-after-write", "segment-after-write"} {
 			t.Run(fmt.Sprintf("force=%t/%s", force, fail), func(t *testing.T) {
 				s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client()}
 				var committed int64 = -1
@@ -197,5 +239,134 @@ func TestAppendBatchesConcurrentRequests(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// Each PUT must enter before either is allowed to finish. This fails for
+// sequential uploads without depending on a latency benchmark.
+type overlappingUploadS3 struct {
+	*MemoryS3Client
+	entered chan string
+	release chan struct{}
+}
+
+func (s *overlappingUploadS3) UploadSegment(ctx context.Context, key string, body []byte) error {
+	s.entered <- "segment"
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.MemoryS3Client.UploadSegment(ctx, key, body)
+}
+
+func (s *overlappingUploadS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	s.entered <- "index"
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.MemoryS3Client.UploadIndex(ctx, key, body)
+}
+
+func TestAppendBatchesUploadsOverlap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s3 := &overlappingUploadS3{MemoryS3Client: NewMemoryS3Client(), entered: make(chan string, 2), release: make(chan struct{})}
+	var commits atomic.Int32
+	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, func(context.Context, *SegmentArtifact) { commits.Add(1) }, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	done := make(chan error, 1)
+	go func() { _, err := log.AppendBatches(ctx, []RecordBatch{batch, batch}, true); done <- err }()
+	entered := map[string]bool{}
+	for range 2 {
+		select {
+		case op := <-s3.entered:
+			entered[op] = true
+		case <-ctx.Done():
+			t.Fatal("segment and index uploads did not overlap")
+		}
+	}
+	if len(entered) != 2 || commits.Load() != 0 || log.BufferedHighWatermark() != 0 {
+		t.Fatal("state published before both uploads completed")
+	}
+	close(s3.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if commits.Load() != 1 || log.BufferedHighWatermark() != 2 {
+		t.Fatal("complete upload was not committed")
+	}
+}
+
+func TestAppendBatchesFailedCleanupFencesRetry(t *testing.T) {
+	ctx := context.Background()
+	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "segment", failDelete: true}
+	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("expected upload and cleanup failure")
+	}
+	s3.fail = "index"
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("retry bypassed failed cleanup")
+	}
+	if s3.puts.Load() != 2 || log.BufferedHighWatermark() != 0 {
+		t.Fatal("dirty offset was reused before cleanup")
+	}
+	// An opposite upload failure must not pair the stale index with a new segment.
+	s3.failDelete = false
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("expected index failure")
+	}
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := recovered.RestoreFromS3(ctx); err != nil || last != -1 {
+		t.Fatalf("recovered a rejected upload: %d, %v", last, err)
+	}
+	s3.fail = ""
+	if result, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err != nil || result.BaseOffset != 0 {
+		t.Fatalf("retry: %+v, %v", result, err)
+	}
+}
+
+func TestAppendBatchFailureDoesNotReserveOffsets(t *testing.T) {
+	ctx := context.Background()
+	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "index"}
+	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{Buffer: WriteBufferConfig{MaxBatches: 1}}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := log.AppendBatch(ctx, batch); err == nil {
+		t.Fatal("expected upload failure")
+	}
+	if log.BufferedHighWatermark() != 0 {
+		t.Fatal("single-batch failure reserved an offset")
+	}
+	s3.fail = ""
+	if result, err := log.AppendBatch(ctx, batch); err != nil || result.BaseOffset != 0 {
+		t.Fatalf("single-batch retry: %+v, %v", result, err)
+	}
+}
+
+func TestAppendBatchesCanceledUploadCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "segment", cancelOnFailure: cancel}
+	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("expected canceled upload failure")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("test did not cancel the upload context")
+	}
+	if log.failedUploadBase != nil {
+		t.Fatal("cleanup reused the canceled upload context")
+	}
+	if log.BufferedHighWatermark() != 0 {
+		t.Fatal("canceled upload reserved offsets")
+	}
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := recovered.RestoreFromS3(context.Background()); err != nil || last != -1 {
+		t.Fatalf("canceled upload survived cleanup: %d, %v", last, err)
 	}
 }
