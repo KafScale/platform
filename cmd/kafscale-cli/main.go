@@ -201,7 +201,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		if restoreCommitted || !targetCreated {
 			return
 		}
-		if err := store.DeleteTopic(context.Background(), cfg.TargetTopic); err != nil {
+		if err := store.RetireTopic(context.Background(), cfg.TargetTopic, cfg.TargetNamespace); err != nil {
 			if !errors.Is(err, metadata.ErrUnknownTopic) {
 				fmt.Fprintf(os.Stderr, "warning: failed to roll back target topic %s: %v\n", cfg.TargetTopic, err)
 			}

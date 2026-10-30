@@ -17,15 +17,12 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"path"
 	"strings"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func (h *handler) topicStorageName(ctx context.Context, topic string) (string, error) {
@@ -42,38 +39,10 @@ func (h *handler) topicStorageName(ctx context.Context, topic string) (string, e
 
 func (h *handler) deleteTopic(ctx context.Context, name string) error {
 	defer h.dropTopicLogs(name)
-	etcdStore, ok := h.store.(*metadata.EtcdStore)
-	if !ok {
-		return h.store.DeleteTopic(ctx, name)
+	if etcdStore, ok := h.store.(*metadata.EtcdStore); ok {
+		return etcdStore.RetireTopic(ctx, name, h.s3Namespace)
 	}
-	meta, err := etcdStore.Metadata(ctx, []string{name})
-	if err != nil {
-		return err
-	}
-	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != protocol.NONE {
-		return metadata.ErrUnknownTopic
-	}
-	generation, err := etcdStore.TopicGeneration(ctx, name)
-	if err != nil {
-		return err
-	}
-	record := metadata.DeletedTopic{
-		Name:       name,
-		TopicID:    fmt.Sprintf("%x", meta.Topics[0].TopicID),
-		Generation: generation,
-		Prefix:     path.Join(h.s3Namespace, metadata.TopicStorageName(name, generation)) + "/",
-		DeletedAt:  time.Now().UTC().Format(time.RFC3339),
-	}
-	if err := etcdStore.RetireTopic(ctx, record); err != nil {
-		return err
-	}
-	if err := etcdStore.DeleteTopic(ctx, name); err != nil {
-		if restoreErr := etcdStore.RestoreTopicGeneration(ctx, name, generation); restoreErr != nil {
-			h.logger.Error("restore topic generation failed", "topic", name, "generation", generation, "error", restoreErr)
-		}
-		return err
-	}
-	return nil
+	return h.store.DeleteTopic(ctx, name)
 }
 
 func (h *handler) dropTopicLogs(topic string) {

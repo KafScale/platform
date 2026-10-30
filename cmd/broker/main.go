@@ -2646,6 +2646,8 @@ func etcdConfigFromEnv() (metadata.EtcdStoreConfig, bool) {
 		Endpoints: strings.Split(endpoints, ","),
 		Username:  os.Getenv("KAFSCALE_ETCD_USERNAME"),
 		Password:  os.Getenv("KAFSCALE_ETCD_PASSWORD"),
+
+		StorageNamespace: envOrDefault("KAFSCALE_S3_NAMESPACE", "default"),
 	}, true
 }
 

@@ -410,7 +410,7 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 		SourceTopic:     "orders",
 		SourceNamespace: "default",
 		TargetTopic:     "orders-restored",
-		TargetNamespace: "default",
+		TargetNamespace: "restore-ns",
 		RestoreTo:       time.Now().UTC(),
 	}, s3, store)
 	if err == nil || !strings.Contains(err.Error(), "list failed") {
@@ -423,6 +423,13 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 	}
 	if len(meta.Topics) != 1 || meta.Topics[0].ErrorCode == 0 {
 		t.Fatalf("expected rolled back target topic to be absent, got %+v", meta.Topics)
+	}
+	record, err := store.EtcdClient().Get(ctx, metadata.DeletedTopicKey("orders-restored", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Kvs) != 1 || !strings.Contains(string(record.Kvs[0].Value), `"prefix":"restore-ns/orders-restored/"`) {
+		t.Fatalf("expected deleted topic record for rolled back target, got %+v", record.Kvs)
 	}
 }
 

@@ -35,6 +35,8 @@ limitations under the License.
 
 - Stop Fetch long-polls when a client disconnects, including through the proxy. Bound Kafka response writes to 30 seconds by default with `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS`; timed-out writes close the socket and preserve the already-read request drain (#257).
 
+- DeleteTopics keeps the deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. A topic created again with the same name starts empty at offset 0 under `<namespace>/<topic>@<generation>/`. The snapshot update, offset deletes, record and generation bump commit in one etcd transaction (#262).
+
 - CreateTopics, auto-create on Metadata or Produce, and `kafscale-cli restore` reject topic names that Kafka does not allow. Names may use only `a-z`, `A-Z`, `0-9`, `.`, `_` and `-`, are at most 249 characters, and cannot be `.` or `..`. Rejected creates return `INVALID_TOPIC_EXCEPTION` (17). Auto-create skips invalid names (#262).
 
 ## Upgrade notes
