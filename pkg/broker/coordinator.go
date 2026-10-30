@@ -94,7 +94,12 @@ type groupState struct {
 	rebalanceDeadline time.Time
 }
 
+type pendingJoin struct {
+	ctx context.Context
+}
+
 type memberState struct {
+	pendingJoin      *pendingJoin
 	clientID         string
 	clientHost       string
 	protocolMetadata []byte
@@ -145,8 +150,12 @@ func (c *GroupCoordinator) JoinGroup(ctx context.Context, req *kmsg.JoinGroupReq
 }
 
 // JoinGroupWithClient records display metadata separately from authentication.
-func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.JoinGroupRequest, clientID string) (*kmsg.JoinGroupResponse, error) {
+func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.JoinGroupRequest, clientID string) (response *kmsg.JoinGroupResponse, resultErr error) {
 	c.mu.Lock()
+	if err := joinContextErr(ctx); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
 	if !c.ownsGroup(req.Group) {
 		c.mu.Unlock()
 		resp := kmsg.NewPtrJoinGroupResponse()
@@ -219,6 +228,15 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		state.startRebalance(timeout)
 	}
 
+	pending := &pendingJoin{ctx: ctx}
+	member.pendingJoin = pending
+	// Every return below releases c.mu before this cleanup reacquires it.
+	defer func() {
+		cleanupErr := c.finishJoin(req.Group, state, memberID, pending)
+		if err := joinContextErr(ctx); err != nil {
+			response, resultErr = nil, errors.Join(err, cleanupErr)
+		}
+	}()
 	member.joinGeneration = state.generationID
 	if state.leaderID == "" {
 		state.ensureLeader()
@@ -233,7 +251,14 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 	// Keep JoinGroup pending until the known members rejoin. Returning
 	// REBALANCE_IN_PROGRESS here makes classic clients restart the join loop.
 	// The deadline is fixed when the rebalance starts; retries cannot extend it.
-	for state.state == groupStatePreparingRebalance && !state.completeIfReady() {
+	for state.state == groupStatePreparingRebalance {
+		if err := joinContextErr(ctx); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
+		if state.completeIfReady() {
+			break
+		}
 		if !time.Now().Before(state.rebalanceDeadline) {
 			state.dropRebalanceLaggers(time.Now())
 			state.ensureLeader()
@@ -244,11 +269,17 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
+		case <-protocol.ClientGone(ctx):
+			return nil, context.Canceled
 		case <-c.stopCh:
 			return nil, context.Canceled
 		case <-time.After(50 * time.Millisecond):
 		}
 		c.mu.Lock()
+		if err := joinContextErr(ctx); err != nil {
+			c.mu.Unlock()
+			return nil, err
+		}
 		if !c.ownsGroup(req.Group) || c.groups[req.Group] != state {
 			c.mu.Unlock()
 			resp := kmsg.NewPtrJoinGroupResponse()
@@ -292,6 +323,51 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 	}
 	c.mu.Unlock()
 	return resp, nil
+}
+
+// Only JoinGroup treats connection EOF as cancellation. Other requests retain
+// their live context so buffered and in-flight produces can complete.
+func joinContextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-protocol.ClientGone(ctx):
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+// finishJoin removes only the canceled request's membership. A replacement join
+// for the same member or a new coordinator must not be changed by old cleanup.
+func (c *GroupCoordinator) finishJoin(groupID string, state *groupState, memberID string, pending *pendingJoin) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.groups[groupID] != state || !c.ownsGroup(groupID) {
+		return nil
+	}
+	member := state.members[memberID]
+	if member == nil || member.pendingJoin != pending {
+		return nil
+	}
+	member.pendingJoin = nil
+	if joinContextErr(pending.ctx) == nil {
+		return nil
+	}
+	delete(state.members, memberID)
+	delete(state.assignments, memberID)
+	if len(state.members) == 0 || state.state != groupStatePreparingRebalance {
+		state.startRebalance(0)
+	} else {
+		state.ensureLeader()
+		state.completeIfReady()
+	}
+	// The disconnected request's context is canceled; use a bounded independent
+	// context so persisted membership is removed as well as the cached member.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(pending.ctx), 5*time.Second)
+	defer cancel()
+	return c.persistGroupLocked(ctx, groupID, state)
 }
 
 func (c *GroupCoordinator) SyncGroup(ctx context.Context, req *kmsg.SyncGroupRequest) (*kmsg.SyncGroupResponse, error) {

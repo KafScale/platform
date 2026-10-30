@@ -557,7 +557,13 @@ func (p *proxy) startHealthServer(ctx context.Context, addr string) {
 }
 
 func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+	var readerDone chan struct{}
+	defer func() {
+		_ = conn.Close()
+		if readerDone != nil {
+			<-readerDone
+		}
+	}()
 	if p.security != nil {
 		secured, authenticatedCtx, err := p.security.authenticate(ctx, conn)
 		if err != nil {
@@ -566,6 +572,8 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 		conn, ctx = secured, authenticatedCtx
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var backendConn net.Conn
 	var backendAddr string
 	defer func() {
@@ -577,9 +585,48 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	pool.dial = p.dialBackend
 	defer pool.Close()
 
+	// Keep detecting client EOF while a routed request is waiting on a broker.
+	// A single reader preserves framing and bounds pipelined read-ahead.
+	clientGone := make(chan struct{})
+	ctx = protocol.ContextWithClientGone(ctx, clientGone)
+	// A failed response must not discard already-read fire-and-forget requests.
+	writeResponse := func(payload []byte) {
+		select {
+		case <-clientGone:
+			return
+		default:
+		}
+		if err := protocol.WriteFrame(conn, payload); err != nil {
+			p.logger.Warn("write response failed", "error", err)
+			_ = conn.Close()
+		}
+	}
+	frames := make(chan *protocol.Frame, 1)
+	readerDone = make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer close(frames)
+		defer close(clientGone)
+		for {
+			frame, err := protocol.ReadFrame(conn)
+			if err != nil {
+				return
+			}
+			select {
+			case frames <- frame:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	for {
-		frame, err := protocol.ReadFrame(conn)
-		if err != nil {
+		var frame *protocol.Frame
+		select {
+		case frame = <-frames:
+			if frame == nil || ctx.Err() != nil {
+				return
+			}
+		case <-ctx.Done():
 			return
 		}
 		header, body, err := protocol.ParseRequestHeader(frame.Payload)
@@ -594,10 +641,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				p.logger.Warn("api versions handling failed", "error", err)
 				return
 			}
-			if err := protocol.WriteFrame(conn, resp); err != nil {
-				p.logger.Warn("write api versions response failed", "error", err)
-				return
-			}
+			writeResponse(resp)
 			continue
 		}
 
@@ -628,10 +672,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				p.logger.Warn("metadata handling failed", "remote_addr", conn.RemoteAddr().String(), "reason", metadataFailureReason(err))
 				return
 			}
-			if err := protocol.WriteFrame(conn, resp); err != nil {
-				p.logger.Warn("write metadata response failed", "error", err)
-				return
-			}
+			writeResponse(resp)
 			continue
 		case protocol.APIKeyFindCoordinator:
 			resp, err := p.handleFindCoordinator(header)
@@ -639,10 +680,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				p.logger.Warn("find coordinator handling failed", "error", err)
 				return
 			}
-			if err := protocol.WriteFrame(conn, resp); err != nil {
-				p.logger.Warn("write coordinator response failed", "error", err)
-				return
-			}
+			writeResponse(resp)
 			continue
 		case protocol.APIKeyProduce:
 			resp, err := p.handleProduceRouting(ctx, header, frame.Payload, pool)
@@ -655,10 +693,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				// acks=0: no response expected by the client.
 				continue
 			}
-			if err := protocol.WriteFrame(conn, resp); err != nil {
-				p.logger.Warn("write produce response failed", "error", err)
-				return
-			}
+			writeResponse(resp)
 			continue
 		case protocol.APIKeyFetch:
 			resp, err := p.handleFetchRouting(ctx, header, frame.Payload, pool)
@@ -667,10 +702,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				p.respondBackendError(conn, header, body)
 				return
 			}
-			if err := protocol.WriteFrame(conn, resp); err != nil {
-				p.logger.Warn("write fetch response failed", "error", err)
-				return
-			}
+			writeResponse(resp)
 			continue
 		case protocol.APIKeyJoinGroup,
 			protocol.APIKeySyncGroup,
@@ -682,14 +714,16 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			protocol.APIKeyDescribeGroups:
 			resp, err := p.handleGroupRouting(ctx, header, frame.Payload, pool)
 			if err != nil {
+				select {
+				case <-clientGone:
+					continue
+				default:
+				}
 				p.logger.Warn("group routing failed", "error", err)
 				p.respondBackendError(conn, header, frame.Payload)
 				return
 			}
-			if err := protocol.WriteFrame(conn, resp); err != nil {
-				p.logger.Warn("write group response failed", "error", err)
-				return
-			}
+			writeResponse(resp)
 			continue
 		default:
 		}
@@ -719,10 +753,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				return
 			}
 		}
-		if err := protocol.WriteFrame(conn, resp); err != nil {
-			p.logger.Warn("write response failed", "error", err)
-			return
-		}
+		writeResponse(resp)
 	}
 }
 
@@ -1697,6 +1728,19 @@ func (p *proxy) resolveTopicID(ctx context.Context, id [16]byte) string {
 }
 
 func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr string, payload []byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Close an in-flight backend connection on cancellation so the broker sees
+	// the disconnect too. Wait for an already-started close before pooling reuse.
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(closed) })
+	defer func() {
+		if !stop() {
+			<-closed
+		}
+	}()
+
 	if err := protocol.WriteFrame(conn, payload); err != nil {
 		return nil, err
 	}
@@ -1711,6 +1755,21 @@ func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr
 // retrying on NOT_COORDINATOR. DescribeGroups is forwarded once without retry
 // since it may span multiple groups on different brokers.
 func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
+	if gone := protocol.ClientGone(ctx); header.APIKey == protocol.APIKeyJoinGroup && gone != nil {
+		joinCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			select {
+			case <-gone:
+				cancel()
+			case <-joinCtx.Done():
+			}
+		}()
+		defer func() { cancel(); <-done }()
+		ctx = joinCtx
+	}
+
 	if header.APIKey == protocol.APIKeyDeleteGroups {
 		_, parsed, err := protocol.ParseRequest(payload)
 		if err != nil {
@@ -1731,6 +1790,9 @@ func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.Request
 	triedBackends := make(map[string]bool)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		targetAddr := ""
 		if p.groupRouter != nil && groupID != "" {
 			if ownerID := p.groupRouter.LookupOwner(groupID); ownerID != "" {

@@ -68,7 +68,9 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 	etcd, endpoints := startEmbeddedEtcd(t)
 	defer etcd.Close()
 	brokerAddr, proxyAddr := freeAddr(t), freeAddr(t)
-	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints)
+	// Flush the acks=0 tail without requiring a later acknowledged Produce to
+	// make its durable watermark visible to the close-after-send regression.
+	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_SEGMENT_BYTES=1")
 	defer stopBroker(t, brokerCmd)
 	waitForBroker(t, brokerLogs, brokerAddr)
 	_, proxyPort, _ := net.SplitHostPort(proxyAddr)
@@ -174,6 +176,8 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 			if fetched.ErrorCode != 0 || len(fetched.Topics) != 1 || len(fetched.Topics[0].Partitions) != 1 || fetched.Topics[0].Partitions[0].Offset != 3 {
 				t.Fatalf("group checkpoint: %+v", fetched)
 			}
+			t.Run("ack-zero-close", func(t *testing.T) { testAckZeroClose(t, target.addr, topic, run) })
+			t.Run("disconnect-during-join", func(t *testing.T) { testJoinDisconnect(t, target.addr, topic) })
 			t.Run("two-members", func(t *testing.T) {
 				multiTopic, multiGroup := topic+"-two", group+"-two"
 				create := kmsg.NewPtrCreateTopicsRequest()
