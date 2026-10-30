@@ -128,12 +128,22 @@ func TestProduceRejectsInvalidRecordSets(t *testing.T) {
 	valid := testBatchBytes(0, 0, 1)
 	legacy := append([]byte(nil), valid...)
 	legacy[16] = 1
+	badCRC := append([]byte(nil), valid...)
+	binary.BigEndian.PutUint32(badCRC[17:21], 0)
+	badPayload := append([]byte(nil), valid...)
+	badPayload[len(badPayload)-1] ^= 1
+	badAttributes := append([]byte(nil), valid...)
+	badAttributes[22] ^= 1
 	cases := []struct {
 		name    string
 		records []byte
 		code    int16
 	}{
 		{"empty", nil, protocol.CORRUPT_MESSAGE},
+		{"zero-crc", badCRC, protocol.CORRUPT_MESSAGE},
+		{"corrupt-payload", badPayload, protocol.CORRUPT_MESSAGE},
+		{"corrupt-attributes", badAttributes, protocol.CORRUPT_MESSAGE},
+		{"valid-then-bad-crc", append(append([]byte(nil), valid...), badCRC...), protocol.CORRUPT_MESSAGE},
 		{"short-header", valid[:16], protocol.CORRUPT_MESSAGE},
 		{"short-batch", valid[:60], protocol.CORRUPT_MESSAGE},
 		{"valid-then-truncated", append(append([]byte(nil), valid...), valid[:65]...), protocol.CORRUPT_MESSAGE},
@@ -174,6 +184,9 @@ func TestProduceRejectsInvalidRecordSets(t *testing.T) {
 			}
 			if next, err := store.NextOffset(context.Background(), "orders", 0); err != nil || next != 0 {
 				t.Fatal(next, err)
+			}
+			if len(h.logs) != 0 {
+				t.Fatal("invalid record set opened a partition log")
 			}
 		})
 	}
