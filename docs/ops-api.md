@@ -47,6 +47,8 @@ out of scope.
 - Write APIs are intentionally narrow to reduce blast radius.
 - Anything outside this list is deferred and advertised as unsupported in ApiVersions.
 
+Pruning the S3 data of deleted topics is not a Kafka API. Use `kafscale-cli prune`, described in [operations.md](operations.md#pruning-deleted-topic-data).
+
 ## Versioning Notes
 
 For v1 we implement the Kafka 3.7 CLI versions in active use; flexible versions are

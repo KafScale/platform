@@ -17,6 +17,10 @@ limitations under the License.
 
 # Unreleased
 
+## New features
+
+- `kafscale-cli prune` lists the S3 data that deleted topics keep and deletes it with `--force`. It filters by `--topic` and `--older-than`, refuses live topics and the current generation, and is safe while brokers run. Access is controlled by the etcd and S3 credentials. It does not cover LFS objects or topics deleted before the upgrade (#262).
+
 ## Bug fixes
 
 - Expire Empty consumer groups and their committed offsets after seven days by default. Configure `KAFSCALE_OFFSETS_RETENTION_MINUTES` or `spec.config.offsetsRetentionMinutes` on KafscaleCluster; zero or negative disables expiry. Joins and commits reset the retention clock, and leased, revision-fenced deletion protects active groups and concurrent writes (#238).
