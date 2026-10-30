@@ -576,6 +576,8 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 					code = protocol.UNKNOWN_SERVER_ERROR
 					if errors.Is(err, metadata.ErrConsumerGroupDeleted) {
 						code = protocol.UNKNOWN_MEMBER_ID
+					} else if errors.Is(err, metadata.ErrConsumerGroupChanged) {
+						code = protocol.COORDINATOR_NOT_AVAILABLE
 					}
 				}
 			}

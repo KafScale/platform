@@ -18,6 +18,7 @@ package metadata
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/KafScale/platform/internal/testutil"
@@ -113,5 +114,42 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 	}
 	if group, revision, err := FetchConsumerGroupRevision(ctx, legacy, "g"); err != nil || group == nil || revision != 0 {
 		t.Fatal(group, revision, err)
+	}
+}
+
+func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	active := &metadatapb.ConsumerGroup{GroupId: "g", Members: map[string]*metadatapb.GroupMember{"m1": {}}}
+	revision, err := PutConsumerGroupRevision(ctx, store, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					_ = store.PutConsumerGroup(ctx, active)
+				}
+			}
+		}()
+	}
+	failed := 0
+	for i := range 200 {
+		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", revision, "orders", 0, int64(i), ""); err != nil {
+			failed++
+		}
+	}
+	close(done)
+	wg.Wait()
+	if failed > 0 {
+		t.Fatalf("%d of 200 commits failed", failed)
 	}
 }

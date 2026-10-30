@@ -226,9 +226,12 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 			encoded, _ := EncodeConsumerGroup(current)
 			ops = append(ops, clientv3.OpPut(ConsumerGroupKey(group), string(encoded)))
 		}
-		cmps := []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision)}
+		var cmps []clientv3.Cmp
 		if createRevision > 0 {
 			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(group)), "=", createRevision))
+		}
+		if createRevision == 0 || len(ops) > 1 {
+			cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision))
 		}
 		result, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Else(clientv3.OpGet(ConsumerGroupKey(group))).Commit()
 		s.recordEtcdResult(err)

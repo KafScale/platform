@@ -117,3 +117,36 @@ func testOffsetCommitAfterDeleteGroups(t *testing.T, recreate bool) {
 		t.Fatal("offset survived", offsets, err)
 	}
 }
+
+type changedCommitStore struct{ *metadata.EtcdStore }
+
+func (s changedCommitStore) CommitConsumerOffsetIfGroupExists(context.Context, string, int64, string, int32, int64, string) error {
+	return metadata.ErrConsumerGroupChanged
+}
+
+func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
+	ctx := context.Background()
+	etcd, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = etcd.Close() })
+	members := map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: time.Now().UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000}}
+	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCoordinator(t, changedCommitStore{etcd})
+	commit := kmsg.NewPtrOffsetCommitRequest()
+	commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
+	topic := kmsg.NewOffsetCommitRequestTopic()
+	topic.Topic = "orders"
+	topic.Partitions = append(topic.Partitions, kmsg.NewOffsetCommitRequestTopicPartition())
+	commit.Topics = append(commit.Topics, topic)
+	resp, err := c.OffsetCommit(ctx, commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.COORDINATOR_NOT_AVAILABLE {
+		t.Fatalf("changed group returned %d", code)
+	}
+}
