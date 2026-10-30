@@ -150,3 +150,29 @@ func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
 		t.Fatalf("changed group returned %d", code)
 	}
 }
+
+func TestDeleteGroupsCachesCreateRevision(t *testing.T) {
+	ctx := context.Background()
+	etcd, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = etcd.Close() })
+	members := map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: time.Now().UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000}}
+	revision, err := etcd.PutConsumerGroupRevision(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCoordinator(t, etcd)
+	del := kmsg.NewPtrDeleteGroupsRequest()
+	del.Groups = []string{"g"}
+	if resp, err := c.DeleteGroups(ctx, del); err != nil || resp.Groups[0].ErrorCode != protocol.NON_EMPTY_GROUP {
+		t.Fatal(resp, err)
+	}
+	c.mu.Lock()
+	cached := c.groups["g"].createRevision
+	c.mu.Unlock()
+	if cached != revision {
+		t.Fatalf("cached revision %d, want %d", cached, revision)
+	}
+}
