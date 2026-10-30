@@ -65,6 +65,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	switch args[0] {
 	case "restore":
 		return runRestoreCommand(ctx, args[1:], stdout)
+	case "prune":
+		return runPruneCommand(ctx, args[1:], stdout)
 	case "-h", "--help", "help":
 		writeUsage(stdout)
 		return nil
@@ -76,6 +78,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 func writeUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: kafscale-cli restore --topic <source> --target-topic <target> --to <RFC3339 timestamp>")
+	_, _ = fmt.Fprintln(w, "       kafscale-cli prune [--topic <name>] [--older-than <7d|24h>] [--force]")
 }
 
 func runRestoreCommand(ctx context.Context, args []string, stdout io.Writer) error {
