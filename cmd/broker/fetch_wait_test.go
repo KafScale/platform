@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -161,5 +162,29 @@ func TestFetchMinBytesCombinesPartitions(t *testing.T) {
 	resp, elapsed := timedFetch(t, h, context.Background(), req)
 	if elapsed > 450*time.Millisecond || len(resp.Topics[0].Partitions[0].RecordBatches) == 0 || len(resp.Topics[0].Partitions[7].RecordBatches) == 0 {
 		t.Fatal(elapsed, resp)
+	}
+}
+
+func TestFetchClientGoneStopsLongPoll(t *testing.T) {
+	h, req := fetchWaitFixture(t)
+	req.MaxWaitMillis = 30000
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gone := make(chan struct{})
+	ctx := protocol.ContextWithClientGone(parent, gone)
+	done := make(chan error, 1)
+	go func() { _, err := h.handleFetch(ctx, &protocol.RequestHeader{APIVersion: 4}, req); done <- err }()
+	// Give the empty Fetch time to enter its long-poll, then signal EOF only.
+	time.AfterFunc(20*time.Millisecond, func() { close(gone) })
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Fetch ignored client EOF during a 30-second long-poll")
+	}
+	if parent.Err() != nil {
+		t.Fatal("Fetch cancellation affected the connection's handler context")
 	}
 }

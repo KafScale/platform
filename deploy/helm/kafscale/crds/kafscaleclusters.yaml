@@ -1135,6 +1135,11 @@ spec:
                       type: integer
                     cacheSize:
                       type: string
+                    responseWriteTimeoutMs:
+                      description: Kafka response write timeout in milliseconds; defaults to 30000.
+                      type: integer
+                      format: int32
+                      minimum: 1
             status:
               type: object
               properties:

@@ -43,29 +43,30 @@ const (
 )
 
 type proxy struct {
-	addr           string
-	advertisedHost string
-	advertisedPort int32
-	store          metadata.Store
-	backends       []string
-	logger         *slog.Logger
-	rr             uint32
-	dialTimeout    time.Duration
-	ready          uint32
-	lastHealthy    int64
-	cacheTTL       time.Duration
-	cacheMu        sync.RWMutex
-	cachedBackends []string
-	apiVersions    []kmsg.ApiVersionsResponseApiKey
-	router         *metadata.PartitionRouter
-	groupRouter    *metadata.GroupRouter
-	brokerAddrMu   sync.RWMutex
-	brokerAddrs    map[string]string // brokerID -> "host:port"
-	topicNamesMu   sync.RWMutex
-	topicNames     map[[16]byte]string // topicID -> topic name
-	metaFlight     singleflight.Group
-	backendRetries int
-	backendBackoff time.Duration
+	addr                 string
+	advertisedHost       string
+	advertisedPort       int32
+	store                metadata.Store
+	backends             []string
+	logger               *slog.Logger
+	rr                   uint32
+	dialTimeout          time.Duration
+	responseWriteTimeout time.Duration
+	ready                uint32
+	lastHealthy          int64
+	cacheTTL             time.Duration
+	cacheMu              sync.RWMutex
+	cachedBackends       []string
+	apiVersions          []kmsg.ApiVersionsResponseApiKey
+	router               *metadata.PartitionRouter
+	groupRouter          *metadata.GroupRouter
+	brokerAddrMu         sync.RWMutex
+	brokerAddrs          map[string]string // brokerID -> "host:port"
+	topicNamesMu         sync.RWMutex
+	topicNames           map[[16]byte]string // topicID -> topic name
+	metaFlight           singleflight.Group
+	backendRetries       int
+	backendBackoff       time.Duration
 	// readyzFetchProbe gates /readyz on an actual Fetch round-trip to a
 	// backend, not merely on "a backend exists". See fetchProbe.
 	readyzFetchProbe bool
@@ -121,20 +122,21 @@ func main() {
 	}
 
 	p := &proxy{
-		security:       security,
-		addr:           addr,
-		advertisedHost: advertisedHost,
-		advertisedPort: advertisedPort,
-		store:          store,
-		backends:       backends,
-		logger:         logger,
-		dialTimeout:    5 * time.Second,
-		cacheTTL:       cacheTTL,
-		apiVersions:    generateProxyApiVersions(),
-		brokerAddrs:    make(map[string]string),
-		topicNames:     make(map[[16]byte]string),
-		backendRetries: backendRetries,
-		backendBackoff: backendBackoff,
+		security:             security,
+		addr:                 addr,
+		advertisedHost:       advertisedHost,
+		advertisedPort:       advertisedPort,
+		store:                store,
+		backends:             backends,
+		logger:               logger,
+		dialTimeout:          5 * time.Second,
+		responseWriteTimeout: time.Duration(envInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000)) * time.Millisecond,
+		cacheTTL:             cacheTTL,
+		apiVersions:          generateProxyApiVersions(),
+		brokerAddrs:          make(map[string]string),
+		topicNames:           make(map[[16]byte]string),
+		backendRetries:       backendRetries,
+		backendBackoff:       backendBackoff,
 		// Default on: readiness requires a decodable Fetch round-trip. Set
 		// KAFSCALE_PROXY_READYZ_FETCH_PROBE=false to fall back to the shallow
 		// "a backend exists" check.
@@ -596,7 +598,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			return
 		default:
 		}
-		if err := protocol.WriteFrame(conn, payload); err != nil {
+		if err := protocol.WriteFrameWithDeadline(conn, payload, p.responseWriteTimeout); err != nil {
 			p.logger.Warn("write response failed", "error", err)
 			_ = conn.Close()
 		}
@@ -652,7 +654,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				return
 			}
 			if ok {
-				if err := protocol.WriteFrame(conn, resp); err != nil {
+				if err := protocol.WriteFrameWithDeadline(conn, resp, p.responseWriteTimeout); err != nil {
 					p.logger.Warn("write not-ready response failed", "error", err)
 				}
 			}
@@ -698,6 +700,11 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 		case protocol.APIKeyFetch:
 			resp, err := p.handleFetchRouting(ctx, header, frame.Payload, pool)
 			if err != nil {
+				select {
+				case <-clientGone:
+					continue
+				default:
+				}
 				p.logger.Warn("fetch routing failed", "error", err)
 				p.respondBackendError(conn, header, body)
 				return
@@ -1143,13 +1150,18 @@ func (p *proxy) brokerIDToAddr(ctx context.Context, brokerID string) string {
 func (p *proxy) connectBackendExcluding(ctx context.Context, exclude map[string]bool) (net.Conn, string, error) {
 	var lastErr error
 	for attempt := 0; attempt < p.backendRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		backends, err := p.currentBackends(ctx)
 		if err != nil || len(backends) == 0 {
 			if cached := p.cachedBackendsSnapshot(); len(cached) > 0 && p.cacheFresh() {
 				backends = cached
 			} else {
 				lastErr = err
-				time.Sleep(p.backendBackoff)
+				if err := waitBackendRetry(ctx, p.backendBackoff); err != nil {
+					return nil, "", err
+				}
 				continue
 			}
 		}
@@ -1166,12 +1178,28 @@ func (p *proxy) connectBackendExcluding(ctx context.Context, exclude map[string]
 			}
 			lastErr = dialErr
 		}
-		time.Sleep(p.backendBackoff)
+		if err := waitBackendRetry(ctx, p.backendBackoff); err != nil {
+			return nil, "", err
+		}
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no backends available")
 	}
 	return nil, "", lastErr
+}
+
+func waitBackendRetry(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (p *proxy) handleApiVersions(header *protocol.RequestHeader) ([]byte, error) {
@@ -1191,7 +1219,7 @@ func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeade
 	if err != nil || !ok {
 		return
 	}
-	_ = protocol.WriteFrame(conn, resp)
+	_ = protocol.WriteFrameWithDeadline(conn, resp, p.responseWriteTimeout)
 }
 
 func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
@@ -1755,19 +1783,10 @@ func (p *proxy) forwardToBackend(ctx context.Context, conn net.Conn, backendAddr
 // retrying on NOT_COORDINATOR. DescribeGroups is forwarded once without retry
 // since it may span multiple groups on different brokers.
 func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
-	if gone := protocol.ClientGone(ctx); header.APIKey == protocol.APIKeyJoinGroup && gone != nil {
-		joinCtx, cancel := context.WithCancel(ctx)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			select {
-			case <-gone:
-				cancel()
-			case <-joinCtx.Done():
-			}
-		}()
-		defer func() { cancel(); <-done }()
-		ctx = joinCtx
+	if header.APIKey == protocol.APIKeyJoinGroup {
+		var stop context.CancelFunc
+		ctx, stop = protocol.ContextUntilClientGone(ctx)
+		defer stop()
 	}
 
 	if header.APIKey == protocol.APIKeyDeleteGroups {
@@ -1893,6 +1912,9 @@ func (p *proxy) extractGroupID(apiKey int16, payload []byte) string {
 // handleFetchRouting splits fetch requests by partition owner, fans out, and
 // merges responses. Retries NOT_LEADER_OR_FOLLOWER on a different broker.
 func (p *proxy) handleFetchRouting(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {
+	ctx, stopWaiting := protocol.ContextUntilClientGone(ctx)
+	defer stopWaiting()
+
 	_, req, err := protocol.ParseRequest(payload)
 	if err != nil {
 		return p.forwardFetchRaw(ctx, payload, pool)
@@ -2021,6 +2043,9 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 
 	var failedPartitions map[string]map[int32]bool
 	for attempt := 0; attempt < maxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		failedPartitions = nil
 		triedBackends := make(map[string]bool)
 		subResults := p.fanOutFetch(ctx, header, groups, originalPayload, triedBackends, pool)

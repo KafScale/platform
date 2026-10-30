@@ -1829,6 +1829,12 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeader, req *kmsg.FetchRequest) ([]byte, error) {
 	deadline := time.Now().Add(time.Duration(req.MaxWaitMillis) * time.Millisecond)
 	for {
+		select {
+		case <-protocol.ClientGone(ctx):
+			return nil, context.Canceled
+		default:
+		}
+
 		// Inspect every partition before waiting. A request has one MinBytes target
 		// and one deadline, regardless of how many partitions are empty.
 		resp, messages, err := h.fetchResponseOnce(ctx, header, req)
@@ -1859,6 +1865,9 @@ func (h *handler) handleFetch(ctx context.Context, header *protocol.RequestHeade
 		timer := time.NewTimer(remaining)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
+			return finish()
+		case <-protocol.ClientGone(ctx):
 			timer.Stop()
 			return finish()
 		case <-timer.C:
@@ -2305,6 +2314,7 @@ func main() {
 	kafkaAddr := envOrDefault("KAFSCALE_BROKER_ADDR", defaultKafkaAddr)
 	srv := &broker.Server{
 		Addr:            kafkaAddr,
+		WriteTimeout:    time.Duration(parseEnvInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000)) * time.Millisecond,
 		Handler:         handler,
 		ConnContextFunc: connContext,
 	}

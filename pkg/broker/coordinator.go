@@ -325,8 +325,8 @@ func (c *GroupCoordinator) JoinGroupWithClient(ctx context.Context, req *kmsg.Jo
 	return resp, nil
 }
 
-// Only JoinGroup treats connection EOF as cancellation. Other requests retain
-// their live context so buffered and in-flight produces can complete.
+// JoinGroup observes EOF independently from its handler context, so buffered
+// and in-flight produces on that connection can still complete.
 func joinContextErr(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err

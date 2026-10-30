@@ -399,6 +399,7 @@ the broker first, or do not gate the install on proxy readiness.
 ### Broker
 
 - `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
+- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – Timeout for one Kafka response write on the broker and proxy (default `30000` milliseconds; nonpositive uses the default). On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value. A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
 - `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
 - `KAFSCALE_BROKER_PORT` – Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
 - `KAFSCALE_BROKER_ID` – Broker node ID.

@@ -22,6 +22,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 
@@ -35,7 +36,9 @@ type Handler interface {
 
 // Server implements minimal Kafka TCP handling for milestone 1.
 type Server struct {
-	Addr            string
+	Addr string
+	// WriteTimeout defaults to 30 seconds when nonpositive.
+	WriteTimeout    time.Duration
 	Handler         Handler
 	ConnContextFunc ConnContextFunc
 	listener        net.Listener
@@ -180,14 +183,16 @@ func (s *Server) handleConnection(conn net.Conn) {
 			// Send an UNKNOWN_SERVER_ERROR response instead of dropping the
 			// connection so the client can recover gracefully.
 			if errResp := buildErrorResponse(header); errResp != nil {
-				_ = protocol.WriteFrame(conn, errResp)
+				if err := protocol.WriteFrameWithDeadline(conn, errResp, s.WriteTimeout); err != nil {
+					_ = conn.Close()
+				}
 			}
 			continue
 		}
 		if respPayload == nil {
 			continue
 		}
-		if err := protocol.WriteFrame(conn, respPayload); err != nil {
+		if err := protocol.WriteFrameWithDeadline(conn, respPayload, s.WriteTimeout); err != nil {
 			log.Printf("write frame: %v", err)
 			_ = conn.Close()
 			// Drain complete requests that were read before the failed response.
