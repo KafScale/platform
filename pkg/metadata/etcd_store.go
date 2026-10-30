@@ -180,7 +180,7 @@ func consumerOffsetKey(group, topic string, partition int32) string {
 
 // CommitConsumerOffset implements Store.CommitConsumerOffset.
 func (s *EtcdStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false)
+	return s.commitConsumerOffset(ctx, group, 0, topic, partition, offset, metadata, false)
 }
 
 // FetchConsumerOffset implements Store.FetchConsumerOffset.
@@ -245,23 +245,34 @@ func (s *EtcdStore) listConsumerOffsets(ctx context.Context, prefix, groupID str
 
 // PutConsumerGroup persists consumer group metadata in etcd.
 func (s *EtcdStore) PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error {
+	_, err := s.putConsumerGroup(ctx, group)
+	return err
+}
+
+func (s *EtcdStore) PutConsumerGroupRevision(ctx context.Context, group *metadatapb.ConsumerGroup) (int64, error) {
 	return s.putConsumerGroup(ctx, group)
 }
 
 // FetchConsumerGroup loads consumer group metadata from etcd.
 func (s *EtcdStore) FetchConsumerGroup(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, error) {
+	group, _, err := s.FetchConsumerGroupRevision(ctx, groupID)
+	return group, err
+}
+
+func (s *EtcdStore) FetchConsumerGroupRevision(ctx context.Context, groupID string) (*metadatapb.ConsumerGroup, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	resp, err := s.client.Get(ctx, ConsumerGroupKey(groupID))
 	if err != nil {
 		s.recordEtcdResult(err)
-		return nil, err
+		return nil, 0, err
 	}
 	s.recordEtcdResult(nil)
 	if len(resp.Kvs) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
-	return DecodeConsumerGroup(resp.Kvs[0].Value)
+	group, err := DecodeConsumerGroup(resp.Kvs[0].Value)
+	return group, resp.Kvs[0].CreateRevision, err
 }
 
 // ListConsumerGroups discovers groups from keys without reading every offset value.

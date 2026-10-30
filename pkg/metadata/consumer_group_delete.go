@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -164,27 +165,47 @@ func (s *InMemoryStore) DeleteConsumerGroupAndOffsets(ctx context.Context, group
 // ConsumerGroupOffsetCommitter is an optional capability that refuses offset
 // commits for a group whose metadata was deleted.
 type ConsumerGroupOffsetCommitter interface {
-	CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error
+	CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error
 }
 
 var ErrConsumerGroupDeleted = errors.New("consumer group deleted")
 
-func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group, topic string, partition int32, offset int64, metadata string) error {
+type ConsumerGroupRevisioner interface {
+	FetchConsumerGroupRevision(context.Context, string) (*metadatapb.ConsumerGroup, int64, error)
+	PutConsumerGroupRevision(context.Context, *metadatapb.ConsumerGroup) (int64, error)
+}
+
+func FetchConsumerGroupRevision(ctx context.Context, store Store, groupID string) (*metadatapb.ConsumerGroup, int64, error) {
+	if revisioner, ok := store.(ConsumerGroupRevisioner); ok {
+		return revisioner.FetchConsumerGroupRevision(ctx, groupID)
+	}
+	group, err := store.FetchConsumerGroup(ctx, groupID)
+	return group, 0, err
+}
+
+func PutConsumerGroupRevision(ctx context.Context, store Store, group *metadatapb.ConsumerGroup) (int64, error) {
+	if revisioner, ok := store.(ConsumerGroupRevisioner); ok {
+		return revisioner.PutConsumerGroupRevision(ctx, group)
+	}
+	return 0, store.PutConsumerGroup(ctx, group)
+}
+
+func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
 	if committer, ok := store.(ConsumerGroupOffsetCommitter); ok {
-		return committer.CommitConsumerOffsetIfGroupExists(ctx, group, topic, partition, offset, metadata)
+		return committer.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, topic, partition, offset, metadata)
 	}
 	return store.CommitConsumerOffset(ctx, group, topic, partition, offset, metadata)
 }
 
-func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
+func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
+	return s.commitConsumerOffset(ctx, group, createRevision, topic, partition, offset, metadata, true)
+}
+
+func (s *InMemoryStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, _ int64, topic string, partition int32, offset int64, metadata string) error {
 	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true)
 }
 
-func (s *InMemoryStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true)
-}
-
-func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string, requireGroup bool) error {
+func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, meta string, requireGroup bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	for range 3 {
@@ -205,13 +226,20 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group, topic strin
 			encoded, _ := EncodeConsumerGroup(current)
 			ops = append(ops, clientv3.OpPut(ConsumerGroupKey(group), string(encoded)))
 		}
-		result, err := s.client.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision)).Then(ops...).Commit()
+		cmps := []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision)}
+		if createRevision > 0 {
+			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(group)), "=", createRevision))
+		}
+		result, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Else(clientv3.OpGet(ConsumerGroupKey(group))).Commit()
 		s.recordEtcdResult(err)
 		if err != nil {
 			return err
 		}
 		if result.Succeeded {
 			return nil
+		}
+		if kvs := result.Responses[0].GetResponseRange().Kvs; createRevision > 0 && (len(kvs) == 0 || kvs[0].CreateRevision != createRevision) {
+			return ErrConsumerGroupDeleted
 		}
 	}
 	return ErrConsumerGroupChanged

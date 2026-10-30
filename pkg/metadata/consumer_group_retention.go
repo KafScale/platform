@@ -75,9 +75,9 @@ func (s *EtcdStore) groupSnapshot(ctx context.Context, id string) (*metadatapb.C
 	return group, response.Kvs[0].ModRevision, response.Header.Revision, err
 }
 
-func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error {
+func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) (int64, error) {
 	if group == nil || group.GroupId == "" {
-		return errors.New("consumer group id required")
+		return 0, errors.New("consumer group id required")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -85,31 +85,37 @@ func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.Cons
 	if len(group.Members) > 0 {
 		payload, err := EncodeConsumerGroup(retainedGroup(group, nil, time.Now()))
 		if err != nil {
-			return err
+			return 0, err
 		}
-		_, err = s.client.Put(ctx, ConsumerGroupKey(group.GroupId), string(payload))
+		resp, err := s.client.Put(ctx, ConsumerGroupKey(group.GroupId), string(payload), clientv3.WithPrevKV())
 		s.recordEtcdResult(err)
-		return err
+		if err != nil {
+			return 0, err
+		}
+		if resp.PrevKv != nil {
+			return resp.PrevKv.CreateRevision, nil
+		}
+		return resp.Header.Revision, nil
 	}
 	for range 3 {
 		previous, revision, _, err := s.groupSnapshot(ctx, group.GroupId)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		payload, err := EncodeConsumerGroup(retainedGroup(group, previous, time.Now()))
 		if err != nil {
-			return err
+			return 0, err
 		}
-		result, err := s.client.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group.GroupId)), "=", revision)).Then(clientv3.OpPut(ConsumerGroupKey(group.GroupId), string(payload))).Commit()
+		result, err := s.client.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group.GroupId)), "=", revision)).Then(clientv3.OpPut(ConsumerGroupKey(group.GroupId), string(payload)), clientv3.OpGet(ConsumerGroupKey(group.GroupId))).Commit()
 		s.recordEtcdResult(err)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if result.Succeeded {
-			return nil
+			return result.Responses[1].GetResponseRange().Kvs[0].CreateRevision, nil
 		}
 	}
-	return ErrConsumerGroupChanged
+	return 0, ErrConsumerGroupChanged
 }
 
 func (s *InMemoryStore) ExpireConsumerGroup(ctx context.Context, id string, cutoff, now time.Time) (bool, error) {
