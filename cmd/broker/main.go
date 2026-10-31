@@ -1155,6 +1155,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				if errors.Is(err, storage.ErrObjectStorage) {
 					code, message := h.backpressureError()
 					p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
+				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					p.ErrorCode = protocol.REQUEST_TIMED_OUT
 				}
 				partitionResponses = append(partitionResponses, p)
 				if h.traceKafka {

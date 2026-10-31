@@ -1906,3 +1906,24 @@ func TestProduceAppendNonStorageErrorStaysUnknown(t *testing.T) {
 		t.Fatalf("got code %d message %v, want %d and no message", part.ErrorCode, part.ErrorMessage, protocol.UNKNOWN_SERVER_ERROR)
 	}
 }
+
+func TestHandleProduceExpiredContextTimesOut(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	handler := newTestHandler(store)
+	produce := func(ctx context.Context, base int64) *kmsg.ProduceResponse {
+		req := &kmsg.ProduceRequest{Version: 9, Acks: -1, TimeoutMillis: 1000, Topics: []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: testBatchBytes(base, 0, 1)}}}}}
+		data, err := handler.handleProduce(ctx, &protocol.RequestHeader{CorrelationID: 1, APIVersion: 9}, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decodeKmsgResponse(t, 9, data, kmsg.NewPtrProduceResponse)
+	}
+	if code := produce(context.Background(), 0).Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatalf("first produce returned %d", code)
+	}
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if code := produce(expired, 1).Topics[0].Partitions[0].ErrorCode; code != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("expired produce returned %d", code)
+	}
+}
