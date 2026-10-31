@@ -141,6 +141,10 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 		storageNames[name] = storage
 	}
 
+	fail := func(err error) (lfsRewriteResult, error) {
+		m.discardUploads(ctx, orphans)
+		return lfsRewriteResult{}, err
+	}
 	for _, dp := range parts {
 		batches := dp.batches
 		batchModified := false
@@ -165,29 +169,29 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 				algHeader, _ := lfsFindHeaderValue(headers, "LFS_BLOB_ALG")
 				alg, err := m.resolveChecksumAlg(string(algHeader))
 				if err != nil {
-					return lfsRewriteResult{}, err
+					return fail(err)
 				}
 				if checksumHeader != "" && alg == lfs.ChecksumNone {
-					return lfsRewriteResult{}, errors.New("checksum provided but checksum algorithm is none")
+					return fail(errors.New("checksum provided but checksum algorithm is none"))
 				}
 				payload := rec.Value
 				m.logger.Info("LFS blob detected", "topic", dp.topic, "size", len(payload))
 				if int64(len(payload)) > m.maxBlob {
 					m.logger.Error("blob exceeds max size", "size", len(payload), "max", m.maxBlob)
-					return lfsRewriteResult{}, fmt.Errorf("blob size %d exceeds max %d", len(payload), m.maxBlob)
+					return fail(fmt.Errorf("blob size %d exceeds max %d", len(payload), m.maxBlob))
 				}
 				key := m.objectKeyFor(storageNames[dp.topic])
 				sha256Hex, checksum, checksumAlg, err := m.s3Uploader.Upload(ctx, key, payload, alg)
 				if err != nil {
 					m.metrics.IncS3Errors()
-					return lfsRewriteResult{}, err
+					return fail(err)
 				}
 				if checksumHeader != "" && checksum != "" && !strings.EqualFold(checksumHeader, checksum) {
 					if err := m.s3Uploader.DeleteObject(ctx, key); err != nil {
 						m.trackOrphans([]orphanInfo{{Topic: dp.topic, Key: key, RequestID: "", Reason: "checksum_mismatch_delete_failed"}})
-						return lfsRewriteResult{}, fmt.Errorf("checksum mismatch; delete failed: %w", err)
+						return fail(fmt.Errorf("checksum mismatch; delete failed: %w", err))
 					}
-					return lfsRewriteResult{}, &lfs.ChecksumError{Expected: checksumHeader, Actual: checksum}
+					return fail(&lfs.ChecksumError{Expected: checksumHeader, Actual: checksum})
 				}
 				env := lfs.Envelope{
 					Version:         1,
@@ -204,7 +208,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 				}
 				encoded, err := lfs.EncodeEnvelope(env)
 				if err != nil {
-					return lfsRewriteResult{}, err
+					return fail(err)
 				}
 				rec.Value = encoded
 				rec.Headers = lfsDropHeader(headers, "LFS_BLOB")
@@ -217,7 +221,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 			newRecords := lfsEncodeRecords(records)
 			compressedRecords, usedCodec, err := lfsCompressRecords(codec, newRecords)
 			if err != nil {
-				return lfsRewriteResult{}, err
+				return fail(err)
 			}
 			batch.Records = compressedRecords
 			batch.NumRecords = int32(len(records))
@@ -242,8 +246,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 	}
 	for name, storage := range storageNames {
 		if err := m.recheckStorageName(ctx, name, storage); err != nil {
-			m.discardUploads(ctx, orphans)
-			return lfsRewriteResult{}, err
+			return fail(err)
 		}
 	}
 
