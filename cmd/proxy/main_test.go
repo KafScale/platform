@@ -1753,3 +1753,22 @@ func TestProxyStopsWritingAfterFailedWrite(t *testing.T) {
 		t.Fatalf("proxy attempted %d writes", conn.writes)
 	}
 }
+
+func TestEnvIntWarnsOnInvalidValue(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Setenv("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "30s")
+	if got := envInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000); got != 30000 {
+		t.Fatalf("got %d", got)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS")) {
+		t.Fatalf("no warning logged: %q", buf.String())
+	}
+	buf.Reset()
+	t.Setenv("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "500")
+	if got := envInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000); got != 500 || buf.Len() != 0 {
+		t.Fatalf("got %d, log %q", got, buf.String())
+	}
+}

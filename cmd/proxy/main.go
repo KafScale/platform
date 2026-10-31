@@ -243,6 +243,7 @@ func envInt(key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(val)
 	if err != nil {
+		slog.Warn("invalid integer environment value, using default", "env", key, "value", val, "default", fallback)
 		return fallback
 	}
 	return parsed

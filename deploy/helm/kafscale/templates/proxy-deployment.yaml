@@ -120,6 +120,14 @@ spec:
             - name: KAFSCALE_PROXY_BACKENDS
               value: "{{ join "," .Values.proxy.backends }}"
 {{- end }}
+{{- if .Values.proxy.responseWriteTimeoutMs }}
+            - name: KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS
+              value: "{{ .Values.proxy.responseWriteTimeoutMs }}"
+{{- end }}
+{{- if .Values.proxy.lfsMetadataTimeoutMs }}
+            - name: KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS
+              value: "{{ .Values.proxy.lfsMetadataTimeoutMs }}"
+{{- end }}
           ports:
             - name: kafka
               containerPort: {{ .Values.proxy.service.port }}

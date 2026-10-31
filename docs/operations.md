@@ -423,7 +423,7 @@ the broker first, or do not gate the install on proxy readiness.
 ### Broker
 
 - `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
-- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – Timeout for one Kafka response write on the broker and proxy (default `30000` milliseconds; nonpositive uses the default). On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value. A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
+- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – Time a client has to read each 256 KB of a Kafka response on the broker and proxy (default `30000` milliseconds; nonpositive uses the default). A large response to a client that keeps reading does not time out. On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value; for the proxy chart, set `proxy.responseWriteTimeoutMs`. The proxy logs a warning and uses the default when an integer setting is not a number. A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
 - `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
 - `KAFSCALE_BROKER_PORT` – Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
 - `KAFSCALE_BROKER_ID` – Broker node ID.
@@ -455,7 +455,7 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
 - `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
 - `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
-- `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes`; omission uses the broker default. Retention is checked once per minute under the group coordination lease.
+- `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes` to zero or more; zero disables expiry and omission uses the broker default. Retention is checked once per minute under the group coordination lease.
 - `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
 - `KAFSCALE_LOG_LEVEL` – Log level (`debug`, `info`, `warn`, `error`).
 - `KAFSCALE_TRACE_KAFKA` – Enable protocol tracing (`true/false`).
@@ -544,7 +544,7 @@ Blobs and checksums:
 - `KAFSCALE_LFS_PROXY_CHECKSUM_ALGO` – Checksum algorithm (default `sha256`).
 - `KAFSCALE_LFS_PROXY_ID` – Proxy identifier recorded in tracker events (no default).
 - `KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH` – Maximum topic name length (default `249`).
-- `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` – Timeout for the etcd topic generation lookup before an LFS upload (default `3000`).
+- `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` – Timeout for the etcd topic generation lookup before an LFS upload (default `3000`). In the Helm chart, set `proxy.lfsMetadataTimeoutMs`.
 
 HTTP API:
 
