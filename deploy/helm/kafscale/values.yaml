@@ -187,9 +187,7 @@ proxy:
     username: ""
     password: null  # Set via --set or use existingSecret
   backends: []
-  # Milliseconds a client has to read each 256 KB of a response; empty uses 30000.
   responseWriteTimeoutMs: ""
-  # Milliseconds for the LFS topic generation lookup in etcd; empty uses 3000.
   lfsMetadataTimeoutMs: ""
   podAnnotations: {}
   resources: {}

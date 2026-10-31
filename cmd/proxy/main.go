@@ -595,7 +595,6 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	// A single reader preserves framing and bounds pipelined read-ahead.
 	clientGone := make(chan struct{})
 	ctx = protocol.ContextWithClientGone(ctx, clientGone)
-	// A failed response must not discard already-read fire-and-forget requests.
 	writeFailed := false
 	writeResponse := func(payload []byte) {
 		if writeFailed {
