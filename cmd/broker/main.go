@@ -2102,7 +2102,7 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 	return resp, fetchedMessages, nil
 }
 
-const fetchPollInterval = 10 * time.Millisecond
+var fetchPollInterval = 10 * time.Millisecond
 
 func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32) error {
 	desired := int32(h.autoCreatePartitions)
