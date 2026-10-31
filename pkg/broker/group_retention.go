@@ -25,6 +25,8 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 )
 
+var errRetentionMembersRemain = errors.New("consumer group still has members")
+
 func retentionCandidate(group *metadatapb.ConsumerGroup, now, cutoff time.Time) bool {
 	if len(group.Members) == 0 {
 		since, err := time.Parse(time.RFC3339Nano, group.EmptySince)
@@ -57,6 +59,9 @@ func (c *GroupCoordinator) cleanupRetainedGroups(now time.Time) {
 	c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if c.config.AcquireRetentionSweep != nil && c.config.AcquireRetentionSweep(ctx) != nil {
+		return
+	}
 	groups, err := c.store.ListConsumerGroups(ctx)
 	if err != nil {
 		slog.Warn("list groups for retention failed", "error", err)
@@ -77,44 +82,51 @@ func (c *GroupCoordinator) cleanupRetainedGroups(now time.Time) {
 				continue
 			}
 		}
+		release := func() {
+			if acquired && c.config.ReleaseGroup != nil {
+				c.config.ReleaseGroup(id)
+			}
+		}
 		c.mu.Lock()
 		if !c.ownsGroup(id) {
 			c.mu.Unlock()
+			release()
 			continue
 		}
-		// Recover stale sessions after a restart as well as cached groups. Missing
-		// heartbeat timestamps receive the normal recovery grace before expiry.
 		if len(group.Members) > 0 {
 			state, loadErr := c.loadGroupIfMissing(ctx, id)
-			if loadErr != nil {
-				if acquired && c.config.ReleaseGroup != nil {
-					c.config.ReleaseGroup(id)
+			if loadErr == nil && state != nil {
+				loadErr = c.expireGroupMembersLocked(ctx, id, state, now)
+				if loadErr == nil && len(state.members) > 0 {
+					loadErr = errRetentionMembersRemain
 				}
+			}
+			if loadErr != nil {
 				c.mu.Unlock()
+				release()
 				continue
 			}
-			if state != nil {
-				if expireErr := c.expireGroupMembersLocked(ctx, id, state, now); expireErr != nil || len(state.members) > 0 {
-					c.mu.Unlock()
-					continue
-				}
-			}
 		}
-		if !c.ownsGroup(id) {
-			c.mu.Unlock()
+		owned := c.ownsGroup(id)
+		c.mu.Unlock()
+		if !owned {
+			release()
 			continue
 		}
 		deleted, expireErr := retainer.ExpireConsumerGroup(ctx, id, cutoff, now)
 		if expireErr != nil && !errors.Is(expireErr, metadata.ErrConsumerGroupChanged) {
 			slog.Warn("consumer group retention failed", "group", id, "error", expireErr)
 		}
-		if deleted {
+		if !deleted {
+			release()
+			continue
+		}
+		c.mu.Lock()
+		if state := c.groups[id]; state == nil || len(state.members) == 0 {
 			delete(c.groups, id)
 			if c.config.GroupDeleted != nil {
 				c.config.GroupDeleted(id)
 			}
-		} else if acquired && c.config.ReleaseGroup != nil {
-			c.config.ReleaseGroup(id)
 		}
 		c.mu.Unlock()
 	}

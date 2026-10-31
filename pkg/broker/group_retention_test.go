@@ -116,3 +116,97 @@ func TestRetentionRequiresOwnership(t *testing.T) {
 		})
 	}
 }
+
+type blockingExpireStore struct {
+	*metadata.InMemoryStore
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (s blockingExpireStore) ExpireConsumerGroup(ctx context.Context, id string, cutoff, now time.Time) (bool, error) {
+	close(s.reached)
+	<-s.release
+	return s.InMemoryStore.ExpireConsumerGroup(ctx, id, cutoff, now)
+}
+
+func TestRetentionExpiryRunsOutsideCoordinatorLock(t *testing.T) {
+	store := blockingExpireStore{metadata.NewInMemoryStore(metadata.ClusterMetadata{}), make(chan struct{}), make(chan struct{})}
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := store.PutConsumerGroup(context.Background(), &metadatapb.ConsumerGroup{GroupId: "expired", State: "empty", EmptySince: old}); err != nil {
+		t.Fatal(err)
+	}
+	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{CleanupInterval: time.Hour, OffsetsRetention: time.Hour})
+	t.Cleanup(c.Stop)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.cleanupRetainedGroups(time.Now())
+	}()
+	<-store.reached
+	locked := c.mu.TryLock()
+	if locked {
+		c.mu.Unlock()
+	}
+	close(store.release)
+	<-done
+	if !locked {
+		t.Fatal("coordinator lock held during expiry")
+	}
+	if group, _ := store.FetchConsumerGroup(context.Background(), "expired"); group != nil {
+		t.Fatalf("group not expired: %+v", group)
+	}
+}
+
+func TestRetentionReleasesAcquiredLeaseWhenMembersRemain(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	now := time.Now()
+	members := map[string]*metadatapb.GroupMember{
+		"dead": {HeartbeatAt: now.Add(-time.Hour).UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 1000},
+		"live": {HeartbeatAt: now.UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000},
+	}
+	if err := store.PutConsumerGroup(context.Background(), &metadatapb.ConsumerGroup{GroupId: "mixed", State: "stable", GenerationId: 1, Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	owned := false
+	released := 0
+	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+		CleanupInterval:  time.Hour,
+		OffsetsRetention: time.Hour,
+		OwnsGroup:        func(string) bool { return owned },
+		AcquireGroup: func(context.Context, string) error {
+			owned = true
+			return nil
+		},
+		ReleaseGroup: func(string) {
+			owned = false
+			released++
+		},
+	})
+	t.Cleanup(c.Stop)
+	c.cleanupRetainedGroups(now)
+	if released != 1 {
+		t.Fatalf("lease released %d times", released)
+	}
+	group, _ := store.FetchConsumerGroup(context.Background(), "mixed")
+	if group == nil || len(group.Members) != 1 || group.Members["live"] == nil {
+		t.Fatalf("unexpected group %+v", group)
+	}
+}
+
+func TestRetentionSkipsSweepWithoutSweeperLease(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := store.PutConsumerGroup(context.Background(), &metadatapb.ConsumerGroup{GroupId: "expired", State: "empty", EmptySince: old}); err != nil {
+		t.Fatal(err)
+	}
+	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+		CleanupInterval:       time.Hour,
+		OffsetsRetention:      time.Hour,
+		AcquireRetentionSweep: func(context.Context) error { return metadata.ErrNotOwner },
+	})
+	t.Cleanup(c.Stop)
+	c.cleanupRetainedGroups(time.Now())
+	if group, _ := store.FetchConsumerGroup(context.Background(), "expired"); group == nil {
+		t.Fatal("group expired without sweeper lease")
+	}
+}

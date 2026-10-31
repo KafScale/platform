@@ -75,6 +75,7 @@ type CoordinatorConfig struct {
 	RetentionCheckInterval time.Duration
 	AcquireGroup           func(context.Context, string) error
 	ReleaseGroup           func(string)
+	AcquireRetentionSweep  func(context.Context) error
 	// OwnsGroup gates group mutation and cleanup after coordination lease loss.
 	// Nil permits standalone coordinators without an external lease manager.
 	OwnsGroup func(string) bool
@@ -138,6 +139,7 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 			config.RetentionCheckInterval = cfg.RetentionCheckInterval
 		}
 		config.AcquireGroup, config.ReleaseGroup = cfg.AcquireGroup, cfg.ReleaseGroup
+		config.AcquireRetentionSweep = cfg.AcquireRetentionSweep
 		config.OwnsGroup = cfg.OwnsGroup
 		config.GroupDeleted = cfg.GroupDeleted
 	}
