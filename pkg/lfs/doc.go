@@ -37,7 +37,7 @@ The LFS envelope is a JSON object stored as the Kafka message value:
 	{
 	  "kfs_lfs": 1,
 	  "bucket": "my-bucket",
-	  "key": "default/topic/lfs/2026/02/01/obj-uuid",
+	  "key": "default/@lfs/topic/2026/02/01/obj-uuid",
 	  "size": 10485760,
 	  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 	  "content_type": "application/octet-stream",

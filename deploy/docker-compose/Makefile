@@ -50,7 +50,7 @@ test-upload: ## Test LFS upload (creates 1KB test file)
 		--data-binary @- | jq .
 
 test-download: ## Test LFS stream download (requires KEY, SHA256, and SIZE)
-	@if [ -z "$(KEY)" ] || [ -z "$(SHA256)" ] || [ -z "$(SIZE)" ]; then echo "Usage: make test-download KEY=default/topic/lfs/... SHA256=<envelope-sha256> SIZE=<envelope-size> [BUCKET=kafscale] [OUT=downloaded-blob.bin]"; exit 1; fi
+	@if [ -z "$(KEY)" ] || [ -z "$(SHA256)" ] || [ -z "$(SIZE)" ]; then echo "Usage: make test-download KEY=default/@lfs/topic/... SHA256=<envelope-sha256> SIZE=<envelope-size> [BUCKET=kafscale] [OUT=downloaded-blob.bin]"; exit 1; fi
 	@curl -f -sS -X POST http://localhost:8080/lfs/download \
 		-H "Content-Type: application/json" \
 		-d '{"bucket":"$(BUCKET)","key":"$(KEY)","mode":"stream","integrity":{"sha256":"$(SHA256)","checksum_alg":"sha256","size":$(SIZE)}}' \

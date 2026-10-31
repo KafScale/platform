@@ -18,7 +18,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"github.com/KafScale/platform/pkg/metadata"
 	"log/slog"
 	"net"
 	"os"
@@ -39,6 +41,7 @@ const (
 	defaultLFSMaxBlob              = int64(5 << 30)
 	defaultLFSChunkSize            = int64(5 << 20)
 	defaultLFSDialTimeoutMs        = 5000
+	defaultLFSMetadataTimeoutMs    = 3000
 	defaultLFSBackendBackoffMs     = 500
 	defaultLFSS3HealthIntervalSec  = 30
 	defaultLFSHTTPReadTimeoutSec   = 30
@@ -57,6 +60,8 @@ const (
 // to detect LFS_BLOB headers, uploads payloads to S3, and replaces record
 // values with JSON envelopes — all before the existing partition-aware fan-out.
 type lfsModule struct {
+	topicGeneration      func(context.Context, string) (int64, error)
+	metadataTimeout      time.Duration
 	authorizer           *acl.Authorizer
 	identityDial         func(context.Context, string) (net.Conn, error)
 	logger               *slog.Logger
@@ -221,6 +226,7 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	}
 
 	m := &lfsModule{
+		metadataTimeout:      time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", defaultLFSMetadataTimeoutMs)) * time.Millisecond,
 		logger:               logger,
 		s3Uploader:           uploader,
 		s3Bucket:             s3Bucket,
@@ -361,13 +367,66 @@ func (m *lfsModule) startS3HealthCheck(ctx context.Context, interval time.Durati
 	}()
 }
 
-func (m *lfsModule) buildObjectKey(topic string) string {
+const lfsPrefix = "@lfs"
+
+func (m *lfsModule) topicStorageName(ctx context.Context, topic string) (string, error) {
+	if m.topicGeneration == nil {
+		return topic, nil
+	}
+	timeout := m.metadataTimeout
+	if timeout <= 0 {
+		timeout = time.Duration(defaultLFSMetadataTimeoutMs) * time.Millisecond
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	gen, err := m.topicGeneration(lookupCtx, topic)
+	if err != nil {
+		return "", fmt.Errorf("lookup topic generation: %w", err)
+	}
+	return metadata.TopicStorageName(topic, gen), nil
+}
+
+var errLFSGenerationChanged = errors.New("topic generation changed during upload")
+
+func (m *lfsModule) recheckStorageName(ctx context.Context, topic, storageName string) error {
+	current, err := m.topicStorageName(ctx, topic)
+	if err != nil {
+		return err
+	}
+	if current != storageName {
+		return fmt.Errorf("%w: %s is now %s", errLFSGenerationChanged, storageName, current)
+	}
+	return nil
+}
+
+func (m *lfsModule) discardUploads(ctx context.Context, uploads []orphanInfo) {
+	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var failed []orphanInfo
+	for _, upload := range uploads {
+		if err := m.s3Uploader.DeleteObject(deleteCtx, upload.Key); err != nil {
+			upload.Reason = "generation_changed_delete_failed"
+			failed = append(failed, upload)
+		}
+	}
+	m.trackOrphans(failed)
+}
+
+func (m *lfsModule) objectKeyFor(storageName string) string {
 	ns := strings.TrimSpace(m.s3Namespace)
 	if ns == "" {
 		ns = "default"
 	}
 	now := time.Now().UTC()
-	return fmt.Sprintf("%s/%s/lfs/%04d/%02d/%02d/obj-%s", ns, topic, now.Year(), now.Month(), now.Day(), newLFSUUID())
+	return fmt.Sprintf("%s/%s/%s/%04d/%02d/%02d/obj-%s", ns, lfsPrefix, storageName, now.Year(), now.Month(), now.Day(), newLFSUUID())
+}
+
+func (m *lfsModule) buildObjectKey(ctx context.Context, topic string) (string, error) {
+	storage, err := m.topicStorageName(ctx, topic)
+	if err != nil {
+		return "", err
+	}
+	return m.objectKeyFor(storage), nil
 }
 
 func (m *lfsModule) resolveChecksumAlg(raw string) (lfs.ChecksumAlg, error) {

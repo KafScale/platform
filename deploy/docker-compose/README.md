@@ -117,7 +117,7 @@ curl -X POST http://localhost:8080/lfs/download \
   -H "Content-Type: application/json" \
   -d '{
     "bucket": "kafscale",
-    "key": "default/test-uploads/lfs/2026/02/05/obj-...",
+    "key": "default/@lfs/test-uploads/2026/02/05/obj-...",
     "mode": "stream",
     "integrity": {
       "sha256": "<envelope-sha256>",
