@@ -1775,6 +1775,20 @@ func TestEnvIntWarnsOnInvalidValue(t *testing.T) {
 	}
 }
 
+func TestLFSMetadataTimeoutWarnsOnInvalidValue(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Setenv("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", "5s")
+	if got := envInt("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", defaultLFSMetadataTimeoutMs); got != defaultLFSMetadataTimeoutMs {
+		t.Fatalf("got %d", got)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS")) {
+		t.Fatalf("no warning logged: %q", buf.String())
+	}
+}
+
 type failingMetadataStore struct {
 	metadata.Store
 	fail bool
