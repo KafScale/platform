@@ -113,3 +113,34 @@ func TestDeleteGroupsCannotCrossNestedGroupACL(t *testing.T) {
 		t.Fatal("deletion crossed offset ACL", offset, meta, err)
 	}
 }
+
+func TestDescribeGroupsOlderVersions(t *testing.T) {
+	for _, entry := range generateApiVersions() {
+		if entry.ApiKey == protocol.APIKeyDescribeGroups && (entry.MinVersion != 0 || entry.MaxVersion != 5) {
+			t.Fatalf("DescribeGroups advertised %d..%d", entry.MinVersion, entry.MaxVersion)
+		}
+	}
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newTestHandler(store)
+	t.Cleanup(h.coordinator.Stop)
+	if err := store.CommitConsumerOffset(context.Background(), "idle", "orders", 0, 42, ""); err != nil {
+		t.Fatal(err)
+	}
+	for version := int16(0); version <= 5; version++ {
+		req := kmsg.NewPtrDescribeGroupsRequest()
+		req.Version = version
+		req.Groups = []string{"idle", "missing"}
+		data, err := h.Handle(context.Background(), &protocol.RequestHeader{APIKey: protocol.APIKeyDescribeGroups, APIVersion: version}, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := decodeKmsgResponse(t, version, data, kmsg.NewPtrDescribeGroupsResponse)
+		if len(resp.Groups) != 2 || resp.Groups[0].ErrorCode != 0 || resp.Groups[0].State != "Empty" || resp.Groups[0].ProtocolType != "consumer" {
+			t.Fatalf("v%d idle group %+v", version, resp.Groups)
+		}
+		dead := resp.Groups[1]
+		if dead.ErrorCode != 0 || dead.State != "Dead" || dead.ProtocolType != "" || dead.Protocol != "" || len(dead.Members) != 0 {
+			t.Fatalf("v%d missing group %+v", version, dead)
+		}
+	}
+}

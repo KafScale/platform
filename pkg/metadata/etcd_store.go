@@ -188,7 +188,7 @@ func consumerOffsetKey(group, topic string, partition int32) string {
 
 // CommitConsumerOffset implements Store.CommitConsumerOffset.
 func (s *EtcdStore) CommitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, 0, topic, partition, offset, metadata, false, false)
+	return s.commitConsumerOffset(ctx, group, 0, "", 0, topic, partition, offset, metadata, false, false)
 }
 
 // FetchConsumerOffset implements Store.FetchConsumerOffset.
