@@ -90,3 +90,24 @@ func TestSimpleOffsetCommit(t *testing.T) {
 		t.Fatal("commit did not reset retention clock", group)
 	}
 }
+
+func TestDescribeGroupsDeadGroupHasEmptyProtocolType(t *testing.T) {
+	c := newTestCoordinator(t, metadata.NewInMemoryStore(metadata.ClusterMetadata{}))
+	for _, version := range []int16{0, 5, 6} {
+		req := kmsg.NewPtrDescribeGroupsRequest()
+		req.Version = version
+		req.Groups = []string{"missing"}
+		resp, err := c.DescribeGroups(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g := resp.Groups[0]
+		want := int16(protocol.NONE)
+		if version >= 6 {
+			want = protocol.GROUP_ID_NOT_FOUND
+		}
+		if g.ErrorCode != want || g.State != "Dead" || g.ProtocolType != "" || g.Protocol != "" || len(g.Members) != 0 {
+			t.Fatalf("v%d dead group %+v", version, g)
+		}
+	}
+}

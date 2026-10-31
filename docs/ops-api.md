@@ -33,7 +33,7 @@ out of scope.
 
 | Category | API Key | Name | Version | Notes |
 |---------|---------|------|---------|-------|
-| Group visibility | 15 | DescribeGroups | v5 | Required for `kafka-consumer-groups.sh --describe`. |
+| Group visibility | 15 | DescribeGroups | v0-v5 | Required for `kafka-consumer-groups.sh --describe`. |
 | Group visibility | 16 | ListGroups | v5 | Required to enumerate consumer groups. |
 | Group cleanup | 42 | DeleteGroups | v2 | Removes group metadata and committed offsets without touching topic data. |
 | Recovery | 23 | OffsetForLeaderEpoch | v3 | Safe recovery after broker failover/truncation. |
@@ -56,7 +56,7 @@ supported where client tooling requires them. IncrementalAlterConfigs remains de
 
 Implemented versions:
 
-- DescribeGroups v5
+- DescribeGroups v0-v5
 - ListGroups v5
 - OffsetForLeaderEpoch v3
 - DescribeConfigs v4
