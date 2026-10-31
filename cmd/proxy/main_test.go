@@ -20,11 +20,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1770,5 +1772,46 @@ func TestEnvIntWarnsOnInvalidValue(t *testing.T) {
 	t.Setenv("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "500")
 	if got := envInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000); got != 500 || buf.Len() != 0 {
 		t.Fatalf("got %d, log %q", got, buf.String())
+	}
+}
+
+type failingMetadataStore struct {
+	metadata.Store
+	fail bool
+}
+
+func (s *failingMetadataStore) Metadata(ctx context.Context, topics []string) (*metadata.ClusterMetadata, error) {
+	if s.fail {
+		return nil, errors.New("etcd unavailable")
+	}
+	return s.Store.Metadata(ctx, topics)
+}
+
+func TestRefreshMetadataCacheFailureKeepsCache(t *testing.T) {
+	id := [16]byte{1}
+	store := &failingMetadataStore{Store: metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 0, Host: "broker-0", Port: 9092}},
+		Topics:  []protocol.MetadataTopic{{Topic: kmsg.StringPtr("events"), TopicID: id, Partitions: []protocol.MetadataPartition{{Partition: 0}}}},
+	})}
+	var logs bytes.Buffer
+	p := &proxy{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil)), cacheTTL: 60 * time.Second}
+	ctx := context.Background()
+	p.refreshMetadataCache(ctx)
+	if !p.checkReady(ctx) {
+		t.Fatal("expected ready after first refresh")
+	}
+	store.fail = true
+	p.refreshMetadataCache(ctx)
+	if cached := p.cachedBackendsSnapshot(); len(cached) != 1 || cached[0] != "broker-0:9092" {
+		t.Fatalf("failed refresh changed cached backends: %#v", cached)
+	}
+	if name := p.resolveTopicID(ctx, id); name != "events" {
+		t.Fatalf("failed refresh dropped topic name, got %q", name)
+	}
+	if !p.checkReady(ctx) {
+		t.Fatal("failed refresh made the proxy unready")
+	}
+	if !strings.Contains(logs.String(), "metadata cache refresh failed") {
+		t.Fatalf("missing warning: %s", logs.String())
 	}
 }
