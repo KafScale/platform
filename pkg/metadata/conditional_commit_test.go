@@ -153,3 +153,35 @@ func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
 		t.Fatalf("%d of 200 commits failed", failed)
 	}
 }
+
+func TestCommitConsumerOffsetChecksMember(t *testing.T) {
+	ctx := context.Background()
+	stores := map[string]Store{
+		"memory": NewInMemoryStore(ClusterMetadata{}),
+		"etcd":   newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t)),
+	}
+	for name, store := range stores {
+		members := map[string]*metadatapb.GroupMember{"m1": {}}
+		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 4, Members: members}); err != nil {
+			t.Fatal(err)
+		}
+		cases := []struct {
+			member     string
+			generation int32
+			want       error
+		}{
+			{"gone", 4, ErrConsumerGroupMemberGone},
+			{"m1", 3, ErrConsumerGroupGenerationChanged},
+			{"m1", 4, nil},
+		}
+		for _, tc := range cases {
+			err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, tc.member, tc.generation, "orders", 0, 5, "")
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatal(name, tc.member, tc.generation, err)
+			}
+		}
+		if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 5 {
+			t.Fatal(name, offset, err)
+		}
+	}
+}
