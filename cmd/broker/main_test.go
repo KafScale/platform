@@ -1927,3 +1927,28 @@ func TestHandleProduceExpiredContextTimesOut(t *testing.T) {
 		t.Fatalf("expired produce returned %d", code)
 	}
 }
+
+func TestProduceAppendPlainErrorStaysUnknown(t *testing.T) {
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newHandler(store, storage.NewMemoryS3Client(), protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
+	batch := testBatchBytes(0, 0, 1)
+	binary.BigEndian.PutUint32(batch[23:27], 0xffffffff)
+	binary.BigEndian.PutUint32(batch[17:21], crc32.Checksum(batch[21:], crc32.MakeTable(crc32.Castagnoli)))
+	req := &kmsg.ProduceRequest{
+		Version:       9,
+		Acks:          -1,
+		TimeoutMillis: 100,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic:      "orders",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: batch}},
+		}},
+	}
+	resp, err := h.handleProduce(context.Background(), &protocol.RequestHeader{CorrelationID: 34, APIVersion: 9}, req)
+	if err != nil {
+		t.Fatalf("handleProduce: %v", err)
+	}
+	part := decodeKmsgResponse(t, 9, resp, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+	if part.ErrorCode != protocol.UNKNOWN_SERVER_ERROR || part.ErrorMessage != nil {
+		t.Fatalf("got code %d message %v, want %d and no message", part.ErrorCode, part.ErrorMessage, protocol.UNKNOWN_SERVER_ERROR)
+	}
+}
