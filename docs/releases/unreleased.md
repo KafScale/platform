@@ -49,6 +49,14 @@ limitations under the License.
 
 - The Iceberg and SQL processors map segments under `<topic>@<generation>/` to the topic `<topic>` and its table, and keep a separate checkpoint for each generation, so a re-created topic is processed from offset 0 (#262).
 
+- Kafka response writes set the write deadline for each 256 KiB chunk instead of once for the whole frame, so a large response to a slow but live client is not cut off. After a write fails, the broker and the proxy stop writing to that connection instead of logging one error for each queued response (#263).
+
+- The Helm chart can set `proxy.responseWriteTimeoutMs` and `proxy.lfsMetadataTimeoutMs`. The proxy logs a warning when an integer environment setting is not a number. The KafscaleCluster CRD rejects a negative `offsetsRetentionMinutes` (#263).
+
+- Produce returns `REQUEST_TIMED_OUT` (7) instead of `UNKNOWN_SERVER_ERROR` when the request context expires before the append finishes (#263).
+
+- When one LFS record in a produce request fails, the proxy deletes the objects it already uploaded for earlier records in that request (#263).
+
 ## Upgrade notes
 
 - Empty groups written by older brokers receive a full retention period from first discovery. Apply the updated KafscaleCluster CRD before setting `spec.config.offsetsRetentionMinutes`; omit it for the seven-day default or set it to `0` to disable automatic expiry.
