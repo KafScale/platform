@@ -34,7 +34,7 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		"etcd":   newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t)),
 	}
 	for name, store := range stores {
-		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "orders", 0, 1, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "", 0, "orders", 0, 1, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
 			t.Fatal(name, err)
 		}
 		if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
@@ -43,7 +43,7 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "orders", 0, 7, "m"); err != nil {
+		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "", 0, "orders", 0, 7, "m"); err != nil {
 			t.Fatal(name, err)
 		}
 		if offset, meta, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 7 || meta != "m" {
@@ -51,15 +51,15 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		}
 	}
 	legacy := legacyCommitStore{NewInMemoryStore(ClusterMetadata{})}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, legacy, "g", 0, "orders", 0, 3, ""); err != nil {
+	if err := CommitConsumerOffsetIfGroupExists(ctx, legacy, "g", 0, "", 0, "orders", 0, 3, ""); err != nil {
 		t.Fatal(err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := stores["etcd"].(*EtcdStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "orders", 0, 1, ""); err == nil {
+	if err := stores["etcd"].(*EtcdStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
 		t.Fatal("expected canceled")
 	}
-	if err := stores["memory"].(*InMemoryStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "orders", 0, 1, ""); err == nil {
+	if err := stores["memory"].(*InMemoryStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
 		t.Fatal("expected canceled")
 	}
 }
@@ -83,7 +83,7 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 	if _, loaded, err := FetchConsumerGroupRevision(ctx, store, "g"); err != nil || loaded != first {
 		t.Fatal(loaded, err)
 	}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", first, "orders", 0, 5, ""); err != nil {
+	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", first, "", 0, "orders", 0, 5, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteConsumerGroupAndOffsets(ctx, "g"); err != nil {
@@ -96,13 +96,13 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 	if err != nil || second <= first {
 		t.Fatal(second, err)
 	}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", first, "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", first, "", 0, "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
 		t.Fatal(err)
 	}
 	if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
 		t.Fatal(offsets)
 	}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", second, "orders", 0, 9, ""); err != nil {
+	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", second, "", 0, "orders", 0, 9, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := PutConsumerGroupRevision(ctx, store, nil); err == nil {
@@ -143,7 +143,7 @@ func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
 	}
 	failed := 0
 	for i := range 200 {
-		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", revision, "orders", 0, int64(i), ""); err != nil {
+		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", revision, "", 0, "orders", 0, int64(i), ""); err != nil {
 			failed++
 		}
 	}

@@ -37,6 +37,11 @@ func TestSimpleOffsetCommit(t *testing.T) {
 	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "empty", State: groupStateEmptyStr, ProtocolType: "consumer", EmptySince: old}); err != nil {
 		t.Fatal(err)
 	}
+	for _, id := range []string{"empty-any", "empty-older"} {
+		if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: id, State: groupStateEmptyStr, GenerationId: 3, ProtocolType: "consumer", EmptySince: old}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	members := map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: time.Now().UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000}}
 	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "active", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
 		t.Fatal(err)
@@ -65,6 +70,8 @@ func TestSimpleOffsetCommit(t *testing.T) {
 	}{
 		{"absent", "", -1, protocol.NONE, true},
 		{"empty", "", -1, protocol.NONE, true},
+		{"empty-any", "any", -1, protocol.NONE, true},
+		{"empty-older", "any", -2, protocol.NONE, true},
 		{"active", "", -1, protocol.UNKNOWN_MEMBER_ID, false},
 		{"active", "m1", -1, protocol.ILLEGAL_GENERATION, false},
 		{"absent-member", "m1", -1, protocol.UNKNOWN_MEMBER_ID, false},
