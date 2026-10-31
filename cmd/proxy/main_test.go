@@ -1713,3 +1713,43 @@ func TestProxyApiVersionsNegotiation(t *testing.T) {
 	}()
 	testutil.AssertApiVersionsNegotiation(t, clientConn)
 }
+
+type failingWriteConn struct {
+	net.Conn
+	mu     sync.Mutex
+	writes int
+}
+
+func (c *failingWriteConn) Write([]byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writes++
+	return 0, io.ErrClosedPipe
+}
+
+func (c *failingWriteConn) Close() error { return nil }
+
+func TestProxyStopsWritingAfterFailedWrite(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	conn := &failingWriteConn{Conn: serverConn}
+	p := &proxy{apiVersions: generateProxyApiVersions(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.handleConnection(context.Background(), conn)
+	}()
+	req := kmsg.NewPtrApiVersionsRequest()
+	for i := range 3 {
+		if _, err := clientConn.Write(kmsg.NewRequestFormatter().AppendRequest(nil, req, int32(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	clientConn.Close()
+	<-done
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.writes != 1 {
+		t.Fatalf("proxy attempted %d writes", conn.writes)
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -579,5 +580,57 @@ func TestServerResponseDeadlineDrainsRequests(t *testing.T) {
 				t.Fatalf("deadline dropped queued Produce: %d, %v", handler.produce, handler.err)
 			}
 		})
+	}
+}
+
+type failingWriteConn struct {
+	net.Conn
+	writes *atomic.Int32
+}
+
+func (c failingWriteConn) Write([]byte) (int, error) {
+	c.writes.Add(1)
+	return 0, errors.New("broken pipe")
+}
+
+func (c failingWriteConn) Close() error { return nil }
+
+type countingHandler struct {
+	testHandler
+	calls chan struct{}
+}
+
+func (h *countingHandler) Handle(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request) ([]byte, error) {
+	defer func() { h.calls <- struct{}{} }()
+	return h.testHandler.Handle(ctx, header, req)
+}
+
+func TestServerStopsWritingAfterFailedWrite(t *testing.T) {
+	server, client := net.Pipe()
+	writes := &atomic.Int32{}
+	handler := &countingHandler{calls: make(chan struct{}, 3)}
+	s := &Server{Handler: handler, ConnContextFunc: func(conn net.Conn) (net.Conn, *ConnContext, error) {
+		return failingWriteConn{Conn: conn, writes: writes}, nil, nil
+	}}
+	done := make(chan struct{})
+	go func() { defer close(done); s.handleConnection(server) }()
+	go func() {
+		for range 3 {
+			if err := protocol.WriteFrame(client, buildApiVersionsRequest()); err != nil {
+				return
+			}
+		}
+	}()
+	for range 3 {
+		select {
+		case <-handler.calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("requests were not handled")
+		}
+	}
+	_ = client.Close()
+	<-done
+	if n := writes.Load(); n != 1 {
+		t.Fatalf("server attempted %d writes after the first failure", n-1)
 	}
 }

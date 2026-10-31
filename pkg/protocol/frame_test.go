@@ -17,7 +17,10 @@ package protocol
 
 import (
 	"bytes"
+	"io"
+	"net"
 	"testing"
+	"time"
 )
 
 func TestFrameReadWrite(t *testing.T) {
@@ -38,5 +41,54 @@ func TestFrameReadWrite(t *testing.T) {
 	}
 	if !bytes.Equal(frame.Payload, payload) {
 		t.Fatalf("payload mismatch: %v vs %v", frame.Payload, payload)
+	}
+}
+
+func TestWriteFrameWithDeadlineResetsPerChunk(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	payload := bytes.Repeat([]byte{7}, 4*ResponseWriteChunk)
+	done := make(chan error, 1)
+	go func() {
+		done <- WriteFrameWithDeadline(server, payload, 150*time.Millisecond)
+	}()
+	buf := make([]byte, 4+len(payload))
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(client, buf[:4]); err != nil {
+		t.Fatal(err)
+	}
+	for start := 4; start < len(buf); start += ResponseWriteChunk {
+		time.Sleep(60 * time.Millisecond)
+		if _, err := io.ReadFull(client, buf[start:start+ResponseWriteChunk]); err != nil {
+			t.Fatalf("read at %d: %v, write: %v", start, err, <-done)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("slow but steady reader failed: %v", err)
+	}
+	if !bytes.Equal(buf[4:], payload) {
+		t.Fatal("payload mismatch")
+	}
+}
+
+func TestWriteFrameWithDeadlineStalledReader(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- WriteFrameWithDeadline(server, bytes.Repeat([]byte{1}, 2*ResponseWriteChunk), 50*time.Millisecond)
+	}()
+	if _, err := io.ReadFull(client, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("stalled reader did not time out")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("write did not time out")
 	}
 }
