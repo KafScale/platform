@@ -16,12 +16,14 @@ package broker
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestCoordinatorRetentionLifecycle(t *testing.T) {
@@ -208,5 +210,122 @@ func TestRetentionSkipsSweepWithoutSweeperLease(t *testing.T) {
 	c.cleanupRetainedGroups(time.Now())
 	if group, _ := store.FetchConsumerGroup(context.Background(), "expired"); group == nil {
 		t.Fatal("group expired without sweeper lease")
+	}
+}
+
+func TestRetentionExpiresEmptyGroupOwnedByNonSweeper(t *testing.T) {
+	ctx := context.Background()
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "idle", State: "empty", EmptySince: old}); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	owner := map[string]string{"idle": "b"}
+	coordinator := func(name string, sweeper bool) *GroupCoordinator {
+		released := func(id string) {
+			mu.Lock()
+			defer mu.Unlock()
+			if owner[id] == name {
+				delete(owner, id)
+			}
+		}
+		c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+			CleanupInterval:  time.Hour,
+			OffsetsRetention: time.Hour,
+			OwnsGroup: func(id string) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				return owner[id] == name
+			},
+			AcquireGroup: func(_ context.Context, id string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				if owner[id] != "" && owner[id] != name {
+					return metadata.ErrNotOwner
+				}
+				owner[id] = name
+				return nil
+			},
+			ReleaseGroup: released,
+			GroupDeleted: released,
+			AcquireRetentionSweep: func(context.Context) error {
+				if sweeper {
+					return nil
+				}
+				return metadata.ErrNotOwner
+			},
+		})
+		t.Cleanup(c.Stop)
+		return c
+	}
+	a := coordinator("a", true)
+	b := coordinator("b", false)
+	b.mu.Lock()
+	_, err := b.loadGroupIfMissing(ctx, "idle")
+	b.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	a.cleanupRetainedGroups(now)
+	b.cleanupRetainedGroups(now)
+	if group, _ := store.FetchConsumerGroup(ctx, "idle"); group != nil {
+		t.Fatalf("empty group owned by a non-sweeper never expires: %+v", group)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if owner["idle"] != "" {
+		t.Fatalf("lease still held by %s", owner["idle"])
+	}
+}
+
+func TestGroupDeletedRunsOutsideCoordinatorLock(t *testing.T) {
+	ctx := context.Background()
+	for _, path := range []string{"retention", "delete"} {
+		t.Run(path, func(t *testing.T) {
+			store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+			old := time.Now().Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
+			if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "idle", State: "empty", EmptySince: old}); err != nil {
+				t.Fatal(err)
+			}
+			reached := make(chan struct{})
+			unblock := make(chan struct{})
+			c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+				CleanupInterval:  time.Hour,
+				OffsetsRetention: time.Hour,
+				GroupDeleted: func(string) {
+					close(reached)
+					<-unblock
+				},
+			})
+			t.Cleanup(c.Stop)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				if path == "retention" {
+					c.cleanupRetainedGroups(time.Now())
+					return
+				}
+				_, _ = c.DeleteGroups(ctx, &kmsg.DeleteGroupsRequest{Groups: []string{"idle"}})
+			}()
+			<-reached
+			heartbeat := make(chan struct{})
+			go func() {
+				defer close(heartbeat)
+				req := kmsg.NewPtrHeartbeatRequest()
+				req.Group, req.MemberID, req.Generation = "other", "m", 1
+				c.Heartbeat(ctx, req)
+			}()
+			select {
+			case <-heartbeat:
+			case <-time.After(2 * time.Second):
+				close(unblock)
+				<-done
+				t.Fatal("heartbeat blocked while the group lease was released")
+			}
+			close(unblock)
+			<-done
+		})
 	}
 }

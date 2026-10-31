@@ -59,6 +59,23 @@ func (c *GroupCoordinator) cleanupRetainedGroups(now time.Time) {
 	c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	cutoff := now.Add(-c.config.OffsetsRetention)
+	c.mu.Lock()
+	var owned []string
+	for id, state := range c.groups {
+		if len(state.members) == 0 && c.ownsGroup(id) {
+			owned = append(owned, id)
+		}
+	}
+	c.mu.Unlock()
+	seen := make(map[string]bool, len(owned))
+	for _, id := range owned {
+		if ctx.Err() != nil {
+			return
+		}
+		seen[id] = true
+		c.retainGroup(ctx, retainer, id, false, cutoff, now)
+	}
 	if c.config.AcquireRetentionSweep != nil && c.config.AcquireRetentionSweep(ctx) != nil {
 		return
 	}
@@ -67,67 +84,69 @@ func (c *GroupCoordinator) cleanupRetainedGroups(now time.Time) {
 		slog.Warn("list groups for retention failed", "error", err)
 		return
 	}
-	cutoff := now.Add(-c.config.OffsetsRetention)
 	for _, group := range groups {
 		if ctx.Err() != nil {
 			return
 		}
-		if !retentionCandidate(group, now, cutoff) {
+		if seen[group.GroupId] || !retentionCandidate(group, now, cutoff) {
 			continue
 		}
-		id := group.GroupId
-		acquired := !c.ownsGroup(id)
-		if acquired {
-			if c.config.AcquireGroup == nil || c.config.AcquireGroup(ctx, id) != nil {
-				continue
+		c.retainGroup(ctx, retainer, group.GroupId, len(group.Members) > 0, cutoff, now)
+	}
+}
+
+func (c *GroupCoordinator) retainGroup(ctx context.Context, retainer metadata.ConsumerGroupRetainer, id string, hasMembers bool, cutoff, now time.Time) {
+	acquired := !c.ownsGroup(id)
+	if acquired {
+		if c.config.AcquireGroup == nil || c.config.AcquireGroup(ctx, id) != nil {
+			return
+		}
+	}
+	release := func() {
+		if acquired && c.config.ReleaseGroup != nil {
+			c.config.ReleaseGroup(id)
+		}
+	}
+	c.mu.Lock()
+	if !c.ownsGroup(id) {
+		c.mu.Unlock()
+		release()
+		return
+	}
+	if hasMembers {
+		state, loadErr := c.loadGroupIfMissing(ctx, id)
+		if loadErr == nil && state != nil {
+			loadErr = c.expireGroupMembersLocked(ctx, id, state, now)
+			if loadErr == nil && len(state.members) > 0 {
+				loadErr = errRetentionMembersRemain
 			}
 		}
-		release := func() {
-			if acquired && c.config.ReleaseGroup != nil {
-				c.config.ReleaseGroup(id)
-			}
-		}
-		c.mu.Lock()
-		if !c.ownsGroup(id) {
+		if loadErr != nil {
 			c.mu.Unlock()
 			release()
-			continue
+			return
 		}
-		if len(group.Members) > 0 {
-			state, loadErr := c.loadGroupIfMissing(ctx, id)
-			if loadErr == nil && state != nil {
-				loadErr = c.expireGroupMembersLocked(ctx, id, state, now)
-				if loadErr == nil && len(state.members) > 0 {
-					loadErr = errRetentionMembersRemain
-				}
-			}
-			if loadErr != nil {
-				c.mu.Unlock()
-				release()
-				continue
-			}
-		}
-		owned := c.ownsGroup(id)
-		c.mu.Unlock()
-		if !owned {
-			release()
-			continue
-		}
-		deleted, expireErr := retainer.ExpireConsumerGroup(ctx, id, cutoff, now)
-		if expireErr != nil && !errors.Is(expireErr, metadata.ErrConsumerGroupChanged) {
-			slog.Warn("consumer group retention failed", "group", id, "error", expireErr)
-		}
-		if !deleted {
-			release()
-			continue
-		}
-		c.mu.Lock()
-		if state := c.groups[id]; state == nil || len(state.members) == 0 {
-			delete(c.groups, id)
-			if c.config.GroupDeleted != nil {
-				c.config.GroupDeleted(id)
-			}
-		}
-		c.mu.Unlock()
 	}
+	owned := c.ownsGroup(id)
+	c.mu.Unlock()
+	if !owned {
+		release()
+		return
+	}
+	deleted, expireErr := retainer.ExpireConsumerGroup(ctx, id, cutoff, now)
+	if expireErr != nil && !errors.Is(expireErr, metadata.ErrConsumerGroupChanged) {
+		slog.Warn("consumer group retention failed", "group", id, "error", expireErr)
+	}
+	if !deleted {
+		release()
+		return
+	}
+	c.mu.Lock()
+	var released []string
+	if state := c.groups[id]; state == nil || len(state.members) == 0 {
+		delete(c.groups, id)
+		released = c.markReleasing(released, id)
+	}
+	c.mu.Unlock()
+	c.finishRelease(released)
 }
