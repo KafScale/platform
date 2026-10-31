@@ -1880,7 +1880,7 @@ func TestListOffsetsEarliestStorageFailure(t *testing.T) {
 	}
 }
 
-func TestProduceAppendNonStorageErrorStaysUnknown(t *testing.T) {
+func TestProduceAppendCanceledContextTimesOut(t *testing.T) {
 	store := metadata.NewInMemoryStore(defaultMetadata())
 	h := newHandler(store, storage.NewMemoryS3Client(), protocol.MetadataBroker{NodeID: 1, Host: "localhost", Port: 19092}, testLogger())
 	if _, err := h.getPartitionLog(context.Background(), "orders", 0); err != nil {
@@ -1902,8 +1902,8 @@ func TestProduceAppendNonStorageErrorStaysUnknown(t *testing.T) {
 		t.Fatalf("handleProduce: %v", err)
 	}
 	part := decodeKmsgResponse(t, 9, resp, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
-	if part.ErrorCode != protocol.UNKNOWN_SERVER_ERROR || part.ErrorMessage != nil {
-		t.Fatalf("got code %d message %v, want %d and no message", part.ErrorCode, part.ErrorMessage, protocol.UNKNOWN_SERVER_ERROR)
+	if part.ErrorCode != protocol.REQUEST_TIMED_OUT || part.ErrorMessage != nil {
+		t.Fatalf("got code %d message %v, want %d and no message", part.ErrorCode, part.ErrorMessage, protocol.REQUEST_TIMED_OUT)
 	}
 }
 
