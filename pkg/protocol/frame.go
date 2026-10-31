@@ -66,12 +66,8 @@ func WriteFrame(w io.Writer, payload []byte) error {
 // DefaultResponseWriteTimeout bounds a client that stops reading responses.
 const DefaultResponseWriteTimeout = 30 * time.Second
 
-// ResponseWriteChunk is how much of a response must be written within one write timeout.
 const ResponseWriteChunk = 256 << 10
 
-// WriteFrameWithDeadline gives each chunk of a response its own deadline, so a
-// large response to a client that keeps reading does not time out, and clears
-// the deadline afterward so it does not constrain a later response.
 func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = DefaultResponseWriteTimeout
