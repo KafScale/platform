@@ -23,6 +23,7 @@ import (
 
 	"github.com/KafScale/platform/internal/testutil"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type legacyCommitStore struct{ Store }
@@ -51,8 +52,14 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		}
 	}
 	legacy := legacyCommitStore{NewInMemoryStore(ClusterMetadata{})}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, legacy, "g", 0, "", 0, "orders", 0, 3, ""); err != nil {
+	if err := legacy.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g"}); err != nil {
 		t.Fatal(err)
+	}
+	if err := CommitConsumerOffsetIfGroupExists(ctx, legacy, "g", 0, "m1", 1, "orders", 0, 3, ""); !errors.Is(err, ErrConsumerGroupCommitUnsupported) {
+		t.Fatal(err)
+	}
+	if offsets, _ := legacy.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+		t.Fatal(offsets)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -183,5 +190,70 @@ func TestCommitConsumerOffsetChecksMember(t *testing.T) {
 		if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 5 {
 			t.Fatal(name, offset, err)
 		}
+	}
+}
+
+type racingKV struct {
+	clientv3.KV
+	before func()
+}
+
+func (k racingKV) Txn(ctx context.Context) clientv3.Txn {
+	k.before()
+	return k.KV.Txn(ctx)
+}
+
+func TestCommitConsumerOffsetFencesGroupChangeAfterSnapshot(t *testing.T) {
+	ctx := context.Background()
+	group := func(members ...string) string {
+		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{}}
+		for _, m := range members {
+			g.Members[m] = &metadatapb.GroupMember{}
+		}
+		encoded, err := EncodeConsumerGroup(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	cases := []struct {
+		name   string
+		always bool
+		after  string
+		want   error
+	}{
+		{"member leaves", false, group("m2"), ErrConsumerGroupMemberGone},
+		{"group keeps changing", true, group("m1", "m2"), ErrConsumerGroupChanged},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+			inner := store.client.KV
+			if _, err := inner.Put(ctx, ConsumerGroupKey("g"), group("m1", "m2")); err != nil {
+				t.Fatal(err)
+			}
+			_, createRevision, err := FetchConsumerGroupRevision(ctx, store, "g")
+			if err != nil || createRevision == 0 {
+				t.Fatal(createRevision, err)
+			}
+			fired := false
+			store.client.KV = racingKV{KV: inner, before: func() {
+				if fired && !tc.always {
+					return
+				}
+				fired = true
+				if _, err := inner.Put(ctx, ConsumerGroupKey("g"), tc.after); err != nil {
+					t.Error(err)
+				}
+			}}
+			err = CommitConsumerOffsetIfGroupExists(ctx, store, "g", createRevision, "m1", 2, "orders", 0, 5, "")
+			store.client.KV = inner
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+				t.Fatalf("offset written: %v", offsets)
+			}
+		})
 	}
 }

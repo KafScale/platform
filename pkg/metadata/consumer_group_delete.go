@@ -170,6 +170,8 @@ type ConsumerGroupOffsetCommitter interface {
 
 var ErrConsumerGroupDeleted = errors.New("consumer group deleted")
 
+var ErrConsumerGroupCommitUnsupported = errors.New("metadata store does not support checked offset commits")
+
 var ErrConsumerGroupNotEmpty = errors.New("consumer group has active members")
 
 var ErrConsumerGroupMemberGone = errors.New("consumer group member not found")
@@ -219,7 +221,7 @@ func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group s
 	if committer, ok := store.(ConsumerGroupOffsetCommitter); ok {
 		return committer.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, memberID, generation, topic, partition, offset, metadata)
 	}
-	return store.CommitConsumerOffset(ctx, group, topic, partition, offset, metadata)
+	return ErrConsumerGroupCommitUnsupported
 }
 
 func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error {
@@ -261,7 +263,7 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		if createRevision > 0 {
 			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(group)), "=", createRevision))
 		}
-		if createRevision == 0 || len(ops) > 1 {
+		if createRevision == 0 || len(ops) > 1 || memberID != "" {
 			cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision))
 		}
 		result, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Else(clientv3.OpGet(ConsumerGroupKey(group))).Commit()
