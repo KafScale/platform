@@ -99,8 +99,8 @@ type EtcdSpec struct {
 }
 
 type ClusterConfigSpec struct {
-	// OffsetsRetentionMinutes defaults to seven days. Zero or negative disables
-	// automatic expiry of Empty consumer groups and their offsets.
+	// OffsetsRetentionMinutes defaults to seven days. Zero disables automatic
+	// expiry of Empty consumer groups and their offsets.
 	// +optional
 	OffsetsRetentionMinutes *int64 `json:"offsetsRetentionMinutes,omitempty"`
 

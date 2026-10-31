@@ -20,11 +20,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1712,4 +1714,118 @@ func TestProxyApiVersionsNegotiation(t *testing.T) {
 		}
 	}()
 	testutil.AssertApiVersionsNegotiation(t, clientConn)
+}
+
+type failingWriteConn struct {
+	net.Conn
+	mu     sync.Mutex
+	writes int
+}
+
+func (c *failingWriteConn) Write([]byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writes++
+	return 0, io.ErrClosedPipe
+}
+
+func (c *failingWriteConn) Close() error { return nil }
+
+func TestProxyStopsWritingAfterFailedWrite(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	conn := &failingWriteConn{Conn: serverConn}
+	p := &proxy{apiVersions: generateProxyApiVersions(), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.handleConnection(context.Background(), conn)
+	}()
+	req := kmsg.NewPtrApiVersionsRequest()
+	for i := range 3 {
+		if _, err := clientConn.Write(kmsg.NewRequestFormatter().AppendRequest(nil, req, int32(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	clientConn.Close()
+	<-done
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	if conn.writes != 1 {
+		t.Fatalf("proxy attempted %d writes", conn.writes)
+	}
+}
+
+func TestEnvIntWarnsOnInvalidValue(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Setenv("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "30s")
+	if got := envInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000); got != 30000 {
+		t.Fatalf("got %d", got)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS")) {
+		t.Fatalf("no warning logged: %q", buf.String())
+	}
+	buf.Reset()
+	t.Setenv("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "500")
+	if got := envInt("KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", 30000); got != 500 || buf.Len() != 0 {
+		t.Fatalf("got %d, log %q", got, buf.String())
+	}
+}
+
+func TestLFSMetadataTimeoutWarnsOnInvalidValue(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Setenv("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", "5s")
+	if got := envInt("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", defaultLFSMetadataTimeoutMs); got != defaultLFSMetadataTimeoutMs {
+		t.Fatalf("got %d", got)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS")) {
+		t.Fatalf("no warning logged: %q", buf.String())
+	}
+}
+
+type failingMetadataStore struct {
+	metadata.Store
+	fail bool
+}
+
+func (s *failingMetadataStore) Metadata(ctx context.Context, topics []string) (*metadata.ClusterMetadata, error) {
+	if s.fail {
+		return nil, errors.New("etcd unavailable")
+	}
+	return s.Store.Metadata(ctx, topics)
+}
+
+func TestRefreshMetadataCacheFailureKeepsCache(t *testing.T) {
+	id := [16]byte{1}
+	store := &failingMetadataStore{Store: metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 0, Host: "broker-0", Port: 9092}},
+		Topics:  []protocol.MetadataTopic{{Topic: kmsg.StringPtr("events"), TopicID: id, Partitions: []protocol.MetadataPartition{{Partition: 0}}}},
+	})}
+	var logs bytes.Buffer
+	p := &proxy{store: store, logger: slog.New(slog.NewTextHandler(&logs, nil)), cacheTTL: 60 * time.Second}
+	ctx := context.Background()
+	p.refreshMetadataCache(ctx)
+	if !p.checkReady(ctx) {
+		t.Fatal("expected ready after first refresh")
+	}
+	store.fail = true
+	p.refreshMetadataCache(ctx)
+	if cached := p.cachedBackendsSnapshot(); len(cached) != 1 || cached[0] != "broker-0:9092" {
+		t.Fatalf("failed refresh changed cached backends: %#v", cached)
+	}
+	if name := p.resolveTopicID(ctx, id); name != "events" {
+		t.Fatalf("failed refresh dropped topic name, got %q", name)
+	}
+	if !p.checkReady(ctx) {
+		t.Fatal("failed refresh made the proxy unready")
+	}
+	if !strings.Contains(logs.String(), "metadata cache refresh failed") {
+		t.Fatalf("missing warning: %s", logs.String())
+	}
 }

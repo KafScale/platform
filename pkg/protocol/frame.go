@@ -66,15 +66,32 @@ func WriteFrame(w io.Writer, payload []byte) error {
 // DefaultResponseWriteTimeout bounds a client that stops reading responses.
 const DefaultResponseWriteTimeout = 30 * time.Second
 
-// WriteFrameWithDeadline bounds one complete response and clears the deadline
-// afterward so a successful write does not constrain a later response.
+const ResponseWriteChunk = 256 << 10
+
 func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = DefaultResponseWriteTimeout
 	}
+	if len(payload) > int(^uint32(0)>>1) {
+		return fmt.Errorf("payload too large: %d", len(payload))
+	}
+	defer conn.SetWriteDeadline(time.Time{})
+	var lengthBuf [4]byte
+	binary.BigEndian.PutUint32(lengthBuf[:], uint32(len(payload)))
 	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
 		return err
 	}
-	defer conn.SetWriteDeadline(time.Time{})
-	return WriteFrame(conn, payload)
+	if _, err := conn.Write(lengthBuf[:]); err != nil {
+		return fmt.Errorf("write frame size: %w", err)
+	}
+	for start := 0; start < len(payload); start += ResponseWriteChunk {
+		end := min(start+ResponseWriteChunk, len(payload))
+		if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+			return err
+		}
+		if _, err := conn.Write(payload[start:end]); err != nil {
+			return fmt.Errorf("write frame payload: %w", err)
+		}
+	}
+	return nil
 }

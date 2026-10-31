@@ -1322,3 +1322,26 @@ func TestHistogramMultipleObservations(t *testing.T) {
 		t.Fatalf("expected sum~%f, got %f", expectedSum, sum)
 	}
 }
+
+func TestRewriteProduceRecordsDiscardsEarlierUploadsOnFailure(t *testing.T) {
+	m, fs3 := testLFSModule(t)
+	records := []kmsg.Record{
+		{Key: []byte("a"), Value: []byte("first blob"), Headers: []kmsg.Header{{Key: "LFS_BLOB", Value: nil}}},
+		{Key: []byte("b"), Value: []byte("second blob"), Headers: []kmsg.Header{{Key: "LFS_BLOB", Value: []byte("wrong-checksum-value")}}},
+	}
+	req := &kmsg.ProduceRequest{
+		Acks:          1,
+		TimeoutMillis: 5000,
+		Topics: []kmsg.ProduceRequestTopic{{
+			Topic:      "test-topic",
+			Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: buildTestBatch(records)}},
+		}},
+	}
+	header := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9, CorrelationID: 1}
+	if _, err := m.rewriteProduceRecords(context.Background(), header, req); err == nil {
+		t.Fatal("expected error on checksum mismatch")
+	}
+	if len(fs3.deleted) != 2 {
+		t.Fatalf("expected both uploads deleted, got %v", fs3.deleted)
+	}
+}

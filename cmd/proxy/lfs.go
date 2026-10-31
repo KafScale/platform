@@ -142,24 +142,24 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	s3Namespace := lfsEnvOrDefault("KAFSCALE_S3_NAMESPACE", "default")
 	checksumAlg := lfsEnvOrDefault("KAFSCALE_LFS_PROXY_CHECKSUM_ALGO", "sha256")
 	httpAPIKey := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_HTTP_API_KEY"))
-	dialTimeout := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS", defaultLFSDialTimeoutMs)) * time.Millisecond
-	backendRetries := lfsEnvInt("KAFSCALE_LFS_PROXY_BACKEND_RETRIES", 6)
+	dialTimeout := time.Duration(envInt("KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS", defaultLFSDialTimeoutMs)) * time.Millisecond
+	backendRetries := envInt("KAFSCALE_LFS_PROXY_BACKEND_RETRIES", 6)
 	if backendRetries < 1 {
 		backendRetries = 1
 	}
-	backendBackoff := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS", defaultLFSBackendBackoffMs)) * time.Millisecond
+	backendBackoff := time.Duration(envInt("KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS", defaultLFSBackendBackoffMs)) * time.Millisecond
 	if backendBackoff <= 0 {
 		backendBackoff = time.Duration(defaultLFSBackendBackoffMs) * time.Millisecond
 	}
-	httpReadTimeout := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC", defaultLFSHTTPReadTimeoutSec)) * time.Second
-	httpWriteTimeout := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC", defaultLFSHTTPWriteTimeoutSec)) * time.Second
-	httpIdleTimeout := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC", defaultLFSHTTPIdleTimeoutSec)) * time.Second
-	httpHeaderTimeout := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_HTTP_HEADER_TIMEOUT_SEC", defaultLFSHTTPHeaderTimeoutSec)) * time.Second
-	httpMaxHeaderBytes := lfsEnvInt("KAFSCALE_LFS_PROXY_HTTP_MAX_HEADER_BYTES", defaultLFSHTTPMaxHeaderBytes)
-	httpShutdownTimeout := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_HTTP_SHUTDOWN_TIMEOUT_SEC", defaultLFSHTTPShutdownSec)) * time.Second
-	uploadSessionTTL := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC", defaultLFSUploadSessionTTLSec)) * time.Second
-	topicMaxLength := lfsEnvInt("KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH", defaultLFSTopicMaxLength)
-	downloadTTLSec := lfsEnvInt("KAFSCALE_LFS_PROXY_DOWNLOAD_TTL_SEC", defaultLFSDownloadTTLSec)
+	httpReadTimeout := time.Duration(envInt("KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC", defaultLFSHTTPReadTimeoutSec)) * time.Second
+	httpWriteTimeout := time.Duration(envInt("KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC", defaultLFSHTTPWriteTimeoutSec)) * time.Second
+	httpIdleTimeout := time.Duration(envInt("KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC", defaultLFSHTTPIdleTimeoutSec)) * time.Second
+	httpHeaderTimeout := time.Duration(envInt("KAFSCALE_LFS_PROXY_HTTP_HEADER_TIMEOUT_SEC", defaultLFSHTTPHeaderTimeoutSec)) * time.Second
+	httpMaxHeaderBytes := envInt("KAFSCALE_LFS_PROXY_HTTP_MAX_HEADER_BYTES", defaultLFSHTTPMaxHeaderBytes)
+	httpShutdownTimeout := time.Duration(envInt("KAFSCALE_LFS_PROXY_HTTP_SHUTDOWN_TIMEOUT_SEC", defaultLFSHTTPShutdownSec)) * time.Second
+	uploadSessionTTL := time.Duration(envInt("KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC", defaultLFSUploadSessionTTLSec)) * time.Second
+	topicMaxLength := envInt("KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH", defaultLFSTopicMaxLength)
+	downloadTTLSec := envInt("KAFSCALE_LFS_PROXY_DOWNLOAD_TTL_SEC", defaultLFSDownloadTTLSec)
 	if downloadTTLSec <= 0 {
 		downloadTTLSec = defaultLFSDownloadTTLSec
 	}
@@ -202,11 +202,11 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	backends := splitCSV(os.Getenv("KAFSCALE_LFS_PROXY_BACKENDS"))
 	trackerEnabled := lfsEnvBoolDefault("KAFSCALE_LFS_TRACKER_ENABLED", true)
 	trackerTopic := lfsEnvOrDefault("KAFSCALE_LFS_TRACKER_TOPIC", defaultTrackerTopic)
-	trackerBatchSize := lfsEnvInt("KAFSCALE_LFS_TRACKER_BATCH_SIZE", defaultTrackerBatchSize)
-	trackerFlushMs := lfsEnvInt("KAFSCALE_LFS_TRACKER_FLUSH_MS", defaultTrackerFlushMs)
+	trackerBatchSize := envInt("KAFSCALE_LFS_TRACKER_BATCH_SIZE", defaultTrackerBatchSize)
+	trackerFlushMs := envInt("KAFSCALE_LFS_TRACKER_FLUSH_MS", defaultTrackerFlushMs)
 	trackerEnsureTopic := lfsEnvBoolDefault("KAFSCALE_LFS_TRACKER_ENSURE_TOPIC", true)
-	trackerPartitions := lfsEnvInt("KAFSCALE_LFS_TRACKER_PARTITIONS", defaultTrackerPartitions)
-	trackerReplication := lfsEnvInt("KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR", defaultTrackerReplication)
+	trackerPartitions := envInt("KAFSCALE_LFS_TRACKER_PARTITIONS", defaultTrackerPartitions)
+	trackerReplication := envInt("KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR", defaultTrackerReplication)
 
 	trackerCfg := TrackerConfig{
 		Enabled:           trackerEnabled,
@@ -226,7 +226,7 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	}
 
 	m := &lfsModule{
-		metadataTimeout:      time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", defaultLFSMetadataTimeoutMs)) * time.Millisecond,
+		metadataTimeout:      time.Duration(envInt("KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", defaultLFSMetadataTimeoutMs)) * time.Millisecond,
 		logger:               logger,
 		s3Uploader:           uploader,
 		s3Bucket:             s3Bucket,
@@ -264,7 +264,7 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 
 	// Mark S3 healthy initially and start health check loop
 	m.markS3Healthy(true)
-	s3HealthInterval := time.Duration(lfsEnvInt("KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC", defaultLFSS3HealthIntervalSec)) * time.Second
+	s3HealthInterval := time.Duration(envInt("KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC", defaultLFSS3HealthIntervalSec)) * time.Second
 	m.startS3HealthCheck(ctx, s3HealthInterval)
 
 	if m.presignEnabled {
@@ -569,18 +569,6 @@ func lfsEnvOrDefault(key, fallback string) string {
 		return val
 	}
 	return fallback
-}
-
-func lfsEnvInt(key string, fallback int) int {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(val)
-	if err != nil {
-		return fallback
-	}
-	return parsed
 }
 
 func lfsEnvInt64(key string, fallback int64) int64 {
