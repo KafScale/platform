@@ -36,8 +36,8 @@ func TestOutOfOrderRevisionDoesNotReset(t *testing.T) {
 	cluster, term, rev := readState(r)
 	early := r.mark()
 	late := r.mark()
-	r.observe(late, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 20})
-	r.observe(early, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 10})
+	r.observe(&late, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 20})
+	r.observe(&early, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 10})
 	if r.CacheResets() != base {
 		t.Fatal("reset on a late reply")
 	}
@@ -53,8 +53,8 @@ func TestLowerRevisionAfterCompletedReadResets(t *testing.T) {
 	r := h.reg
 	base := r.CacheResets()
 	cluster, term, rev := readState(r)
-	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 20})
-	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 5})
+	r.observe(markOf(r), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 20})
+	r.observe(markOf(r), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 5})
 	if r.CacheResets() != base+1 {
 		t.Fatal("no reset on a lower revision")
 	}
@@ -68,8 +68,8 @@ func TestOutOfOrderRaftTermDoesNotReset(t *testing.T) {
 	cluster, term, rev := readState(r)
 	early := r.mark()
 	late := r.mark()
-	r.observe(late, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 2, Revision: rev + 20})
-	r.observe(early, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 1, Revision: rev + 20})
+	r.observe(&late, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 2, Revision: rev + 20})
+	r.observe(&early, &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 1, Revision: rev + 20})
 	if r.CacheResets() != base {
 		t.Fatal("reset on a late reply from an older term")
 	}
@@ -84,8 +84,8 @@ func TestLowerRaftTermAfterCompletedReadResets(t *testing.T) {
 	r := h.reg
 	base := r.CacheResets()
 	cluster, term, rev := readState(r)
-	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 2, Revision: rev + 20})
-	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 1, Revision: rev + 30})
+	r.observe(markOf(r), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 2, Revision: rev + 20})
+	r.observe(markOf(r), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term + 1, Revision: rev + 30})
 	if r.CacheResets() != base+1 {
 		t.Fatal("no reset on a lower raft term")
 	}
