@@ -27,6 +27,8 @@ import java.util.Map;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
 
 public final class Main {
     private static final String SCHEMA = "{\"type\":\"record\",\"name\":\"User\",\"namespace\":\"e2e\",\"fields\":[{\"name\":\"name\",\"type\":\"string\"},{\"name\":\"age\",\"type\":\"int\"}]}";
@@ -37,6 +39,40 @@ public final class Main {
         String topic = args[2];
         Path file = Path.of(args[3]);
         Map<String, Object> config = Map.of("schema.registry.url", url, "auto.register.schemas", "serialize".equals(mode));
+        if ("guid-serialize".equals(mode)) {
+            Schema schema = new Schema.Parser().parse(SCHEMA);
+            List<String> lines = new ArrayList<>();
+            Map<String, Object> headerConfig = Map.of("schema.registry.url", url, "value.schema.id.serializer", "io.confluent.kafka.serializers.schema.id.HeaderSchemaIdSerializer");
+            try (KafkaAvroSerializer serializer = new KafkaAvroSerializer()) {
+                serializer.configure(headerConfig, false);
+                for (int i = 0; i < Integer.parseInt(args[4]); i++) {
+                    GenericRecord record = new GenericData.Record(schema);
+                    record.put("name", "java-" + i);
+                    record.put("age", i);
+                    Headers headers = new RecordHeaders();
+                    byte[] payload = serializer.serialize(topic, headers, record);
+                    lines.add(HexFormat.of().formatHex(headers.lastHeader("__value_schema_id").value()) + " " + HexFormat.of().formatHex(payload));
+                }
+            }
+            Files.write(file, lines, StandardCharsets.UTF_8);
+            return;
+        }
+        if ("guid-deserialize".equals(mode)) {
+            try (KafkaAvroDeserializer deserializer = new KafkaAvroDeserializer()) {
+                deserializer.configure(config, false);
+                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    String[] parts = line.trim().split(" ");
+                    Headers headers = new RecordHeaders();
+                    headers.add("__value_schema_id", HexFormat.of().parseHex(parts[0]));
+                    GenericRecord record = (GenericRecord) deserializer.deserialize(topic, headers, HexFormat.of().parseHex(parts[1]));
+                    System.out.println(record.get("name") + "," + record.get("age"));
+                }
+            }
+            return;
+        }
         if ("serialize".equals(mode)) {
             Schema schema = new Schema.Parser().parse(SCHEMA);
             List<String> lines = new ArrayList<>();

@@ -15,7 +15,11 @@
 
 import sys
 
-from confluent_kafka.schema_registry import SchemaRegistryClient
+from confluent_kafka.schema_registry import (
+    SchemaRegistryClient,
+    dual_schema_id_deserializer,
+    header_schema_id_serializer,
+)
 from confluent_kafka.schema_registry.avro import AvroDeserializer, AvroSerializer
 from confluent_kafka.serialization import MessageField, SerializationContext
 
@@ -26,6 +30,24 @@ def main():
     mode, url, topic, path = sys.argv[1:5]
     client = SchemaRegistryClient({"url": url})
     ctx = SerializationContext(topic, MessageField.VALUE)
+    if mode == "guid-serialize":
+        serializer = AvroSerializer(client, SCHEMA, conf={"schema.id.serializer": header_schema_id_serializer})
+        with open(path, "w") as out:
+            for i in range(int(sys.argv[5])):
+                headers = []
+                payload = serializer({"name": "python-%d" % i, "age": i}, SerializationContext(topic, MessageField.VALUE, headers))
+                out.write("%s %s\n" % (dict(headers)["__value_schema_id"].hex(), payload.hex()))
+        return
+    if mode == "guid-deserialize":
+        deserializer = AvroDeserializer(client, conf={"schema.id.deserializer": dual_schema_id_deserializer})
+        with open(path) as src:
+            for line in src:
+                if line.strip():
+                    header, payload = line.split()
+                    headers = [("__value_schema_id", bytes.fromhex(header))]
+                    record = deserializer(bytes.fromhex(payload), SerializationContext(topic, MessageField.VALUE, headers))
+                    print("%s,%d" % (record["name"], record["age"]))
+        return
     if mode == "serialize":
         serializer = AvroSerializer(client, SCHEMA)
         with open(path, "w") as out:

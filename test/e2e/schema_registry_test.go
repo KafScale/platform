@@ -118,6 +118,9 @@ func (h *srHarness) checkTools() {
 	if h.python == "" {
 		h.python = "python3"
 	}
+	if err := exec.Command(h.python, "-c", "import confluent_kafka").Run(); err != nil {
+		t.Skipf("confluent_kafka is not importable with %s (set KAFSCALE_SR_PYTHON): %v", h.python, err)
+	}
 	if out := strings.TrimSpace(h.run(nil, h.python, "-c", "import confluent_kafka; print(confluent_kafka.version()[0] if isinstance(confluent_kafka.version(), tuple) else confluent_kafka.version())")); out != "2.16.1" {
 		t.Fatalf("confluent-kafka 2.16.1 is required, found %s", out)
 	}
@@ -492,6 +495,46 @@ func (h *srHarness) interop(t *testing.T, brokerAddr, urlA, urlB string) {
 	}
 	if got, want := h.py("deserialize", urlA, "users", "go.hex", 0), expectedUsers("go"); got != want {
 		t.Fatalf("python decode of franz-go data:\n%s\nwant:\n%s", got, want)
+	}
+	h.guidHeaders(t, urlA, urlB)
+}
+
+func (h *srHarness) guidHeaders(t *testing.T, urlA, urlB string) {
+	h.py("guid-serialize", urlA, "guids", "python-guid.txt", srRecords)
+	h.java("guid-serialize", urlB, "guids", "java-guid.txt", srRecords)
+	var latest struct {
+		GUID   string `json:"guid"`
+		Schema string `json:"schema"`
+	}
+	srCall(t, http.MethodGet, urlB+"/subjects/guids-value/versions/latest", nil, &latest)
+	guid, err := hex.DecodeString(strings.ReplaceAll(latest.GUID, "-", ""))
+	if err != nil || len(guid) != 16 {
+		t.Fatalf("guid %q: %v", latest.GUID, err)
+	}
+	for _, file := range []string{"python-guid.txt", "java-guid.txt"} {
+		data, err := os.ReadFile(h.dataPath(file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			header, err := hex.DecodeString(strings.Fields(line)[0])
+			if err != nil || len(header) != 17 || header[0] != 1 || !bytes.Equal(header[1:], guid) {
+				t.Fatalf("%s header %x, want 01%x", file, header, guid)
+			}
+		}
+	}
+	var byGUID struct {
+		Schema string `json:"schema"`
+	}
+	srCall(t, http.MethodGet, urlA+"/schemas/guids/"+latest.GUID, nil, &byGUID)
+	if byGUID.Schema != latest.Schema {
+		t.Fatalf("schema by guid %q, want %q", byGUID.Schema, latest.Schema)
+	}
+	if got, want := h.java("guid-deserialize", urlA, "guids", "python-guid.txt", 0), expectedUsers("python"); got != want {
+		t.Fatalf("java decode of python guid header data:\n%s\nwant:\n%s", got, want)
+	}
+	if got, want := h.py("guid-deserialize", urlB, "guids", "java-guid.txt", 0), expectedUsers("java"); got != want {
+		t.Fatalf("python decode of java guid header data:\n%s\nwant:\n%s", got, want)
 	}
 }
 
