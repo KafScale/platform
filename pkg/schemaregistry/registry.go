@@ -285,11 +285,12 @@ func (r *Registry) read(ctx context.Context, keys []string, prefixes []string) (
 	for _, prefix := range prefixes {
 		ops = append(ops, clientv3.OpGet(prefix, clientv3.WithPrefix()))
 	}
+	m := r.mark()
 	resp, err := r.cli.Txn(ctx).Then(ops...).Commit()
 	if err != nil {
 		return nil, err
 	}
-	r.observe(resp.Header)
+	r.observe(m, resp.Header)
 	snap := make(snapshot)
 	for _, op := range resp.Responses {
 		for _, kv := range op.GetResponseRange().Kvs {
@@ -385,11 +386,12 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 			return nil, err
 		}
 	}
+	m := r.mark()
 	resp, err := r.cli.Get(ctx, idKey(id))
 	if err != nil {
 		return nil, err
 	}
-	r.observe(resp.Header)
+	r.observe(m, resp.Header)
 	if len(resp.Kvs) == 0 {
 		return nil, nil
 	}
@@ -425,11 +427,12 @@ func (r *Registry) CacheResets() uint64 {
 }
 
 func (r *Registry) syncCounter(ctx context.Context) error {
+	m := r.mark()
 	resp, err := r.cli.Get(ctx, counterKey())
 	if err != nil {
 		return err
 	}
-	r.observe(resp.Header)
+	r.observe(m, resp.Header)
 	var n int64
 	if len(resp.Kvs) > 0 {
 		if n, err = strconv.ParseInt(string(resp.Kvs[0].Value), 10, 64); err != nil {
@@ -438,24 +441,40 @@ func (r *Registry) syncCounter(ctx context.Context) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if n < r.counter {
+	if n < m.counter {
 		r.resetLocked()
+		r.counter = n
+		return nil
 	}
-	r.counter = n
+	r.counter = max(r.counter, n)
 	return nil
 }
 
-func (r *Registry) observe(h *etcdserverpb.ResponseHeader) {
+type readMark struct {
+	revision int64
+	raftTerm uint64
+	counter  int64
+}
+
+func (r *Registry) mark() readMark {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return readMark{revision: r.revision, raftTerm: r.raftTerm, counter: r.counter}
+}
+
+func (r *Registry) observe(m readMark, h *etcdserverpb.ResponseHeader) {
 	if h == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if h.Revision < r.revision || (r.clusterID != 0 && h.ClusterId != r.clusterID) || h.RaftTerm < r.raftTerm {
+	if h.Revision < m.revision || (r.clusterID != 0 && h.ClusterId != r.clusterID) || h.RaftTerm < m.raftTerm {
 		r.resetLocked()
 		r.counter = 0
+		r.revision, r.clusterID, r.raftTerm = h.Revision, h.ClusterId, h.RaftTerm
+		return
 	}
-	r.revision, r.clusterID, r.raftTerm = h.Revision, h.ClusterId, h.RaftTerm
+	r.revision, r.clusterID, r.raftTerm = max(r.revision, h.Revision), h.ClusterId, max(r.raftTerm, h.RaftTerm)
 }
 
 func (r *Registry) resetLocked() {
@@ -504,11 +523,12 @@ func (r *Registry) SchemaByID(ctx context.Context, id int64) (*Schema, error) {
 func (s *Schema) GUID() string { return schemaGUID(s.Text, s.References) }
 
 func (r *Registry) SchemaByGUID(ctx context.Context, guid string) (*Schema, error) {
+	m := r.mark()
 	resp, err := r.cli.Get(ctx, guidKey(guid))
 	if err != nil {
 		return nil, storeErr(ctx, err)
 	}
-	r.observe(resp.Header)
+	r.observe(m, resp.Header)
 	if len(resp.Kvs) == 0 {
 		return nil, nil
 	}
@@ -922,11 +942,12 @@ func (r *Registry) commit(ctx context.Context, cmps []clientv3.Cmp, ops []client
 	if r.beforeCommit != nil {
 		r.beforeCommit()
 	}
+	m := r.mark()
 	resp, err := r.cli.Txn(ctx).If(cmps...).Then(ops...).Commit()
 	if err != nil {
 		return false, err
 	}
-	r.observe(resp.Header)
+	r.observe(m, resp.Header)
 	return resp.Succeeded, nil
 }
 

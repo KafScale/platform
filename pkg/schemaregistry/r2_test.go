@@ -189,16 +189,16 @@ func TestCacheResetsOnClusterOrTermChange(t *testing.T) {
 	r.mu.RLock()
 	cluster, term, rev := r.clusterID, r.raftTerm, r.revision
 	r.mu.RUnlock()
-	r.observe(&etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 10})
+	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster, RaftTerm: term, Revision: rev + 10})
 	if r.CacheResets() != base {
 		t.Fatal("reset without a change")
 	}
-	r.observe(&etcdserverpb.ResponseHeader{ClusterId: cluster + 1, RaftTerm: term, Revision: rev + 20})
+	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster + 1, RaftTerm: term, Revision: rev + 20})
 	if r.CacheResets() != base+1 {
 		t.Fatal("no reset on cluster id change")
 	}
-	r.observe(&etcdserverpb.ResponseHeader{ClusterId: cluster + 1, RaftTerm: term + 5, Revision: rev + 30})
-	r.observe(&etcdserverpb.ResponseHeader{ClusterId: cluster + 1, RaftTerm: term + 1, Revision: rev + 40})
+	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster + 1, RaftTerm: term + 5, Revision: rev + 30})
+	r.observe(r.mark(), &etcdserverpb.ResponseHeader{ClusterId: cluster + 1, RaftTerm: term + 1, Revision: rev + 40})
 	if r.CacheResets() != base+2 {
 		t.Fatal("no reset on lower raft term")
 	}
