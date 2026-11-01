@@ -93,9 +93,9 @@ spec:
             - name: KAFSCALE_S3_ENDPOINT
               value: "{{ .endpoint }}"
 {{- end }}
-{{- if .pathStyle }}
+{{- if kindIs "bool" .pathStyle }}
             - name: KAFSCALE_S3_PATH_STYLE
-              value: "true"
+              value: "{{ .pathStyle }}"
 {{- end }}
 {{- if .credentialsSecret }}
             - name: KAFSCALE_S3_ACCESS_KEY

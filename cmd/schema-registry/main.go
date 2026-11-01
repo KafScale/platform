@@ -140,6 +140,11 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	if err := reg.Init(initCtx); err != nil {
+		log.Printf("read schema id counter from etcd: %v", err)
+	}
+	cancel()
 	srv := &http.Server{Addr: s.addr, Handler: schemaregistry.NewServer(reg, s.timeout), ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
