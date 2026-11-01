@@ -21,12 +21,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -168,9 +170,17 @@ type ConsumerGroupOffsetCommitter interface {
 	CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error
 }
 
+type ConsumerGroupMemberOffsetCommitter interface {
+	CommitMemberConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error
+}
+
 var ErrConsumerGroupDeleted = errors.New("consumer group deleted")
 
 var ErrConsumerGroupNotEmpty = errors.New("consumer group has active members")
+
+var ErrConsumerGroupMemberGone = errors.New("consumer group member not found")
+
+var ErrConsumerGroupGenerationChanged = errors.New("consumer group generation changed")
 
 type ConsumerGroupSimpleOffsetCommitter interface {
 	CommitSimpleConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error
@@ -184,11 +194,11 @@ func CommitSimpleConsumerOffset(ctx context.Context, store Store, group, topic s
 }
 
 func (s *EtcdStore) CommitSimpleConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, 0, topic, partition, offset, metadata, false, true)
+	return s.commitConsumerOffset(ctx, group, 0, "", 0, topic, partition, offset, metadata, false, true)
 }
 
 func (s *InMemoryStore) CommitSimpleConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, false, true)
+	return s.commitConsumerOffset(ctx, group, "", 0, topic, partition, offset, metadata, false, true)
 }
 
 type ConsumerGroupRevisioner interface {
@@ -218,18 +228,33 @@ func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group s
 	return store.CommitConsumerOffset(ctx, group, topic, partition, offset, metadata)
 }
 
+func CommitMemberConsumerOffsetIfGroupExists(ctx context.Context, store Store, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error {
+	if committer, ok := store.(ConsumerGroupMemberOffsetCommitter); ok {
+		return committer.CommitMemberConsumerOffset(ctx, group, createRevision, memberID, generation, topic, partition, offset, metadata)
+	}
+	return CommitConsumerOffsetIfGroupExists(ctx, store, group, createRevision, topic, partition, offset, metadata)
+}
+
 func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, createRevision, topic, partition, offset, metadata, true, false)
+	return s.commitConsumerOffset(ctx, group, createRevision, "", 0, topic, partition, offset, metadata, true, false)
+}
+
+func (s *EtcdStore) CommitMemberConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error {
+	return s.commitConsumerOffset(ctx, group, createRevision, memberID, generation, topic, partition, offset, metadata, true, false)
 }
 
 func (s *InMemoryStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, _ int64, topic string, partition int32, offset int64, metadata string) error {
-	return s.commitConsumerOffset(ctx, group, topic, partition, offset, metadata, true, false)
+	return s.commitConsumerOffset(ctx, group, "", 0, topic, partition, offset, metadata, true, false)
 }
 
-func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
+func (s *InMemoryStore) CommitMemberConsumerOffset(ctx context.Context, group string, _ int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error {
+	return s.commitConsumerOffset(ctx, group, memberID, generation, topic, partition, offset, metadata, true, false)
+}
+
+func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	for range 3 {
+	for conflicts := 0; conflicts < 3; {
 		current, revision, _, err := s.groupSnapshot(ctx, group)
 		if err != nil {
 			return err
@@ -239,6 +264,9 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		}
 		if current != nil && simple && len(current.Members) > 0 {
 			return ErrConsumerGroupNotEmpty
+		}
+		if err := checkCommitMember(current, memberID, generation); err != nil {
+			return err
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		payload, _ := json.Marshal(consumerOffsetRecord{Offset: offset, Metadata: meta, CommittedAt: now})
@@ -254,7 +282,7 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		if createRevision > 0 {
 			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(group)), "=", createRevision))
 		}
-		if createRevision == 0 || len(ops) > 1 {
+		if createRevision == 0 || len(ops) > 1 || memberID != "" {
 			cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group)), "=", revision))
 		}
 		result, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Else(clientv3.OpGet(ConsumerGroupKey(group))).Commit()
@@ -265,14 +293,21 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		if result.Succeeded {
 			return nil
 		}
-		if kvs := result.Responses[0].GetResponseRange().Kvs; createRevision > 0 && (len(kvs) == 0 || kvs[0].CreateRevision != createRevision) {
+		kvs := result.Responses[0].GetResponseRange().Kvs
+		if createRevision > 0 && (len(kvs) == 0 || kvs[0].CreateRevision != createRevision) {
 			return ErrConsumerGroupDeleted
+		}
+		if groupMembershipChanged(current, kvs) {
+			conflicts++
+			commitBackoff(ctx, time.Millisecond, 4*time.Millisecond)
+		} else {
+			commitBackoff(ctx, 100*time.Microsecond, 400*time.Microsecond)
 		}
 	}
 	return ErrConsumerGroupChanged
 }
 
-func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
+func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, memberID string, generation int32, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -285,10 +320,51 @@ func (s *InMemoryStore) commitConsumerOffset(ctx context.Context, group, topic s
 	if current != nil && simple && len(current.Members) > 0 {
 		return ErrConsumerGroupNotEmpty
 	}
+	if err := checkCommitMember(current, memberID, generation); err != nil {
+		return err
+	}
 	if current != nil && len(current.Members) == 0 {
 		current.EmptySince = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	key := consumerKey(group, topic, partition)
 	s.consumerOffsets[key], s.consumerMeta[key] = offset, meta
 	return nil
+}
+
+func groupMembershipChanged(previous *metadatapb.ConsumerGroup, kvs []*mvccpb.KeyValue) bool {
+	if len(kvs) == 0 || previous == nil {
+		return len(kvs) != 0 || previous != nil
+	}
+	latest, err := DecodeConsumerGroup(kvs[0].Value)
+	if err != nil || latest.GenerationId != previous.GenerationId || len(latest.Members) != len(previous.Members) {
+		return true
+	}
+	for id := range previous.Members {
+		if latest.Members[id] == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func checkCommitMember(current *metadatapb.ConsumerGroup, memberID string, generation int32) error {
+	if current == nil || memberID == "" {
+		return nil
+	}
+	if current.Members[memberID] == nil {
+		return ErrConsumerGroupMemberGone
+	}
+	if current.GenerationId != generation {
+		return ErrConsumerGroupGenerationChanged
+	}
+	return nil
+}
+
+var commitBackoff = func(ctx context.Context, base, jitter time.Duration) {
+	timer := time.NewTimer(base + time.Duration(rand.Int63n(int64(jitter))))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
 }

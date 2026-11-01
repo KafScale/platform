@@ -18,11 +18,14 @@ package metadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 type legacyCommitStore struct{ Store }
@@ -34,7 +37,7 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		"etcd":   newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t)),
 	}
 	for name, store := range stores {
-		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "orders", 0, 1, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+		if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "", 0, "orders", 0, 1, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
 			t.Fatal(name, err)
 		}
 		if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
@@ -43,7 +46,7 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g"}); err != nil {
 			t.Fatal(err)
 		}
-		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "orders", 0, 7, "m"); err != nil {
+		if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "", 0, "orders", 0, 7, "m"); err != nil {
 			t.Fatal(name, err)
 		}
 		if offset, meta, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 7 || meta != "m" {
@@ -51,15 +54,27 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		}
 	}
 	legacy := legacyCommitStore{NewInMemoryStore(ClusterMetadata{})}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, legacy, "g", 0, "orders", 0, 3, ""); err != nil {
+	if err := legacy.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g"}); err != nil {
 		t.Fatal(err)
+	}
+	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, legacy, "g", 0, "m1", 1, "orders", 0, 3, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offset, _, err := legacy.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 3 {
+		t.Fatal(offset, err)
+	}
+	if err := CommitConsumerOffsetIfGroupExists(ctx, legacy, "missing", 0, "orders", 0, 6, "m"); err != nil {
+		t.Fatal(err)
+	}
+	if offset, meta, err := legacy.FetchConsumerOffset(ctx, "missing", "orders", 0); err != nil || offset != 6 || meta != "m" {
+		t.Fatal(offset, meta, err)
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := stores["etcd"].(*EtcdStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "orders", 0, 1, ""); err == nil {
+	if err := stores["etcd"].(*EtcdStore).CommitMemberConsumerOffset(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
 		t.Fatal("expected canceled")
 	}
-	if err := stores["memory"].(*InMemoryStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "orders", 0, 1, ""); err == nil {
+	if err := stores["memory"].(*InMemoryStore).CommitMemberConsumerOffset(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
 		t.Fatal("expected canceled")
 	}
 }
@@ -83,7 +98,7 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 	if _, loaded, err := FetchConsumerGroupRevision(ctx, store, "g"); err != nil || loaded != first {
 		t.Fatal(loaded, err)
 	}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", first, "orders", 0, 5, ""); err != nil {
+	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", first, "", 0, "orders", 0, 5, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DeleteConsumerGroupAndOffsets(ctx, "g"); err != nil {
@@ -96,13 +111,13 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 	if err != nil || second <= first {
 		t.Fatal(second, err)
 	}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", first, "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", first, "", 0, "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
 		t.Fatal(err)
 	}
 	if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
 		t.Fatal(offsets)
 	}
-	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", second, "orders", 0, 9, ""); err != nil {
+	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", second, "", 0, "orders", 0, 9, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := PutConsumerGroupRevision(ctx, store, nil); err == nil {
@@ -143,7 +158,7 @@ func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
 	}
 	failed := 0
 	for i := range 200 {
-		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", revision, "orders", 0, int64(i), ""); err != nil {
+		if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", revision, "", 0, "orders", 0, int64(i), ""); err != nil {
 			failed++
 		}
 	}
@@ -152,4 +167,313 @@ func TestCommitConsumerOffsetDuringHeartbeats(t *testing.T) {
 	if failed > 0 {
 		t.Fatalf("%d of 200 commits failed", failed)
 	}
+}
+
+func TestCommitConsumerOffsetChecksMember(t *testing.T) {
+	ctx := context.Background()
+	stores := map[string]Store{
+		"memory": NewInMemoryStore(ClusterMetadata{}),
+		"etcd":   newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t)),
+	}
+	for name, store := range stores {
+		members := map[string]*metadatapb.GroupMember{"m1": {}}
+		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 4, Members: members}); err != nil {
+			t.Fatal(err)
+		}
+		cases := []struct {
+			member     string
+			generation int32
+			want       error
+		}{
+			{"gone", 4, ErrConsumerGroupMemberGone},
+			{"m1", 3, ErrConsumerGroupGenerationChanged},
+			{"m1", 4, nil},
+		}
+		for _, tc := range cases {
+			err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, tc.member, tc.generation, "orders", 0, 5, "")
+			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+				t.Fatal(name, tc.member, tc.generation, err)
+			}
+		}
+		if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 5 {
+			t.Fatal(name, offset, err)
+		}
+	}
+}
+
+type racingKV struct {
+	clientv3.KV
+	before func()
+}
+
+func (k racingKV) Txn(ctx context.Context) clientv3.Txn {
+	k.before()
+	return k.KV.Txn(ctx)
+}
+
+func TestCommitConsumerOffsetFencesGroupChangeAfterSnapshot(t *testing.T) {
+	ctx := context.Background()
+	group := func(members ...string) string {
+		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{}}
+		for _, m := range members {
+			g.Members[m] = &metadatapb.GroupMember{}
+		}
+		encoded, err := EncodeConsumerGroup(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	cases := []struct {
+		name   string
+		always bool
+		after  func(int) string
+		want   error
+	}{
+		{"member leaves", false, func(int) string { return group("m2") }, ErrConsumerGroupMemberGone},
+		{"member set keeps changing", true, func(n int) string { return group("m1", "m2", fmt.Sprintf("joiner-%d", n)) }, ErrConsumerGroupChanged},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+			inner := store.client.KV
+			if _, err := inner.Put(ctx, ConsumerGroupKey("g"), group("m1", "m2")); err != nil {
+				t.Fatal(err)
+			}
+			_, createRevision, err := FetchConsumerGroupRevision(ctx, store, "g")
+			if err != nil || createRevision == 0 {
+				t.Fatal(createRevision, err)
+			}
+			fired := 0
+			store.client.KV = racingKV{KV: inner, before: func() {
+				if fired > 0 && !tc.always {
+					return
+				}
+				fired++
+				if _, err := inner.Put(ctx, ConsumerGroupKey("g"), tc.after(fired)); err != nil {
+					t.Error(err)
+				}
+			}}
+			err = CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", createRevision, "m1", 2, "orders", 0, 5, "")
+			store.client.KV = inner
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+			if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+				t.Fatalf("offset written: %v", offsets)
+			}
+		})
+	}
+}
+
+func TestMemberCommitSurvivesConcurrentHeartbeats(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	group := func() *metadatapb.ConsumerGroup {
+		members := map[string]*metadatapb.GroupMember{}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for _, id := range []string{"m0", "m1", "m2", "m3", "m4"} {
+			members[id] = &metadatapb.GroupMember{HeartbeatAt: now, SessionTimeoutMs: 30000}
+		}
+		return &metadatapb.ConsumerGroup{GroupId: "g", State: "stable", GenerationId: 3, Members: members}
+	}
+	if err := store.PutConsumerGroup(ctx, group()); err != nil {
+		t.Fatal(err)
+	}
+	_, createRevision, err := FetchConsumerGroupRevision(ctx, store, "g")
+	if err != nil || createRevision == 0 {
+		t.Fatal(createRevision, err)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = store.PutConsumerGroup(ctx, group())
+				time.Sleep(200 * time.Microsecond)
+			}
+		}()
+	}
+	var failures []error
+	for i := range 10 {
+		if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", createRevision, "m0", 3, "orders", 0, int64(i), ""); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	if len(failures) > 0 {
+		t.Fatalf("%d of 10 member commits failed during heartbeats, first: %v", len(failures), failures[0])
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 9 {
+		t.Fatal(offset, err)
+	}
+}
+
+type oldCommitterStore struct {
+	Store
+	inner *InMemoryStore
+}
+
+func (s oldCommitterStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
+	return s.inner.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, topic, partition, offset, metadata)
+}
+
+func TestCommitConsumerOffsetFallsBackToOldCommitter(t *testing.T) {
+	ctx := context.Background()
+	inner := NewInMemoryStore(ClusterMetadata{})
+	store := oldCommitterStore{Store: inner, inner: inner}
+	var _ ConsumerGroupOffsetCommitter = store
+	if _, ok := Store(store).(ConsumerGroupMemberOffsetCommitter); ok {
+		t.Fatal("store should implement only the old interface")
+	}
+	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 1, "orders", 0, 4, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+		t.Fatal(err)
+	}
+	members := map[string]*metadatapb.GroupMember{"m1": {}}
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 1, Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 1, "orders", 0, 4, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 4 {
+		t.Fatal(offset, err)
+	}
+}
+
+func TestEtcdStoreOldCommitterCommits(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	if err := store.CommitConsumerOffsetIfGroupExists(ctx, "g", 0, "orders", 0, 2, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+		t.Fatal(err)
+	}
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitConsumerOffsetIfGroupExists(ctx, "g", 0, "orders", 0, 2, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 2 {
+		t.Fatal(offset, err)
+	}
+}
+
+func TestCommitBackoffStopsOnContext(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		commitBackoff(canceled, time.Millisecond, 4*time.Millisecond)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("backoff ignored canceled context")
+	}
+	commitBackoff(context.Background(), 100*time.Microsecond, 400*time.Microsecond)
+}
+
+func TestHeartbeatOnlyRaceUsesShortYield(t *testing.T) {
+	ctx := context.Background()
+	group := func(heartbeat string, members ...string) string {
+		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{}}
+		for _, m := range members {
+			g.Members[m] = &metadatapb.GroupMember{HeartbeatAt: heartbeat}
+		}
+		encoded, err := EncodeConsumerGroup(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	backoffs, yields := 0, 0
+	saved := commitBackoff
+	commitBackoff = func(_ context.Context, base, _ time.Duration) {
+		if base >= time.Millisecond {
+			backoffs++
+		} else {
+			yields++
+		}
+	}
+	t.Cleanup(func() { commitBackoff = saved })
+	cases := []struct {
+		name     string
+		races    int
+		next     func(int) string
+		backoffs int
+		yields   int
+	}{
+		{"heartbeat only", 5, func(n int) string { return group(fmt.Sprint(n), "m1", "m2") }, 0, 5},
+		{"membership", 1, func(n int) string { return group("0", "m1", "m2", "m3") }, 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backoffs, yields = 0, 0
+			store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+			inner := store.client.KV
+			if _, err := inner.Put(ctx, ConsumerGroupKey("g"), group("0", "m1", "m2")); err != nil {
+				t.Fatal(err)
+			}
+			fired := 0
+			store.client.KV = racingKV{KV: inner, before: func() {
+				if fired >= tc.races {
+					return
+				}
+				fired++
+				if _, err := inner.Put(ctx, ConsumerGroupKey("g"), tc.next(fired)); err != nil {
+					t.Error(err)
+				}
+			}}
+			err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 2, "orders", 0, 5, "")
+			store.client.KV = inner
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backoffs != tc.backoffs || yields != tc.yields {
+				t.Fatalf("backed off %d and yielded %d times, want %d and %d", backoffs, yields, tc.backoffs, tc.yields)
+			}
+		})
+	}
+}
+
+func TestNonstopHeartbeatRaceEndsAtDeadline(t *testing.T) {
+	store := newTestEtcdStore(t, context.Background(), ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	inner := store.client.KV
+	put := func(n int) {
+		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: fmt.Sprint(n)}}}
+		encoded, _ := EncodeConsumerGroup(g)
+		if _, err := inner.Put(context.Background(), ConsumerGroupKey("g"), string(encoded)); err != nil {
+			t.Error(err)
+		}
+	}
+	put(0)
+	attempts := 0
+	store.client.KV = racingKV{KV: inner, before: func() {
+		attempts++
+		put(attempts)
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 2, "orders", 0, 5, "")
+	store.client.KV = inner
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v after %d attempts", err, attempts)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("commit ran %v past its deadline", elapsed)
+	}
+	if attempts > 250 {
+		t.Fatalf("%d attempts in 300ms, want at most 250", attempts)
+	}
+	t.Logf("%d attempts before the deadline", attempts)
 }

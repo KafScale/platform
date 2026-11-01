@@ -24,6 +24,9 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type pausedCommitStore struct {
@@ -42,9 +45,9 @@ func (s pausedCommitStore) CommitConsumerOffset(ctx context.Context, group, topi
 	return s.EtcdStore.CommitConsumerOffset(ctx, group, topic, partition, offset, meta)
 }
 
-func (s pausedCommitStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, meta string) error {
+func (s pausedCommitStore) CommitMemberConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string) error {
 	s.pause()
-	return s.EtcdStore.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, topic, partition, offset, meta)
+	return s.EtcdStore.CommitMemberConsumerOffset(ctx, group, createRevision, memberID, generation, topic, partition, offset, meta)
 }
 
 func TestOffsetCommitAfterDeleteGroupsFails(t *testing.T) {
@@ -118,10 +121,21 @@ func testOffsetCommitAfterDeleteGroups(t *testing.T, recreate bool) {
 	}
 }
 
-type changedCommitStore struct{ *metadata.EtcdStore }
+type changedCommitStore struct {
+	*metadata.EtcdStore
+	err error
+}
 
-func (s changedCommitStore) CommitConsumerOffsetIfGroupExists(context.Context, string, int64, string, int32, int64, string) error {
-	return metadata.ErrConsumerGroupChanged
+func (s changedCommitStore) CommitMemberConsumerOffset(context.Context, string, int64, string, int32, string, int32, int64, string) error {
+	return s.err
+}
+
+type expiredCommitStore struct{ *metadata.EtcdStore }
+
+func (s expiredCommitStore) CommitMemberConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string) error {
+	expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+	return s.EtcdStore.CommitMemberConsumerOffset(expired, group, createRevision, memberID, generation, topic, partition, offset, meta)
 }
 
 func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
@@ -135,19 +149,44 @@ func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
 	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
 		t.Fatal(err)
 	}
-	c := newTestCoordinator(t, changedCommitStore{etcd})
-	commit := kmsg.NewPtrOffsetCommitRequest()
-	commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
-	topic := kmsg.NewOffsetCommitRequestTopic()
-	topic.Topic = "orders"
-	topic.Partitions = append(topic.Partitions, kmsg.NewOffsetCommitRequestTopicPartition())
-	commit.Topics = append(commit.Topics, topic)
-	resp, err := c.OffsetCommit(ctx, commit)
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name  string
+		store metadata.Store
+		want  int16
+	}{
+		{"changed", changedCommitStore{etcd, metadata.ErrConsumerGroupChanged}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"deadline", expiredCommitStore{etcd}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"canceled", changedCommitStore{etcd, context.Canceled}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"unavailable", changedCommitStore{etcd, status.Error(codes.Unavailable, "etcd down")}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"server deadline", changedCommitStore{etcd, status.Error(codes.DeadlineExceeded, "deadline")}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"store", changedCommitStore{etcd, metadata.ErrStoreUnavailable}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"no leader", changedCommitStore{etcd, rpctypes.ErrNoLeader}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"leader changed", changedCommitStore{etcd, rpctypes.ErrLeaderChanged}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"timeout", changedCommitStore{etcd, rpctypes.ErrTimeout}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"timeout leader fail", changedCommitStore{etcd, rpctypes.ErrTimeoutDueToLeaderFail}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"unhealthy", changedCommitStore{etcd, rpctypes.ErrUnhealthy}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"stopped", changedCommitStore{etcd, rpctypes.ErrStopped}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"etcd server deadline", changedCommitStore{etcd, rpctypes.Error(rpctypes.ErrGRPCDeadlineExceeded)}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"request too large", changedCommitStore{etcd, rpctypes.ErrRequestTooLarge}, protocol.UNKNOWN_SERVER_ERROR},
+		{"permission denied", changedCommitStore{etcd, rpctypes.ErrPermissionDenied}, protocol.UNKNOWN_SERVER_ERROR},
+		{"no space", changedCommitStore{etcd, rpctypes.ErrNoSpace}, protocol.UNKNOWN_SERVER_ERROR},
 	}
-	if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.COORDINATOR_NOT_AVAILABLE {
-		t.Fatalf("changed group returned %d", code)
+	for _, tc := range cases {
+		name, store := tc.name, tc.store
+		c := newTestCoordinator(t, store)
+		commit := kmsg.NewPtrOffsetCommitRequest()
+		commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
+		topic := kmsg.NewOffsetCommitRequestTopic()
+		topic.Topic = "orders"
+		topic.Partitions = append(topic.Partitions, kmsg.NewOffsetCommitRequestTopicPartition())
+		commit.Topics = append(commit.Topics, topic)
+		resp, err := c.OffsetCommit(ctx, commit)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		if code := resp.Topics[0].Partitions[0].ErrorCode; code != tc.want {
+			t.Errorf("%s commit returned %d, want %d", name, code, tc.want)
+		}
 	}
 }
 
@@ -174,5 +213,50 @@ func TestDeleteGroupsCachesCreateRevision(t *testing.T) {
 	c.mu.Unlock()
 	if cached != revision {
 		t.Fatalf("cached revision %d, want %d", cached, revision)
+	}
+}
+
+func TestOffsetCommitAfterGroupBecomesEmptyFails(t *testing.T) {
+	ctx := context.Background()
+	etcd, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = etcd.Close() })
+	members := map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: time.Now().UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 60000}}
+	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	store := pausedCommitStore{EtcdStore: etcd, reached: make(chan struct{}), release: make(chan struct{})}
+	c := newTestCoordinator(t, store)
+	commit := kmsg.NewPtrOffsetCommitRequest()
+	commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
+	topic := kmsg.NewOffsetCommitRequestTopic()
+	topic.Topic = "orders"
+	part := kmsg.NewOffsetCommitRequestTopicPartition()
+	part.Offset = 42
+	topic.Partitions = append(topic.Partitions, part)
+	commit.Topics = append(commit.Topics, topic)
+	done := make(chan *kmsg.OffsetCommitResponse, 1)
+	go func() {
+		resp, err := c.OffsetCommit(ctx, commit)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- resp
+	}()
+	<-store.reached
+	leave := kmsg.NewPtrLeaveGroupRequest()
+	leave.Group, leave.MemberID = "g", "m1"
+	if resp := c.LeaveGroup(ctx, leave); resp.ErrorCode != 0 {
+		t.Fatal(resp)
+	}
+	close(store.release)
+	resp := <-done
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.UNKNOWN_MEMBER_ID {
+		t.Fatalf("commit after group became empty returned %d", code)
+	}
+	if offsets, err := etcd.ListGroupConsumerOffsets(ctx, "g"); err != nil || len(offsets) != 0 {
+		t.Fatal("offset stored", offsets, err)
 	}
 }

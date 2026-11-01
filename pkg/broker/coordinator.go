@@ -28,6 +28,9 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
@@ -66,6 +69,8 @@ type GroupCoordinator struct {
 	mu                 sync.Mutex
 	groups             map[string]*groupState
 	lastRetentionSweep time.Time
+	releaseMu          sync.Mutex
+	releasing          map[string]struct{}
 }
 
 type CoordinatorConfig struct {
@@ -75,10 +80,11 @@ type CoordinatorConfig struct {
 	RetentionCheckInterval time.Duration
 	AcquireGroup           func(context.Context, string) error
 	ReleaseGroup           func(string)
+	AcquireRetentionSweep  func(context.Context) error
 	// OwnsGroup gates group mutation and cleanup after coordination lease loss.
 	// Nil permits standalone coordinators without an external lease manager.
 	OwnsGroup func(string) bool
-	// GroupDeleted releases external ownership while group operations remain locked.
+	// GroupDeleted releases external ownership after the coordinator lock is released.
 	GroupDeleted func(string)
 }
 
@@ -116,6 +122,7 @@ type memberState struct {
 	topics           []string
 	sessionTimeout   time.Duration
 	lastHeartbeat    time.Time
+	savedHeartbeat   time.Time
 	expiryGrace      time.Duration
 	joinGeneration   int32
 }
@@ -138,6 +145,7 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 			config.RetentionCheckInterval = cfg.RetentionCheckInterval
 		}
 		config.AcquireGroup, config.ReleaseGroup = cfg.AcquireGroup, cfg.ReleaseGroup
+		config.AcquireRetentionSweep = cfg.AcquireRetentionSweep
 		config.OwnsGroup = cfg.OwnsGroup
 		config.GroupDeleted = cfg.GroupDeleted
 	}
@@ -487,6 +495,10 @@ func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *kmsg.HeartbeatReq
 	member.lastHeartbeat = time.Now()
 	member.expiryGrace = 0
 	resp := mkResp(protocol.NONE)
+	if member.lastHeartbeat.Sub(member.savedHeartbeat) < member.heartbeatSaveInterval() {
+		c.mu.Unlock()
+		return resp
+	}
 	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
@@ -548,7 +560,7 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 
 	groupErr := int16(protocol.NONE)
 	createRevision := int64(0)
-	simple := req.Generation < 0 && req.MemberID == "" && (state == nil || len(state.members) == 0)
+	simple := req.Generation < 0 && (state == nil && req.MemberID == "" || state != nil && len(state.members) == 0)
 	switch {
 	case simple:
 	case state == nil:
@@ -579,14 +591,17 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 				if simple {
 					err = metadata.CommitSimpleConsumerOffset(ctx, c.store, req.Group, topic.Topic, part.Partition, part.Offset, meta)
 				} else {
-					err = metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, topic.Topic, part.Partition, part.Offset, meta)
+					err = metadata.CommitMemberConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, req.MemberID, req.Generation, topic.Topic, part.Partition, part.Offset, meta)
 				}
 				if err != nil {
 					code = protocol.UNKNOWN_SERVER_ERROR
-					if errors.Is(err, metadata.ErrConsumerGroupDeleted) || errors.Is(err, metadata.ErrConsumerGroupNotEmpty) {
+					switch {
+					case errors.Is(err, metadata.ErrConsumerGroupDeleted), errors.Is(err, metadata.ErrConsumerGroupNotEmpty), errors.Is(err, metadata.ErrConsumerGroupMemberGone):
 						code = protocol.UNKNOWN_MEMBER_ID
-					} else if errors.Is(err, metadata.ErrConsumerGroupChanged) {
-						code = protocol.COORDINATOR_NOT_AVAILABLE
+					case errors.Is(err, metadata.ErrConsumerGroupGenerationChanged):
+						code = protocol.ILLEGAL_GENERATION
+					case errors.Is(err, metadata.ErrConsumerGroupChanged), commitRetriable(err):
+						code = protocol.COORDINATOR_LOAD_IN_PROGRESS
 					}
 				}
 			}
@@ -741,8 +756,12 @@ func (c *GroupCoordinator) ListGroups(ctx context.Context, req *kmsg.ListGroupsR
 
 func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGroupsRequest) (*kmsg.DeleteGroupsResponse, error) {
 	// Serialize membership checks and deletion with joins and cleanup.
+	var released []string
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer func() {
+		c.mu.Unlock()
+		c.finishRelease(released)
+	}()
 	resp := kmsg.NewPtrDeleteGroupsResponse()
 	resp.Groups = make([]kmsg.DeleteGroupsResponseGroup, 0, len(req.Groups))
 	for _, groupID := range req.Groups {
@@ -779,9 +798,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 		if group == nil {
 			result.ErrorCode = protocol.GROUP_ID_NOT_FOUND
 			delete(c.groups, groupID)
-			if c.config.GroupDeleted != nil {
-				c.config.GroupDeleted(groupID)
-			}
+			released = c.markReleasing(released, groupID)
 			resp.Groups = append(resp.Groups, result)
 			continue
 		}
@@ -816,9 +833,7 @@ func (c *GroupCoordinator) DeleteGroups(ctx context.Context, req *kmsg.DeleteGro
 			continue
 		}
 		delete(c.groups, groupID)
-		if c.config.GroupDeleted != nil {
-			c.config.GroupDeleted(groupID)
-		}
+		released = c.markReleasing(released, groupID)
 		result.ErrorCode = protocol.NONE
 		resp.Groups = append(resp.Groups, result)
 	}
@@ -869,7 +884,17 @@ func (c *GroupCoordinator) persistGroupLocked(ctx context.Context, groupID strin
 		return err
 	}
 	state.createRevision = createRevision
+	for _, member := range state.members {
+		member.savedHeartbeat = member.lastHeartbeat
+	}
 	return nil
+}
+
+func (m *memberState) heartbeatSaveInterval() time.Duration {
+	if m.sessionTimeout > 0 {
+		return m.sessionTimeout / 3
+	}
+	return defaultSessionTimeout / 3
 }
 
 func buildConsumerGroup(groupID string, state *groupState) *metadatapb.ConsumerGroup {
@@ -999,7 +1024,8 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 		if member.HeartbeatAt != "" {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
 				entry.lastHeartbeat = parsed
-				entry.expiryGrace = recoveredSessionGrace
+				entry.savedHeartbeat = parsed
+				entry.expiryGrace = recoveredGrace(entry.sessionTimeout)
 			}
 		}
 		state.members[memberID] = entry
@@ -1341,7 +1367,32 @@ func (c *GroupCoordinator) cleanupGroups() {
 }
 
 func (c *GroupCoordinator) ownsGroup(groupID string) bool {
-	return c.config.OwnsGroup == nil || c.config.OwnsGroup(groupID)
+	c.releaseMu.Lock()
+	_, releasing := c.releasing[groupID]
+	c.releaseMu.Unlock()
+	return !releasing && (c.config.OwnsGroup == nil || c.config.OwnsGroup(groupID))
+}
+
+func (c *GroupCoordinator) markReleasing(released []string, groupID string) []string {
+	if c.config.GroupDeleted == nil {
+		return released
+	}
+	c.releaseMu.Lock()
+	if c.releasing == nil {
+		c.releasing = make(map[string]struct{})
+	}
+	c.releasing[groupID] = struct{}{}
+	c.releaseMu.Unlock()
+	return append(released, groupID)
+}
+
+func (c *GroupCoordinator) finishRelease(released []string) {
+	for _, groupID := range released {
+		c.config.GroupDeleted(groupID)
+		c.releaseMu.Lock()
+		delete(c.releasing, groupID)
+		c.releaseMu.Unlock()
+	}
 }
 
 func groupExpiryErrorCode(err error) int16 {
@@ -1502,4 +1553,20 @@ func (s *groupState) dropRebalanceLaggers(now time.Time) bool {
 		s.state = groupStateEmpty
 	}
 	return changed
+}
+
+func commitRetriable(err error) bool {
+	var etcdErr rpctypes.EtcdError
+	if errors.As(err, &etcdErr) && (etcdErr.Code() == codes.Unavailable || etcdErr.Code() == codes.DeadlineExceeded) {
+		return true
+	}
+	code := status.Code(err)
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, metadata.ErrStoreUnavailable) || code == codes.Unavailable || code == codes.DeadlineExceeded
+}
+
+func recoveredGrace(sessionTimeout time.Duration) time.Duration {
+	if sessionTimeout <= 0 {
+		sessionTimeout = defaultSessionTimeout
+	}
+	return recoveredSessionGrace + sessionTimeout/3
 }

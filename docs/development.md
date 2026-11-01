@@ -256,7 +256,7 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 12 | Heartbeat | 4 | ✅ Implemented (v0-4) |
 | 13 | LeaveGroup | 4 | ✅ Implemented (v0-4) |
 | 14 | SyncGroup | 4 | ✅ Implemented (v0-4) |
-| 15 | DescribeGroups | 5 | ✅ Implemented |
+| 15 | DescribeGroups | 0-5 | ✅ Implemented |
 | 16 | ListGroups | 5 | ✅ Implemented |
 | 17 | SaslHandshake | 1 | ❌ Not supported |
 | 18 | ApiVersions | 3 | ✅ Implemented (v0-3) |

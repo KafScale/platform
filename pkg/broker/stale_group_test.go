@@ -294,10 +294,11 @@ func TestDeleteExpiryLosesLeaseBeforeWrite(t *testing.T) {
 func TestRecoveredSessionHasClockSkewMargin(t *testing.T) {
 	heartbeat := time.Now()
 	state := restoreGroupState(&metadatapb.ConsumerGroup{Members: map[string]*metadatapb.GroupMember{"member": {HeartbeatAt: heartbeat.UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 1000}}})
-	if state.removeExpiredMembers(heartbeat.Add(time.Second + recoveredSessionGrace - time.Millisecond)) {
+	grace := recoveredSessionGrace + time.Second/3
+	if state.removeExpiredMembers(heartbeat.Add(time.Second + grace - time.Millisecond)) {
 		t.Fatal("recovered session expired within grace")
 	}
-	if !state.removeExpiredMembers(heartbeat.Add(time.Second + recoveredSessionGrace + time.Millisecond)) {
+	if !state.removeExpiredMembers(heartbeat.Add(time.Second + grace + time.Millisecond)) {
 		t.Fatal("recovered session did not expire after grace")
 	}
 }
@@ -311,7 +312,7 @@ func TestHeartbeatClearsRecoveredSessionGrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.members["a"].expiryGrace != recoveredSessionGrace {
+	if state.members["a"].expiryGrace != recoveredSessionGrace+state.members["a"].heartbeatSaveInterval() {
 		t.Fatal("missing recovery grace")
 	}
 	heartbeat := kmsg.NewPtrHeartbeatRequest()
@@ -321,5 +322,36 @@ func TestHeartbeatClearsRecoveredSessionGrace(t *testing.T) {
 	}
 	if state.members["a"].expiryGrace != 0 {
 		t.Fatal("local heartbeat retained recovery grace")
+	}
+}
+
+func TestRecoveredSessionGraceCoversHeartbeatThrottle(t *testing.T) {
+	heartbeat := time.Now()
+	state := restoreGroupState(&metadatapb.ConsumerGroup{Members: map[string]*metadatapb.GroupMember{"member": {HeartbeatAt: heartbeat.UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 10000}}})
+	if got, want := state.members["member"].expiryGrace, recoveredSessionGrace+10*time.Second/3; got != want {
+		t.Fatalf("restored grace %v, want %v", got, want)
+	}
+	if state.removeExpiredMembers(heartbeat.Add(10*time.Second + recoveredSessionGrace + 3*time.Second)) {
+		t.Fatal("recovered session expired inside the heartbeat throttle window")
+	}
+}
+
+func TestRetentionMatchesRecoveredGrace(t *testing.T) {
+	now := time.Now()
+	for _, timeout := range []time.Duration{time.Second, 10 * time.Second, defaultSessionTimeout} {
+		group := func(age time.Duration) *metadatapb.ConsumerGroup {
+			return &metadatapb.ConsumerGroup{Members: map[string]*metadatapb.GroupMember{"m": {HeartbeatAt: now.Add(-age).UTC().Format(time.RFC3339Nano), SessionTimeoutMs: int32(timeout / time.Millisecond)}}}
+		}
+		limit := timeout + recoveredSessionGrace + timeout/3
+		if retentionCandidate(group(limit-10*time.Millisecond), now, now) {
+			t.Fatalf("timeout %v: member inside restore grace treated as dead", timeout)
+		}
+		if !retentionCandidate(group(limit+10*time.Millisecond), now, now) {
+			t.Fatalf("timeout %v: member past restore grace kept", timeout)
+		}
+		state := restoreGroupState(group(limit - 10*time.Millisecond))
+		if state.removeExpiredMembers(now) {
+			t.Fatalf("timeout %v: restore expired member inside grace", timeout)
+		}
 	}
 }
