@@ -44,15 +44,28 @@ func TestProxyTimeoutValues(t *testing.T) {
 	if env["KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS"] != "60000" || env["KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS"] != "5000" {
 		t.Fatal(env)
 	}
-	values := filepath.Join(t.TempDir(), "large.yaml")
-	large := "proxy:\n  responseWriteTimeoutMs: 1200000\n  lfsMetadataTimeoutMs: 1200000\n  security:\n    tlsSecretRef: proxy-tls\n    identitySecretRef: proxy-identity\n    handshakeTimeoutMs: 1200000\n"
-	if err := os.WriteFile(values, []byte(large), 0o600); err != nil {
-		t.Fatal(err)
+	writeValues := func(body string) string {
+		path := filepath.Join(t.TempDir(), "values.yaml")
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	env = render("-f", values)
-	for _, key := range []string{"KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", "KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"} {
-		if env[key] != "1200000" {
-			t.Fatalf("%s rendered %q, want \"1200000\"", key, env[key])
+	tls := "  security:\n    tlsSecretRef: proxy-tls\n    identitySecretRef: proxy-identity\n"
+	env = render("-f", writeValues("proxy:\n  responseWriteTimeoutMs: 1200000\n  lfsMetadataTimeoutMs: 1200000\n"+tls+"    handshakeTimeoutMs: 60000\n"))
+	want := map[string]string{"KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS": "1200000", "KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS": "1200000", "KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS": "60000"}
+	for key, value := range want {
+		if env[key] != value {
+			t.Fatalf("%s rendered %q, want %q", key, env[key], value)
+		}
+	}
+	if env = render("-f", writeValues("proxy:\n"+tls)); env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"] != "1000" {
+		t.Fatalf("default handshake timeout rendered %q", env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"])
+	}
+	for _, empty := range []string{`""`, "null"} {
+		env = render("-f", writeValues("proxy:\n"+tls+"    handshakeTimeoutMs: "+empty+"\n"))
+		if value, ok := env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"]; ok && value != "" {
+			t.Fatalf("handshakeTimeoutMs %s rendered %q", empty, value)
 		}
 	}
 }

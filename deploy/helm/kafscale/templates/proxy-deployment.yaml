@@ -73,8 +73,10 @@ spec:
               value: {{ .Values.proxy.security.maxHandshakes | quote }}
             - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP
               value: {{ .Values.proxy.security.maxHandshakesPerIP | quote }}
+{{- if .Values.proxy.security.handshakeTimeoutMs }}
             - name: KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS
               value: {{ .Values.proxy.security.handshakeTimeoutMs | int64 | quote }}
+{{- end }}
             - name: KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS
               value: {{ .Values.proxy.security.handshakeQueueMs | quote }}
             - name: KAFSCALE_PROXY_TLS_CERT_FILE
