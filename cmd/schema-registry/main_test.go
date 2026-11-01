@@ -93,3 +93,23 @@ func TestLoadSettingsErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestNamespaceWarning(t *testing.T) {
+	env := map[string]string{"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e:2379", "KAFSCALE_S3_BUCKET": "b", "KAFSCALE_S3_NAMESPACE": "  "}
+	s, err := loadSettings(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg := namespaceWarning(s); !strings.Contains(msg, `"default"`) || !strings.Contains(msg, "bucket b") {
+		t.Fatalf("warning %q", msg)
+	}
+	env["KAFSCALE_S3_NAMESPACE"] = "prod"
+	if s, _ = loadSettings(func(k string) string { return env[k] }); namespaceWarning(s) != "" {
+		t.Fatal("warning for a set namespace")
+	}
+	delete(env, "KAFSCALE_S3_BUCKET")
+	env["KAFSCALE_S3_NAMESPACE"] = ""
+	if s, _ = loadSettings(func(k string) string { return env[k] }); namespaceWarning(s) != "" {
+		t.Fatal("warning without S3")
+	}
+}

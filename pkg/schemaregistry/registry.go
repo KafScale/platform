@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/rand/v2"
 	"net/url"
@@ -122,6 +123,7 @@ type Registry struct {
 	inlineLimit  int
 	conflicts    atomic.Uint64
 	mu           sync.RWMutex
+	writeMu      sync.Mutex
 	cache        map[int64]*Schema
 	cacheBytes   int
 	cacheLimit   int
@@ -750,7 +752,11 @@ func (r *Registry) CheckIDMarkers(ctx context.Context) error {
 		b[i] = byte(rand.Uint32())
 	}
 	key := fmt.Sprintf("%s/@schemas/probe/%x", r.namespace, b)
-	defer func() { _ = r.s3.DeleteIndex(context.WithoutCancel(ctx), key) }()
+	defer func() {
+		if err := r.s3.DeleteIndex(context.WithoutCancel(ctx), key); err != nil {
+			log.Printf("delete S3 probe object %s: %v; the registry needs s3:DeleteObject on the %s/@schemas/probe/ prefix", key, err, r.namespace)
+		}
+	}()
 	if err := r.markers.UploadIndexIfAbsent(ctx, key, []byte("probe")); err != nil {
 		return fmt.Errorf("S3 conditional write probe at %s failed: %w", key, err)
 	}
@@ -810,7 +816,7 @@ func (r *Registry) Register(ctx context.Context, subject string, req RegisterReq
 			return nil, storeErr(ctx, err)
 		}
 		w.p = p
-		id, version, err := r.tryRegister(ctx, subject, req, p, w)
+		id, version, err := r.lockedTryRegister(ctx, subject, req, p, w)
 		if err != nil {
 			return nil, storeErr(ctx, err)
 		}
@@ -822,6 +828,12 @@ func (r *Registry) Register(ctx context.Context, subject string, req RegisterReq
 			return out, nil
 		}
 	}
+}
+
+func (r *Registry) lockedTryRegister(ctx context.Context, subject string, req RegisterRequest, p *prepared, w *recordWriter) (int64, int, error) {
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
+	return r.tryRegister(ctx, subject, req, p, w)
 }
 
 func refOps(refs []Reference, subject string, version int) []clientv3.Op {
@@ -922,27 +934,6 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 			return 0, 0, err
 		}
 		cmps = append(cmps, snap.fence(hk)...)
-	} else {
-		n, err := snap.int(counterKey())
-		if err != nil {
-			return 0, 0, err
-		}
-		if id, err = w.claim(ctx, n); err != nil {
-			return 0, 0, err
-		}
-		record, err := w.record(ctx)
-		if err != nil {
-			return 0, 0, err
-		}
-		cmps = append(cmps, snap.fence(counterKey())...)
-		cmps = append(cmps,
-			clientv3.Compare(clientv3.CreateRevision(hk), "=", 0),
-			clientv3.Compare(clientv3.CreateRevision(idKey(id)), "=", 0))
-		ops = append(ops,
-			clientv3.OpPut(idKey(id), record),
-			clientv3.OpPut(hk, strconv.FormatInt(id, 10)),
-			clientv3.OpPut(guidKey(p.guid), strconv.FormatInt(id, 10)),
-			clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10)))
 	}
 	live := sortedVersions(versions, false)
 	if len(live) > 0 && effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatBackward {
@@ -956,6 +947,28 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	version := top + 1
 	if top > 0 {
 		cmps = append(cmps, snap.fence(versionKey(subject, top))...)
+	}
+	if snap[hk] == nil {
+		n, err := snap.int(counterKey())
+		if err != nil {
+			return 0, 0, err
+		}
+		record, err := w.record(ctx)
+		if err != nil {
+			return 0, 0, err
+		}
+		if id, err = w.claim(ctx, n); err != nil {
+			return 0, 0, err
+		}
+		cmps = append(cmps, snap.fence(counterKey())...)
+		cmps = append(cmps,
+			clientv3.Compare(clientv3.CreateRevision(hk), "=", 0),
+			clientv3.Compare(clientv3.CreateRevision(idKey(id)), "=", 0))
+		ops = append(ops,
+			clientv3.OpPut(idKey(id), record),
+			clientv3.OpPut(hk, strconv.FormatInt(id, 10)),
+			clientv3.OpPut(guidKey(p.guid), strconv.FormatInt(id, 10)),
+			clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10)))
 	}
 	for v, e := range versions {
 		if e.Deleted && e.ID == id {
@@ -1013,30 +1026,8 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 			return 0, 0, errNotPermitted("Schema id %d already holds a different schema", id)
 		}
 		cmps = append(cmps, snap.fence(ik)...)
-	} else {
-		n, err := snap.int(counterKey())
-		if err != nil {
-			return 0, 0, err
-		}
-		if err := w.claimImport(ctx, id); err != nil {
-			return 0, 0, err
-		}
-		record, err := w.record(ctx)
-		if err != nil {
-			return 0, 0, err
-		}
-		cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(ik), "=", 0))
-		ops = append(ops, clientv3.OpPut(ik, record))
-		hk := hashKey(p.schemaType, p.hash)
-		if snap[hk] == nil {
-			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(hk), "=", 0))
-			ops = append(ops, clientv3.OpPut(hk, strconv.FormatInt(id, 10)), clientv3.OpPut(guidKey(p.guid), strconv.FormatInt(id, 10)))
-		}
-		if id > n {
-			cmps = append(cmps, snap.fence(counterKey())...)
-			ops = append(ops, clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10)))
-		}
 	}
+	newID := snap[ik] == nil
 	versions, err := snap.versions(subject)
 	if err != nil {
 		return 0, 0, err
@@ -1044,7 +1035,7 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	top := topVersion(versions)
 	version := req.Version
 	if version == 0 {
-		if len(ops) == 0 {
+		if !newID {
 			live := sortedVersions(versions, false)
 			for i := len(live) - 1; i >= 0; i-- {
 				if versions[live[i]].ID == id {
@@ -1062,6 +1053,30 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 			return 0, 0, errNotPermitted("Version %d of subject %s already holds schema id %d", version, subject, e.ID)
 		}
 		return id, version, nil
+	}
+	if newID {
+		n, err := snap.int(counterKey())
+		if err != nil {
+			return 0, 0, err
+		}
+		record, err := w.record(ctx)
+		if err != nil {
+			return 0, 0, err
+		}
+		if err := w.claimImport(ctx, id); err != nil {
+			return 0, 0, err
+		}
+		cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(ik), "=", 0))
+		ops = append(ops, clientv3.OpPut(ik, record))
+		hk := hashKey(p.schemaType, p.hash)
+		if snap[hk] == nil {
+			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(hk), "=", 0))
+			ops = append(ops, clientv3.OpPut(hk, strconv.FormatInt(id, 10)), clientv3.OpPut(guidKey(p.guid), strconv.FormatInt(id, 10)))
+		}
+		if id > n {
+			cmps = append(cmps, snap.fence(counterKey())...)
+			ops = append(ops, clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10)))
+		}
 	}
 	cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(versionKey(subject, version)), "=", 0))
 	ops = append(ops,

@@ -36,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/pkg/storage"
 	"github.com/hamba/avro/v2"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sr"
@@ -64,6 +65,8 @@ type srHarness struct {
 	javaDir   string
 	m2        string
 	work      string
+	s3Env     []string
+	after     func(url string)
 }
 
 func TestSchemaRegistryE2E(t *testing.T) {
@@ -72,9 +75,108 @@ func TestSchemaRegistryE2E(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
-	h := &srHarness{t: t, ctx: ctx, work: t.TempDir()}
-	parent := t
+	h := &srHarness{t: t, ctx: ctx, work: t.TempDir(), s3Env: []string{"KAFSCALE_S3_BUCKET="}}
 	h.checkTools()
+	h.runScenarios()
+}
+
+func TestSchemaRegistryMinIOE2E(t *testing.T) {
+	if os.Getenv("KAFSCALE_E2E") != "1" {
+		t.Skip("set KAFSCALE_E2E=1")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
+	defer cancel()
+	h := &srHarness{t: t, ctx: ctx, work: t.TempDir()}
+	h.checkTools()
+	s3cfg := h.startMinIO()
+	h.s3Env = []string{
+		"KAFSCALE_S3_BUCKET=" + s3cfg.Bucket,
+		"KAFSCALE_S3_REGION=" + s3cfg.Region,
+		"KAFSCALE_S3_ENDPOINT=" + s3cfg.Endpoint,
+		"KAFSCALE_S3_ACCESS_KEY=" + s3cfg.AccessKeyID,
+		"KAFSCALE_S3_SECRET_KEY=" + s3cfg.SecretAccessKey,
+		"KAFSCALE_S3_NAMESPACE=sr-e2e",
+		"KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES=64",
+	}
+	h.after = func(url string) { h.checkBucket(s3cfg, url) }
+	h.runScenarios()
+}
+
+func (h *srHarness) startMinIO() storage.S3Config {
+	t := h.t
+	image := os.Getenv("KAFSCALE_E2E_MINIO_IMAGE")
+	if image == "" {
+		image = "kafscale-minio:sr-e2e"
+		h.run(nil, h.docker[0], append(h.docker[1:], "build", "-q", "-t", image, "-f", filepath.Join(repoRoot(t), "test", "e2e", "minio.Dockerfile"), repoRoot(t))...)
+	}
+	addr := freeAddr(t)
+	name := "kafscale-sr-minio-" + strings.ReplaceAll(strings.ReplaceAll(addr, ":", "-"), ".", "-")
+	h.container(t, name, "-e", "MINIO_ROOT_USER=minioadmin", "-e", "MINIO_ROOT_PASSWORD=minioadmin", image, "server", "/data", "--address", addr, "--console-address", freeAddr(t))
+	cfg := storage.S3Config{Bucket: "kafscale-sr-e2e", Region: "us-east-1", Endpoint: "http://" + addr, ForcePathStyle: true, AccessKeyID: "minioadmin", SecretAccessKey: "minioadmin"}
+	for deadline := time.Now().Add(60 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+		cli, err := storage.NewS3Client(h.ctx, cfg)
+		if err == nil {
+			if err = cli.EnsureBucket(h.ctx); err == nil {
+				return cfg
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("MinIO on %s not ready: %v", addr, err)
+		}
+	}
+}
+
+func (h *srHarness) checkBucket(cfg storage.S3Config, url string) {
+	t := h.t
+	cli, err := storage.NewS3Client(h.ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := func(prefix string) []string {
+		objs, err := cli.ListSegments(h.ctx, prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keys []string
+		for _, o := range objs {
+			keys = append(keys, o.Key)
+		}
+		return keys
+	}
+	if probes := list("sr-e2e/@schemas/probe/"); len(probes) != 0 {
+		t.Fatalf("probe objects left behind: %v", probes)
+	}
+	if texts := list("sr-e2e/@schemas/sha256/"); len(texts) == 0 {
+		t.Fatal("no schema text stored in S3 with a 64 byte inline limit")
+	}
+	markers := list("sr-e2e/@schemas/ids/")
+	if len(markers) == 0 {
+		t.Fatal("no schema id markers in S3")
+	}
+	var schemas []struct {
+		ID int64 `json:"id"`
+	}
+	if code := srCall(t, http.MethodGet, url+"/schemas?deleted=true", nil, &schemas); code != http.StatusOK || len(schemas) == 0 {
+		t.Fatalf("GET /schemas: HTTP %d, %d schemas", code, len(schemas))
+	}
+	have := map[string]bool{}
+	for _, key := range markers {
+		have[key] = true
+	}
+	served := map[int64]bool{}
+	for _, sc := range schemas {
+		if key := fmt.Sprintf("sr-e2e/@schemas/ids/%020d", sc.ID); !have[key] && !served[sc.ID] {
+			t.Fatalf("schema id %d has no marker %s", sc.ID, key)
+		}
+		served[sc.ID] = true
+	}
+	t.Logf("MinIO bucket: %d schema ids, %d id markers, %d markers without a schema, schema text objects present, no probe objects", len(served), len(markers), len(markers)-len(served))
+}
+
+func (h *srHarness) runScenarios() {
+	t := h.t
+	ctx := h.ctx
+	parent := t
 	etcd, endpoints := startEmbeddedEtcd(t)
 	defer etcd.Close()
 	h.endpoints = endpoints
@@ -106,6 +208,9 @@ func TestSchemaRegistryE2E(t *testing.T) {
 		defer func() { h.t = parent }()
 		h.interop(t, brokerAddr, urlA, urlB)
 	})
+	if h.after != nil && !parent.Failed() {
+		h.after(urlA)
+	}
 }
 
 func (h *srHarness) checkTools() {
@@ -191,8 +296,8 @@ func (h *srHarness) startRegistry(addr string) *exec.Cmd {
 	configureProcessGroup(cmd)
 	cmd.Env = append(os.Environ(),
 		"KAFSCALE_SCHEMA_REGISTRY_ADDR="+addr,
-		"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS="+strings.Join(h.endpoints, ","),
-		"KAFSCALE_S3_BUCKET=")
+		"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS="+strings.Join(h.endpoints, ","))
+	cmd.Env = append(cmd.Env, h.s3Env...)
 	logs := mustLogFile(t, "schema-registry-"+strings.ReplaceAll(addr, ":", "-")+".log")
 	cmd.Stdout, cmd.Stderr = logs, logs
 	if err := cmd.Start(); err != nil {

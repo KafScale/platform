@@ -237,9 +237,10 @@ func TestRegisterRaceWithImportBelowCounter(t *testing.T) {
 	h.register("seed", map[string]any{"schema": userV2, "id": 100})
 	h.ok("PUT", "/mode/imp", map[string]string{"mode": "IMPORT"}, nil)
 	var once atomic.Bool
+	peer := h.peer()
 	h.reg.beforeCommit = func() {
 		if once.CompareAndSwap(false, true) {
-			if _, _, err := registerIDs(h.reg, ctx, "imp", RegisterRequest{Schema: userV1, ID: 50}); err != nil {
+			if _, _, err := registerIDs(peer, ctx, "imp", RegisterRequest{Schema: userV1, ID: 50}); err != nil {
 				t.Error(err)
 			}
 		}
@@ -260,9 +261,10 @@ func TestRegisterRaceSameSubject(t *testing.T) {
 	h.register("s", schema(userV1))
 	h.register("x", schema(userV2))
 	var once atomic.Bool
+	peer := h.peer()
 	h.reg.beforeCommit = func() {
 		if once.CompareAndSwap(false, true) {
-			if _, _, err := registerIDs(h.reg, ctx, "s", RegisterRequest{Schema: userV3}); err != nil {
+			if _, _, err := registerIDs(peer, ctx, "s", RegisterRequest{Schema: userV3}); err != nil {
 				t.Error(err)
 			}
 		}
@@ -293,4 +295,13 @@ func TestSoftDeletedVersionFlag(t *testing.T) {
 	if out["deleted"] != true {
 		t.Fatalf("soft deleted version %v", out)
 	}
+}
+
+func (h *harness) peer() *Registry {
+	h.t.Helper()
+	reg, err := New(Config{Client: h.cli, InlineLimit: DefaultInlineLimit})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return reg
 }

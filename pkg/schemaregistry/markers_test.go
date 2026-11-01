@@ -16,10 +16,15 @@
 package schemaregistry
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"math"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +58,26 @@ func (s *conflictS3) UploadIndexIfAbsent(ctx context.Context, key string, body [
 	}
 	s.mu.Unlock()
 	return s.MemoryS3Client.UploadIndexIfAbsent(ctx, key, body)
+}
+
+type undeletableS3 struct {
+	*storage.MemoryS3Client
+}
+
+func (s *undeletableS3) DeleteIndex(ctx context.Context, key string) error {
+	return errors.New("AccessDenied")
+}
+
+func TestCheckIDMarkersWarnsOnFailedDelete(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	if err := registryOn(t, &undeletableS3{storage.NewMemoryS3Client()}).CheckIDMarkers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if out := buf.String(); !strings.Contains(out, "delete S3 probe object prod/@schemas/probe/") || !strings.Contains(out, "AccessDenied") || !strings.Contains(out, "s3:DeleteObject") {
+		t.Fatalf("log %q", out)
+	}
 }
 
 type recordingS3 struct {
@@ -311,5 +336,106 @@ func TestClaimStaysWithinInt32(t *testing.T) {
 	id, err := writerFor(t, r, record("C")).claim(ctx, 0)
 	if err != nil || id <= linearClaimProbes+4 || id > 2*(linearClaimProbes+4)+64 {
 		t.Fatalf("claim past occupied ids: id %d err %v", id, err)
+	}
+}
+
+func markerIDs(t *testing.T, r *Registry, s3 storage.S3Client, upTo int64) []int64 {
+	t.Helper()
+	var out []int64
+	for id := int64(1); id <= upTo; id++ {
+		if _, err := s3.DownloadIndex(context.Background(), r.idMarkerKey(id)); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func TestRejectedRegistersClaimNoIDs(t *testing.T) {
+	s3 := storage.NewMemoryS3Client()
+	h := newHarness(t, nil, Config{S3: s3, Namespace: "prod"})
+	h.register("s", schema(userV1))
+	for range 20 {
+		h.fail("POST", "/subjects/s/versions", schema(userV3), 409, 40901)
+	}
+	h.ok("PUT", "/mode/imp", map[string]string{"mode": "IMPORT"}, nil)
+	h.ok("POST", "/subjects/imp/versions", map[string]any{"schema": address, "id": 40, "version": 1}, nil)
+	for range 5 {
+		h.fail("POST", "/subjects/imp/versions", map[string]any{"schema": userV3, "id": 41, "version": 1}, 422, 42205)
+	}
+	if got := markerIDs(t, h.reg, s3, 100); !slices.Equal(got, []int64{1, 40}) {
+		t.Fatalf("markers after rejections %v, want [1 40]", got)
+	}
+	if id := h.register("s", schema(userV2)); id != 41 {
+		t.Fatalf("compatible register after rejections got id %d, want 41", id)
+	}
+	if got := markerIDs(t, h.reg, s3, 100); !slices.Equal(got, []int64{1, 40, 41}) {
+		t.Fatalf("markers %v, want [1 40 41]", got)
+	}
+}
+
+func TestFenceRetryReusesClaimedID(t *testing.T) {
+	s3 := storage.NewMemoryS3Client()
+	h := newHarness(t, nil, Config{S3: s3, Namespace: "prod"})
+	h.register("s", schema(userV1))
+	bumps := 0
+	h.reg.beforeCommit = func() {
+		if bumps < 3 {
+			bumps++
+			if _, err := h.cli.Put(context.Background(), configKey("s"), CompatBackward); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	if id := h.register("s", schema(userV2)); id != 2 {
+		t.Fatalf("id %d after fence retries, want 2", id)
+	}
+	if bumps != 3 {
+		t.Fatalf("%d fence failures, want 3", bumps)
+	}
+	if got := markerIDs(t, h.reg, s3, 20); !slices.Equal(got, []int64{1, 2}) {
+		t.Fatalf("markers %v, want [1 2]", got)
+	}
+}
+
+func TestConcurrentRegistersInOneInstanceLeaveNoOrphans(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	s3 := storage.NewMemoryS3Client()
+	regs := make([]*Registry, 1)
+	for i := range regs {
+		reg, err := New(Config{Client: newClient(t, endpoints), S3: s3, Namespace: "prod", InlineLimit: DefaultInlineLimit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		regs[i] = reg
+	}
+	if err := regs[0].SetCompatibility(context.Background(), "", CompatNone); err != nil {
+		t.Fatal(err)
+	}
+	const workers, perWorker = 8, 25
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var maxID int64
+	for g := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range perWorker {
+				out, err := regs[g%len(regs)].Register(context.Background(), fmt.Sprintf("s%d", g), RegisterRequest{Schema: record(fmt.Sprintf("W%d_%d", g, i))})
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				mu.Lock()
+				maxID = max(maxID, out.Schema.ID)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	markers := markerIDs(t, regs[0], s3, maxID+64)
+	orphans := len(markers) - workers*perWorker
+	t.Logf("%d registers, %d markers, %d orphans, max id %d", workers*perWorker, len(markers), orphans, maxID)
+	if orphans != 0 {
+		t.Fatalf("%d orphan markers for %d registers", orphans, workers*perWorker)
 	}
 }

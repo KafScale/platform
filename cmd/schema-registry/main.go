@@ -59,7 +59,7 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		password:    getenv("KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD"),
 		timeout:     10 * time.Second,
 		inlineLimit: schemaregistry.DefaultInlineLimit,
-		namespace:   getenv("KAFSCALE_S3_NAMESPACE"),
+		namespace:   strings.TrimSpace(getenv("KAFSCALE_S3_NAMESPACE")),
 	}
 	if s.addr == "" {
 		s.addr = ":8081"
@@ -113,6 +113,13 @@ func loadSettings(getenv func(string) string) (settings, error) {
 	return s, nil
 }
 
+func namespaceWarning(s settings) string {
+	if s.s3 == nil || s.namespace != "default" {
+		return ""
+	}
+	return fmt.Sprintf("KAFSCALE_S3_NAMESPACE is %q; schema id records go to %s/@schemas/ in bucket %s, and registries on different etcd clusters that use this bucket and namespace share one schema id space; set KAFSCALE_S3_NAMESPACE per cluster", s.namespace, s.namespace, s.s3.Bucket)
+}
+
 func run(ctx context.Context, getenv func(string) string) error {
 	s, err := loadSettings(getenv)
 	if err != nil {
@@ -135,6 +142,9 @@ func run(ctx context.Context, getenv func(string) string) error {
 		}
 	} else {
 		log.Printf("KAFSCALE_S3_BUCKET not set; schemas above %d bytes are rejected and issued schema ids are recorded only in etcd", s.inlineLimit)
+	}
+	if msg := namespaceWarning(s); msg != "" {
+		log.Print(msg)
 	}
 	reg, err := schemaregistry.New(cfg)
 	if err != nil {
