@@ -30,7 +30,7 @@ import (
 
 const (
 	contentType  = "application/vnd.schemaregistry.v1+json"
-	maxBodyBytes = 16 << 20
+	maxBodyBytes = 2 << 20
 )
 
 type Server struct {
@@ -52,6 +52,7 @@ type versionBody struct {
 	Subject    string      `json:"subject,omitempty"`
 	Version    int         `json:"version,omitempty"`
 	ID         int64       `json:"id,omitempty"`
+	GUID       string      `json:"guid,omitempty"`
 	SchemaType string      `json:"schemaType"`
 	References []Reference `json:"references,omitempty"`
 	Schema     string      `json:"schema"`
@@ -78,6 +79,7 @@ func NewServer(reg *Registry, timeout time.Duration) *Server {
 		"GET /{$}":                       func(http.ResponseWriter, *http.Request) (any, error) { return map[string]any{}, nil },
 		"GET /schemas/types":             func(http.ResponseWriter, *http.Request) (any, error) { return []string{schemaTypeAvro}, nil },
 		"GET /schemas/ids/{id}":          s.getSchema,
+		"GET /schemas/guids/{guid}":      s.getSchemaByGUID,
 		"GET /schemas/ids/{id}/schema":   s.getSchemaText,
 		"GET /schemas/ids/{id}/versions": s.getIDVersions,
 		"GET /schemas/ids/{id}/subjects": s.getIDSubjects,
@@ -197,6 +199,7 @@ func versionResponse(v *VersionedSchema, withDeleted bool) versionBody {
 		Subject:    v.Subject,
 		Version:    v.Version,
 		ID:         v.Schema.ID,
+		GUID:       v.Schema.GUID(),
 		Schema:     v.Schema.Text,
 		SchemaType: v.Schema.Type,
 		References: v.Schema.References,
@@ -220,7 +223,7 @@ func (s *Server) getSchema(_ http.ResponseWriter, r *http.Request) (any, error) 
 		}
 		return nil, err
 	}
-	out := versionBody{SchemaType: sc.Type, References: sc.References, Schema: sc.Text}
+	out := versionBody{GUID: sc.GUID(), SchemaType: sc.Type, References: sc.References, Schema: sc.Text}
 	for _, deleted := range []bool{false, true} {
 		owners, err := s.reg.IDVersions(r.Context(), id, deleted)
 		if err != nil {
@@ -232,6 +235,26 @@ func (s *Server) getSchema(_ http.ResponseWriter, r *http.Request) (any, error) 
 		}
 	}
 	return out, nil
+}
+
+func (s *Server) getSchemaByGUID(_ http.ResponseWriter, r *http.Request) (any, error) {
+	guid := r.PathValue("guid")
+	sc, err := s.reg.SchemaByGUID(r.Context(), guid)
+	if err != nil {
+		return nil, err
+	}
+	if sc == nil {
+		return nil, newError(404, 40403, "Schema %s not found", guid)
+	}
+	deleted := true
+	owners, err := s.reg.IDVersions(r.Context(), sc.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(owners) > 0 {
+		deleted = false
+	}
+	return versionBody{GUID: guid, SchemaType: sc.Type, References: sc.References, Schema: sc.Text, Deleted: &deleted}, nil
 }
 
 func (s *Server) getIDSubjects(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -355,13 +378,14 @@ func (s *Server) register(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := registerBody{ID: v.Schema.ID, Version: v.Version, SchemaType: v.Schema.Type, References: v.Schema.References, Schema: v.Schema.Text}
+	out := registerBody{ID: v.Schema.ID, Version: v.Version, GUID: v.Schema.GUID(), SchemaType: v.Schema.Type, References: v.Schema.References, Schema: v.Schema.Text}
 	return out, nil
 }
 
 type registerBody struct {
 	ID         int64       `json:"id"`
 	Version    int         `json:"version"`
+	GUID       string      `json:"guid"`
 	SchemaType string      `json:"schemaType"`
 	References []Reference `json:"references,omitempty"`
 	Schema     string      `json:"schema"`

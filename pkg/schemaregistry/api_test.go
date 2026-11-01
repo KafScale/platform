@@ -88,7 +88,7 @@ func TestNewEndpoints(t *testing.T) {
 func TestResponseShapes(t *testing.T) {
 	h := newHarness(t, nil, Config{})
 	_, data := h.do("POST", "/subjects/s/versions", schema(userV1))
-	if string(data) != `{"id":1,"version":1,"schemaType":"AVRO","schema":`+mustQuote(userV1)+`}` {
+	if string(data) != `{"id":1,"version":1,"guid":"b4233e53-d42c-78fc-f52b-daf039258374","schemaType":"AVRO","schema":`+mustQuote(userV1)+`}` {
 		t.Fatalf("register %s", data)
 	}
 	var reg map[string]any

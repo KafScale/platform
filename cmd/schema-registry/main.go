@@ -134,7 +134,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 			return fmt.Errorf("create S3 client: %w", err)
 		}
 	} else {
-		log.Printf("KAFSCALE_S3_BUCKET not set; schemas above %d bytes are rejected", s.inlineLimit)
+		log.Printf("KAFSCALE_S3_BUCKET not set; schemas above %d bytes are rejected and issued schema ids are recorded only in etcd", s.inlineLimit)
 	}
 	reg, err := schemaregistry.New(cfg)
 	if err != nil {

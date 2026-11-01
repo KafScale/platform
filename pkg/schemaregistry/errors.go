@@ -114,3 +114,7 @@ func errStore(err error) *Error {
 func errTimeout(err error) *Error {
 	return newError(500, 50002, "Operation timed out: %v", err)
 }
+
+func errTooLarge() *Error {
+	return newError(422, 42209, "Register operation failed because schema is too large")
+}

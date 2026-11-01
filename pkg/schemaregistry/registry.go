@@ -17,7 +17,9 @@ package schemaregistry
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -40,6 +42,8 @@ import (
 const (
 	keyPrefix          = "/kafscale/schemas/"
 	DefaultInlineLimit = 64 << 10
+	DefaultCacheBytes  = 32 << 20
+	MaxSchemaBytes     = 1 << 20
 	ModeReadWrite      = "READWRITE"
 	ModeReadOnly       = "READONLY"
 	ModeImport         = "IMPORT"
@@ -117,8 +121,12 @@ type Registry struct {
 	conflicts    atomic.Uint64
 	mu           sync.RWMutex
 	cache        map[int64]*Schema
+	cacheBytes   int
+	cacheLimit   int
 	counter      int64
 	revision     int64
+	clusterID    uint64
+	raftTerm     uint64
 	resets       atomic.Uint64
 	beforeCommit func()
 }
@@ -139,6 +147,7 @@ func New(cfg Config) (*Registry, error) {
 		namespace:   cfg.Namespace,
 		inlineLimit: cfg.InlineLimit,
 		cache:       make(map[int64]*Schema),
+		cacheLimit:  DefaultCacheBytes,
 	}, nil
 }
 
@@ -161,6 +170,24 @@ func idSubjectKey(id int64, subject string, version int) string {
 }
 
 func hashKey(schemaType, hash string) string { return keyPrefix + "hash/" + schemaType + "/" + hash }
+
+func guidKey(guid string) string { return keyPrefix + "guids/" + guid }
+
+func (r *Registry) idMarkerKey(id int64) string {
+	return fmt.Sprintf("%s/@schemas/ids/%020d", r.namespace, id)
+}
+
+func schemaGUID(text string, refs []Reference) string {
+	h := md5.New()
+	h.Write([]byte(text))
+	for _, ref := range refs {
+		h.Write([]byte(ref.Name))
+		h.Write([]byte(ref.Subject))
+		_ = binary.Write(h, binary.BigEndian, int32(ref.Version))
+	}
+	b := h.Sum(nil)
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
 
 func subjectsPrefix() string { return keyPrefix + "subjects/" }
 
@@ -370,7 +397,7 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 	}
 	s = &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}
 	r.mu.Lock()
-	r.cache[id] = s
+	r.cacheLocked(s)
 	r.counter = max(r.counter, id)
 	r.mu.Unlock()
 	return s, nil
@@ -411,16 +438,43 @@ func (r *Registry) observe(h *etcdserverpb.ResponseHeader) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if h.Revision < r.revision {
+	if h.Revision < r.revision || (r.clusterID != 0 && h.ClusterId != r.clusterID) || h.RaftTerm < r.raftTerm {
 		r.resetLocked()
 		r.counter = 0
 	}
-	r.revision = h.Revision
+	r.revision, r.clusterID, r.raftTerm = h.Revision, h.ClusterId, h.RaftTerm
 }
 
 func (r *Registry) resetLocked() {
 	clear(r.cache)
+	r.cacheBytes = 0
 	r.resets.Add(1)
+}
+
+func (r *Registry) cacheLocked(s *Schema) {
+	size := len(s.Text)
+	if size > r.cacheLimit {
+		return
+	}
+	if old := r.cache[s.ID]; old != nil {
+		r.cacheBytes -= len(old.Text)
+		delete(r.cache, s.ID)
+	}
+	for id, old := range r.cache {
+		if r.cacheBytes+size <= r.cacheLimit {
+			break
+		}
+		r.cacheBytes -= len(old.Text)
+		delete(r.cache, id)
+	}
+	r.cache[s.ID] = s
+	r.cacheBytes += size
+}
+
+func (r *Registry) CacheBytes() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cacheBytes
 }
 
 func (r *Registry) SchemaByID(ctx context.Context, id int64) (*Schema, error) {
@@ -432,6 +486,24 @@ func (r *Registry) SchemaByID(ctx context.Context, id int64) (*Schema, error) {
 		return nil, errSchemaNotFound()
 	}
 	return s, nil
+}
+
+func (s *Schema) GUID() string { return schemaGUID(s.Text, s.References) }
+
+func (r *Registry) SchemaByGUID(ctx context.Context, guid string) (*Schema, error) {
+	resp, err := r.cli.Get(ctx, guidKey(guid))
+	if err != nil {
+		return nil, storeErr(ctx, err)
+	}
+	r.observe(resp.Header)
+	if len(resp.Kvs) == 0 {
+		return nil, nil
+	}
+	id, err := strconv.ParseInt(string(resp.Kvs[0].Value), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return r.SchemaByID(ctx, id)
 }
 
 func (r *Registry) resolveReferences(ctx context.Context, refs []Reference, depth int, seen map[string]bool, out *[]resolvedReference) (map[string]int64, error) {
@@ -526,6 +598,7 @@ type prepared struct {
 	canonical  string
 	hash       string
 	norm       string
+	guid       string
 	refs       []resolvedReference
 	refRevs    map[string]int64
 }
@@ -540,6 +613,9 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	}
 	if strings.TrimSpace(req.Schema) == "" {
 		return nil, errInvalidSchema("empty schema")
+	}
+	if len(req.Schema) > MaxSchemaBytes {
+		return nil, errTooLarge()
 	}
 	var refs []resolvedReference
 	refRevs, err := r.resolveReferences(ctx, req.References, 0, map[string]bool{}, &refs)
@@ -562,6 +638,7 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 		canonical:  canonical,
 		hash:       schemaHash(schemaType, canonical, req.References),
 		norm:       schemaHash(schemaType, normalized, req.References),
+		guid:       schemaGUID(canonical, req.References),
 		refs:       refs,
 		refRevs:    refRevs,
 	}, nil
@@ -573,6 +650,64 @@ type recordWriter struct {
 	p        *prepared
 	uploaded string
 	writes   int
+	claimed  int64
+}
+
+const maxClaimProbes = 64
+
+func (w *recordWriter) claim(ctx context.Context, counter int64) (int64, error) {
+	if w.r.s3 == nil {
+		return counter + 1, nil
+	}
+	if w.claimed > counter {
+		return w.claimed, nil
+	}
+	id, step := counter+1, int64(1)
+	for range maxClaimProbes {
+		used, err := w.r.markerHolds(ctx, id, "")
+		if err != nil {
+			return 0, err
+		}
+		if !used {
+			if err := w.r.s3.UploadIndex(ctx, w.r.idMarkerKey(id), []byte(w.p.hash)); err != nil {
+				return 0, fmt.Errorf("write schema id %d marker to S3: %w", id, err)
+			}
+			w.claimed = id
+			return id, nil
+		}
+		id += step
+		step *= 2
+	}
+	return 0, fmt.Errorf("no free schema id found above %d in S3 id markers", counter)
+}
+
+func (r *Registry) markerHolds(ctx context.Context, id int64, hash string) (bool, error) {
+	data, err := r.s3.DownloadIndex(ctx, r.idMarkerKey(id))
+	if errors.Is(err, storage.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+	}
+	return hash == "" || string(data) != hash, nil
+}
+
+func (w *recordWriter) claimImport(ctx context.Context, id int64) error {
+	if w.r.s3 == nil || w.claimed == id {
+		return nil
+	}
+	taken, err := w.r.markerHolds(ctx, id, w.p.hash)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return errNotPermitted("Schema id %d was issued before for a different schema", id)
+	}
+	if err := w.r.s3.UploadIndex(ctx, w.r.idMarkerKey(id), []byte(w.p.hash)); err != nil {
+		return fmt.Errorf("write schema id %d marker to S3: %w", id, err)
+	}
+	w.claimed = id
+	return nil
 }
 
 func (w *recordWriter) record(ctx context.Context) (string, error) {
@@ -702,6 +837,15 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	if err != nil {
 		return 0, 0, err
 	}
+	versions, err := snap.versions(subject)
+	if err != nil {
+		return 0, 0, err
+	}
+	if req.ID == 0 && req.Version == 0 {
+		if v, id, err := r.subjectMatch(ctx, versions, p, false); err != nil || v > 0 {
+			return id, v, err
+		}
+	}
 	mode := effective(snap, modeKey(subject), modeKey(""), ModeReadWrite)
 	switch mode {
 	case ModeReadOnly:
@@ -714,13 +858,6 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	}
 	if req.ID > 0 || req.Version > 0 {
 		return 0, 0, errNotPermitted("Schema id and version can only be set in IMPORT mode")
-	}
-	versions, err := snap.versions(subject)
-	if err != nil {
-		return 0, 0, err
-	}
-	if v, id, err := r.subjectMatch(ctx, versions, p, false); err != nil || v > 0 {
-		return id, v, err
 	}
 	cmps := snap.fence(lk, modeKey(""), modeKey(subject), configKey(""), configKey(subject))
 	cmps = append(cmps, refFence(p.refRevs)...)
@@ -736,7 +873,9 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		if err != nil {
 			return 0, 0, err
 		}
-		id = n + 1
+		if id, err = w.claim(ctx, n); err != nil {
+			return 0, 0, err
+		}
 		record, err := w.record(ctx)
 		if err != nil {
 			return 0, 0, err
@@ -748,6 +887,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		ops = append(ops,
 			clientv3.OpPut(idKey(id), record),
 			clientv3.OpPut(hk, strconv.FormatInt(id, 10)),
+			clientv3.OpPut(guidKey(p.guid), strconv.FormatInt(id, 10)),
 			clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10)))
 	}
 	live := sortedVersions(versions, false)
@@ -824,6 +964,9 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		if err != nil {
 			return 0, 0, err
 		}
+		if err := w.claimImport(ctx, id); err != nil {
+			return 0, 0, err
+		}
 		record, err := w.record(ctx)
 		if err != nil {
 			return 0, 0, err
@@ -833,7 +976,7 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		hk := hashKey(p.schemaType, p.hash)
 		if snap[hk] == nil {
 			cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(hk), "=", 0))
-			ops = append(ops, clientv3.OpPut(hk, strconv.FormatInt(id, 10)))
+			ops = append(ops, clientv3.OpPut(hk, strconv.FormatInt(id, 10)), clientv3.OpPut(guidKey(p.guid), strconv.FormatInt(id, 10)))
 		}
 		if id > n {
 			cmps = append(cmps, snap.fence(counterKey())...)
