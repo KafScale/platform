@@ -365,3 +365,19 @@ func TestEtcdStoreOldCommitterCommits(t *testing.T) {
 		t.Fatal(offset, err)
 	}
 }
+
+func TestCommitBackoffStopsOnContext(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		commitBackoff(canceled)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("backoff ignored canceled context")
+	}
+	commitBackoff(context.Background())
+}

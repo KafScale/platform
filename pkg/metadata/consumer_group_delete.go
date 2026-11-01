@@ -300,9 +300,7 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		if groupMembershipChanged(current, kvs) {
 			conflicts++
 		}
-		if err := commitBackoff(ctx); err != nil {
-			return err
-		}
+		commitBackoff(ctx)
 	}
 	return ErrConsumerGroupChanged
 }
@@ -360,13 +358,11 @@ func checkCommitMember(current *metadatapb.ConsumerGroup, memberID string, gener
 	return nil
 }
 
-func commitBackoff(ctx context.Context) error {
+func commitBackoff(ctx context.Context) {
 	timer := time.NewTimer(time.Millisecond + time.Duration(rand.Int63n(int64(4*time.Millisecond))))
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
 	case <-timer.C:
-		return nil
 	}
 }
