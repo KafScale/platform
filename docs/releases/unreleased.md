@@ -60,6 +60,7 @@ limitations under the License.
 
 - Kafka response writes set the write deadline for each 256 KiB chunk instead of once for the whole frame, so a large response to a slow but live client is not cut off. After a write fails, the broker and the proxy stop writing to that connection instead of logging one error for each queued response (#263).
 - The proxy chart renders `proxy.responseWriteTimeoutMs`, `proxy.lfsMetadataTimeoutMs` and `proxy.security.handshakeTimeoutMs` as plain integers. Values of 1000000 or more were rendered as `1.2e+06`, so the proxy logged a warning and used the default (#263).
+- The proxy chart omits `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` when `proxy.security.handshakeTimeoutMs` is empty or null. It rendered `"0"`, which the proxy rejects at startup, so TLS proxies with an empty value failed to start.
 - When the LFS proxy cannot delete uploads it discards after a failed produce rewrite, the orphan reason now names the failure, such as `checksum_mismatch_delete_failed` or `blob_too_large_delete_failed`, instead of always `generation_changed_delete_failed` (#263).
 
 - The Helm chart can set `proxy.responseWriteTimeoutMs` and `proxy.lfsMetadataTimeoutMs`. The proxy logs a warning when an integer environment setting is not a number. The KafscaleCluster CRD rejects a negative `offsetsRetentionMinutes` (#263).
