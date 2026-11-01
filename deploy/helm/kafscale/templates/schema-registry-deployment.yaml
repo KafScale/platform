@@ -93,9 +93,20 @@ spec:
             - name: KAFSCALE_S3_ENDPOINT
               value: "{{ .endpoint }}"
 {{- end }}
+{{- $pathStyle := "" }}
 {{- if kindIs "bool" .pathStyle }}
+{{- $pathStyle = toString .pathStyle }}
+{{- else if kindIs "string" .pathStyle }}
+{{- $pathStyle = .pathStyle | trim | lower }}
+{{- else if not (kindIs "invalid" .pathStyle) }}
+{{- fail "schemaRegistry.s3.pathStyle must be true, false or empty" }}
+{{- end }}
+{{- if $pathStyle }}
+{{- if not (has $pathStyle (list "true" "false")) }}
+{{- fail (printf "schemaRegistry.s3.pathStyle must be true, false or empty, got %q" .pathStyle) }}
+{{- end }}
             - name: KAFSCALE_S3_PATH_STYLE
-              value: "{{ .pathStyle }}"
+              value: "{{ $pathStyle }}"
 {{- end }}
 {{- if .credentialsSecret }}
             - name: KAFSCALE_S3_ACCESS_KEY

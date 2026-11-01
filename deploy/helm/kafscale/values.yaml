@@ -349,7 +349,7 @@ schemaRegistry:
     region: ""
     namespace: default
     endpoint: ""
-    pathStyle: ""  # true or false sets path style addressing, empty uses path style when endpoint is set
+    pathStyle: ""  # true or false, as a boolean or a string, sets path style addressing, empty uses path style when endpoint is set
     credentialsSecret: ""  # Name of existing Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys
   podAnnotations: {}
   podDisruptionBudget:
