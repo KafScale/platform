@@ -123,7 +123,7 @@ type Registry struct {
 	inlineLimit  int
 	conflicts    atomic.Uint64
 	mu           sync.RWMutex
-	writeMu      sync.Mutex
+	writeSem     chan struct{}
 	cache        map[int64]*Schema
 	cacheBytes   int
 	cacheLimit   int
@@ -153,6 +153,7 @@ func New(cfg Config) (*Registry, error) {
 		}
 	}
 	return &Registry{
+		writeSem:    make(chan struct{}, 1),
 		cli:         cfg.Client,
 		s3:          cfg.S3,
 		markers:     markers,
@@ -831,9 +832,46 @@ func (r *Registry) Register(ctx context.Context, subject string, req RegisterReq
 }
 
 func (r *Registry) lockedTryRegister(ctx context.Context, subject string, req RegisterRequest, p *prepared, w *recordWriter) (int64, int, error) {
-	r.writeMu.Lock()
-	defer r.writeMu.Unlock()
+	if req.ID == 0 && req.Version == 0 {
+		if id, v, err := r.latestMatch(ctx, subject, p); err != nil || v > 0 {
+			return id, v, err
+		}
+	}
+	select {
+	case r.writeSem <- struct{}{}:
+	case <-ctx.Done():
+		return 0, 0, errTimeout(fmt.Errorf("waiting for another schema write on this instance: %w", ctx.Err()))
+	}
+	defer func() { <-r.writeSem }()
 	return r.tryRegister(ctx, subject, req, p, w)
+}
+
+func (r *Registry) latestMatch(ctx context.Context, subject string, p *prepared) (int64, int, error) {
+	hk := hashKey(p.schemaType, p.hash)
+	snap, err := r.read(ctx, []string{hk, latestKey(subject)}, nil)
+	if err != nil || snap[hk] == nil || snap[latestKey(subject)] == nil {
+		return 0, 0, err
+	}
+	id, err := strconv.ParseInt(string(snap[hk].Value), 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	top, err := strconv.Atoi(string(snap[latestKey(subject)].Value))
+	if err != nil {
+		return 0, 0, err
+	}
+	resp, err := r.cli.Get(ctx, versionKey(subject, top))
+	if err != nil || len(resp.Kvs) == 0 {
+		return 0, 0, err
+	}
+	var rec versionRecord
+	if err := json.Unmarshal(resp.Kvs[0].Value, &rec); err != nil {
+		return 0, 0, err
+	}
+	if rec.Deleted || rec.ID != id {
+		return 0, 0, nil
+	}
+	return id, top, nil
 }
 
 func refOps(refs []Reference, subject string, version int) []clientv3.Op {

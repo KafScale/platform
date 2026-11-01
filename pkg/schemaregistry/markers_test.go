@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/storage"
@@ -437,5 +438,124 @@ func TestConcurrentRegistersInOneInstanceLeaveNoOrphans(t *testing.T) {
 	t.Logf("%d registers, %d markers, %d orphans, max id %d", workers*perWorker, len(markers), orphans, maxID)
 	if orphans != 0 {
 		t.Fatalf("%d orphan markers for %d registers", orphans, workers*perWorker)
+	}
+}
+
+type stallingS3 struct {
+	*storage.MemoryS3Client
+	mu      sync.Mutex
+	stall   chan struct{}
+	stalled chan struct{}
+}
+
+func (s *stallingS3) UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error {
+	s.mu.Lock()
+	stall := s.stall
+	s.mu.Unlock()
+	if stall != nil {
+		select {
+		case s.stalled <- struct{}{}:
+		default:
+		}
+		select {
+		case <-stall:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.MemoryS3Client.UploadIndexIfAbsent(ctx, key, body)
+}
+
+func stalledWrite(t *testing.T) (*Registry, func()) {
+	t.Helper()
+	s3 := &stallingS3{MemoryS3Client: storage.NewMemoryS3Client()}
+	reg := registryOn(t, s3)
+	if err := reg.SetCompatibility(context.Background(), "", CompatNone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Register(context.Background(), "existing", RegisterRequest{Schema: record("E")}); err != nil {
+		t.Fatal(err)
+	}
+	stall := make(chan struct{})
+	s3.mu.Lock()
+	s3.stall = stall
+	s3.stalled = make(chan struct{}, 1)
+	s3.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = reg.Register(ctx, "slow", RegisterRequest{Schema: record("S")})
+	}()
+	select {
+	case <-s3.stalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("write never reached S3")
+	}
+	return reg, func() {
+		close(stall)
+		<-done
+	}
+}
+
+func TestExistingSchemaNotBlockedByStalledWrite(t *testing.T) {
+	reg, release := stalledWrite(t)
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	out, err := reg.Register(ctx, "existing", RegisterRequest{Schema: record("E")})
+	if err != nil || out.Schema.ID != 1 {
+		t.Fatalf("re-register of an existing schema during a stalled write: %v after %v", err, time.Since(start))
+	}
+	if _, err := reg.Lookup(ctx, "existing", RegisterRequest{Schema: record("E")}, false); err != nil {
+		t.Fatalf("lookup during a stalled write: %v", err)
+	}
+}
+
+func TestWriteLockWaiterHonorsDeadline(t *testing.T) {
+	reg, release := stalledWrite(t)
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := reg.Register(ctx, "new", RegisterRequest{Schema: record("N")})
+	took := time.Since(start)
+	var regErr *Error
+	if !errors.As(err, &regErr) || regErr.Code != 50002 {
+		t.Fatalf("waiter got %v, want 50002", err)
+	}
+	if took > time.Second {
+		t.Fatalf("waiter returned after %v with a 300ms deadline", took)
+	}
+}
+
+func TestWaiterReturnsSchemaRegisteredWhileWaiting(t *testing.T) {
+	reg, release := stalledWrite(t)
+	type res struct {
+		id, version int64
+		err         error
+	}
+	got := make(chan res, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, err := reg.Register(ctx, "slow", RegisterRequest{Schema: record("S")})
+		if err != nil {
+			got <- res{err: err}
+			return
+		}
+		got <- res{id: out.Schema.ID, version: int64(out.Version)}
+	}()
+	time.Sleep(100 * time.Millisecond)
+	release()
+	r := <-got
+	if r.err != nil || r.id != 2 || r.version != 1 {
+		t.Fatalf("waiter got id %d version %d err %v, want id 2 version 1", r.id, r.version, r.err)
+	}
+	versions, err := reg.Versions(context.Background(), "slow", false)
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("versions %v err %v", versions, err)
 	}
 }
