@@ -125,7 +125,7 @@ func TestConsumerGroupRetentionClockReset(t *testing.T) {
 			if emptySince(saved).Before(time.Now().Add(-time.Minute)) {
 				t.Fatal("raw commit did not reset clock")
 			}
-			if err := CommitConsumerOffsetIfGroupExists(ctx, store, "clock", 0, "", 0, "orders", 0, 8, ""); err != nil {
+			if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "clock", 0, "", 0, "orders", 0, 8, ""); err != nil {
 				t.Fatal(err)
 			}
 			saved, _ = store.FetchConsumerGroup(ctx, "clock")

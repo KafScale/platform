@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
@@ -588,7 +590,7 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 				if simple {
 					err = metadata.CommitSimpleConsumerOffset(ctx, c.store, req.Group, topic.Topic, part.Partition, part.Offset, meta)
 				} else {
-					err = metadata.CommitConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, req.MemberID, req.Generation, topic.Topic, part.Partition, part.Offset, meta)
+					err = metadata.CommitMemberConsumerOffsetIfGroupExists(ctx, c.store, req.Group, createRevision, req.MemberID, req.Generation, topic.Topic, part.Partition, part.Offset, meta)
 				}
 				if err != nil {
 					code = protocol.UNKNOWN_SERVER_ERROR
@@ -597,7 +599,7 @@ func (c *GroupCoordinator) OffsetCommit(ctx context.Context, req *kmsg.OffsetCom
 						code = protocol.UNKNOWN_MEMBER_ID
 					case errors.Is(err, metadata.ErrConsumerGroupGenerationChanged):
 						code = protocol.ILLEGAL_GENERATION
-					case errors.Is(err, metadata.ErrConsumerGroupChanged):
+					case errors.Is(err, metadata.ErrConsumerGroupChanged), commitRetriable(err):
 						code = protocol.COORDINATOR_LOAD_IN_PROGRESS
 					}
 				}
@@ -1022,7 +1024,7 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
 				entry.lastHeartbeat = parsed
 				entry.savedHeartbeat = parsed
-				entry.expiryGrace = recoveredSessionGrace
+				entry.expiryGrace = recoveredSessionGrace + entry.heartbeatSaveInterval()
 			}
 		}
 		state.members[memberID] = entry
@@ -1550,4 +1552,8 @@ func (s *groupState) dropRebalanceLaggers(now time.Time) bool {
 		s.state = groupStateEmpty
 	}
 	return changed
+}
+
+func commitRetriable(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, metadata.ErrStoreUnavailable) || status.Code(err) == codes.Unavailable
 }

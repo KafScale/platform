@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,8 +176,6 @@ type ConsumerGroupMemberOffsetCommitter interface {
 
 var ErrConsumerGroupDeleted = errors.New("consumer group deleted")
 
-var ErrConsumerGroupCommitUnsupported = errors.New("metadata store does not support checked offset commits")
-
 var ErrConsumerGroupNotEmpty = errors.New("consumer group has active members")
 
 var ErrConsumerGroupMemberGone = errors.New("consumer group member not found")
@@ -222,14 +221,18 @@ func PutConsumerGroupRevision(ctx context.Context, store Store, group *metadatap
 	return 0, store.PutConsumerGroup(ctx, group)
 }
 
-func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error {
-	if committer, ok := store.(ConsumerGroupMemberOffsetCommitter); ok {
-		return committer.CommitMemberConsumerOffset(ctx, group, createRevision, memberID, generation, topic, partition, offset, metadata)
-	}
+func CommitConsumerOffsetIfGroupExists(ctx context.Context, store Store, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
 	if committer, ok := store.(ConsumerGroupOffsetCommitter); ok {
 		return committer.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, topic, partition, offset, metadata)
 	}
-	return ErrConsumerGroupCommitUnsupported
+	return store.CommitConsumerOffset(ctx, group, topic, partition, offset, metadata)
+}
+
+func CommitMemberConsumerOffsetIfGroupExists(ctx context.Context, store Store, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, metadata string) error {
+	if committer, ok := store.(ConsumerGroupMemberOffsetCommitter); ok {
+		return committer.CommitMemberConsumerOffset(ctx, group, createRevision, memberID, generation, topic, partition, offset, metadata)
+	}
+	return CommitConsumerOffsetIfGroupExists(ctx, store, group, createRevision, topic, partition, offset, metadata)
 }
 
 func (s *EtcdStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
@@ -297,6 +300,9 @@ func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, crea
 		if groupMembershipChanged(current, kvs) {
 			conflicts++
 		}
+		if err := commitBackoff(ctx); err != nil {
+			return err
+		}
 	}
 	return ErrConsumerGroupChanged
 }
@@ -352,4 +358,15 @@ func checkCommitMember(current *metadatapb.ConsumerGroup, memberID string, gener
 		return ErrConsumerGroupGenerationChanged
 	}
 	return nil
+}
+
+func commitBackoff(ctx context.Context) error {
+	timer := time.NewTimer(time.Millisecond + time.Duration(rand.Int63n(int64(4*time.Millisecond))))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

@@ -24,6 +24,8 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type pausedCommitStore struct {
@@ -118,10 +120,21 @@ func testOffsetCommitAfterDeleteGroups(t *testing.T, recreate bool) {
 	}
 }
 
-type changedCommitStore struct{ *metadata.EtcdStore }
+type changedCommitStore struct {
+	*metadata.EtcdStore
+	err error
+}
 
 func (s changedCommitStore) CommitMemberConsumerOffset(context.Context, string, int64, string, int32, string, int32, int64, string) error {
-	return metadata.ErrConsumerGroupChanged
+	return s.err
+}
+
+type expiredCommitStore struct{ *metadata.EtcdStore }
+
+func (s expiredCommitStore) CommitMemberConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string) error {
+	expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+	return s.EtcdStore.CommitMemberConsumerOffset(expired, group, createRevision, memberID, generation, topic, partition, offset, meta)
 }
 
 func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
@@ -135,19 +148,28 @@ func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
 	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
 		t.Fatal(err)
 	}
-	c := newTestCoordinator(t, changedCommitStore{etcd})
-	commit := kmsg.NewPtrOffsetCommitRequest()
-	commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
-	topic := kmsg.NewOffsetCommitRequestTopic()
-	topic.Topic = "orders"
-	topic.Partitions = append(topic.Partitions, kmsg.NewOffsetCommitRequestTopicPartition())
-	commit.Topics = append(commit.Topics, topic)
-	resp, err := c.OffsetCommit(ctx, commit)
-	if err != nil {
-		t.Fatal(err)
+	stores := map[string]metadata.Store{
+		"changed":     changedCommitStore{etcd, metadata.ErrConsumerGroupChanged},
+		"deadline":    expiredCommitStore{etcd},
+		"canceled":    changedCommitStore{etcd, context.Canceled},
+		"unavailable": changedCommitStore{etcd, status.Error(codes.Unavailable, "etcd down")},
+		"store":       changedCommitStore{etcd, metadata.ErrStoreUnavailable},
 	}
-	if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.COORDINATOR_LOAD_IN_PROGRESS {
-		t.Fatalf("changed group returned %d", code)
+	for name, store := range stores {
+		c := newTestCoordinator(t, store)
+		commit := kmsg.NewPtrOffsetCommitRequest()
+		commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
+		topic := kmsg.NewOffsetCommitRequestTopic()
+		topic.Topic = "orders"
+		topic.Partitions = append(topic.Partitions, kmsg.NewOffsetCommitRequestTopicPartition())
+		commit.Topics = append(commit.Topics, topic)
+		resp, err := c.OffsetCommit(ctx, commit)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.COORDINATOR_LOAD_IN_PROGRESS {
+			t.Fatalf("%s commit returned %d", name, code)
+		}
 	}
 }
 

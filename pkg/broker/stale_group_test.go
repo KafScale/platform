@@ -294,10 +294,11 @@ func TestDeleteExpiryLosesLeaseBeforeWrite(t *testing.T) {
 func TestRecoveredSessionHasClockSkewMargin(t *testing.T) {
 	heartbeat := time.Now()
 	state := restoreGroupState(&metadatapb.ConsumerGroup{Members: map[string]*metadatapb.GroupMember{"member": {HeartbeatAt: heartbeat.UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 1000}}})
-	if state.removeExpiredMembers(heartbeat.Add(time.Second + recoveredSessionGrace - time.Millisecond)) {
+	grace := recoveredSessionGrace + time.Second/3
+	if state.removeExpiredMembers(heartbeat.Add(time.Second + grace - time.Millisecond)) {
 		t.Fatal("recovered session expired within grace")
 	}
-	if !state.removeExpiredMembers(heartbeat.Add(time.Second + recoveredSessionGrace + time.Millisecond)) {
+	if !state.removeExpiredMembers(heartbeat.Add(time.Second + grace + time.Millisecond)) {
 		t.Fatal("recovered session did not expire after grace")
 	}
 }
@@ -311,7 +312,7 @@ func TestHeartbeatClearsRecoveredSessionGrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.members["a"].expiryGrace != recoveredSessionGrace {
+	if state.members["a"].expiryGrace != recoveredSessionGrace+state.members["a"].heartbeatSaveInterval() {
 		t.Fatal("missing recovery grace")
 	}
 	heartbeat := kmsg.NewPtrHeartbeatRequest()
@@ -321,5 +322,16 @@ func TestHeartbeatClearsRecoveredSessionGrace(t *testing.T) {
 	}
 	if state.members["a"].expiryGrace != 0 {
 		t.Fatal("local heartbeat retained recovery grace")
+	}
+}
+
+func TestRecoveredSessionGraceCoversHeartbeatThrottle(t *testing.T) {
+	heartbeat := time.Now()
+	state := restoreGroupState(&metadatapb.ConsumerGroup{Members: map[string]*metadatapb.GroupMember{"member": {HeartbeatAt: heartbeat.UTC().Format(time.RFC3339Nano), SessionTimeoutMs: 10000}}})
+	if got, want := state.members["member"].expiryGrace, recoveredSessionGrace+10*time.Second/3; got != want {
+		t.Fatalf("restored grace %v, want %v", got, want)
+	}
+	if state.removeExpiredMembers(heartbeat.Add(10*time.Second + recoveredSessionGrace + 3*time.Second)) {
+		t.Fatal("recovered session expired inside the heartbeat throttle window")
 	}
 }
