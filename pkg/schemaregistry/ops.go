@@ -411,11 +411,11 @@ func (r *Registry) DeleteVersion(ctx context.Context, subject string, version in
 				return false, err
 			}
 			ops = append(ops, clientv3.OpDelete(versionKey(subject, v)))
-			indexed, err := snap.int(subjectHashKey(subject, e.ID))
+			indexed, err := snap.version(subjectHashKey(subject, e.ID))
 			if err != nil {
 				return false, err
 			}
-			if int(indexed) == v {
+			if indexed == v {
 				ops = append(ops, clientv3.OpDelete(subjectHashKey(subject, e.ID)))
 			}
 		}

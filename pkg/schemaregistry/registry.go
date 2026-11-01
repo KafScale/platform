@@ -208,6 +208,15 @@ func (s snapshot) int(key string) (int64, error) {
 	return strconv.ParseInt(string(kv.Value), 10, 64)
 }
 
+func (s snapshot) version(key string) (int, error) {
+	kv := s[key]
+	if kv == nil {
+		return 0, nil
+	}
+	v, err := strconv.ParseInt(string(kv.Value), 10, 32)
+	return int(v), err
+}
+
 func (s snapshot) str(key string) string {
 	if kv := s[key]; kv != nil {
 		return string(kv.Value)
@@ -592,7 +601,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	if err != nil {
 		return 0, 0, err
 	}
-	latest, err := snap.int(lk)
+	latest, err := snap.version(lk)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -604,10 +613,10 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		if id, err = strconv.ParseInt(string(kv.Value), 10, 64); err != nil {
 			return 0, 0, err
 		}
-		if v, err := snap.int(subjectHashKey(subject, id)); err != nil {
+		if v, err := snap.version(subjectHashKey(subject, id)); err != nil {
 			return 0, 0, err
-		} else if e, ok := versions[int(v)]; ok && !e.Deleted {
-			return id, int(v), nil
+		} else if e, ok := versions[v]; ok && !e.Deleted {
+			return id, v, nil
 		}
 		cmps = append(cmps, snap.fence(hk)...)
 	} else {
@@ -633,7 +642,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		}
 		cmps = append(cmps, snap.fence(versionKey(subject, prev))...)
 	}
-	version := int(latest) + 1
+	version := latest + 1
 	shk := subjectHashKey(subject, id)
 	cmps = append(cmps, snap.fence(shk)...)
 	cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(versionKey(subject, version)), "=", 0))
@@ -708,21 +717,21 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	if err != nil {
 		return 0, 0, err
 	}
-	latest, err := snap.int(lk)
+	latest, err := snap.version(lk)
 	if err != nil {
 		return 0, 0, err
 	}
 	shk := subjectHashKey(subject, id)
-	indexed, err := snap.int(shk)
+	indexed, err := snap.version(shk)
 	if err != nil {
 		return 0, 0, err
 	}
 	version := req.Version
 	if version == 0 {
-		if e, ok := versions[int(indexed)]; ok && !e.Deleted && len(ops) == 0 {
-			return id, int(indexed), nil
+		if e, ok := versions[indexed]; ok && !e.Deleted && len(ops) == 0 {
+			return id, indexed, nil
 		}
-		version = int(latest) + 1
+		version = latest + 1
 	}
 	if e, ok := versions[version]; ok {
 		if e.ID != id {
@@ -735,7 +744,7 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	ops = append(ops,
 		clientv3.OpPut(versionKey(subject, version), versionValue(id)),
 		clientv3.OpPut(idSubjectKey(id, subject, version), ""))
-	if int64(version) > latest {
+	if version > latest {
 		ops = append(ops, clientv3.OpPut(lk, strconv.Itoa(version)))
 	}
 	if indexed == 0 {
