@@ -72,6 +72,7 @@ type handler struct {
 	coordinator          *broker.GroupCoordinator
 	leaseManager         *metadata.PartitionLeaseManager
 	groupLeaseManager    *metadata.GroupLeaseManager
+	retentionSweepLease  *metadata.LeaseManager
 	s3Health             *broker.S3HealthMonitor
 	s3Namespace          string
 	brokerInfo           protocol.MetadataBroker
@@ -2245,6 +2246,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	authorizer := buildAuthorizerFromEnv(logger)
 	var leaseManager *metadata.PartitionLeaseManager
 	var groupLeaseManager *metadata.GroupLeaseManager
+	var retentionSweepLease *metadata.LeaseManager
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
 		brokerIDStr := fmt.Sprintf("%d", brokerInfo.NodeID)
 		leaseManager = metadata.NewPartitionLeaseManager(etcdStore.EtcdClient(), metadata.PartitionLeaseConfig{
@@ -2255,6 +2257,12 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			BrokerID: brokerIDStr,
 			Logger:   logger,
 		})
+		retentionSweepLease = metadata.NewLeaseManager(etcdStore.EtcdClient(), metadata.LeaseManagerConfig{
+			BrokerID:     brokerIDStr,
+			Prefix:       "/kafscale/retention-sweeper",
+			Logger:       logger,
+			ResourceKind: "retention sweeper",
+		})
 	}
 	coordinatorConfig := &broker.CoordinatorConfig{OffsetsRetention: offsetsRetentionFromEnv()}
 	if groupLeaseManager != nil {
@@ -2262,6 +2270,11 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		coordinatorConfig.AcquireGroup = groupLeaseManager.Acquire
 		coordinatorConfig.ReleaseGroup = groupLeaseManager.Release
 		coordinatorConfig.GroupDeleted = groupLeaseManager.Release
+	}
+	if retentionSweepLease != nil {
+		coordinatorConfig.AcquireRetentionSweep = func(ctx context.Context) error {
+			return retentionSweepLease.Acquire(ctx, "sweeper")
+		}
 	}
 	return &handler{
 		apiVersions: generateApiVersions(),
@@ -2284,6 +2297,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, coordinatorConfig),
 		leaseManager:         leaseManager,
 		groupLeaseManager:    groupLeaseManager,
+		retentionSweepLease:  retentionSweepLease,
 		s3Health:             health,
 		s3Namespace:          s3Namespace,
 		brokerInfo:           brokerInfo,
@@ -2398,6 +2412,9 @@ func main() {
 	}
 	if handler.groupLeaseManager != nil {
 		handler.groupLeaseManager.ReleaseAll()
+	}
+	if handler.retentionSweepLease != nil {
+		handler.retentionSweepLease.ReleaseAll()
 	}
 	srv.Wait()
 }
@@ -2922,7 +2939,7 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyLeaveGroup, minVersion: 0, maxVersion: 4},
 		{key: protocol.APIKeyOffsetCommit, minVersion: 1, maxVersion: 3},
 		{key: protocol.APIKeyOffsetFetch, minVersion: 1, maxVersion: 5},
-		{key: protocol.APIKeyDescribeGroups, minVersion: 5, maxVersion: 5},
+		{key: protocol.APIKeyDescribeGroups, minVersion: 0, maxVersion: 5},
 		// Older Kafka admin clients negotiate LIST_GROUPS in range [0,4].
 		// Narrow 5-5 advertisement breaks `kafka-consumer-groups --list` even
 		// though the coordinator handler is version-agnostic.

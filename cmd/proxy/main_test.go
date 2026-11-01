@@ -1713,3 +1713,18 @@ func TestProxyApiVersionsNegotiation(t *testing.T) {
 	}()
 	testutil.AssertApiVersionsNegotiation(t, clientConn)
 }
+
+func TestProxyAdvertisesOlderGroupAdminVersions(t *testing.T) {
+	want := map[int16]bool{protocol.APIKeyDescribeGroups: true, protocol.APIKeyListGroups: true}
+	for _, entry := range generateProxyApiVersions() {
+		if want[entry.ApiKey] {
+			delete(want, entry.ApiKey)
+			if entry.MinVersion != 0 || entry.MaxVersion != 5 {
+				t.Fatalf("api %d advertised %d..%d", entry.ApiKey, entry.MinVersion, entry.MaxVersion)
+			}
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing api versions %v", want)
+	}
+}

@@ -307,7 +307,8 @@ func TestDeleteConsumerGroupAfterCoordinatorCrash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if remaining := time.Until(heartbeat.Add(time.Duration(member.SessionTimeoutMs)*time.Millisecond + 5*time.Second + 20*time.Millisecond)); remaining > 0 {
+		timeout := time.Duration(member.SessionTimeoutMs) * time.Millisecond
+		if remaining := time.Until(heartbeat.Add(timeout + 5*time.Second + timeout/3 + 20*time.Millisecond)); remaining > 0 {
 			time.Sleep(remaining)
 		}
 	}
