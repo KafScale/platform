@@ -329,3 +329,41 @@ mcp:
           - path: /
             pathType: Prefix
     tls: []
+
+schemaRegistry:
+  enabled: false
+  replicas: 2
+  port: 8081
+  image:
+    repository: ghcr.io/kafscale/kafscale-schema-registry
+    tag: ""
+    useLatest: false
+    pullPolicy: IfNotPresent
+  etcdEndpoints: []
+  etcd:
+    existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
+  requestTimeout: ""  # Go duration, for example 10s
+  inlineLimitBytes: ""  # Schema text above this size goes to S3, default 65536
+  s3:
+    bucket: ""
+    region: ""
+    namespace: default
+    endpoint: ""
+    pathStyle: false
+    credentialsSecret: ""  # Name of existing Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys
+  podAnnotations: {}
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]

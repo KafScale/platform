@@ -49,7 +49,9 @@ render_deployment() {
     --show-only "templates/${template}" \
     --set proxy.enabled=true \
     --set console.enabled=true \
-    --set mcp.enabled=true
+    --set mcp.enabled=true \
+    --set schemaRegistry.enabled=true \
+    --set 'schemaRegistry.etcdEndpoints={http://etcd:2379}'
 }
 
 # assert_present <component> <description> <rendered-yaml> <grep-pattern>
@@ -86,6 +88,7 @@ declare -a COMPONENTS=(
   "proxy:proxy-deployment.yaml"
   "console:console-deployment.yaml"
   "mcp:mcp-deployment.yaml"
+  "schema-registry:schema-registry-deployment.yaml"
 )
 
 for entry in "${COMPONENTS[@]}"; do
@@ -122,4 +125,4 @@ if [ "${fail}" -ne 0 ]; then
   echo "==> chart PSA-restricted conformance gate FAILED"
   exit 1
 fi
-echo "==> chart PSA-restricted conformance gate passed (4 Deployments x 6 controls; proxy /tmp mount)"
+echo "==> chart PSA-restricted conformance gate passed (5 Deployments x 6 controls; proxy /tmp mount)"
