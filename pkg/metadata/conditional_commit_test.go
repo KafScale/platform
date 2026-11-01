@@ -371,7 +371,7 @@ func TestCommitBackoffStopsOnContext(t *testing.T) {
 	cancel()
 	done := make(chan struct{})
 	go func() {
-		commitBackoff(canceled)
+		commitBackoff(canceled, time.Millisecond, 4*time.Millisecond)
 		close(done)
 	}()
 	select {
@@ -379,10 +379,10 @@ func TestCommitBackoffStopsOnContext(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("backoff ignored canceled context")
 	}
-	commitBackoff(context.Background())
+	commitBackoff(context.Background(), 100*time.Microsecond, 400*time.Microsecond)
 }
 
-func TestHeartbeatOnlyRaceRetriesWithoutBackoff(t *testing.T) {
+func TestHeartbeatOnlyRaceUsesShortYield(t *testing.T) {
 	ctx := context.Background()
 	group := func(heartbeat string, members ...string) string {
 		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{}}
@@ -395,22 +395,29 @@ func TestHeartbeatOnlyRaceRetriesWithoutBackoff(t *testing.T) {
 		}
 		return string(encoded)
 	}
-	backoffs := 0
+	backoffs, yields := 0, 0
 	saved := commitBackoff
-	commitBackoff = func(context.Context) { backoffs++ }
+	commitBackoff = func(_ context.Context, base, _ time.Duration) {
+		if base >= time.Millisecond {
+			backoffs++
+		} else {
+			yields++
+		}
+	}
 	t.Cleanup(func() { commitBackoff = saved })
 	cases := []struct {
 		name     string
 		races    int
 		next     func(int) string
 		backoffs int
+		yields   int
 	}{
-		{"heartbeat only", 5, func(n int) string { return group(fmt.Sprint(n), "m1", "m2") }, 0},
-		{"membership", 1, func(n int) string { return group("0", "m1", "m2", "m3") }, 1},
+		{"heartbeat only", 5, func(n int) string { return group(fmt.Sprint(n), "m1", "m2") }, 0, 5},
+		{"membership", 1, func(n int) string { return group("0", "m1", "m2", "m3") }, 1, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			backoffs = 0
+			backoffs, yields = 0, 0
 			store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
 			inner := store.client.KV
 			if _, err := inner.Put(ctx, ConsumerGroupKey("g"), group("0", "m1", "m2")); err != nil {
@@ -431,8 +438,8 @@ func TestHeartbeatOnlyRaceRetriesWithoutBackoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if backoffs != tc.backoffs {
-				t.Fatalf("backed off %d times, want %d", backoffs, tc.backoffs)
+			if backoffs != tc.backoffs || yields != tc.yields {
+				t.Fatalf("backed off %d and yielded %d times, want %d and %d", backoffs, yields, tc.backoffs, tc.yields)
 			}
 		})
 	}
@@ -464,6 +471,9 @@ func TestNonstopHeartbeatRaceEndsAtDeadline(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("commit ran %v past its deadline", elapsed)
+	}
+	if attempts > 250 {
+		t.Fatalf("%d attempts in 300ms, want at most 250", attempts)
 	}
 	t.Logf("%d attempts before the deadline", attempts)
 }
