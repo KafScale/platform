@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/url"
 	"slices"
@@ -96,6 +97,7 @@ func (r *Registry) Version(ctx context.Context, subject string, version int, del
 	if err != nil {
 		return nil, storeErr(ctx, err)
 	}
+	out.Deleted = versions[v].Deleted
 	return out, nil
 }
 
@@ -200,39 +202,25 @@ func (r *Registry) Lookup(ctx context.Context, subject string, req RegisterReque
 	if err != nil {
 		return nil, storeErr(ctx, err)
 	}
-	snap, err := r.read(ctx, []string{hashKey(p.schemaType, p.hash)}, nil)
+	v, id, err := r.subjectMatch(ctx, versions, p, deleted)
 	if err != nil {
 		return nil, storeErr(ctx, err)
 	}
-	id, err := snap.int(hashKey(p.schemaType, p.hash))
-	if err != nil {
-		return nil, errStore(err)
-	}
-	if id == 0 {
-		return nil, errSchemaNotFound()
-	}
-	resp, err := r.cli.Get(ctx, subjectHashKey(subject, id))
-	if err != nil {
-		return nil, storeErr(ctx, err)
-	}
-	if len(resp.Kvs) == 0 {
-		return nil, errSchemaNotFound()
-	}
-	v, err := strconv.Atoi(string(resp.Kvs[0].Value))
-	if err != nil {
-		return nil, errStore(err)
-	}
-	if e, ok := versions[v]; !ok || (e.Deleted && !deleted) {
+	if v == 0 {
 		return nil, errSchemaNotFound()
 	}
 	out, err := r.versioned(ctx, subject, v, id)
 	if err != nil {
 		return nil, storeErr(ctx, err)
 	}
+	out.Deleted = versions[v].Deleted
 	return out, nil
 }
 
 func (r *Registry) Compatible(ctx context.Context, subject string, version int, req RegisterRequest) (bool, []string, error) {
+	if err := validSubject(subject); err != nil {
+		return false, nil, err
+	}
 	snap, err := r.read(ctx, []string{configKey(""), configKey(subject)}, []string{subjectPrefix(subject)})
 	if err != nil {
 		return false, nil, storeErr(ctx, err)
@@ -241,26 +229,154 @@ func (r *Registry) Compatible(ctx context.Context, subject string, version int, 
 	if err != nil {
 		return false, nil, errStore(err)
 	}
-	v, err := pickVersion(subject, versions, version, false)
-	if err != nil {
-		return false, nil, err
+	live := sortedVersions(versions, false)
+	var v int
+	switch {
+	case version == latestVersion && len(live) == 0:
+		v = 0
+	case version > 0 && len(live) == 0:
+		return false, nil, errVersionNotFound(version)
+	default:
+		if v, err = pickVersion(subject, versions, version, false); err != nil {
+			return false, nil, err
+		}
 	}
 	p, err := r.prepare(ctx, req)
 	if err != nil {
 		return false, nil, storeErr(ctx, err)
 	}
-	if effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatNone {
+	if v == 0 || effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatNone {
 		return true, nil, nil
 	}
-	err = r.checkAgainst(ctx, req.Schema, p.refs, versions[v].ID)
+	err = r.checkAgainst(ctx, subject, p.canonical, p.refs, v, versions[v].ID)
 	var regErr *Error
-	if errors.As(err, &regErr) && regErr.Code == 409 {
+	if errors.As(err, &regErr) && regErr.Code == 40901 {
 		return false, []string{regErr.Message}, nil
 	}
 	if err != nil {
 		return false, nil, storeErr(ctx, err)
 	}
 	return true, nil, nil
+}
+
+func (r *Registry) ReferencedBy(ctx context.Context, subject string, version int) ([]int64, error) {
+	_, versions, err := r.subjectSnapshot(ctx, subject)
+	if err != nil {
+		return nil, storeErr(ctx, err)
+	}
+	v, err := pickVersion(subject, versions, version, false)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.cli.Get(ctx, refByPrefix(subject, v), clientv3.WithPrefix(), clientv3.WithKeysOnly())
+	if err != nil {
+		return nil, storeErr(ctx, err)
+	}
+	seen := map[int64]bool{}
+	out := []int64{}
+	for _, kv := range resp.Kvs {
+		escaped, rawVersion, ok := strings.Cut(strings.TrimPrefix(string(kv.Key), refByPrefix(subject, v)), "/")
+		refSubject, err := url.PathUnescape(escaped)
+		if !ok || err != nil {
+			return nil, errStore(fmt.Errorf("bad reference key %q", kv.Key))
+		}
+		vr, err := r.cli.Get(ctx, versionKey(refSubject, mustAtoi(rawVersion)))
+		if err != nil {
+			return nil, storeErr(ctx, err)
+		}
+		if len(vr.Kvs) == 0 {
+			continue
+		}
+		var rec versionRecord
+		if err := json.Unmarshal(vr.Kvs[0].Value, &rec); err != nil {
+			return nil, errStore(err)
+		}
+		if !seen[rec.ID] {
+			seen[rec.ID] = true
+			out = append(out, rec.ID)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+func mustAtoi(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+type SchemaFilter struct {
+	SubjectPrefix string
+	Deleted       bool
+	LatestOnly    bool
+	Offset        int
+	Limit         int
+}
+
+func (r *Registry) Schemas(ctx context.Context, f SchemaFilter) ([]*VersionedSchema, error) {
+	resp, err := r.cli.Get(ctx, subjectsPrefix(), clientv3.WithPrefix())
+	if err != nil {
+		return nil, storeErr(ctx, err)
+	}
+	type entry struct {
+		subject string
+		version int
+		rec     versionRecord
+	}
+	var all []entry
+	for _, kv := range resp.Kvs {
+		escaped, rest, ok := strings.Cut(strings.TrimPrefix(string(kv.Key), subjectsPrefix()), "/")
+		raw, isVersion := strings.CutPrefix(rest, "versions/")
+		if !ok || !isVersion {
+			continue
+		}
+		subject, err := url.PathUnescape(escaped)
+		if err != nil {
+			return nil, errStore(fmt.Errorf("bad subject key %q", kv.Key))
+		}
+		if !strings.HasPrefix(subject, f.SubjectPrefix) {
+			continue
+		}
+		var rec versionRecord
+		if err := json.Unmarshal(kv.Value, &rec); err != nil {
+			return nil, errStore(fmt.Errorf("decode %q: %w", kv.Key, err))
+		}
+		if rec.Deleted && !f.Deleted {
+			continue
+		}
+		all = append(all, entry{subject: subject, version: mustAtoi(raw), rec: rec})
+	}
+	slices.SortFunc(all, func(a, b entry) int {
+		if c := strings.Compare(a.subject, b.subject); c != 0 {
+			return c
+		}
+		return a.version - b.version
+	})
+	if f.LatestOnly {
+		var latest []entry
+		for i, e := range all {
+			if i+1 == len(all) || all[i+1].subject != e.subject {
+				latest = append(latest, e)
+			}
+		}
+		all = latest
+	}
+	if f.Offset > 0 {
+		all = all[min(f.Offset, len(all)):]
+	}
+	if f.Limit > 0 {
+		all = all[:min(f.Limit, len(all))]
+	}
+	out := make([]*VersionedSchema, 0, len(all))
+	for _, e := range all {
+		v, err := r.versioned(ctx, e.subject, e.version, e.rec.ID)
+		if err != nil {
+			return nil, storeErr(ctx, err)
+		}
+		v.Deleted = e.rec.Deleted
+		out = append(out, v)
+	}
+	return out, nil
 }
 
 func (r *Registry) retry(ctx context.Context, try func() (bool, error)) error {
@@ -404,19 +520,19 @@ func (r *Registry) DeleteVersion(ctx context.Context, subject string, version in
 		if err != nil {
 			return false, err
 		}
-		cmps := append(snap.fence(modeKey(""), modeKey(subject), versionKey(subject, v), subjectHashKey(subject, e.ID)), cmp)
+		cmps := append(snap.fence(modeKey(""), modeKey(subject), versionKey(subject, v), latestKey(subject)), cmp)
 		ops := []clientv3.Op{clientv3.OpPut(versionKey(subject, v), deletedValue(e.ID))}
 		if permanent {
 			if ops, err = r.indexOps(ctx, subject, v, e.ID); err != nil {
 				return false, err
 			}
 			ops = append(ops, clientv3.OpDelete(versionKey(subject, v)))
-			indexed, err := snap.version(subjectHashKey(subject, e.ID))
-			if err != nil {
-				return false, err
-			}
-			if indexed == v {
-				ops = append(ops, clientv3.OpDelete(subjectHashKey(subject, e.ID)))
+			rest := maps.Clone(versions)
+			delete(rest, v)
+			if top := topVersion(rest); top > 0 {
+				ops = append(ops, clientv3.OpPut(latestKey(subject), strconv.Itoa(top)))
+			} else {
+				ops = append(ops, clientv3.OpDelete(latestKey(subject)))
 			}
 		}
 		resp, err := r.cli.Txn(ctx).If(cmps...).Then(ops...).Commit()
@@ -463,16 +579,21 @@ func (r *Registry) setting(ctx context.Context, subject string, defaultToGlobal 
 	return fallback, nil
 }
 
-func (r *Registry) deleteSetting(ctx context.Context, subject string, key string, missing func(string) *Error) (string, error) {
-	if err := validSubject(subject); err != nil {
-		return "", err
+func (r *Registry) deleteSetting(ctx context.Context, subject string, key string, fallback string) (string, error) {
+	if subject != "" {
+		if err := validSubject(subject); err != nil {
+			return "", err
+		}
 	}
 	resp, err := r.cli.Delete(ctx, key, clientv3.WithPrevKV())
 	if err != nil {
 		return "", storeErr(ctx, err)
 	}
 	if len(resp.PrevKvs) == 0 {
-		return "", missing(subject)
+		if subject != "" {
+			return "", errSubjectNotFound(subject)
+		}
+		return fallback, nil
 	}
 	return string(resp.PrevKvs[0].Value), nil
 }
@@ -497,7 +618,7 @@ func (r *Registry) SetCompatibility(ctx context.Context, subject, level string) 
 }
 
 func (r *Registry) DeleteCompatibility(ctx context.Context, subject string) (string, error) {
-	return r.deleteSetting(ctx, subject, configKey(subject), errSubjectConfigNotFound)
+	return r.deleteSetting(ctx, subject, configKey(subject), CompatBackward)
 }
 
 func (r *Registry) Mode(ctx context.Context, subject string, defaultToGlobal bool) (string, error) {
@@ -535,7 +656,7 @@ func (r *Registry) SetMode(ctx context.Context, subject, mode string, force bool
 }
 
 func (r *Registry) DeleteMode(ctx context.Context, subject string) (string, error) {
-	return r.deleteSetting(ctx, subject, modeKey(subject), errSubjectModeNotFound)
+	return r.deleteSetting(ctx, subject, modeKey(subject), ModeReadWrite)
 }
 
 func (r *Registry) Ready(ctx context.Context) error {

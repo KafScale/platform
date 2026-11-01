@@ -43,6 +43,10 @@ func errSchemaNotFound() *Error {
 	return newError(404, 40403, "Schema not found")
 }
 
+func errSchemaIDNotFound(id int64) *Error {
+	return newError(404, 40403, "Schema %d not found", id)
+}
+
 func errInvalidSchema(format string, args ...any) *Error {
 	return newError(422, 42201, "Invalid schema: "+format, args...)
 }
@@ -67,8 +71,8 @@ func errReferenceExists(subject string, version int) *Error {
 	return newError(422, 42206, "One or more references exist to the schema {subject=%s,version=%d}.", subject, version)
 }
 
-func errIncompatible(reason string) *Error {
-	return newError(409, 409, "Schema being registered is incompatible with an earlier schema for subject: %s", reason)
+func errIncompatible(subject string, version int, oldSchema, reason string) *Error {
+	return newError(409, 40901, "Schema being registered is incompatible with an earlier schema for subject %q, details: [%s, {oldSchemaVersion: %d}, {oldSchema: '%s'}, {compatibility: 'BACKWARD'}]", subject, reason, version, oldSchema)
 }
 
 func errSubjectSoftDeleted(subject string) *Error {
@@ -93,6 +97,10 @@ func errSubjectConfigNotFound(subject string) *Error {
 
 func errSubjectModeNotFound(subject string) *Error {
 	return newError(404, 40409, "Subject '%s' does not have subject-level mode configured", subject)
+}
+
+func errMalformedBody(err error) *Error {
+	return newError(400, 400, "%v", err)
 }
 
 func errBadRequest(format string, args ...any) *Error {

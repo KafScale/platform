@@ -76,7 +76,7 @@ func registerAll(t *testing.T, regs []*Registry, work func(g int) []result) []re
 			<-start
 			reg := regs[g%len(regs)]
 			for _, r := range work(g) {
-				id, version, err := reg.Register(ctx, r.subject, RegisterRequest{Schema: r.schema})
+				id, version, err := registerIDs(reg, ctx, r.subject, RegisterRequest{Schema: r.schema})
 				if err != nil {
 					errs <- fmt.Errorf("goroutine %d subject %s: %w", g, r.subject, err)
 					return
@@ -271,7 +271,7 @@ func TestConcurrentImportAndRegister(t *testing.T) {
 			schema := distinctSchema(1000 + g)
 			if g%2 == 0 {
 				id := int64(1000 + g)
-				_, _, err := reg.Register(ctx, "imported", RegisterRequest{Schema: schema, ID: id, Version: g + 1})
+				_, _, err := registerIDs(reg, ctx, "imported", RegisterRequest{Schema: schema, ID: id, Version: g + 1})
 				var se *Error
 				switch {
 				case err == nil:
@@ -282,7 +282,7 @@ func TestConcurrentImportAndRegister(t *testing.T) {
 				}
 				return
 			}
-			id, _, err := reg.Register(ctx, fmt.Sprintf("live-%d", g), RegisterRequest{Schema: schema})
+			id, _, err := registerIDs(reg, ctx, fmt.Sprintf("live-%d", g), RegisterRequest{Schema: schema})
 			if err != nil {
 				errs <- err
 				return
@@ -320,7 +320,7 @@ func TestConcurrentImportAndRegister(t *testing.T) {
 	if err := regs[0].SetMode(ctx, "imported", ModeReadWrite, false); err != nil {
 		t.Fatal(err)
 	}
-	id, _, err := regs[0].Register(ctx, "after", RegisterRequest{Schema: distinctSchema(5000)})
+	id, _, err := registerIDs(regs[0], ctx, "after", RegisterRequest{Schema: distinctSchema(5000)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestConcurrentDeleteAndReferenceRegister(t *testing.T) {
 	for range 10 {
 		regs := newInstances(t)
 		ctx := context.Background()
-		if _, _, err := regs[0].Register(ctx, "addr", RegisterRequest{Schema: address}); err != nil {
+		if _, _, err := registerIDs(regs[0], ctx, "addr", RegisterRequest{Schema: address}); err != nil {
 			t.Fatal(err)
 		}
 		var wg sync.WaitGroup
@@ -341,7 +341,7 @@ func TestConcurrentDeleteAndReferenceRegister(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, _, regErr = regs[1].Register(ctx, "person", RegisterRequest{Schema: person, References: []Reference{{Name: "example.Address", Subject: "addr", Version: 1}}})
+			_, _, regErr = registerIDs(regs[1], ctx, "person", RegisterRequest{Schema: person, References: []Reference{{Name: "example.Address", Subject: "addr", Version: 1}}})
 		}()
 		go func() {
 			defer wg.Done()

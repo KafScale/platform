@@ -1,0 +1,178 @@
+[
+ {
+  "schema": "\"string\"",
+  "normalize": false,
+  "want": "\"string\""
+ },
+ {
+  "schema": "\"string\"",
+  "normalize": true,
+  "want": "\"string\""
+ },
+ {
+  "schema": "{\"type\":\"string\"}",
+  "normalize": false,
+  "want": "\"string\""
+ },
+ {
+  "schema": "{\"type\":\"string\"}",
+  "normalize": true,
+  "want": "\"string\""
+ },
+ {
+  "schema": "{\"type\": \"string\", \"foo\": \"bar\"}",
+  "normalize": false,
+  "want": "{\"type\":\"string\",\"foo\":\"bar\"}"
+ },
+ {
+  "schema": "{\"type\": \"string\", \"foo\": \"bar\"}",
+  "normalize": true,
+  "want": "{\"type\":\"string\",\"foo\":\"bar\"}"
+ },
+ {
+  "schema": "{\"type\":\"int\",\"logicalType\":\"date\"}",
+  "normalize": false,
+  "want": "{\"type\":\"int\",\"logicalType\":\"date\"}"
+ },
+ {
+  "schema": "{\"type\":\"int\",\"logicalType\":\"date\"}",
+  "normalize": true,
+  "want": "{\"type\":\"int\",\"logicalType\":\"date\"}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"p.R\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"string\"}}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"a\",\"type\":\"string\"}]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"p.R\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"string\"}}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"a\",\"type\":\"string\"}]}"
+ },
+ {
+  "schema": "{\"fields\":[{\"type\":\"string\",\"name\":\"a\"}],\"namespace\":\"p\",\"name\":\"R\",\"type\":\"record\"}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"a\",\"type\":\"string\"}]}"
+ },
+ {
+  "schema": "{\"fields\":[{\"type\":\"string\",\"name\":\"a\"}],\"namespace\":\"p\",\"name\":\"R\",\"type\":\"record\"}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"a\",\"type\":\"string\"}]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"\\u0061\",\"type\":\"string\",\"doc\":\"\\u00e9\\n\\t\\\"q\\\" <&> \\u2028 \\u0001 /\"}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"a\",\"type\":\"string\",\"doc\":\"é\\n\\t\\\"q\\\" <&>   \\u0001 /\"}]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"\\u0061\",\"type\":\"string\",\"doc\":\"\\u00e9\\n\\t\\\"q\\\" <&> \\u2028 \\u0001 /\"}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"p\",\"fields\":[{\"name\":\"a\",\"type\":\"string\",\"doc\":\"é\\n\\t\\\"q\\\" <&>   \\u0001 /\"}]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"R\",\"fields\":[{\"name\":\"a\",\"type\":\"double\",\"default\":1e3},{\"name\":\"b\",\"type\":\"float\",\"default\":0.1},{\"name\":\"c\",\"type\":\"long\",\"default\":12345678901234},{\"name\":\"d\",\"type\":\"double\",\"default\":1.5E10},{\"name\":\"e\",\"type\":\"double\",\"default\":0.0001},{\"name\":\"f\",\"type\":\"double\",\"default\":-2.50}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"fields\":[{\"name\":\"a\",\"type\":\"double\",\"default\":1000.0},{\"name\":\"b\",\"type\":\"float\",\"default\":0.1},{\"name\":\"c\",\"type\":\"long\",\"default\":12345678901234},{\"name\":\"d\",\"type\":\"double\",\"default\":1.5E10},{\"name\":\"e\",\"type\":\"double\",\"default\":1.0E-4},{\"name\":\"f\",\"type\":\"double\",\"default\":-2.5}]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"R\",\"fields\":[{\"name\":\"a\",\"type\":\"double\",\"default\":1e3},{\"name\":\"b\",\"type\":\"float\",\"default\":0.1},{\"name\":\"c\",\"type\":\"long\",\"default\":12345678901234},{\"name\":\"d\",\"type\":\"double\",\"default\":1.5E10},{\"name\":\"e\",\"type\":\"double\",\"default\":0.0001},{\"name\":\"f\",\"type\":\"double\",\"default\":-2.50}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"fields\":[{\"name\":\"a\",\"type\":\"double\",\"default\":1000.0},{\"name\":\"b\",\"type\":\"float\",\"default\":0.1},{\"name\":\"c\",\"type\":\"long\",\"default\":12345678901234},{\"name\":\"d\",\"type\":\"double\",\"default\":1.5E10},{\"name\":\"e\",\"type\":\"double\",\"default\":1.0E-4},{\"name\":\"f\",\"type\":\"double\",\"default\":-2.5}]}"
+ },
+ {
+  "schema": "{\"namespace\": \"n\", \"fields\": [{\"type\": {\"type\": \"long\", \"logicalType\": \"timestamp-millis\"}, \"name\": \"ts\", \"default\": 15, \"x-prop\": {\"b\": 1, \"a\": 2}}, {\"name\": \"e\", \"type\": {\"type\": \"enum\", \"name\": \"E\", \"symbols\": [\"A\", \"B\"], \"default\": \"A\", \"aliases\": [\"OldE\"], \"doc\": \"d\"}}, {\"name\": \"f\", \"order\": \"descending\", \"aliases\": [\"g\"], \"doc\": \"fd\", \"type\": {\"type\": \"fixed\", \"size\": 4, \"name\": \"other.F\"}}, {\"name\": \"r\", \"type\": [\"null\", {\"type\": \"record\", \"name\": \"Inner\", \"fields\": [{\"name\": \"x\", \"type\": \"n.E\"}]}], \"default\": null}, {\"name\": \"m\", \"type\": {\"type\": \"map\", \"values\": {\"type\": \"array\", \"items\": \"other.F\"}}}, {\"name\": \"d\", \"type\": {\"type\": \"bytes\", \"logicalType\": \"decimal\", \"precision\": 4, \"scale\": 2}}, {\"name\": \"o\", \"order\": \"ascending\", \"type\": \"int\"}], \"type\": \"record\", \"name\": \"R\", \"doc\": \"rd\", \"custom\": \"c\", \"aliases\": [\"n2.Old\", \"Old2\"]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"n\",\"doc\":\"rd\",\"fields\":[{\"name\":\"ts\",\"type\":{\"type\":\"long\",\"logicalType\":\"timestamp-millis\"},\"default\":15,\"x-prop\":{\"b\":1,\"a\":2}},{\"name\":\"e\",\"type\":{\"type\":\"enum\",\"name\":\"E\",\"doc\":\"d\",\"symbols\":[\"A\",\"B\"],\"default\":\"A\",\"aliases\":[\"OldE\"]}},{\"name\":\"f\",\"type\":{\"type\":\"fixed\",\"name\":\"F\",\"namespace\":\"other\",\"size\":4},\"doc\":\"fd\",\"order\":\"descending\",\"aliases\":[\"g\"]},{\"name\":\"r\",\"type\":[\"null\",{\"type\":\"record\",\"name\":\"Inner\",\"fields\":[{\"name\":\"x\",\"type\":\"E\"}]}],\"default\":null},{\"name\":\"m\",\"type\":{\"type\":\"map\",\"values\":{\"type\":\"array\",\"items\":\"other.F\"}}},{\"name\":\"d\",\"type\":{\"type\":\"bytes\",\"logicalType\":\"decimal\",\"precision\":4,\"scale\":2}},{\"name\":\"o\",\"type\":\"int\"}],\"custom\":\"c\",\"aliases\":[\"n2.Old\",\"Old2\"]}"
+ },
+ {
+  "schema": "{\"namespace\": \"n\", \"fields\": [{\"type\": {\"type\": \"long\", \"logicalType\": \"timestamp-millis\"}, \"name\": \"ts\", \"default\": 15, \"x-prop\": {\"b\": 1, \"a\": 2}}, {\"name\": \"e\", \"type\": {\"type\": \"enum\", \"name\": \"E\", \"symbols\": [\"A\", \"B\"], \"default\": \"A\", \"aliases\": [\"OldE\"], \"doc\": \"d\"}}, {\"name\": \"f\", \"order\": \"descending\", \"aliases\": [\"g\"], \"doc\": \"fd\", \"type\": {\"type\": \"fixed\", \"size\": 4, \"name\": \"other.F\"}}, {\"name\": \"r\", \"type\": [\"null\", {\"type\": \"record\", \"name\": \"Inner\", \"fields\": [{\"name\": \"x\", \"type\": \"n.E\"}]}], \"default\": null}, {\"name\": \"m\", \"type\": {\"type\": \"map\", \"values\": {\"type\": \"array\", \"items\": \"other.F\"}}}, {\"name\": \"d\", \"type\": {\"type\": \"bytes\", \"logicalType\": \"decimal\", \"precision\": 4, \"scale\": 2}}, {\"name\": \"o\", \"order\": \"ascending\", \"type\": \"int\"}], \"type\": \"record\", \"name\": \"R\", \"doc\": \"rd\", \"custom\": \"c\", \"aliases\": [\"n2.Old\", \"Old2\"]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"n\",\"doc\":\"rd\",\"fields\":[{\"name\":\"ts\",\"type\":{\"type\":\"long\",\"logicalType\":\"timestamp-millis\"},\"default\":15,\"x-prop\":{\"a\":2,\"b\":1}},{\"name\":\"e\",\"type\":{\"type\":\"enum\",\"name\":\"E\",\"doc\":\"d\",\"symbols\":[\"A\",\"B\"],\"default\":\"A\",\"aliases\":[\"OldE\"]}},{\"name\":\"f\",\"type\":{\"type\":\"fixed\",\"name\":\"F\",\"namespace\":\"other\",\"size\":4},\"doc\":\"fd\",\"order\":\"descending\",\"aliases\":[\"g\"]},{\"name\":\"r\",\"type\":[\"null\",{\"type\":\"record\",\"name\":\"Inner\",\"fields\":[{\"name\":\"x\",\"type\":\"E\"}]}],\"default\":null},{\"name\":\"m\",\"type\":{\"type\":\"map\",\"values\":{\"type\":\"array\",\"items\":\"other.F\"}}},{\"name\":\"d\",\"type\":{\"type\":\"bytes\",\"logicalType\":\"decimal\",\"precision\":4,\"scale\":2}},{\"name\":\"o\",\"type\":\"int\"}],\"custom\":\"c\",\"aliases\":[\"Old2\",\"n2.Old\"]}"
+ },
+ {
+  "schema": "{\"type\": \"error\", \"name\": \"Err\", \"fields\": []}",
+  "normalize": false,
+  "want": "{\"type\":\"error\",\"name\":\"Err\",\"fields\":[]}"
+ },
+ {
+  "schema": "{\"type\": \"error\", \"name\": \"Err\", \"fields\": []}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"Err\",\"fields\":[]}"
+ },
+ {
+  "schema": "[\"null\", \"string\", {\"type\": \"array\", \"items\": \"int\", \"p\": 1}]",
+  "normalize": false,
+  "want": "[\"null\",\"string\",{\"type\":\"array\",\"items\":\"int\",\"p\":1}]"
+ },
+ {
+  "schema": "[\"null\", \"string\", {\"type\": \"array\", \"items\": \"int\", \"p\": 1}]",
+  "normalize": true,
+  "want": "[\"null\",\"string\",{\"type\":\"array\",\"items\":\"int\",\"p\":1}]"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"a.b.R\", \"namespace\": \"ignored\", \"fields\": [{\"name\": \"x\", \"type\": {\"type\": \"record\", \"name\": \"S\", \"fields\": [{\"name\": \"y\", \"type\": \"a.b.R\"}, {\"name\": \"z\", \"type\": [\"null\", \"S\"]}]}}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"a.b\",\"fields\":[{\"name\":\"x\",\"type\":{\"type\":\"record\",\"name\":\"S\",\"fields\":[{\"name\":\"y\",\"type\":\"R\"},{\"name\":\"z\",\"type\":[\"null\",\"S\"]}]}}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"a.b.R\", \"namespace\": \"ignored\", \"fields\": [{\"name\": \"x\", \"type\": {\"type\": \"record\", \"name\": \"S\", \"fields\": [{\"name\": \"y\", \"type\": \"a.b.R\"}, {\"name\": \"z\", \"type\": [\"null\", \"S\"]}]}}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"a.b\",\"fields\":[{\"name\":\"x\",\"type\":{\"type\":\"record\",\"name\":\"S\",\"fields\":[{\"name\":\"y\",\"type\":\"R\"},{\"name\":\"z\",\"type\":[\"null\",\"S\"]}]}}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"R\", \"namespace\": \"x\", \"fields\": [{\"name\": \"a\", \"type\": {\"type\": \"record\", \"name\": \"S\", \"namespace\": \"\", \"fields\": [{\"name\": \"b\", \"type\": {\"type\": \"enum\", \"name\": \"T\", \"symbols\": [\"X\"]}}]}}, {\"name\": \"c\", \"type\": \"T\"}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"x\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"record\",\"name\":\"S\",\"namespace\":\"\",\"fields\":[{\"name\":\"b\",\"type\":{\"type\":\"enum\",\"name\":\"T\",\"symbols\":[\"X\"]}}]}},{\"name\":\"c\",\"type\":\"T\"}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"R\", \"namespace\": \"x\", \"fields\": [{\"name\": \"a\", \"type\": {\"type\": \"record\", \"name\": \"S\", \"namespace\": \"\", \"fields\": [{\"name\": \"b\", \"type\": {\"type\": \"enum\", \"name\": \"T\", \"symbols\": [\"X\"]}}]}}, {\"name\": \"c\", \"type\": \"T\"}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"R\",\"namespace\":\"x\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"record\",\"name\":\"S\",\"fields\":[{\"name\":\"b\",\"type\":{\"type\":\"enum\",\"name\":\"T\",\"symbols\":[\"X\"]}}]}},{\"name\":\"c\",\"type\":\"T\"}]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"N1\",\"aliases\":[\"b\",\"a\"],\"p2\":1,\"p1\":2,\"fields\":[{\"name\":\"x\",\"type\":\"int\",\"default\":1,\"q2\":1,\"q1\":2}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"N1\",\"fields\":[{\"name\":\"x\",\"type\":\"int\",\"default\":1,\"q2\":1,\"q1\":2}],\"p2\":1,\"p1\":2,\"aliases\":[\"b\",\"a\"]}"
+ },
+ {
+  "schema": "{\"type\":\"record\",\"name\":\"N1\",\"aliases\":[\"b\",\"a\"],\"p2\":1,\"p1\":2,\"fields\":[{\"name\":\"x\",\"type\":\"int\",\"default\":1,\"q2\":1,\"q1\":2}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"N1\",\"fields\":[{\"name\":\"x\",\"type\":\"int\",\"default\":1,\"q1\":2,\"q2\":1}],\"p1\":2,\"p2\":1,\"aliases\":[\"a\",\"b\"]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"N9\", \"fields\": [{\"name\": \"x\", \"aliases\": [\"z\", \"y\"], \"type\": {\"type\": \"enum\", \"name\": \"E9\", \"symbols\": [\"B\", \"A\"], \"aliases\": [\"q\", \"p\"], \"k2\": {\"d\": 1, \"c\": [{\"f\": 1, \"e\": 2}]}, \"k1\": 0}}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"N9\",\"fields\":[{\"name\":\"x\",\"type\":{\"type\":\"enum\",\"name\":\"E9\",\"symbols\":[\"B\",\"A\"],\"k2\":{\"d\":1,\"c\":[{\"f\":1,\"e\":2}]},\"k1\":0,\"aliases\":[\"q\",\"p\"]},\"aliases\":[\"z\",\"y\"]}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"N9\", \"fields\": [{\"name\": \"x\", \"aliases\": [\"z\", \"y\"], \"type\": {\"type\": \"enum\", \"name\": \"E9\", \"symbols\": [\"B\", \"A\"], \"aliases\": [\"q\", \"p\"], \"k2\": {\"d\": 1, \"c\": [{\"f\": 1, \"e\": 2}]}, \"k1\": 0}}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"N9\",\"fields\":[{\"name\":\"x\",\"type\":{\"type\":\"enum\",\"name\":\"E9\",\"symbols\":[\"B\",\"A\"],\"k1\":0,\"k2\":{\"c\":[{\"e\":2,\"f\":1}],\"d\":1},\"aliases\":[\"p\",\"q\"]},\"aliases\":[\"y\",\"z\"]}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"W\", \"fields\": [{\"name\": \"a\", \"type\": {\"type\": \"array\", \"items\": \"string\"}, \"default\": []}, {\"name\": \"m\", \"type\": {\"type\": \"map\", \"values\": \"long\"}, \"default\": {\"z\": 1, \"a\": 2}}, {\"name\": \"b\", \"type\": \"boolean\", \"default\": true}, {\"name\": \"u\", \"type\": [\"string\", \"null\"], \"default\": \"x\"}]}",
+  "normalize": false,
+  "want": "{\"type\":\"record\",\"name\":\"W\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"array\",\"items\":\"string\"},\"default\":[]},{\"name\":\"m\",\"type\":{\"type\":\"map\",\"values\":\"long\"},\"default\":{\"z\":1,\"a\":2}},{\"name\":\"b\",\"type\":\"boolean\",\"default\":true},{\"name\":\"u\",\"type\":[\"string\",\"null\"],\"default\":\"x\"}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"W\", \"fields\": [{\"name\": \"a\", \"type\": {\"type\": \"array\", \"items\": \"string\"}, \"default\": []}, {\"name\": \"m\", \"type\": {\"type\": \"map\", \"values\": \"long\"}, \"default\": {\"z\": 1, \"a\": 2}}, {\"name\": \"b\", \"type\": \"boolean\", \"default\": true}, {\"name\": \"u\", \"type\": [\"string\", \"null\"], \"default\": \"x\"}]}",
+  "normalize": true,
+  "want": "{\"type\":\"record\",\"name\":\"W\",\"fields\":[{\"name\":\"a\",\"type\":{\"type\":\"array\",\"items\":\"string\"},\"default\":[]},{\"name\":\"m\",\"type\":{\"type\":\"map\",\"values\":\"long\"},\"default\":{\"a\":2,\"z\":1}},{\"name\":\"b\",\"type\":\"boolean\",\"default\":true},{\"name\":\"u\",\"type\":[\"string\",\"null\"],\"default\":\"x\"}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"Use\", \"namespace\": \"q\", \"fields\": [{\"name\": \"r\", \"type\": \"q.Ref\"}, {\"name\": \"s\", \"type\": \"Ref\"}]}",
+  "normalize": false,
+  "refs": [
+   "{\"type\": \"record\", \"name\": \"Ref\", \"namespace\": \"q\", \"fields\": [{\"name\": \"a\", \"type\": \"int\"}]}"
+  ],
+  "want": "{\"type\":\"record\",\"name\":\"Use\",\"namespace\":\"q\",\"fields\":[{\"name\":\"r\",\"type\":\"Ref\"},{\"name\":\"s\",\"type\":\"Ref\"}]}"
+ },
+ {
+  "schema": "{\"type\": \"record\", \"name\": \"Other\", \"namespace\": \"z\", \"fields\": [{\"name\": \"r\", \"type\": \"q.Ref\"}]}",
+  "normalize": false,
+  "refs": [
+   "{\"type\": \"record\", \"name\": \"Ref\", \"namespace\": \"q\", \"fields\": [{\"name\": \"a\", \"type\": \"int\"}]}"
+  ],
+  "want": "{\"type\":\"record\",\"name\":\"Other\",\"namespace\":\"z\",\"fields\":[{\"name\":\"r\",\"type\":\"q.Ref\"}]}"
+ }
+]

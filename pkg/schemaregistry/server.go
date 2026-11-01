@@ -49,12 +49,13 @@ type schemaBody struct {
 }
 
 type versionBody struct {
-	Subject    string      `json:"subject"`
-	Version    int         `json:"version"`
-	ID         int64       `json:"id"`
-	Schema     string      `json:"schema"`
-	SchemaType string      `json:"schemaType,omitempty"`
+	Subject    string      `json:"subject,omitempty"`
+	Version    int         `json:"version,omitempty"`
+	ID         int64       `json:"id,omitempty"`
+	SchemaType string      `json:"schemaType"`
 	References []Reference `json:"references,omitempty"`
+	Schema     string      `json:"schema"`
+	Deleted    *bool       `json:"deleted,omitempty"`
 }
 
 type errorBody struct {
@@ -74,11 +75,17 @@ func NewServer(reg *Registry, timeout time.Duration) *Server {
 		Help: "Schema registry etcd transactions retried after a compare failed.",
 	}, func() float64 { return float64(reg.Conflicts()) }))
 	routes := map[string]func(http.ResponseWriter, *http.Request) (any, error){
-		"GET /{$}":                                          func(http.ResponseWriter, *http.Request) (any, error) { return map[string]any{}, nil },
-		"GET /schemas/types":                                func(http.ResponseWriter, *http.Request) (any, error) { return []string{schemaTypeAvro}, nil },
-		"GET /schemas/ids/{id}":                             s.getSchema,
-		"GET /schemas/ids/{id}/schema":                      s.getSchemaText,
-		"GET /schemas/ids/{id}/versions":                    s.getIDVersions,
+		"GET /{$}":                       func(http.ResponseWriter, *http.Request) (any, error) { return map[string]any{}, nil },
+		"GET /schemas/types":             func(http.ResponseWriter, *http.Request) (any, error) { return []string{schemaTypeAvro}, nil },
+		"GET /schemas/ids/{id}":          s.getSchema,
+		"GET /schemas/ids/{id}/schema":   s.getSchemaText,
+		"GET /schemas/ids/{id}/versions": s.getIDVersions,
+		"GET /schemas/ids/{id}/subjects": s.getIDSubjects,
+		"GET /schemas":                   s.getSchemas,
+		"GET /contexts":                  func(http.ResponseWriter, *http.Request) (any, error) { return []string{"."}, nil },
+		"GET /subjects/{subject}/versions/{version}/referencedby": s.getReferencedBy,
+		"DELETE /config": s.deleteConfig,
+		"POST /compatibility/subjects/{subject}/versions": s.compatibility,
 		"GET /subjects":                                     s.getSubjects,
 		"GET /subjects/{subject}/versions":                  s.getVersions,
 		"GET /subjects/{subject}/versions/{version}":        s.getVersion,
@@ -164,9 +171,12 @@ func flag(r *http.Request, name string) bool {
 }
 
 func pathID(r *http.Request) (int64, error) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id <= 0 {
-		return 0, errSchemaNotFound()
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 32)
+	if err != nil {
+		return 0, newError(404, 404, "HTTP 404 Not Found")
+	}
+	if id <= 0 {
+		return 0, errSchemaIDNotFound(id)
 	}
 	return id, nil
 }
@@ -177,27 +187,24 @@ func pathVersion(r *http.Request) (int, error) {
 
 func decode(r *http.Request, v any) error {
 	if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxBodyBytes)).Decode(v); err != nil {
-		return errBadRequest("invalid request body: %v", err)
+		return errMalformedBody(err)
 	}
 	return nil
 }
 
-func typeName(t string) string {
-	if t == schemaTypeAvro {
-		return ""
-	}
-	return t
-}
-
-func versionResponse(v *VersionedSchema) versionBody {
-	return versionBody{
+func versionResponse(v *VersionedSchema, withDeleted bool) versionBody {
+	out := versionBody{
 		Subject:    v.Subject,
 		Version:    v.Version,
 		ID:         v.Schema.ID,
 		Schema:     v.Schema.Text,
-		SchemaType: typeName(v.Schema.Type),
+		SchemaType: v.Schema.Type,
 		References: v.Schema.References,
 	}
+	if withDeleted {
+		out.Deleted = &v.Deleted
+	}
+	return out
 }
 
 func (s *Server) getSchema(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -207,9 +214,76 @@ func (s *Server) getSchema(_ http.ResponseWriter, r *http.Request) (any, error) 
 	}
 	sc, err := s.reg.SchemaByID(r.Context(), id)
 	if err != nil {
+		var regErr *Error
+		if errors.As(err, &regErr) && regErr.Code == 40403 {
+			return nil, errSchemaIDNotFound(id)
+		}
 		return nil, err
 	}
-	return schemaBody{Schema: sc.Text, SchemaType: typeName(sc.Type), References: sc.References}, nil
+	out := versionBody{SchemaType: sc.Type, References: sc.References, Schema: sc.Text}
+	for _, deleted := range []bool{false, true} {
+		owners, err := s.reg.IDVersions(r.Context(), id, deleted)
+		if err != nil {
+			return nil, err
+		}
+		if len(owners) > 0 {
+			out.Subject, out.Version, out.Deleted = owners[0].Subject, owners[0].Version, &deleted
+			break
+		}
+	}
+	return out, nil
+}
+
+func (s *Server) getIDSubjects(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	owners, err := s.reg.IDVersions(r.Context(), id, flag(r, "deleted"))
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, o := range owners {
+		if len(out) == 0 || out[len(out)-1] != o.Subject {
+			out = append(out, o.Subject)
+		}
+	}
+	return out, nil
+}
+
+func intParam(r *http.Request, name string) int {
+	n, err := strconv.Atoi(r.URL.Query().Get(name))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+func (s *Server) getSchemas(_ http.ResponseWriter, r *http.Request) (any, error) {
+	list, err := s.reg.Schemas(r.Context(), SchemaFilter{
+		SubjectPrefix: r.URL.Query().Get("subjectPrefix"),
+		Deleted:       flag(r, "deleted"),
+		LatestOnly:    flag(r, "latestOnly"),
+		Offset:        intParam(r, "offset"),
+		Limit:         intParam(r, "limit"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]versionBody, 0, len(list))
+	for _, v := range list {
+		out = append(out, versionResponse(v, true))
+	}
+	return out, nil
+}
+
+func (s *Server) getReferencedBy(_ http.ResponseWriter, r *http.Request) (any, error) {
+	version, err := pathVersion(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.reg.ReferencedBy(r.Context(), r.PathValue("subject"), version)
 }
 
 func (s *Server) getSchemaText(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -253,7 +327,7 @@ func (s *Server) getVersion(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return versionResponse(v), nil
+	return versionResponse(v, true), nil
 }
 
 func (s *Server) getVersionText(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -269,7 +343,7 @@ func registerRequest(r *http.Request) (RegisterRequest, error) {
 	if err := decode(r, &body); err != nil {
 		return RegisterRequest{}, err
 	}
-	return RegisterRequest{Schema: body.Schema, SchemaType: body.SchemaType, References: body.References, ID: body.ID, Version: body.Version}, nil
+	return RegisterRequest{Schema: body.Schema, SchemaType: body.SchemaType, References: body.References, ID: body.ID, Version: body.Version, Normalize: flag(r, "normalize")}, nil
 }
 
 func (s *Server) register(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -277,11 +351,20 @@ func (s *Server) register(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	id, _, err := s.reg.Register(r.Context(), r.PathValue("subject"), req)
+	v, err := s.reg.Register(r.Context(), r.PathValue("subject"), req)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]int64{"id": id}, nil
+	out := registerBody{ID: v.Schema.ID, Version: v.Version, SchemaType: v.Schema.Type, References: v.Schema.References, Schema: v.Schema.Text}
+	return out, nil
+}
+
+type registerBody struct {
+	ID         int64       `json:"id"`
+	Version    int         `json:"version"`
+	SchemaType string      `json:"schemaType"`
+	References []Reference `json:"references,omitempty"`
+	Schema     string      `json:"schema"`
 }
 
 func (s *Server) lookup(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -293,7 +376,7 @@ func (s *Server) lookup(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return versionResponse(v), nil
+	return versionResponse(v, false), nil
 }
 
 func (s *Server) deleteSubject(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -367,9 +450,13 @@ func (s *Server) deleteMode(_ http.ResponseWriter, r *http.Request) (any, error)
 }
 
 func (s *Server) compatibility(_ http.ResponseWriter, r *http.Request) (any, error) {
-	version, err := pathVersion(r)
-	if err != nil {
-		return nil, err
+	version := latestVersion
+	if r.PathValue("version") != "" {
+		v, err := pathVersion(r)
+		if err != nil {
+			return nil, err
+		}
+		version = v
 	}
 	req, err := registerRequest(r)
 	if err != nil {

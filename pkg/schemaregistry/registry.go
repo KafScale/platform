@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/pkg/storage"
+	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -58,6 +59,7 @@ type Schema struct {
 	Type       string
 	Text       string
 	References []Reference
+	Norm       string
 }
 
 type SubjectVersion struct {
@@ -69,6 +71,7 @@ type VersionedSchema struct {
 	Subject string
 	Version int
 	Schema  *Schema
+	Deleted bool
 }
 
 type RegisterRequest struct {
@@ -77,11 +80,13 @@ type RegisterRequest struct {
 	References []Reference
 	ID         int64
 	Version    int
+	Normalize  bool
 }
 
 type schemaRecord struct {
 	SchemaType string      `json:"schemaType"`
 	Hash       string      `json:"hash"`
+	Norm       string      `json:"norm,omitempty"`
 	References []Reference `json:"references,omitempty"`
 	Schema     string      `json:"schema,omitempty"`
 	S3Key      string      `json:"s3Key,omitempty"`
@@ -105,13 +110,17 @@ type Config struct {
 }
 
 type Registry struct {
-	cli         *clientv3.Client
-	s3          storage.S3Client
-	namespace   string
-	inlineLimit int
-	conflicts   atomic.Uint64
-	mu          sync.RWMutex
-	cache       map[int64]*Schema
+	cli          *clientv3.Client
+	s3           storage.S3Client
+	namespace    string
+	inlineLimit  int
+	conflicts    atomic.Uint64
+	mu           sync.RWMutex
+	cache        map[int64]*Schema
+	counter      int64
+	revision     int64
+	resets       atomic.Uint64
+	beforeCommit func()
 }
 
 func New(cfg Config) (*Registry, error) {
@@ -164,10 +173,6 @@ func versionKey(subject string, version int) string {
 }
 
 func latestKey(subject string) string { return subjectPrefix(subject) + "latest" }
-
-func subjectHashKey(subject string, id int64) string {
-	return subjectPrefix(subject) + "hash/" + strconv.FormatInt(id, 10)
-}
 
 func refByPrefix(subject string, version int) string {
 	return keyPrefix + "refby/" + esc(subject) + "/" + strconv.Itoa(version) + "/"
@@ -244,6 +249,7 @@ func (r *Registry) read(ctx context.Context, keys []string, prefixes []string) (
 	if err != nil {
 		return nil, err
 	}
+	r.observe(resp.Header)
 	snap := make(snapshot)
 	for _, op := range resp.Responses {
 		for _, kv := range op.GetResponseRange().Kvs {
@@ -329,15 +335,21 @@ func backoff(ctx context.Context, attempt int) error {
 
 func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 	r.mu.RLock()
-	s := r.cache[id]
+	s, counter := r.cache[id], r.counter
 	r.mu.RUnlock()
-	if s != nil {
+	if s != nil && id <= counter {
 		return s, nil
+	}
+	if id > counter {
+		if err := r.syncCounter(ctx); err != nil {
+			return nil, err
+		}
 	}
 	resp, err := r.cli.Get(ctx, idKey(id))
 	if err != nil {
 		return nil, err
 	}
+	r.observe(resp.Header)
 	if len(resp.Kvs) == 0 {
 		return nil, nil
 	}
@@ -356,11 +368,59 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 		}
 		text = string(body)
 	}
-	s = &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References}
+	s = &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}
 	r.mu.Lock()
 	r.cache[id] = s
+	r.counter = max(r.counter, id)
 	r.mu.Unlock()
 	return s, nil
+}
+
+func (r *Registry) Init(ctx context.Context) error {
+	return r.syncCounter(ctx)
+}
+
+func (r *Registry) CacheResets() uint64 {
+	return r.resets.Load()
+}
+
+func (r *Registry) syncCounter(ctx context.Context) error {
+	resp, err := r.cli.Get(ctx, counterKey())
+	if err != nil {
+		return err
+	}
+	r.observe(resp.Header)
+	var n int64
+	if len(resp.Kvs) > 0 {
+		if n, err = strconv.ParseInt(string(resp.Kvs[0].Value), 10, 64); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if n < r.counter {
+		r.resetLocked()
+	}
+	r.counter = n
+	return nil
+}
+
+func (r *Registry) observe(h *etcdserverpb.ResponseHeader) {
+	if h == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if h.Revision < r.revision {
+		r.resetLocked()
+		r.counter = 0
+	}
+	r.revision = h.Revision
+}
+
+func (r *Registry) resetLocked() {
+	clear(r.cache)
+	r.resets.Add(1)
 }
 
 func (r *Registry) SchemaByID(ctx context.Context, id int64) (*Schema, error) {
@@ -463,7 +523,9 @@ func (r *Registry) resolveStoredReferences(ctx context.Context, refs []Reference
 
 type prepared struct {
 	schemaType string
+	canonical  string
 	hash       string
+	norm       string
 	refs       []resolvedReference
 	refRevs    map[string]int64
 }
@@ -487,30 +549,49 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	if _, err := parseAvro(req.Schema, refs); err != nil {
 		return nil, errInvalidSchema("%v", err)
 	}
-	canonical, err := canonicalText(req.Schema)
+	canonical, err := canonicalAvro(req.Schema, refs, req.Normalize)
+	if err != nil {
+		return nil, errInvalidSchema("%v", err)
+	}
+	normalized, err := canonicalAvro(req.Schema, refs, true)
 	if err != nil {
 		return nil, errInvalidSchema("%v", err)
 	}
 	return &prepared{
 		schemaType: schemaType,
+		canonical:  canonical,
 		hash:       schemaHash(schemaType, canonical, req.References),
+		norm:       schemaHash(schemaType, normalized, req.References),
 		refs:       refs,
 		refRevs:    refRevs,
 	}, nil
 }
 
-func (r *Registry) newRecord(ctx context.Context, req RegisterRequest, p *prepared) (string, error) {
-	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, References: req.References}
-	if len(req.Schema) <= r.inlineLimit {
-		rec.Schema = req.Schema
+type recordWriter struct {
+	r        *Registry
+	req      RegisterRequest
+	p        *prepared
+	uploaded string
+	writes   int
+}
+
+func (w *recordWriter) record(ctx context.Context) (string, error) {
+	p := w.p
+	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, References: w.req.References}
+	if len(p.canonical) <= w.r.inlineLimit {
+		rec.Schema = p.canonical
 	} else {
-		if r.s3 == nil {
-			return "", errInvalidSchema("schema is %d bytes, schemas above %d bytes need S3 storage and S3 is not configured", len(req.Schema), r.inlineLimit)
+		if w.r.s3 == nil {
+			return "", errInvalidSchema("schema is %d bytes, schemas above %d bytes need S3 storage and S3 is not configured", len(p.canonical), w.r.inlineLimit)
 		}
-		sum := sha256.Sum256([]byte(req.Schema))
-		rec.S3Key = r.namespace + "/@schemas/sha256/" + hex.EncodeToString(sum[:])
-		if err := r.s3.UploadSegment(ctx, rec.S3Key, []byte(req.Schema)); err != nil {
-			return "", fmt.Errorf("write schema text to S3: %w", err)
+		sum := sha256.Sum256([]byte(p.canonical))
+		rec.S3Key = w.r.namespace + "/@schemas/sha256/" + hex.EncodeToString(sum[:])
+		if w.uploaded != rec.S3Key {
+			if err := w.r.s3.UploadSegment(ctx, rec.S3Key, []byte(p.canonical)); err != nil {
+				return "", fmt.Errorf("write schema text to S3: %w", err)
+			}
+			w.uploaded = rec.S3Key
+			w.writes++
 		}
 	}
 	data, err := json.Marshal(rec)
@@ -520,34 +601,36 @@ func (r *Registry) newRecord(ctx context.Context, req RegisterRequest, p *prepar
 	return string(data), nil
 }
 
-func (r *Registry) Register(ctx context.Context, subject string, req RegisterRequest) (int64, int, error) {
+func (r *Registry) Register(ctx context.Context, subject string, req RegisterRequest) (*VersionedSchema, error) {
 	if err := validSubject(subject); err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	if req.ID < 0 || req.Version < 0 {
-		return 0, 0, errBadRequest("id and version must not be negative")
+		return nil, errBadRequest("id and version must not be negative")
 	}
+	w := &recordWriter{r: r, req: req}
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			r.conflicts.Add(1)
 			if err := backoff(ctx, attempt); err != nil {
-				return 0, 0, errTimeout(fmt.Errorf("register on subject %s gave up after %d attempts: %w", subject, attempt, err))
+				return nil, errTimeout(fmt.Errorf("register on subject %s gave up after %d attempts: %w", subject, attempt, err))
 			}
 		}
 		p, err := r.prepare(ctx, req)
 		if err != nil {
-			return 0, 0, storeErr(ctx, err)
+			return nil, storeErr(ctx, err)
 		}
-		record, err := r.newRecord(ctx, req, p)
+		w.p = p
+		id, version, err := r.tryRegister(ctx, subject, req, p, w)
 		if err != nil {
-			return 0, 0, storeErr(ctx, err)
-		}
-		id, version, err := r.tryRegister(ctx, subject, req, p, record)
-		if err != nil {
-			return 0, 0, storeErr(ctx, err)
+			return nil, storeErr(ctx, err)
 		}
 		if id > 0 {
-			return id, version, nil
+			out, err := r.versioned(ctx, subject, version, id)
+			if err != nil {
+				return nil, storeErr(ctx, err)
+			}
+			return out, nil
 		}
 	}
 }
@@ -573,7 +656,42 @@ func versionValue(id int64) string {
 	return string(data)
 }
 
-func (r *Registry) tryRegister(ctx context.Context, subject string, req RegisterRequest, p *prepared, record string) (int64, int, error) {
+func topVersion(versions map[int]versionEntry) int {
+	top := 0
+	for v := range versions {
+		top = max(top, v)
+	}
+	return top
+}
+
+func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEntry, p *prepared, deleted bool) (int, int64, error) {
+	vs := sortedVersions(versions, deleted)
+	for i := len(vs) - 1; i >= 0; i-- {
+		id := versions[vs[i]].ID
+		s, err := r.schemaByID(ctx, id)
+		if err != nil {
+			return 0, 0, err
+		}
+		if s != nil && s.Type == p.schemaType && s.Norm == p.norm {
+			return vs[i], id, nil
+		}
+	}
+	return 0, 0, nil
+}
+
+func (r *Registry) commit(ctx context.Context, cmps []clientv3.Cmp, ops []clientv3.Op) (bool, error) {
+	if r.beforeCommit != nil {
+		r.beforeCommit()
+	}
+	resp, err := r.cli.Txn(ctx).If(cmps...).Then(ops...).Commit()
+	if err != nil {
+		return false, err
+	}
+	r.observe(resp.Header)
+	return resp.Succeeded, nil
+}
+
+func (r *Registry) tryRegister(ctx context.Context, subject string, req RegisterRequest, p *prepared, w *recordWriter) (int64, int, error) {
 	hk := hashKey(p.schemaType, p.hash)
 	lk := latestKey(subject)
 	keys := []string{counterKey(), hk, modeKey(""), modeKey(subject), configKey(""), configKey(subject)}
@@ -592,7 +710,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		if req.ID == 0 {
 			return 0, 0, errNotPermitted("Subject %s is in import mode, register with an explicit id", subject)
 		}
-		return r.tryImport(ctx, subject, req, p, record, snap)
+		return r.tryImport(ctx, subject, req, p, w, snap)
 	}
 	if req.ID > 0 || req.Version > 0 {
 		return 0, 0, errNotPermitted("Schema id and version can only be set in IMPORT mode")
@@ -601,9 +719,8 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	if err != nil {
 		return 0, 0, err
 	}
-	latest, err := snap.version(lk)
-	if err != nil {
-		return 0, 0, err
+	if v, id, err := r.subjectMatch(ctx, versions, p, false); err != nil || v > 0 {
+		return id, v, err
 	}
 	cmps := snap.fence(lk, modeKey(""), modeKey(subject), configKey(""), configKey(subject))
 	cmps = append(cmps, refFence(p.refRevs)...)
@@ -613,11 +730,6 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		if id, err = strconv.ParseInt(string(kv.Value), 10, 64); err != nil {
 			return 0, 0, err
 		}
-		if v, err := snap.version(subjectHashKey(subject, id)); err != nil {
-			return 0, 0, err
-		} else if e, ok := versions[v]; ok && !e.Deleted {
-			return id, v, nil
-		}
 		cmps = append(cmps, snap.fence(hk)...)
 	} else {
 		n, err := snap.int(counterKey())
@@ -625,6 +737,10 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 			return 0, 0, err
 		}
 		id = n + 1
+		record, err := w.record(ctx)
+		if err != nil {
+			return 0, 0, err
+		}
 		cmps = append(cmps, snap.fence(counterKey())...)
 		cmps = append(cmps,
 			clientv3.Compare(clientv3.CreateRevision(hk), "=", 0),
@@ -637,32 +753,39 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	live := sortedVersions(versions, false)
 	if len(live) > 0 && effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatBackward {
 		prev := live[len(live)-1]
-		if err := r.checkAgainst(ctx, req.Schema, p.refs, versions[prev].ID); err != nil {
+		if err := r.checkAgainst(ctx, subject, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
 			return 0, 0, err
 		}
 		cmps = append(cmps, snap.fence(versionKey(subject, prev))...)
 	}
-	version := latest + 1
-	shk := subjectHashKey(subject, id)
-	cmps = append(cmps, snap.fence(shk)...)
+	top := topVersion(versions)
+	version := top + 1
+	if top > 0 {
+		cmps = append(cmps, snap.fence(versionKey(subject, top))...)
+	}
+	for v, e := range versions {
+		if e.Deleted && e.ID == id {
+			cmps = append(cmps, snap.fence(versionKey(subject, v))...)
+			ops = append(ops, clientv3.OpDelete(versionKey(subject, v)), clientv3.OpDelete(idSubjectKey(id, subject, v)))
+			for _, ref := range req.References {
+				ops = append(ops, clientv3.OpDelete(refByKey(ref, subject, v)))
+			}
+		}
+	}
 	cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(versionKey(subject, version)), "=", 0))
 	ops = append(ops,
 		clientv3.OpPut(versionKey(subject, version), versionValue(id)),
 		clientv3.OpPut(lk, strconv.Itoa(version)),
-		clientv3.OpPut(shk, strconv.Itoa(version)),
 		clientv3.OpPut(idSubjectKey(id, subject, version), ""))
 	ops = append(ops, refOps(req.References, subject, version)...)
-	resp, err := r.cli.Txn(ctx).If(cmps...).Then(ops...).Commit()
-	if err != nil {
+	ok, err := r.commit(ctx, cmps, ops)
+	if err != nil || !ok {
 		return 0, 0, err
-	}
-	if !resp.Succeeded {
-		return 0, 0, nil
 	}
 	return id, version, nil
 }
 
-func (r *Registry) checkAgainst(ctx context.Context, text string, refs []resolvedReference, prevID int64) error {
+func (r *Registry) checkAgainst(ctx context.Context, subject, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
 	prev, err := r.schemaByID(ctx, prevID)
 	if err != nil {
 		return err
@@ -675,12 +798,12 @@ func (r *Registry) checkAgainst(ctx context.Context, text string, refs []resolve
 		return err
 	}
 	if err := checkBackward(text, refs, prev.Text, prevRefs); err != nil {
-		return errIncompatible(err.Error())
+		return errIncompatible(subject, prevVersion, prev.Text, err.Error())
 	}
 	return nil
 }
 
-func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRequest, p *prepared, record string, snap snapshot) (int64, int, error) {
+func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRequest, p *prepared, w *recordWriter, snap snapshot) (int64, int, error) {
 	id := req.ID
 	ik := idKey(id)
 	lk := latestKey(subject)
@@ -692,12 +815,16 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		if err != nil {
 			return 0, 0, err
 		}
-		if existing == nil || existing.Type != p.schemaType || existing.Text != req.Schema || !slices.Equal(existing.References, req.References) {
+		if existing == nil || existing.Type != p.schemaType || existing.Text != p.canonical || !slices.Equal(existing.References, req.References) {
 			return 0, 0, errNotPermitted("Schema id %d already holds a different schema", id)
 		}
 		cmps = append(cmps, snap.fence(ik)...)
 	} else {
 		n, err := snap.int(counterKey())
+		if err != nil {
+			return 0, 0, err
+		}
+		record, err := w.record(ctx)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -717,21 +844,21 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	if err != nil {
 		return 0, 0, err
 	}
-	latest, err := snap.version(lk)
-	if err != nil {
-		return 0, 0, err
-	}
-	shk := subjectHashKey(subject, id)
-	indexed, err := snap.version(shk)
-	if err != nil {
-		return 0, 0, err
-	}
+	top := topVersion(versions)
 	version := req.Version
 	if version == 0 {
-		if e, ok := versions[indexed]; ok && !e.Deleted && len(ops) == 0 {
-			return id, indexed, nil
+		if len(ops) == 0 {
+			live := sortedVersions(versions, false)
+			for i := len(live) - 1; i >= 0; i-- {
+				if versions[live[i]].ID == id {
+					return id, live[i], nil
+				}
+			}
 		}
-		version = latest + 1
+		version = top + 1
+		if top > 0 {
+			cmps = append(cmps, snap.fence(versionKey(subject, top))...)
+		}
 	}
 	if e, ok := versions[version]; ok {
 		if e.ID != id {
@@ -739,24 +866,17 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		}
 		return id, version, nil
 	}
-	cmps = append(cmps, snap.fence(shk)...)
 	cmps = append(cmps, clientv3.Compare(clientv3.CreateRevision(versionKey(subject, version)), "=", 0))
 	ops = append(ops,
 		clientv3.OpPut(versionKey(subject, version), versionValue(id)),
 		clientv3.OpPut(idSubjectKey(id, subject, version), ""))
-	if version > latest {
+	if version > top {
 		ops = append(ops, clientv3.OpPut(lk, strconv.Itoa(version)))
 	}
-	if indexed == 0 {
-		ops = append(ops, clientv3.OpPut(shk, strconv.Itoa(version)))
-	}
 	ops = append(ops, refOps(req.References, subject, version)...)
-	resp, err := r.cli.Txn(ctx).If(cmps...).Then(ops...).Commit()
-	if err != nil {
+	ok, err := r.commit(ctx, cmps, ops)
+	if err != nil || !ok {
 		return 0, 0, err
-	}
-	if !resp.Succeeded {
-		return 0, 0, nil
 	}
 	return id, version, nil
 }

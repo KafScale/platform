@@ -158,7 +158,7 @@ func TestRegisterAndReadEndpoints(t *testing.T) {
 	}
 	var byID map[string]any
 	h.ok("GET", "/schemas/ids/1", nil, &byID)
-	if byID["schema"] != userV1 || byID["schemaType"] != nil || byID["references"] != nil {
+	if byID["schema"] != userV1 || byID["schemaType"] != "AVRO" || byID["references"] != nil || byID["subject"] != "users-value" || byID["version"] != 1.0 || byID["deleted"] != false {
 		t.Fatalf("by id %v", byID)
 	}
 	if _, data := h.do("GET", "/schemas/ids/2/schema", nil); string(data) != userV2 {
@@ -259,7 +259,8 @@ func TestErrorCodes(t *testing.T) {
 	h.fail("DELETE", "/subjects/missing", nil, 404, 40401)
 	h.fail("GET", "/subjects/s/versions/7", nil, 404, 40402)
 	h.fail("GET", "/schemas/ids/99", nil, 404, 40403)
-	h.fail("GET", "/schemas/ids/abc", nil, 404, 40403)
+	h.fail("GET", "/schemas/ids/abc", nil, 404, 404)
+	h.fail("GET", "/schemas/ids/0", nil, 404, 40403)
 	h.fail("GET", "/schemas/ids/99/schema", nil, 404, 40403)
 	h.fail("GET", "/schemas/ids/99/versions", nil, 404, 40403)
 	h.fail("POST", "/subjects/s", schema(userV2), 404, 40403)
@@ -286,7 +287,7 @@ func TestErrorCodes(t *testing.T) {
 	h.fail("DELETE", "/subjects/s", nil, 422, 42205)
 	h.fail("DELETE", "/subjects/s/versions/1", nil, 422, 42205)
 	h.ok("DELETE", "/mode/s", nil, nil)
-	h.fail("POST", "/subjects/s/versions", schema(userV3), 409, 409)
+	h.fail("POST", "/subjects/s/versions", schema(userV3), 409, 40901)
 	h.register("s", schema(userV2))
 	h.fail("DELETE", "/subjects/s?permanent=true", nil, 404, 40405)
 	h.fail("DELETE", "/subjects/s/versions/1?permanent=true", nil, 404, 40407)
@@ -295,18 +296,18 @@ func TestErrorCodes(t *testing.T) {
 	h.ok("DELETE", "/subjects/s", nil, nil)
 	h.fail("DELETE", "/subjects/s", nil, 404, 40404)
 	h.fail("GET", "/config/s", nil, 404, 40408)
-	h.fail("DELETE", "/config/s", nil, 404, 40408)
+	h.fail("DELETE", "/config/s", nil, 404, 40401)
 	h.fail("GET", "/mode/s", nil, 404, 40409)
-	h.fail("DELETE", "/mode/s", nil, 404, 40409)
+	h.fail("DELETE", "/mode/s", nil, 404, 40401)
 	h.register("addr", schema(address))
 	h.register("person", map[string]any{"schema": person, "references": []Reference{{Name: "example.Address", Subject: "addr", Version: 1}}})
 	h.fail("DELETE", "/subjects/addr", nil, 422, 42206)
 	h.fail("DELETE", "/subjects/addr/versions/1", nil, 422, 42206)
-	h.fail("POST", "/subjects/s/versions", "{not json", 422, 422)
-	h.fail("PUT", "/config", "{", 422, 422)
-	h.fail("PUT", "/mode", "{", 422, 422)
-	h.fail("POST", "/subjects/s", "{", 422, 422)
-	h.fail("POST", "/compatibility/subjects/addr/versions/1", "{", 422, 422)
+	h.fail("POST", "/subjects/s/versions", "{not json", 400, 400)
+	h.fail("PUT", "/config", "{", 400, 400)
+	h.fail("PUT", "/mode", "{", 400, 400)
+	h.fail("POST", "/subjects/s", "{", 400, 400)
+	h.fail("POST", "/compatibility/subjects/addr/versions/1", "{", 400, 400)
 	h.fail("POST", "/subjects/s/versions", map[string]any{"schema": userV1, "id": -1}, 422, 422)
 	h.fail("GET", "/subjects/bad%0Aname/versions", nil, 422, 422)
 	h.fail("GET", "/nope", nil, 404, 404)
@@ -332,7 +333,7 @@ func TestRegisterTimesOutWith50002(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, _, err = reg.Register(ctx, "s", RegisterRequest{Schema: userV1})
+	_, _, err = registerIDs(reg, ctx, "s", RegisterRequest{Schema: userV1})
 	var regErr *Error
 	if !asError(err, &regErr) || regErr.Code != 50002 || regErr.Status != 500 {
 		t.Fatalf("got %v, want 50002", err)
@@ -503,7 +504,9 @@ func TestImportMode(t *testing.T) {
 		t.Fatalf("imported text %s", data)
 	}
 	h.fail("POST", "/subjects/s/versions", map[string]any{"schema": userV2, "id": 100, "version": 4}, 422, 42205)
-	h.fail("POST", "/subjects/s/versions", map[string]any{"schema": " " + userV1, "id": 100, "version": 4}, 422, 42205)
+	if id := h.register("s", map[string]any{"schema": " " + userV1, "id": 100, "version": 4}); id != 100 {
+		t.Fatalf("import of the same canonical form %d", id)
+	}
 	h.fail("POST", "/subjects/s/versions", map[string]any{"schema": userV2, "id": 101, "version": 3}, 422, 42205)
 	if id := h.register("s", map[string]any{"schema": userV3, "id": 50, "version": 1}); id != 50 {
 		t.Fatalf("incompatible import id %d", id)
@@ -513,7 +516,7 @@ func TestImportMode(t *testing.T) {
 	}
 	var versions []int
 	h.ok("GET", "/subjects/s/versions", nil, &versions)
-	if fmt.Sprint(versions) != "[1 3 4]" {
+	if fmt.Sprint(versions) != "[1 3 4 5]" {
 		t.Fatalf("versions %v", versions)
 	}
 	h.ok("PUT", "/mode", map[string]string{"mode": "READWRITE"}, nil)
@@ -568,7 +571,7 @@ func TestConfigAndModePrecedence(t *testing.T) {
 		t.Fatalf("subject config %v", cfg)
 	}
 	h.register("s", schema(userV1))
-	h.fail("POST", "/subjects/s/versions", schema(userV3), 409, 409)
+	h.fail("POST", "/subjects/s/versions", schema(userV3), 409, 40901)
 	h.register("other", schema(userV1))
 	h.register("other", schema(userV3))
 	h.ok("DELETE", "/config/s", nil, &cfg)
@@ -603,7 +606,12 @@ func TestConfigAndModePrecedence(t *testing.T) {
 
 func TestCompatibilityEndpoint(t *testing.T) {
 	h := newHarness(t, nil, Config{})
-	h.fail("POST", "/compatibility/subjects/s/versions/latest", schema(userV2), 404, 40401)
+	var missing map[string]bool
+	h.ok("POST", "/compatibility/subjects/s/versions/latest", schema(userV2), &missing)
+	if !missing["is_compatible"] {
+		t.Fatalf("missing subject %v", missing)
+	}
+	h.fail("POST", "/compatibility/subjects/s/versions/2", schema(userV2), 404, 40402)
 	h.register("s", schema(userV1))
 	var out struct {
 		IsCompatible bool     `json:"is_compatible"`
@@ -703,4 +711,12 @@ func TestCorruptStateFailsClosed(t *testing.T) {
 	}
 	h.fail("GET", "/subjects/ghost/versions/1", nil, 500, 50001)
 	h.fail("POST", "/subjects/x/versions", map[string]any{"schema": person, "references": []Reference{{Name: "example.Address", Subject: "ghost", Version: 1}}}, 500, 50001)
+}
+
+func registerIDs(reg *Registry, ctx context.Context, subject string, req RegisterRequest) (int64, int, error) {
+	v, err := reg.Register(ctx, subject, req)
+	if err != nil {
+		return 0, 0, err
+	}
+	return v.Schema.ID, v.Version, nil
 }
