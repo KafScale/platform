@@ -172,11 +172,22 @@ func (c *awsS3Client) DeleteIndex(ctx context.Context, key string) error {
 	return c.deleteObject(ctx, key)
 }
 
+func (c *awsS3Client) UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error {
+	return c.put(ctx, key, body, true)
+}
+
 func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) error {
+	return c.put(ctx, key, body, false)
+}
+
+func (c *awsS3Client) put(ctx context.Context, key string, body []byte, ifAbsent bool) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader(body),
+	}
+	if ifAbsent {
+		input.IfNoneMatch = aws.String("*")
 	}
 	if c.kmsKey != "" {
 		input.ServerSideEncryption = types.ServerSideEncryptionAwsKms
@@ -184,6 +195,9 @@ func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) er
 	}
 	_, err := c.api.PutObject(ctx, input)
 	if err != nil {
+		if cond := conditionalErr(err); ifAbsent && cond != nil {
+			return fmt.Errorf("put object %s: %w: %w", key, cond, err)
+		}
 		if isBucketMissingErr(err) {
 			if ensureErr := c.EnsureBucket(ctx); ensureErr == nil {
 				if _, retryErr := c.api.PutObject(ctx, input); retryErr == nil {
@@ -222,6 +236,28 @@ func isNotFoundErr(err error) bool {
 		return true
 	}
 	return false
+}
+
+func conditionalErr(err error) error {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "PreconditionFailed":
+			return ErrPreconditionFailed
+		case "ConditionalRequestConflict":
+			return ErrConditionalConflict
+		}
+	}
+	var respErr *awshttp.ResponseError
+	if errors.As(err, &respErr) {
+		switch respErr.HTTPStatusCode() {
+		case http.StatusPreconditionFailed:
+			return ErrPreconditionFailed
+		case http.StatusConflict:
+			return ErrConditionalConflict
+		}
+	}
+	return nil
 }
 
 func isBucketMissingErr(err error) bool {

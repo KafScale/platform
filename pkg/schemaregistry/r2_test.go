@@ -160,6 +160,13 @@ func (f *failingS3) DownloadIndex(ctx context.Context, key string) ([]byte, erro
 	return f.MemoryS3Client.DownloadIndex(ctx, key)
 }
 
+func (f *failingS3) UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error {
+	if f.fail {
+		return errors.New("s3 down")
+	}
+	return f.MemoryS3Client.UploadIndexIfAbsent(ctx, key, body)
+}
+
 func TestRegisterFailsWhenIDMarkersUnavailable(t *testing.T) {
 	s3 := &failingS3{MemoryS3Client: storage.NewMemoryS3Client()}
 	h := newHarness(t, nil, Config{S3: s3, Namespace: "prod"})

@@ -20,12 +20,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 type fakeS3 struct {
@@ -422,5 +425,53 @@ func TestAWSS3ClientCheckBucket(t *testing.T) {
 	denied := &awsS3Client{bucket: "b", api: &fakeS3{headErr: &fakeAPIError{code: "Forbidden"}}}
 	if err := denied.CheckBucket(ctx); err == nil || !strings.Contains(err.Error(), "head bucket b") {
 		t.Fatalf("expected head error, got %v", err)
+	}
+}
+
+func TestAWSUploadIndexIfAbsent(t *testing.T) {
+	api := &fakeS3{}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api).(ConditionalIndexWriter)
+	if err := client.UploadIndexIfAbsent(context.Background(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if got := aws.ToString(api.putInputs[0].IfNoneMatch); got != "*" {
+		t.Fatalf("IfNoneMatch %q", got)
+	}
+	for code, want := range map[string]error{"PreconditionFailed": ErrPreconditionFailed, "ConditionalRequestConflict": ErrConditionalConflict} {
+		api.putErr = &fakeAPIError{code: code}
+		if err := client.UploadIndexIfAbsent(context.Background(), "k", []byte("v")); !errors.Is(err, want) {
+			t.Fatalf("%s gave %v", code, err)
+		}
+	}
+	for status, want := range map[int]error{http.StatusPreconditionFailed: ErrPreconditionFailed, http.StatusConflict: ErrConditionalConflict} {
+		api.putErr = &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: errors.New("status")}}
+		if err := client.UploadIndexIfAbsent(context.Background(), "k", []byte("v")); !errors.Is(err, want) {
+			t.Fatalf("status %d gave %v", status, err)
+		}
+	}
+	api.putErr = errors.New("connection reset")
+	if err := client.UploadIndexIfAbsent(context.Background(), "k", []byte("v")); err == nil || errors.Is(err, ErrPreconditionFailed) || errors.Is(err, ErrConditionalConflict) {
+		t.Fatalf("network error gave %v", err)
+	}
+	api.putErr = &fakeAPIError{code: "PreconditionFailed"}
+	if err := newAWSClientWithAPI("test-bucket", "us-east-1", "", api).UploadIndex(context.Background(), "k", []byte("v")); err == nil || errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("unconditional put mapped to %v", err)
+	}
+	if aws.ToString(api.putInputs[len(api.putInputs)-1].IfNoneMatch) != "" {
+		t.Fatal("unconditional put sent IfNoneMatch")
+	}
+}
+
+func TestMemoryUploadIndexIfAbsent(t *testing.T) {
+	m := NewMemoryS3Client()
+	ctx := context.Background()
+	if err := m.UploadIndexIfAbsent(ctx, "k", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UploadIndexIfAbsent(ctx, "k", []byte("b")); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("second put %v", err)
+	}
+	if data, _ := m.DownloadIndex(ctx, "k"); string(data) != "a" {
+		t.Fatalf("overwritten with %s", data)
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"net/url"
 	"slices"
@@ -116,6 +117,7 @@ type Config struct {
 type Registry struct {
 	cli          *clientv3.Client
 	s3           storage.S3Client
+	markers      storage.ConditionalIndexWriter
 	namespace    string
 	inlineLimit  int
 	conflicts    atomic.Uint64
@@ -138,12 +140,20 @@ func New(cfg Config) (*Registry, error) {
 	if cfg.InlineLimit <= 0 {
 		return nil, errors.New("inline limit must be positive")
 	}
-	if cfg.S3 != nil && cfg.Namespace == "" {
-		return nil, errors.New("s3 namespace required")
+	var markers storage.ConditionalIndexWriter
+	if cfg.S3 != nil {
+		if cfg.Namespace == "" {
+			return nil, errors.New("s3 namespace required")
+		}
+		var ok bool
+		if markers, ok = cfg.S3.(storage.ConditionalIndexWriter); !ok {
+			return nil, errors.New("s3 client does not support conditional writes")
+		}
 	}
 	return &Registry{
 		cli:         cfg.Client,
 		s3:          cfg.S3,
+		markers:     markers,
 		namespace:   cfg.Namespace,
 		inlineLimit: cfg.InlineLimit,
 		cache:       make(map[int64]*Schema),
@@ -653,7 +663,30 @@ type recordWriter struct {
 	claimed  int64
 }
 
-const maxClaimProbes = 64
+const (
+	maxClaimProbes    = 64
+	linearClaimProbes = 32
+	maxConflictRetry  = 3
+	conflictRetryWait = 20 * time.Millisecond
+)
+
+func (r *Registry) putMarker(ctx context.Context, id int64, hash string) error {
+	var err error
+	for attempt := 0; attempt <= maxConflictRetry; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(conflictRetryWait):
+			}
+		}
+		err = r.markers.UploadIndexIfAbsent(ctx, r.idMarkerKey(id), []byte(hash))
+		if !errors.Is(err, storage.ErrConditionalConflict) {
+			return err
+		}
+	}
+	return err
+}
 
 func (w *recordWriter) claim(ctx context.Context, counter int64) (int64, error) {
 	if w.r.s3 == nil {
@@ -663,50 +696,71 @@ func (w *recordWriter) claim(ctx context.Context, counter int64) (int64, error) 
 		return w.claimed, nil
 	}
 	id, step := counter+1, int64(1)
-	for range maxClaimProbes {
-		used, err := w.r.markerHolds(ctx, id, "")
-		if err != nil {
-			return 0, err
+	for probe := range maxClaimProbes {
+		if id > math.MaxInt32 {
+			break
 		}
-		if !used {
-			if err := w.r.s3.UploadIndex(ctx, w.r.idMarkerKey(id), []byte(w.p.hash)); err != nil {
-				return 0, fmt.Errorf("write schema id %d marker to S3: %w", id, err)
-			}
+		err := w.r.putMarker(ctx, id, w.p.hash)
+		switch {
+		case err == nil:
 			w.claimed = id
 			return id, nil
+		case errors.Is(err, storage.ErrPreconditionFailed), errors.Is(err, storage.ErrConditionalConflict):
+			if probe < linearClaimProbes {
+				id++
+				continue
+			}
+			id += step + rand.Int64N(step)
+			step *= 2
+		default:
+			return 0, fmt.Errorf("write schema id %d marker to S3: %w", id, err)
 		}
-		id += step
-		step *= 2
 	}
 	return 0, fmt.Errorf("no free schema id found above %d in S3 id markers", counter)
-}
-
-func (r *Registry) markerHolds(ctx context.Context, id int64, hash string) (bool, error) {
-	data, err := r.s3.DownloadIndex(ctx, r.idMarkerKey(id))
-	if errors.Is(err, storage.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read schema id %d marker from S3: %w", id, err)
-	}
-	return hash == "" || string(data) != hash, nil
 }
 
 func (w *recordWriter) claimImport(ctx context.Context, id int64) error {
 	if w.r.s3 == nil || w.claimed == id {
 		return nil
 	}
-	taken, err := w.r.markerHolds(ctx, id, w.p.hash)
+	err := w.r.putMarker(ctx, id, w.p.hash)
+	if errors.Is(err, storage.ErrPreconditionFailed) {
+		data, readErr := w.r.s3.DownloadIndex(ctx, w.r.idMarkerKey(id))
+		if readErr != nil {
+			return fmt.Errorf("read schema id %d marker from S3: %w", id, readErr)
+		}
+		if string(data) != w.p.hash {
+			return errNotPermitted("Schema id %d was issued before for a different schema, recorded in S3 at %s", id, w.r.idMarkerKey(id))
+		}
+		err = nil
+	}
 	if err != nil {
-		return err
-	}
-	if taken {
-		return errNotPermitted("Schema id %d was issued before for a different schema", id)
-	}
-	if err := w.r.s3.UploadIndex(ctx, w.r.idMarkerKey(id), []byte(w.p.hash)); err != nil {
 		return fmt.Errorf("write schema id %d marker to S3: %w", id, err)
 	}
 	w.claimed = id
+	return nil
+}
+
+func (r *Registry) CheckIDMarkers(ctx context.Context) error {
+	if r.s3 == nil {
+		return nil
+	}
+	b := make([]byte, 16)
+	for i := range b {
+		b[i] = byte(rand.Uint32())
+	}
+	key := fmt.Sprintf("%s/@schemas/probe/%x", r.namespace, b)
+	defer func() { _ = r.s3.DeleteIndex(context.WithoutCancel(ctx), key) }()
+	if err := r.markers.UploadIndexIfAbsent(ctx, key, []byte("probe")); err != nil {
+		return fmt.Errorf("S3 conditional write probe at %s failed: %w", key, err)
+	}
+	err := r.markers.UploadIndexIfAbsent(ctx, key, []byte("probe"))
+	if err == nil {
+		return fmt.Errorf("S3 backend accepted a second PutObject with If-None-Match at %s, so it ignores the condition and schema ids cannot be fenced", key)
+	}
+	if !errors.Is(err, storage.ErrPreconditionFailed) {
+		return fmt.Errorf("S3 conditional write probe at %s: second write gave %w, want 412 PreconditionFailed", key, err)
+	}
 	return nil
 }
 

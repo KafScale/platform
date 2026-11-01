@@ -140,6 +140,12 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
+	probeCtx, probeCancel := context.WithTimeout(ctx, 30*time.Second)
+	err = reg.CheckIDMarkers(probeCtx)
+	probeCancel()
+	if err != nil {
+		return err
+	}
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	if err := reg.Init(initCtx); err != nil {
 		log.Printf("read schema id counter from etcd: %v", err)
