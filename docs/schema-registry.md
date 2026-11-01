@@ -50,6 +50,7 @@ Endpoints:
 |--------|------|------------------|
 | GET | `/schemas/types` | |
 | GET | `/schemas/ids/{id}` | |
+| GET | `/schemas/guids/{guid}` | |
 | GET | `/schemas/ids/{id}/schema` | |
 | GET | `/schemas/ids/{id}/versions` | `deleted` |
 | GET | `/schemas/ids/{id}/subjects` | `deleted` |
@@ -71,7 +72,7 @@ Endpoints:
 | POST | `/compatibility/subjects/{subject}/versions`, `/compatibility/subjects/{subject}/versions/{version}` | `verbose` |
 | GET | `/healthz`, `/readyz`, `/metrics` | |
 
-`{version}` accepts a number or `latest`. `/contexts` always returns `["."]`. Compatibility against a subject that does not exist returns `is_compatible: true` for `latest` or no version, and 40402 for a numbered version. `DELETE /config/{subject}` and `DELETE /mode/{subject}` return 40401 when the subject has no setting. `DELETE /config` returns the previous global level and resets it to `BACKWARD`. Errors use the Confluent body `{"error_code": ..., "message": ...}` and codes: 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set, 40901 incompatible schema (HTTP 409), 400 malformed request body, 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 50001 store error, 50002 operation timed out.
+`{version}` accepts a number or `latest`. Register, lookup, `GET /schemas/ids/{id}` and `GET /subjects/{subject}/versions/{version}` responses carry a `guid`, computed like Confluent Schema Registry 8.4.0: the MD5 of the stored schema text followed by the name, subject and version (four byte big endian) of each reference, written as a UUID. Clients that put the schema guid in the `__value_schema_id` or `__key_schema_id` record header, such as the `header_schema_id_serializer` in confluent-kafka-python and the Java `HeaderSchemaIdSerializer`, resolve it with `GET /schemas/guids/{guid}`. It returns `guid`, `schemaType`, `references`, `schema` and `deleted`, which is true when only soft deleted versions use the schema. An unknown guid returns 40403. Schema text above 1 MiB is rejected with 42209, and a request body above 2 MiB with 400. `/contexts` always returns `["."]`. Compatibility against a subject that does not exist returns `is_compatible: true` for `latest` or no version, and 40402 for a numbered version. `DELETE /config/{subject}` and `DELETE /mode/{subject}` return 40401 when the subject has no setting. `DELETE /config` returns the previous global level and resets it to `BACKWARD`. Errors use the Confluent body `{"error_code": ..., "message": ...}` and codes: 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set, 40901 incompatible schema (HTTP 409), 400 malformed request body, 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 42209 schema too large, 50001 store error, 50002 operation timed out.
 
 ### Ids and versions
 
@@ -95,17 +96,23 @@ To keep the ids that existing data carries, import the schemas with their ids be
 2. For every subject version in the source registry, `POST /subjects/{subject}/versions` with `{"schema": ..., "schemaType": ..., "references": ..., "id": ..., "version": ...}`. The id must be free or already hold the same schema, and the version must be free or already hold the same id, otherwise the request fails with 42205. Compatibility is not checked in `IMPORT` mode.
 3. `PUT /mode` with `{"mode": "READWRITE"}`. New schemas get ids above the highest imported id.
 
+In `READONLY` and `IMPORT` mode, registering a schema that the subject already holds without an id returns its existing id and version, as in Confluent Schema Registry. A new schema without an id is refused with 42205.
+
 ### Storage
 
 All state lives in etcd under `/kafscale/schemas/`. Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201. The object key is the hash of the text, so retries and identical schemas write the same object once per request. When a write uploads the text and then fails in etcd, the object stays in S3 without an etcd key pointing to it. Such objects are not removed today. To find them, list `<namespace>/@schemas/sha256/` and compare it with the `s3Key` values under `/kafscale/schemas/ids/`.
 
-Each instance caches schemas by id. It drops the cache when etcd reports a lower revision or a lower id counter than it has seen. After restoring etcd from a backup, restart the registry pods anyway, so no instance serves a schema from before the restore.
+Each instance caches schemas by id, up to 32 MiB of schema text, and drops entries when the cache is full. It drops the whole cache when etcd reports a lower revision, a different cluster id, a lower raft term or a lower id counter than it has seen.
+
+With `KAFSCALE_S3_BUCKET` set, every id the registry gives out is also recorded in S3 as `<namespace>/@schemas/ids/<id, 20 digits>` holding the hash of the schema, before the etcd write. These objects are written once and never changed or removed. Before it uses an id, the registry checks that no such object exists and moves on to a higher id if it does, so an etcd restored from an older backup does not hand out an id that existing data already carries. An import with an explicit id that S3 records for a different schema is refused with 42205. When S3 cannot be read or written, registering a new schema fails with 50001 and nothing is written to etcd. Without `KAFSCALE_S3_BUCKET` the registry has only etcd, and after a restore it gives out again the ids issued after the backup was taken. After restoring etcd, restart the registry pods so no instance keeps state from before the restore.
 
 ### Differences from Confluent Schema Registry
 
 Checked against Confluent Schema Registry 8.4.0:
 
-- Responses have no `guid` and no `ts` fields.
+- Responses have no `ts` field.
+- `POST /subjects/{subject}/versions` with an empty body `{}` returns 42201. Confluent returns 42201 for a new subject and the latest version for an existing subject.
+- The size limit for schema text is 1 MiB. Confluent limits the size of the stored record, which is slightly above 1 MiB of schema text.
 - Error messages use different wording, and `verbose=true` returns plain messages.
 - Only `NONE` and `BACKWARD` compatibility and only Avro are supported.
 - A hard delete keeps the id. Confluent forgets an id once no subject uses it and gives the schema a new id when it is registered again.

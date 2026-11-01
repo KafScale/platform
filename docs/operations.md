@@ -287,6 +287,8 @@ When the KafScale operator manages etcd, each cluster pod runs ```restore init c
 - The restore container runs `etcdctl snapshot restore` if the data directory is empty and a snapshot file is present.
 - If no snapshot is available, etcd starts with a clean data directory.
 
+The schema registry keeps its state in the same etcd. After a restore, restart the registry pods. When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again. See [schema-registry.md](schema-registry.md#storage).
+
 The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
 ### Topic Recovery On The DR Spine
