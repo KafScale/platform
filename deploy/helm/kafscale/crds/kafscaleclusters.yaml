@@ -1132,9 +1132,10 @@ spec:
                     segmentBytes:
                       type: integer
                     offsetsRetentionMinutes:
-                      description: Empty group and offset retention in minutes; defaults to 10080. Zero or negative disables expiry.
+                      description: Empty group and offset retention in minutes; defaults to 10080. Zero disables expiry.
                       type: integer
                       format: int64
+                      minimum: 0
                     flushIntervalMs:
                       type: integer
                     cacheSize:

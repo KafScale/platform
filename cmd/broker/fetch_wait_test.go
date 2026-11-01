@@ -188,3 +188,30 @@ func TestFetchClientGoneStopsLongPoll(t *testing.T) {
 		t.Fatal("Fetch cancellation affected the connection's handler context")
 	}
 }
+
+func TestFetchWaitWithLongPollInterval(t *testing.T) {
+	previous := fetchPollInterval
+	fetchPollInterval = 10 * time.Second
+	t.Cleanup(func() { fetchPollInterval = previous })
+
+	h, req := fetchWaitFixture(t)
+	resp, elapsed := timedFetch(t, h, context.Background(), req)
+	if elapsed < 80*time.Millisecond || elapsed > time.Second || len(resp.Topics[0].Partitions) != 8 {
+		t.Fatalf("wait did not end at the request deadline: %s", elapsed)
+	}
+
+	req.MaxWaitMillis = 30000
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	_, elapsed = timedFetch(t, h, ctx, req)
+	if elapsed > time.Second {
+		t.Fatalf("cancellation during the wait took %s", elapsed)
+	}
+
+	gone := make(chan struct{})
+	time.AfterFunc(50*time.Millisecond, func() { close(gone) })
+	_, elapsed = timedFetch(t, h, protocol.ContextWithClientGone(context.Background(), gone), req)
+	if elapsed > time.Second {
+		t.Fatalf("client EOF during the wait took %s", elapsed)
+	}
+}

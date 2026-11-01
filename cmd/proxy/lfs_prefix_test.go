@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -386,5 +387,56 @@ func TestHTTPMultipartGenerationChangedDiscardsUpload(t *testing.T) {
 	}
 	if accepted.Load() != 0 {
 		t.Fatal("record was produced")
+	}
+}
+
+func TestRewriteProduceDiscardRecordsFailureReason(t *testing.T) {
+	blob := func(payload, checksum string) kmsg.Record {
+		if checksum == "" {
+			sum := sha256.Sum256([]byte(payload))
+			checksum = hex.EncodeToString(sum[:])
+		}
+		return kmsg.Record{Value: []byte(payload), Headers: []kmsg.Header{{Key: "LFS_BLOB", Value: []byte(checksum)}}}
+	}
+	cases := []struct {
+		name   string
+		second kmsg.Record
+		setup  func(*lfsModule)
+		want   string
+	}{
+		{"checksum", blob("second", strings.Repeat("0", 64)), nil, "checksum_mismatch_delete_failed"},
+		{"size", blob("second blob that is too large", ""), func(m *lfsModule) { m.maxBlob = 10 }, "blob_too_large_delete_failed"},
+		{"generation", blob("second", ""), func(m *lfsModule) { m.topicGeneration = bumpingGeneration() }, "generation_changed_delete_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, fs3 := testLFSModule(t)
+			var logs bytes.Buffer
+			m.logger = slog.New(slog.NewTextHandler(&logs, nil))
+			fs3.deleteErr = errors.New("s3 down")
+			if tc.setup != nil {
+				tc.setup(m)
+			}
+			req := &kmsg.ProduceRequest{Acks: 1, TimeoutMillis: 5000, Topics: []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Records: buildTestBatch([]kmsg.Record{blob("first", ""), tc.second})}}}}}
+			header := &protocol.RequestHeader{APIKey: protocol.APIKeyProduce, APIVersion: 9}
+			if _, err := m.rewriteProduceRecords(context.Background(), header, req); err == nil {
+				t.Fatal("expected rewrite to fail")
+			}
+			var reasons []string
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(line, "lfs orphaned object") {
+					_, reason, _ := strings.Cut(line, "reason=")
+					reasons = append(reasons, reason)
+				}
+			}
+			if len(reasons) == 0 {
+				t.Fatal("no orphans recorded")
+			}
+			for _, reason := range reasons {
+				if reason != tc.want {
+					t.Fatalf("orphan reasons %v, want %s", reasons, tc.want)
+				}
+			}
+		})
 	}
 }

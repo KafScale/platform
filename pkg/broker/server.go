@@ -154,6 +154,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 			}
 		}
 	}()
+	writeFailed := false
 	for {
 		var frame *protocol.Frame
 		select {
@@ -182,17 +183,19 @@ func (s *Server) handleConnection(conn net.Conn) {
 			log.Printf("handle request api=%d v=%d: %v", header.APIKey, header.APIVersion, err)
 			// Send an UNKNOWN_SERVER_ERROR response instead of dropping the
 			// connection so the client can recover gracefully.
-			if errResp := buildErrorResponse(header); errResp != nil {
+			if errResp := buildErrorResponse(header); errResp != nil && !writeFailed {
 				if err := protocol.WriteFrameWithDeadline(conn, errResp, s.WriteTimeout); err != nil {
+					writeFailed = true
 					_ = conn.Close()
 				}
 			}
 			continue
 		}
-		if respPayload == nil {
+		if respPayload == nil || writeFailed {
 			continue
 		}
 		if err := protocol.WriteFrameWithDeadline(conn, respPayload, s.WriteTimeout); err != nil {
+			writeFailed = true
 			log.Printf("write frame: %v", err)
 			_ = conn.Close()
 			// Drain complete requests that were read before the failed response.
