@@ -30,7 +30,7 @@ Any registry that speaks the Confluent Schema Registry REST API works with KafSc
 
 Data that is mirrored or copied from another Kafka cluster into KafScale keeps the schema ids in its frames. Consumers can read it as long as they use the registry that assigned those ids, or a registry that holds the same ids (see [Moving schemas into the built in registry](#moving-schemas-into-the-built-in-registry)).
 
-Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_schemas`). Confluent Schema Registry 8.4.0 writes that topic with a transactional producer, and KafScale brokers do not support `InitProducerId`, so its `kafkastore.bootstrap.servers` must point at a Kafka cluster, not at KafScale.
+Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_schemas`). Confluent Schema Registry 8.4.0 writes that topic with an idempotent producer that has no transactional id. That producer sends `InitProducerId` at startup, which KafScale does not support (see [Limits / Non-Goals](user-guide.md#limits--non-goals)), so its `kafkastore.bootstrap.servers` must point at a Kafka cluster, not at KafScale.
 
 ## Option 2: run the built in registry
 
@@ -52,26 +52,32 @@ Endpoints:
 | GET | `/schemas/ids/{id}` | |
 | GET | `/schemas/ids/{id}/schema` | |
 | GET | `/schemas/ids/{id}/versions` | `deleted` |
+| GET | `/schemas/ids/{id}/subjects` | `deleted` |
+| GET | `/schemas` | `subjectPrefix`, `deleted`, `latestOnly`, `offset`, `limit` |
+| GET | `/contexts` | |
 | GET | `/subjects` | `deleted` |
 | GET | `/subjects/{subject}/versions` | `deleted` |
 | GET | `/subjects/{subject}/versions/{version}` | `deleted` |
 | GET | `/subjects/{subject}/versions/{version}/schema` | |
-| POST | `/subjects/{subject}/versions` | |
-| POST | `/subjects/{subject}` | `deleted` |
+| GET | `/subjects/{subject}/versions/{version}/referencedby` | |
+| POST | `/subjects/{subject}/versions` | `normalize` |
+| POST | `/subjects/{subject}` | `deleted`, `normalize` |
 | DELETE | `/subjects/{subject}` | `permanent` |
 | DELETE | `/subjects/{subject}/versions/{version}` | `permanent` |
 | GET, PUT | `/config`, `/config/{subject}` | `defaultToGlobal` on GET |
-| DELETE | `/config/{subject}` | |
+| DELETE | `/config`, `/config/{subject}` | |
 | GET, PUT | `/mode`, `/mode/{subject}` | `defaultToGlobal` on GET, `force` on PUT |
 | DELETE | `/mode/{subject}` | |
-| POST | `/compatibility/subjects/{subject}/versions/{version}` | `verbose` |
+| POST | `/compatibility/subjects/{subject}/versions`, `/compatibility/subjects/{subject}/versions/{version}` | `verbose` |
 | GET | `/healthz`, `/readyz`, `/metrics` | |
 
-`{version}` accepts a number or `latest`. Errors use the Confluent body `{"error_code": ..., "message": ...}` and codes: 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set, 409 incompatible schema, 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 50001 store error, 50002 operation timed out.
+`{version}` accepts a number or `latest`. `/contexts` always returns `["."]`. Compatibility against a subject that does not exist returns `is_compatible: true` for `latest` or no version, and 40402 for a numbered version. `DELETE /config/{subject}` and `DELETE /mode/{subject}` return 40401 when the subject has no setting. `DELETE /config` returns the previous global level and resets it to `BACKWARD`. Errors use the Confluent body `{"error_code": ..., "message": ...}` and codes: 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set, 40901 incompatible schema (HTTP 409), 400 malformed request body, 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 50001 store error, 50002 operation timed out.
 
 ### Ids and versions
 
-Schema ids are global, unique and increase with every new schema. Ids can have gaps. Registering a schema that already exists anywhere in the registry returns its existing id. Registering the same schema again under the same subject returns the existing version. Two schemas are the same when their type, their JSON text after whitespace is removed, and their references match. The registry returns the text exactly as it was first registered.
+Schema ids are global, unique and increase with every new schema. Ids can have gaps. The registry stores each schema in the form Confluent Schema Registry stores it: the Avro schema printed by the Java Avro library, with whitespace removed, names written relative to the enclosing namespace, and default values and properties kept. Registering a schema whose stored form, type and references already exist anywhere in the registry returns the existing id. Under one subject, a schema that differs from an existing version only in the order of properties or aliases returns that version, the highest one if several match. With `normalize=true`, properties and aliases are sorted and `error` is stored as `record` before the id is chosen.
+
+A new version number is one above the highest version the subject has, live or soft deleted. A version removed with a hard delete is no longer counted, so its number can be given again. Registering a schema that only exists as a soft deleted version of the subject creates a new version and removes the soft deleted one.
 
 Every write is one etcd transaction that compares the revisions of the keys it read, so concurrent requests on any number of replicas cannot give one id to two schemas, give one version to two ids, or lose a version. When a transaction loses a race it retries after a short random wait. When the request timeout runs out first, the request fails with 50002 and nothing is written.
 
@@ -79,7 +85,7 @@ Every write is one etcd transaction that compares the revisions of the keys it r
 
 A soft delete hides a version or a subject. A hard delete (`permanent=true`) needs a soft delete first and then removes the version or subject. Deleting a version or subject that another schema references fails with 42206.
 
-A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it, and its id is never given to another schema. Registering the same schema again returns the same id. Removing schemas that no subject uses is a candidate for the `kafscale-cli prune` command and is not done today.
+A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it, and its id is never given to another schema. Registering the same schema again returns the same id. Nothing removes schemas that no subject uses, and nothing removes their S3 objects.
 
 ### Moving schemas into the built in registry
 
@@ -91,7 +97,21 @@ To keep the ids that existing data carries, import the schemas with their ids be
 
 ### Storage
 
-All state lives in etcd under `/kafscale/schemas/`. Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201.
+All state lives in etcd under `/kafscale/schemas/`. Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201. The object key is the hash of the text, so retries and identical schemas write the same object once per request. When a write uploads the text and then fails in etcd, the object stays in S3 without an etcd key pointing to it. Such objects are not removed today. To find them, list `<namespace>/@schemas/sha256/` and compare it with the `s3Key` values under `/kafscale/schemas/ids/`.
+
+Each instance caches schemas by id. It drops the cache when etcd reports a lower revision or a lower id counter than it has seen. After restoring etcd from a backup, restart the registry pods anyway, so no instance serves a schema from before the restore.
+
+### Differences from Confluent Schema Registry
+
+Checked against Confluent Schema Registry 8.4.0:
+
+- Responses have no `guid` and no `ts` fields.
+- Error messages use different wording, and `verbose=true` returns plain messages.
+- Only `NONE` and `BACKWARD` compatibility and only Avro are supported.
+- A hard delete keeps the id. Confluent forgets an id once no subject uses it and gives the schema a new id when it is registered again.
+- When one schema is stored under several ids by import, registering it in a new subject returns the first id. Confluent returns the latest.
+- Named types defined inside referenced schemas are always known to the referencing schema.
+- Doubles in defaults are printed with the shortest form that reads back to the same value. Java can print a longer form for some values.
 
 ### Security
 
