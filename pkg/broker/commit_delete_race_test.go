@@ -24,6 +24,7 @@ import (
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -148,14 +149,30 @@ func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
 	if err := etcd.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", State: groupStateStableStr, GenerationId: 4, Leader: "m1", ProtocolType: "consumer", Protocol: "range", Members: members}); err != nil {
 		t.Fatal(err)
 	}
-	stores := map[string]metadata.Store{
-		"changed":     changedCommitStore{etcd, metadata.ErrConsumerGroupChanged},
-		"deadline":    expiredCommitStore{etcd},
-		"canceled":    changedCommitStore{etcd, context.Canceled},
-		"unavailable": changedCommitStore{etcd, status.Error(codes.Unavailable, "etcd down")},
-		"store":       changedCommitStore{etcd, metadata.ErrStoreUnavailable},
+	cases := []struct {
+		name  string
+		store metadata.Store
+		want  int16
+	}{
+		{"changed", changedCommitStore{etcd, metadata.ErrConsumerGroupChanged}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"deadline", expiredCommitStore{etcd}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"canceled", changedCommitStore{etcd, context.Canceled}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"unavailable", changedCommitStore{etcd, status.Error(codes.Unavailable, "etcd down")}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"server deadline", changedCommitStore{etcd, status.Error(codes.DeadlineExceeded, "deadline")}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"store", changedCommitStore{etcd, metadata.ErrStoreUnavailable}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"no leader", changedCommitStore{etcd, rpctypes.ErrNoLeader}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"leader changed", changedCommitStore{etcd, rpctypes.ErrLeaderChanged}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"timeout", changedCommitStore{etcd, rpctypes.ErrTimeout}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"timeout leader fail", changedCommitStore{etcd, rpctypes.ErrTimeoutDueToLeaderFail}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"unhealthy", changedCommitStore{etcd, rpctypes.ErrUnhealthy}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"stopped", changedCommitStore{etcd, rpctypes.ErrStopped}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"etcd server deadline", changedCommitStore{etcd, rpctypes.Error(rpctypes.ErrGRPCDeadlineExceeded)}, protocol.COORDINATOR_LOAD_IN_PROGRESS},
+		{"request too large", changedCommitStore{etcd, rpctypes.ErrRequestTooLarge}, protocol.UNKNOWN_SERVER_ERROR},
+		{"permission denied", changedCommitStore{etcd, rpctypes.ErrPermissionDenied}, protocol.UNKNOWN_SERVER_ERROR},
+		{"no space", changedCommitStore{etcd, rpctypes.ErrNoSpace}, protocol.UNKNOWN_SERVER_ERROR},
 	}
-	for name, store := range stores {
+	for _, tc := range cases {
+		name, store := tc.name, tc.store
 		c := newTestCoordinator(t, store)
 		commit := kmsg.NewPtrOffsetCommitRequest()
 		commit.Group, commit.MemberID, commit.Generation = "g", "m1", 4
@@ -167,8 +184,8 @@ func TestOffsetCommitChangedGroupIsRetriable(t *testing.T) {
 		if err != nil {
 			t.Fatal(name, err)
 		}
-		if code := resp.Topics[0].Partitions[0].ErrorCode; code != protocol.COORDINATOR_LOAD_IN_PROGRESS {
-			t.Fatalf("%s commit returned %d", name, code)
+		if code := resp.Topics[0].Partitions[0].ErrorCode; code != tc.want {
+			t.Errorf("%s commit returned %d, want %d", name, code, tc.want)
 		}
 	}
 }

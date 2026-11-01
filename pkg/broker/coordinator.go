@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -1024,7 +1025,7 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
 				entry.lastHeartbeat = parsed
 				entry.savedHeartbeat = parsed
-				entry.expiryGrace = recoveredSessionGrace + entry.heartbeatSaveInterval()
+				entry.expiryGrace = recoveredGrace(entry.sessionTimeout)
 			}
 		}
 		state.members[memberID] = entry
@@ -1555,5 +1556,17 @@ func (s *groupState) dropRebalanceLaggers(now time.Time) bool {
 }
 
 func commitRetriable(err error) bool {
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, metadata.ErrStoreUnavailable) || status.Code(err) == codes.Unavailable
+	var etcdErr rpctypes.EtcdError
+	if errors.As(err, &etcdErr) && (etcdErr.Code() == codes.Unavailable || etcdErr.Code() == codes.DeadlineExceeded) {
+		return true
+	}
+	code := status.Code(err)
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, metadata.ErrStoreUnavailable) || code == codes.Unavailable || code == codes.DeadlineExceeded
+}
+
+func recoveredGrace(sessionTimeout time.Duration) time.Duration {
+	if sessionTimeout <= 0 {
+		sessionTimeout = defaultSessionTimeout
+	}
+	return recoveredSessionGrace + sessionTimeout/3
 }

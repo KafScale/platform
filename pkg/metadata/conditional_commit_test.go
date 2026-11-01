@@ -381,3 +381,89 @@ func TestCommitBackoffStopsOnContext(t *testing.T) {
 	}
 	commitBackoff(context.Background())
 }
+
+func TestHeartbeatOnlyRaceRetriesWithoutBackoff(t *testing.T) {
+	ctx := context.Background()
+	group := func(heartbeat string, members ...string) string {
+		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{}}
+		for _, m := range members {
+			g.Members[m] = &metadatapb.GroupMember{HeartbeatAt: heartbeat}
+		}
+		encoded, err := EncodeConsumerGroup(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(encoded)
+	}
+	backoffs := 0
+	saved := commitBackoff
+	commitBackoff = func(context.Context) { backoffs++ }
+	t.Cleanup(func() { commitBackoff = saved })
+	cases := []struct {
+		name     string
+		races    int
+		next     func(int) string
+		backoffs int
+	}{
+		{"heartbeat only", 5, func(n int) string { return group(fmt.Sprint(n), "m1", "m2") }, 0},
+		{"membership", 1, func(n int) string { return group("0", "m1", "m2", "m3") }, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backoffs = 0
+			store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+			inner := store.client.KV
+			if _, err := inner.Put(ctx, ConsumerGroupKey("g"), group("0", "m1", "m2")); err != nil {
+				t.Fatal(err)
+			}
+			fired := 0
+			store.client.KV = racingKV{KV: inner, before: func() {
+				if fired >= tc.races {
+					return
+				}
+				fired++
+				if _, err := inner.Put(ctx, ConsumerGroupKey("g"), tc.next(fired)); err != nil {
+					t.Error(err)
+				}
+			}}
+			err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 2, "orders", 0, 5, "")
+			store.client.KV = inner
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backoffs != tc.backoffs {
+				t.Fatalf("backed off %d times, want %d", backoffs, tc.backoffs)
+			}
+		})
+	}
+}
+
+func TestNonstopHeartbeatRaceEndsAtDeadline(t *testing.T) {
+	store := newTestEtcdStore(t, context.Background(), ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	inner := store.client.KV
+	put := func(n int) {
+		g := &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 2, Members: map[string]*metadatapb.GroupMember{"m1": {HeartbeatAt: fmt.Sprint(n)}}}
+		encoded, _ := EncodeConsumerGroup(g)
+		if _, err := inner.Put(context.Background(), ConsumerGroupKey("g"), string(encoded)); err != nil {
+			t.Error(err)
+		}
+	}
+	put(0)
+	attempts := 0
+	store.client.KV = racingKV{KV: inner, before: func() {
+		attempts++
+		put(attempts)
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 2, "orders", 0, 5, "")
+	store.client.KV = inner
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v after %d attempts", err, attempts)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("commit ran %v past its deadline", elapsed)
+	}
+	t.Logf("%d attempts before the deadline", attempts)
+}

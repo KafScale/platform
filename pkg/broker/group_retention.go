@@ -38,7 +38,7 @@ func retentionCandidate(group *metadatapb.ConsumerGroup, now, cutoff time.Time) 
 		if member.SessionTimeoutMs > 0 {
 			timeout = time.Duration(member.SessionTimeoutMs) * time.Millisecond
 		}
-		if err != nil || now.Sub(heartbeat) > timeout+recoveredSessionGrace {
+		if err != nil || now.Sub(heartbeat) > timeout+recoveredGrace(timeout) {
 			return true
 		}
 	}
