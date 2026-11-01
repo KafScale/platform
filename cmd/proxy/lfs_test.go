@@ -47,6 +47,7 @@ type fakeS3 struct {
 	abortErr      error
 	abortCanceled bool
 	abortDeadline bool
+	deleteErr     error
 }
 
 func newFakeS3() *fakeS3 {
@@ -88,6 +89,9 @@ func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 }
 func (f *fakeS3) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	f.deleted = append(f.deleted, *params.Key)
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
 	delete(f.objects, *params.Key)
 	return &s3.DeleteObjectOutput{}, nil
 }

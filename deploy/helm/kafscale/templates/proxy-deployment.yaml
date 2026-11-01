@@ -74,7 +74,7 @@ spec:
             - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP
               value: {{ .Values.proxy.security.maxHandshakesPerIP | quote }}
             - name: KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS
-              value: {{ .Values.proxy.security.handshakeTimeoutMs | quote }}
+              value: {{ .Values.proxy.security.handshakeTimeoutMs | int64 | quote }}
             - name: KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS
               value: {{ .Values.proxy.security.handshakeQueueMs | quote }}
             - name: KAFSCALE_PROXY_TLS_CERT_FILE
@@ -122,11 +122,11 @@ spec:
 {{- end }}
 {{- if .Values.proxy.responseWriteTimeoutMs }}
             - name: KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS
-              value: "{{ .Values.proxy.responseWriteTimeoutMs }}"
+              value: {{ .Values.proxy.responseWriteTimeoutMs | int64 | quote }}
 {{- end }}
 {{- if .Values.proxy.lfsMetadataTimeoutMs }}
             - name: KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS
-              value: "{{ .Values.proxy.lfsMetadataTimeoutMs }}"
+              value: {{ .Values.proxy.lfsMetadataTimeoutMs | int64 | quote }}
 {{- end }}
           ports:
             - name: kafka

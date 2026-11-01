@@ -36,7 +36,7 @@ limitations under the License.
 
 - Produce and Fetch return `KAFKA_STORAGE_ERROR` (56) instead of `UNKNOWN_SERVER_ERROR` (-1) when S3 is unavailable, when a write or read to S3 fails, and when a partition cannot be restored from S3. Clients such as librdkafka now retry instead of failing the message. Degraded S3 still returns `REQUEST_TIMED_OUT` (7). Produce v8 and later include a message such as "object storage unavailable, retry later" (#255). Produce below v4 and Fetch v5 or below receive `NOT_LEADER_OR_FOLLOWER` (6) instead, as Kafka does for versions that predate the storage error. ListOffsets returns `KAFKA_STORAGE_ERROR` when an earliest lookup cannot load the partition from S3. Produce append errors that do not come from S3 still return `UNKNOWN_SERVER_ERROR`.
 
-- Expire Empty consumer groups and their committed offsets after seven days by default. Configure `KAFSCALE_OFFSETS_RETENTION_MINUTES` or `spec.config.offsetsRetentionMinutes` on KafscaleCluster; zero or negative disables expiry. Joins and commits reset the retention clock, and leased, revision-fenced deletion protects active groups and concurrent writes (#238).
+- Expire Empty consumer groups and their committed offsets after seven days by default. Configure `KAFSCALE_OFFSETS_RETENTION_MINUTES` or `spec.config.offsetsRetentionMinutes` on KafscaleCluster. Zero disables expiry in both; the environment variable also treats a negative value as disabled, and the CRD rejects negative values. Joins and commits reset the retention clock, and leased, revision-fenced deletion protects active groups and concurrent writes (#238).
 
 - Remove members that disconnect during a pending JoinGroup through the broker or proxy from the rebalance and persisted group state, so survivors can receive their partitions without waiting for the dead member's session timeout (#251).
 
@@ -59,6 +59,8 @@ limitations under the License.
 - The Iceberg and SQL processors map segments under `<topic>@<generation>/` to the topic `<topic>` and its table, and keep a separate checkpoint for each generation, so a re-created topic is processed from offset 0 (#262).
 
 - Kafka response writes set the write deadline for each 256 KiB chunk instead of once for the whole frame, so a large response to a slow but live client is not cut off. After a write fails, the broker and the proxy stop writing to that connection instead of logging one error for each queued response (#263).
+- The proxy chart renders `proxy.responseWriteTimeoutMs`, `proxy.lfsMetadataTimeoutMs` and `proxy.security.handshakeTimeoutMs` as plain integers. Values of 1000000 or more were rendered as `1.2e+06`, so the proxy logged a warning and used the default (#263).
+- When the LFS proxy cannot delete uploads it discards after a failed produce rewrite, the orphan reason now names the failure, such as `checksum_mismatch_delete_failed` or `blob_too_large_delete_failed`, instead of always `generation_changed_delete_failed` (#263).
 
 - The Helm chart can set `proxy.responseWriteTimeoutMs` and `proxy.lfsMetadataTimeoutMs`. The proxy logs a warning when an integer environment setting is not a number. The KafscaleCluster CRD rejects a negative `offsetsRetentionMinutes` (#263).
 

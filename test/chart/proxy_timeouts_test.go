@@ -4,6 +4,7 @@
 package chart
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -42,5 +43,16 @@ func TestProxyTimeoutValues(t *testing.T) {
 	env = render("--set", "proxy.responseWriteTimeoutMs=60000", "--set", "proxy.lfsMetadataTimeoutMs=5000")
 	if env["KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS"] != "60000" || env["KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS"] != "5000" {
 		t.Fatal(env)
+	}
+	values := filepath.Join(t.TempDir(), "large.yaml")
+	large := "proxy:\n  responseWriteTimeoutMs: 1200000\n  lfsMetadataTimeoutMs: 1200000\n  security:\n    tlsSecretRef: proxy-tls\n    identitySecretRef: proxy-identity\n    handshakeTimeoutMs: 1200000\n"
+	if err := os.WriteFile(values, []byte(large), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env = render("-f", values)
+	for _, key := range []string{"KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS", "KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS", "KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"} {
+		if env[key] != "1200000" {
+			t.Fatalf("%s rendered %q, want \"1200000\"", key, env[key])
+		}
 	}
 }

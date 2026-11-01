@@ -399,13 +399,13 @@ func (m *lfsModule) recheckStorageName(ctx context.Context, topic, storageName s
 	return nil
 }
 
-func (m *lfsModule) discardUploads(ctx context.Context, uploads []orphanInfo) {
+func (m *lfsModule) discardUploads(ctx context.Context, uploads []orphanInfo, reason string) {
 	deleteCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	var failed []orphanInfo
 	for _, upload := range uploads {
 		if err := m.s3Uploader.DeleteObject(deleteCtx, upload.Key); err != nil {
-			upload.Reason = "generation_changed_delete_failed"
+			upload.Reason = reason + "_delete_failed"
 			failed = append(failed, upload)
 		}
 	}
