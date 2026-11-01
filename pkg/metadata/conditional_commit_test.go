@@ -342,3 +342,20 @@ func TestCommitConsumerOffsetFallsBackToOldCommitter(t *testing.T) {
 		t.Fatal(offset, err)
 	}
 }
+
+func TestEtcdStoreOldCommitterCommits(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	if err := store.CommitConsumerOffsetIfGroupExists(ctx, "g", 0, "orders", 0, 2, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+		t.Fatal(err)
+	}
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitConsumerOffsetIfGroupExists(ctx, "g", 0, "orders", 0, 2, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 2 {
+		t.Fatal(offset, err)
+	}
+}
