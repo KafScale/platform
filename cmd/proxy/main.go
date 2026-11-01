@@ -243,6 +243,7 @@ func envInt(key string, fallback int) int {
 	}
 	parsed, err := strconv.Atoi(val)
 	if err != nil {
+		slog.Warn("invalid integer environment value, using default", "env", key, "value", val, "default", fallback)
 		return fallback
 	}
 	return parsed
@@ -594,14 +595,18 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	// A single reader preserves framing and bounds pipelined read-ahead.
 	clientGone := make(chan struct{})
 	ctx = protocol.ContextWithClientGone(ctx, clientGone)
-	// A failed response must not discard already-read fire-and-forget requests.
+	writeFailed := false
 	writeResponse := func(payload []byte) {
+		if writeFailed {
+			return
+		}
 		select {
 		case <-clientGone:
 			return
 		default:
 		}
 		if err := protocol.WriteFrameWithDeadline(conn, payload, p.responseWriteTimeout); err != nil {
+			writeFailed = true
 			p.logger.Warn("write response failed", "error", err)
 			_ = conn.Close()
 		}
@@ -691,7 +696,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			resp, err := p.handleProduceRouting(ctx, header, frame.Payload, pool)
 			if err != nil {
 				p.logger.Warn("produce routing failed", "error", err)
-				p.respondBackendError(conn, header, body)
+				p.respondBackendError(writeResponse, header, body)
 				return
 			}
 			if resp == nil {
@@ -709,7 +714,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				default:
 				}
 				p.logger.Warn("fetch routing failed", "error", err)
-				p.respondBackendError(conn, header, body)
+				p.respondBackendError(writeResponse, header, body)
 				return
 			}
 			writeResponse(resp)
@@ -730,7 +735,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 				default:
 				}
 				p.logger.Warn("group routing failed", "error", err)
-				p.respondBackendError(conn, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, frame.Payload)
 				return
 			}
 			writeResponse(resp)
@@ -742,7 +747,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			backendConn, backendAddr, err = p.connectBackend(ctx)
 			if err != nil {
 				p.logger.Error("backend connect failed", "error", err)
-				p.respondBackendError(conn, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, frame.Payload)
 				return
 			}
 		}
@@ -753,13 +758,13 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			backendConn, backendAddr, err = p.connectBackend(ctx)
 			if err != nil {
 				p.logger.Warn("backend reconnect failed", "error", err)
-				p.respondBackendError(conn, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, frame.Payload)
 				return
 			}
 			resp, err = p.forwardToBackend(ctx, backendConn, backendAddr, frame.Payload)
 			if err != nil {
 				p.logger.Warn("backend forward failed", "error", err)
-				p.respondBackendError(conn, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, frame.Payload)
 				return
 			}
 		}
@@ -1229,12 +1234,12 @@ func (p *proxy) handleApiVersions(header *protocol.RequestHeader) ([]byte, error
 	return protocol.EncodeResponse(header.CorrelationID, responseVersion, resp), nil
 }
 
-func (p *proxy) respondBackendError(conn net.Conn, header *protocol.RequestHeader, body []byte) {
+func (p *proxy) respondBackendError(write func([]byte), header *protocol.RequestHeader, body []byte) {
 	resp, ok, err := p.buildNotReadyResponse(header, body)
 	if err != nil || !ok {
 		return
 	}
-	_ = protocol.WriteFrameWithDeadline(conn, resp, p.responseWriteTimeout)
+	write(resp)
 }
 
 func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHeader, payload []byte, pool *connPool) ([]byte, error) {

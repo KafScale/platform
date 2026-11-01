@@ -187,6 +187,8 @@ proxy:
     username: ""
     password: null  # Set via --set or use existingSecret
   backends: []
+  responseWriteTimeoutMs: ""
+  lfsMetadataTimeoutMs: ""
   podAnnotations: {}
   resources: {}
   nodeSelector: {}

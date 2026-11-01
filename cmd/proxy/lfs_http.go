@@ -329,7 +329,7 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := m.recheckStorageName(r.Context(), topic, storageName); err != nil {
-		m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}})
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}}, "generation_changed")
 		m.metrics.IncRequests(topic, "error", "lfs")
 		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "metadata_unavailable", err.Error(), "generation_check", size, time.Since(start))
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
@@ -1038,7 +1038,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := m.recheckStorageName(r.Context(), session.Topic, session.StorageName); err != nil {
-		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}})
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "generation_changed")
 		m.lfsDeleteUploadSession(sessionID)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "metadata_unavailable", err.Error(), "generation_check", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
