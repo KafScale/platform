@@ -291,6 +291,7 @@ func TestMemberCommitSurvivesConcurrentHeartbeats(t *testing.T) {
 				default:
 				}
 				_ = store.PutConsumerGroup(ctx, group())
+				time.Sleep(200 * time.Microsecond)
 			}
 		}()
 	}
