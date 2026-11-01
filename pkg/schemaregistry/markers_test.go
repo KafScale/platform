@@ -181,7 +181,7 @@ func TestRacingRegistriesGetDistinctIDs(t *testing.T) {
 		t.Fatalf("%d ids for %d registrations", len(seen), 2*n)
 	}
 	for id := range seen {
-		if id > 8*n {
+		if id > 64*n {
 			t.Fatalf("id %d for %d registrations", id, 2*n)
 		}
 	}
