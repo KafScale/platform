@@ -18,8 +18,10 @@ package metadata
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
@@ -63,10 +65,10 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := stores["etcd"].(*EtcdStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
+	if err := stores["etcd"].(*EtcdStore).CommitMemberConsumerOffset(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
 		t.Fatal("expected canceled")
 	}
-	if err := stores["memory"].(*InMemoryStore).CommitConsumerOffsetIfGroupExists(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
+	if err := stores["memory"].(*InMemoryStore).CommitMemberConsumerOffset(canceled, "g", 0, "", 0, "orders", 0, 1, ""); err == nil {
 		t.Fatal("expected canceled")
 	}
 }
@@ -219,11 +221,11 @@ func TestCommitConsumerOffsetFencesGroupChangeAfterSnapshot(t *testing.T) {
 	cases := []struct {
 		name   string
 		always bool
-		after  string
+		after  func(int) string
 		want   error
 	}{
-		{"member leaves", false, group("m2"), ErrConsumerGroupMemberGone},
-		{"group keeps changing", true, group("m1", "m2"), ErrConsumerGroupChanged},
+		{"member leaves", false, func(int) string { return group("m2") }, ErrConsumerGroupMemberGone},
+		{"member set keeps changing", true, func(n int) string { return group("m1", "m2", fmt.Sprintf("joiner-%d", n)) }, ErrConsumerGroupChanged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,13 +238,13 @@ func TestCommitConsumerOffsetFencesGroupChangeAfterSnapshot(t *testing.T) {
 			if err != nil || createRevision == 0 {
 				t.Fatal(createRevision, err)
 			}
-			fired := false
+			fired := 0
 			store.client.KV = racingKV{KV: inner, before: func() {
-				if fired && !tc.always {
+				if fired > 0 && !tc.always {
 					return
 				}
-				fired = true
-				if _, err := inner.Put(ctx, ConsumerGroupKey("g"), tc.after); err != nil {
+				fired++
+				if _, err := inner.Put(ctx, ConsumerGroupKey("g"), tc.after(fired)); err != nil {
 					t.Error(err)
 				}
 			}}
@@ -255,5 +257,87 @@ func TestCommitConsumerOffsetFencesGroupChangeAfterSnapshot(t *testing.T) {
 				t.Fatalf("offset written: %v", offsets)
 			}
 		})
+	}
+}
+
+func TestMemberCommitSurvivesConcurrentHeartbeats(t *testing.T) {
+	ctx := context.Background()
+	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
+	group := func() *metadatapb.ConsumerGroup {
+		members := map[string]*metadatapb.GroupMember{}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for _, id := range []string{"m0", "m1", "m2", "m3", "m4"} {
+			members[id] = &metadatapb.GroupMember{HeartbeatAt: now, SessionTimeoutMs: 30000}
+		}
+		return &metadatapb.ConsumerGroup{GroupId: "g", State: "stable", GenerationId: 3, Members: members}
+	}
+	if err := store.PutConsumerGroup(ctx, group()); err != nil {
+		t.Fatal(err)
+	}
+	_, createRevision, err := FetchConsumerGroupRevision(ctx, store, "g")
+	if err != nil || createRevision == 0 {
+		t.Fatal(createRevision, err)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = store.PutConsumerGroup(ctx, group())
+			}
+		}()
+	}
+	var failures []error
+	for i := range 10 {
+		if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", createRevision, "m0", 3, "orders", 0, int64(i), ""); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+	if len(failures) > 0 {
+		t.Fatalf("%d of 10 member commits failed during heartbeats, first: %v", len(failures), failures[0])
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 9 {
+		t.Fatal(offset, err)
+	}
+}
+
+type oldCommitterStore struct {
+	Store
+	inner *InMemoryStore
+}
+
+func (s oldCommitterStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, topic string, partition int32, offset int64, metadata string) error {
+	return s.inner.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, topic, partition, offset, metadata)
+}
+
+func TestCommitConsumerOffsetFallsBackToOldCommitter(t *testing.T) {
+	ctx := context.Background()
+	inner := NewInMemoryStore(ClusterMetadata{})
+	store := oldCommitterStore{Store: inner, inner: inner}
+	var _ ConsumerGroupOffsetCommitter = store
+	if _, ok := Store(store).(ConsumerGroupMemberOffsetCommitter); ok {
+		t.Fatal("store should implement only the old interface")
+	}
+	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 1, "orders", 0, 4, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
+		t.Fatal(err)
+	}
+	members := map[string]*metadatapb.GroupMember{"m1": {}}
+	if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g", GenerationId: 1, Members: members}); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitConsumerOffsetIfGroupExists(ctx, store, "g", 0, "m1", 1, "orders", 0, 4, ""); err != nil {
+		t.Fatal(err)
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g", "orders", 0); err != nil || offset != 4 {
+		t.Fatal(offset, err)
 	}
 }

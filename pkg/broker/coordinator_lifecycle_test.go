@@ -386,6 +386,9 @@ func TestCoordinatorStoreFailures(t *testing.T) {
 					t.Fatalf("join persistence: %+v", resp)
 				}
 				syncTestGroup(t, c, "a", 4, protocol.UNKNOWN_SERVER_ERROR)
+				c.mu.Lock()
+				c.groups["readers"].members["a"].savedHeartbeat = time.Time{}
+				c.mu.Unlock()
 				hb := kmsg.NewPtrHeartbeatRequest()
 				hb.Group, hb.MemberID, hb.Generation = "readers", "a", 4
 				if resp := c.Heartbeat(ctx, hb); resp.ErrorCode != protocol.UNKNOWN_SERVER_ERROR {

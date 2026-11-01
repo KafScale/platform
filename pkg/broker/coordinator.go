@@ -119,6 +119,7 @@ type memberState struct {
 	topics           []string
 	sessionTimeout   time.Duration
 	lastHeartbeat    time.Time
+	savedHeartbeat   time.Time
 	expiryGrace      time.Duration
 	joinGeneration   int32
 }
@@ -491,6 +492,10 @@ func (c *GroupCoordinator) Heartbeat(ctx context.Context, req *kmsg.HeartbeatReq
 	member.lastHeartbeat = time.Now()
 	member.expiryGrace = 0
 	resp := mkResp(protocol.NONE)
+	if member.lastHeartbeat.Sub(member.savedHeartbeat) < member.heartbeatSaveInterval() {
+		c.mu.Unlock()
+		return resp
+	}
 	if err := c.persistGroupLocked(ctx, req.Group, state); err != nil {
 		resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 	}
@@ -876,7 +881,17 @@ func (c *GroupCoordinator) persistGroupLocked(ctx context.Context, groupID strin
 		return err
 	}
 	state.createRevision = createRevision
+	for _, member := range state.members {
+		member.savedHeartbeat = member.lastHeartbeat
+	}
 	return nil
+}
+
+func (m *memberState) heartbeatSaveInterval() time.Duration {
+	if m.sessionTimeout > 0 {
+		return m.sessionTimeout / 3
+	}
+	return defaultSessionTimeout / 3
 }
 
 func buildConsumerGroup(groupID string, state *groupState) *metadatapb.ConsumerGroup {
@@ -1006,6 +1021,7 @@ func restoreGroupState(group *metadatapb.ConsumerGroup) *groupState {
 		if member.HeartbeatAt != "" {
 			if parsed, err := time.Parse(time.RFC3339Nano, member.HeartbeatAt); err == nil {
 				entry.lastHeartbeat = parsed
+				entry.savedHeartbeat = parsed
 				entry.expiryGrace = recoveredSessionGrace
 			}
 		}

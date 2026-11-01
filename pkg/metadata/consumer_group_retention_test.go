@@ -270,7 +270,7 @@ func TestRetentionCommitFencesAndStoreErrors(t *testing.T) {
 			}
 			defer client.Close()
 			store := &EtcdStore{client: client}
-			err = store.CommitConsumerOffsetIfGroupExists(ctx, id, 0, "", 0, "orders", 0, 99, "")
+			err = store.CommitMemberConsumerOffset(ctx, id, 0, "", 0, "orders", 0, 99, "")
 			if mode == "changed" {
 				if !errors.Is(err, ErrConsumerGroupChanged) || attempts != 3 {
 					t.Fatalf("unbounded or unfenced retry: attempts=%d err=%v", attempts, err)

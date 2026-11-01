@@ -42,9 +42,9 @@ func (s pausedCommitStore) CommitConsumerOffset(ctx context.Context, group, topi
 	return s.EtcdStore.CommitConsumerOffset(ctx, group, topic, partition, offset, meta)
 }
 
-func (s pausedCommitStore) CommitConsumerOffsetIfGroupExists(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string) error {
+func (s pausedCommitStore) CommitMemberConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string) error {
 	s.pause()
-	return s.EtcdStore.CommitConsumerOffsetIfGroupExists(ctx, group, createRevision, memberID, generation, topic, partition, offset, meta)
+	return s.EtcdStore.CommitMemberConsumerOffset(ctx, group, createRevision, memberID, generation, topic, partition, offset, meta)
 }
 
 func TestOffsetCommitAfterDeleteGroupsFails(t *testing.T) {
@@ -120,7 +120,7 @@ func testOffsetCommitAfterDeleteGroups(t *testing.T, recreate bool) {
 
 type changedCommitStore struct{ *metadata.EtcdStore }
 
-func (s changedCommitStore) CommitConsumerOffsetIfGroupExists(context.Context, string, int64, string, int32, string, int32, int64, string) error {
+func (s changedCommitStore) CommitMemberConsumerOffset(context.Context, string, int64, string, int32, string, int32, int64, string) error {
 	return metadata.ErrConsumerGroupChanged
 }
 

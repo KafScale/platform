@@ -329,3 +329,32 @@ func TestGroupDeletedRunsOutsideCoordinatorLock(t *testing.T) {
 		})
 	}
 }
+
+type countingGroupStore struct {
+	*metadata.InMemoryStore
+	puts *int
+}
+
+func (s countingGroupStore) PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error {
+	*s.puts++
+	return s.InMemoryStore.PutConsumerGroup(ctx, group)
+}
+
+func TestHeartbeatSkipsUnchangedGroupWrite(t *testing.T) {
+	puts := 0
+	store := countingGroupStore{metadata.NewInMemoryStore(disconnectGroupMetadata()), &puts}
+	c := newTestCoordinator(t, store)
+	joined := joinTestGroup(t, c, "")
+	syncTestGroup(t, c, joined.MemberID, joined.Generation, 0)
+	puts = 0
+	for range 3 {
+		req := kmsg.NewPtrHeartbeatRequest()
+		req.Group, req.MemberID, req.Generation = "readers", joined.MemberID, joined.Generation
+		if resp := c.Heartbeat(context.Background(), req); resp.ErrorCode != 0 {
+			t.Fatalf("heartbeat code %d", resp.ErrorCode)
+		}
+	}
+	if puts != 0 {
+		t.Fatalf("heartbeats wrote the group %d times", puts)
+	}
+}
