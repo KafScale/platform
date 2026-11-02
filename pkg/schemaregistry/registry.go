@@ -431,6 +431,54 @@ func (r *Registry) decodeSchema(ctx context.Context, id int64, value []byte) (*S
 	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}, nil
 }
 
+const prefetchBatch = 100
+
+func (r *Registry) prefetch(ctx context.Context, ids []int64) error {
+	r.mu.RLock()
+	var missing []int64
+	for _, id := range ids {
+		if s := r.cache[id]; s == nil || id > r.counter {
+			missing = append(missing, id)
+		}
+	}
+	r.mu.RUnlock()
+	for len(missing) > 0 {
+		batch := missing[:min(prefetchBatch, len(missing))]
+		missing = missing[len(batch):]
+		ops := make([]clientv3.Op, 0, len(batch))
+		for _, id := range batch {
+			ops = append(ops, clientv3.OpGet(idKey(id)))
+		}
+		m := r.mark()
+		resp, err := r.cli.Txn(ctx).Then(ops...).Commit()
+		if err != nil {
+			return err
+		}
+		current := r.observe(&m, resp.Header)
+		var found []*Schema
+		for i, op := range resp.Responses {
+			kvs := op.GetResponseRange().Kvs
+			if len(kvs) == 0 {
+				continue
+			}
+			s, err := r.decodeSchema(ctx, batch[i], kvs[0].Value)
+			if err != nil {
+				return err
+			}
+			found = append(found, s)
+		}
+		r.mu.Lock()
+		if current && r.resets.Load() == m.gen {
+			for _, s := range found {
+				r.cacheLocked(s)
+				r.counter = max(r.counter, s.ID)
+			}
+		}
+		r.mu.Unlock()
+	}
+	return nil
+}
+
 func (r *Registry) Init(ctx context.Context) error {
 	return r.syncCounter(ctx)
 }
@@ -954,6 +1002,13 @@ func topVersion(versions map[int]versionEntry) int {
 
 func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEntry, p *prepared, deleted bool) (int, int64, error) {
 	vs := sortedVersions(versions, deleted)
+	ids := make([]int64, 0, len(vs))
+	for _, v := range vs {
+		ids = append(ids, versions[v].ID)
+	}
+	if err := r.prefetch(ctx, ids); err != nil {
+		return 0, 0, err
+	}
 	for i := len(vs) - 1; i >= 0; i-- {
 		id := versions[vs[i]].ID
 		s, err := r.schemaByID(ctx, id)
@@ -1025,6 +1080,13 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	}
 	level := effective(snap, configKey(subject), configKey(""), CompatBackward)
 	targets := compatTargets(level, versions)
+	targetIDs := make([]int64, 0, len(targets))
+	for _, prev := range targets {
+		targetIDs = append(targetIDs, versions[prev].ID)
+	}
+	if err := r.prefetch(ctx, targetIDs); err != nil {
+		return 0, 0, err
+	}
 	for _, prev := range targets {
 		if err := r.checkAgainst(ctx, subject, level, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
 			return 0, 0, err
