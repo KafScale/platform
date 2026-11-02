@@ -114,11 +114,10 @@ type versionEntry struct {
 }
 
 type Config struct {
-	Client         *clientv3.Client
-	S3             storage.S3Client
-	Namespace      string
-	InlineLimit    int
-	RequestTimeout time.Duration
+	Client      *clientv3.Client
+	S3          storage.S3Client
+	Namespace   string
+	InlineLimit int
 }
 
 type Registry struct {
@@ -126,8 +125,6 @@ type Registry struct {
 	s3           storage.S3Client
 	markers      storage.ConditionalIndexWriter
 	replacer     storage.ConditionalIndexReplacer
-	reclaimAfter time.Duration
-	now          func() time.Time
 	namespace    string
 	inlineLimit  int
 	conflicts    atomic.Uint64
@@ -164,17 +161,15 @@ func New(cfg Config) (*Registry, error) {
 		replacer, _ = cfg.S3.(storage.ConditionalIndexReplacer)
 	}
 	return &Registry{
-		writeSem:     make(chan struct{}, 1),
-		cli:          cfg.Client,
-		s3:           cfg.S3,
-		markers:      markers,
-		replacer:     replacer,
-		reclaimAfter: 2 * cfg.RequestTimeout,
-		now:          time.Now,
-		namespace:    cfg.Namespace,
-		inlineLimit:  cfg.InlineLimit,
-		cache:        make(map[int64]*Schema),
-		cacheLimit:   DefaultCacheBytes,
+		writeSem:    make(chan struct{}, 1),
+		cli:         cfg.Client,
+		s3:          cfg.S3,
+		markers:     markers,
+		replacer:    replacer,
+		namespace:   cfg.Namespace,
+		inlineLimit: cfg.InlineLimit,
+		cache:       make(map[int64]*Schema),
+		cacheLimit:  DefaultCacheBytes,
 	}, nil
 }
 
@@ -867,7 +862,11 @@ func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) err
 	if string(obj.Body) == hash {
 		return nil
 	}
-	if r.reclaimAfter <= 0 || obj.LastModified.IsZero() || r.now().Sub(obj.LastModified) <= r.reclaimAfter {
+	free, err := r.fenceID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !free {
 		return taken
 	}
 	err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
@@ -877,8 +876,63 @@ func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) err
 	if err != nil {
 		return err
 	}
-	log.Printf("reclaimed orphaned schema id %d marker at %s, written %s with no etcd record", id, key, obj.LastModified.UTC().Format(time.RFC3339))
+	log.Printf("reclaimed orphaned schema id %d marker at %q, etcd has no schema with that id", id, key)
 	return nil
+}
+
+func (r *Registry) fenceID(ctx context.Context, id int64) (bool, error) {
+	for attempt := 0; attempt <= maxConflictRetry; attempt++ {
+		snap, err := r.read(ctx, []string{counterKey(), idKey(id)}, nil)
+		if err != nil {
+			return false, err
+		}
+		if snap[idKey(id)] != nil {
+			return false, nil
+		}
+		n, err := snap.int(counterKey())
+		if err != nil {
+			return false, err
+		}
+		if n >= id {
+			return true, nil
+		}
+		cmps := append(snap.fence(counterKey()), clientv3.Compare(clientv3.CreateRevision(idKey(id)), "=", 0))
+		ok, err := r.commit(ctx, cmps, []clientv3.Op{clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10))})
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *Registry) settleMarker(ctx context.Context, id int64, hash string) {
+	if r.replacer == nil {
+		return
+	}
+	key := r.idMarkerKey(id)
+	for attempt := 0; attempt <= maxConflictRetry; attempt++ {
+		obj, err := r.replacer.DownloadIndexObject(ctx, key)
+		if err != nil {
+			log.Printf("check schema id %d marker at %q: %v", id, key, err)
+			return
+		}
+		if string(obj.Body) == hash {
+			return
+		}
+		err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
+		if err == nil {
+			log.Printf("rewrote schema id %d marker at %q to the schema etcd holds", id, key)
+			return
+		}
+		if !errors.Is(err, storage.ErrPreconditionFailed) && !errors.Is(err, storage.ErrConditionalConflict) {
+			log.Printf("rewrite schema id %d marker at %q: %v", id, key, err)
+			return
+		}
+	}
+	log.Printf("schema id %d marker at %q kept changing and may not hold the hash of the schema etcd holds", id, key)
 }
 
 func (r *Registry) CheckIDMarkers(ctx context.Context) error {
@@ -1076,6 +1130,27 @@ func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEnt
 			return 0, 0, err
 		}
 		if s != nil && s.Type == p.schemaType && s.Norm == p.norm {
+			return vs[i], id, nil
+		}
+	}
+	for i := len(vs) - 1; i >= 0; i-- {
+		id := versions[vs[i]].ID
+		s, err := r.schemaByID(ctx, id)
+		if err != nil {
+			return 0, 0, err
+		}
+		if s == nil || s.Type != p.schemaType {
+			continue
+		}
+		refs, err := r.storedReferences(ctx, s)
+		if err != nil {
+			return 0, 0, err
+		}
+		normalized, err := canonicalAvro(s.Text, refs, true)
+		if err != nil {
+			continue
+		}
+		if schemaHash(s.Type, normalized, s.References) == p.norm {
 			return vs[i], id, nil
 		}
 	}
@@ -1336,6 +1411,9 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	ok, err := r.commit(ctx, cmps, ops)
 	if err != nil || !ok {
 		return 0, 0, err
+	}
+	if newID && w.r.s3 != nil {
+		r.settleMarker(ctx, id, p.hash)
 	}
 	return id, version, nil
 }

@@ -135,7 +135,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		return fmt.Errorf("connect to etcd: %w", err)
 	}
 	defer cli.Close()
-	cfg := schemaregistry.Config{Client: cli, Namespace: s.namespace, InlineLimit: s.inlineLimit, RequestTimeout: s.timeout}
+	cfg := schemaregistry.Config{Client: cli, Namespace: s.namespace, InlineLimit: s.inlineLimit}
 	if s.s3 != nil {
 		if cfg.S3, err = storage.NewS3Client(ctx, *s.s3); err != nil {
 			return fmt.Errorf("create S3 client: %w", err)

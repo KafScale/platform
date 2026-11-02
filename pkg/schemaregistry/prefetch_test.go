@@ -68,3 +68,20 @@ func TestRegisterRoundTripsDoNotGrowWithVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestPrefetchRereadsCachedIDAboveCounter(t *testing.T) {
+	h := newHarness(t, nil, Config{})
+	id := h.register("s", schema(userV1))
+	h.reg.mu.Lock()
+	h.reg.cache[id] = &Schema{ID: id, Type: schemaTypeAvro, Text: "stale"}
+	h.reg.counter = id - 1
+	h.reg.mu.Unlock()
+	if err := h.reg.prefetch(context.Background(), []int64{id}); err != nil {
+		t.Fatal(err)
+	}
+	h.reg.mu.RLock()
+	defer h.reg.mu.RUnlock()
+	if s := h.reg.cache[id]; s == nil || s.Text == "stale" || h.reg.counter != id {
+		t.Fatalf("cache %+v counter %d", s, h.reg.counter)
+	}
+}
