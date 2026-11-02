@@ -29,13 +29,19 @@ const maxWatchBackoff = 10 * time.Second
 var errWatchClosed = errors.New("watch closed")
 
 func (r *Registry) Watch(ctx context.Context) {
+	r.watchLoop(ctx, r.watchOnce, waitFor)
+}
+
+func (r *Registry) watchLoop(ctx context.Context, once func(context.Context, int64) (int64, bool, error), wait func(context.Context, time.Duration) bool) {
 	var from int64
 	failures := 0
 	for ctx.Err() == nil {
-		next, err := r.watchOnce(ctx, from)
+		next, received, err := once(ctx, from)
 		from = next
-		if err == nil {
+		if received || err == nil {
 			failures = 0
+		}
+		if err == nil {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -43,22 +49,33 @@ func (r *Registry) Watch(ctx context.Context) {
 		}
 		failures++
 		log.Printf("schema registry etcd watch: %v", err)
-		wait := min(100*time.Millisecond<<min(failures, 7), maxWatchBackoff)
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !wait(ctx, watchBackoff(failures)) {
 			return
-		case <-timer.C:
 		}
 	}
 }
 
-func (r *Registry) watchOnce(ctx context.Context, from int64) (int64, error) {
+func watchBackoff(failures int) time.Duration {
+	return min(100*time.Millisecond<<min(failures, 7), maxWatchBackoff)
+}
+
+func waitFor(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func (r *Registry) watchOnce(ctx context.Context, from int64) (int64, bool, error) {
+	received := false
 	if from == 0 {
 		resp, err := r.cli.Get(ctx, counterKey(), clientv3.WithCountOnly())
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		from = resp.Header.Revision
 	}
@@ -68,17 +85,18 @@ func (r *Registry) watchOnce(ctx context.Context, from int64) (int64, error) {
 	for resp := range ch {
 		if resp.CompactRevision > 0 || (resp.Header.Revision > 0 && resp.Header.Revision < from) {
 			r.restored(ctx)
-			return 0, nil
+			return 0, true, nil
 		}
 		if err := resp.Err(); err != nil {
-			return from, err
+			return from, received, err
 		}
+		received = true
 		from = max(from, resp.Header.Revision)
 	}
 	if ctx.Err() != nil {
-		return from, ctx.Err()
+		return from, received, ctx.Err()
 	}
-	return from, errWatchClosed
+	return from, received, errWatchClosed
 }
 
 func (r *Registry) restored(ctx context.Context) {
