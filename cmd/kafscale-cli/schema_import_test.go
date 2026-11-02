@@ -511,3 +511,30 @@ func TestSchemaImportFailedRunPrintsSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaImportFailedPlanPrintsSummary(t *testing.T) {
+	src := seedSource(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && r.URL.Path == "/subjects" {
+				http.Error(w, `{"error_code":50001,"message":"listing failed"}`, http.StatusInternalServerError)
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
+	})
+	dst := startTestRegistry(t, nil)
+	dst.must("PUT", "/mode", map[string]string{"mode": "IMPORT"})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "list source subjects") {
+		t.Fatalf("err %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"imported 0, skipped 0, soft-deleted 0, settings changed 0, conflicts 0, skipped contexts 0",
+		"the run stopped early; rerun the same command to resume it",
+		"target is still in IMPORT mode",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q\n%s", want, out)
+		}
+	}
+}

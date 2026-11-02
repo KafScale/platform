@@ -228,20 +228,11 @@ func executeSchemaImport(ctx context.Context, stdout io.Writer, cfg schemaImport
 		return fmt.Errorf("--to: %w", err)
 	}
 	im := &schemaImport{cfg: cfg, src: src, dst: dst, out: stdout, items: map[string]*srVersion{}, tempModes: map[string]string{}, planned: map[int64]*srVersion{}}
-	subjects, err := im.plan(ctx)
-	if err != nil {
-		return err
-	}
-	order, err := im.order()
-	if err != nil {
-		return err
-	}
 	prefix := ""
 	if cfg.DryRun {
 		prefix = "dry run: "
 	}
-	_, _ = fmt.Fprintf(stdout, "%splanned %d subjects and %d schema versions from %s\n", prefix, len(subjects), len(order), src.base)
-	runErr := im.run(ctx, order, subjects)
+	runErr := im.planAndRun(ctx, prefix)
 	_, _ = fmt.Fprintf(stdout, "%simported %d, skipped %d, soft-deleted %d, settings changed %d, conflicts %d, skipped contexts %d\n", prefix, im.imported, im.skipped, im.deleted, im.settings, im.conflicts, len(im.contexts))
 	if !cfg.DryRun {
 		var mode modeBody
@@ -262,6 +253,19 @@ func executeSchemaImport(ctx context.Context, stdout io.Writer, cfg schemaImport
 		return fmt.Errorf("schema import skipped %d subjects in non-default contexts", len(im.contexts))
 	}
 	return nil
+}
+
+func (im *schemaImport) planAndRun(ctx context.Context, prefix string) error {
+	subjects, err := im.plan(ctx)
+	if err != nil {
+		return err
+	}
+	order, err := im.order()
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(im.out, "%splanned %d subjects and %d schema versions from %s\n", prefix, len(subjects), len(order), im.src.base)
+	return im.run(ctx, order, subjects)
 }
 
 func (im *schemaImport) run(ctx context.Context, order []*srVersion, subjects []string) error {
