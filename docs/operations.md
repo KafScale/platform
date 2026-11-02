@@ -284,12 +284,12 @@ Snapshot restore refers to **etcd operational data** (cluster metadata/offsets).
 When the KafScale operator manages etcd, each cluster pod runs ```restore init containers``` before etcd starts:
 
 - The snapshot download container pulls the latest `.db` snapshot from the configured bucket/prefix.
-- The restore container runs `etcdctl snapshot restore` if the data directory is empty and a snapshot file is present.
+- The restore container runs `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted` if the data directory is empty and a snapshot file is present. The bump keeps etcd revisions moving forward after the restore, and marking them compacted ends every watch that started before it.
 - If no snapshot is available, etcd starts with a clean data directory.
 
-The schema registry keeps its state in the same etcd. After a restore, restart every registry pod. A pod can't always tell that etcd was restored: the restore keeps the cluster id, and the revision soon climbs past what the pod saw. With `--bump-revision` and `--mark-compacted` the revision is higher at once, so no pod notices the restore and every pod keeps serving schemas the snapshot no longer has. A pod that is not restarted can keep schemas it cached before the restore. When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 with a create-only write and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again. See [schema-registry.md](schema-registry.md#storage).
+The schema registry keeps its state in the same etcd. Registry pods watch their keys and clear their schema cache when that watch reports a compaction, so a restore run by the operator is handled without restarting them. For a manual restore, run `etcdutl snapshot restore` with `--bump-revision` and `--mark-compacted`, or restart every registry pod afterwards. Without those flags a pod can't always tell that etcd was restored: the restore keeps the cluster id, and the revision soon climbs past what the pod saw, so each pod keeps serving the schemas it had cached. When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 with a create-only write and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again. See [schema-registry.md](schema-registry.md#storage).
 
-The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
+The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.8. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
 ### Topic Recovery On The DR Spine
 

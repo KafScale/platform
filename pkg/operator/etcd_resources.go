@@ -69,6 +69,7 @@ const (
 	operatorEtcdDefragEnabledEnv  = "KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED"
 
 	defaultEtcdImage                 = "kubesphere/etcd:3.6.4-0"
+	etcdRestoreRevisionBump          = 1000000000
 	defaultEtcdctlImage              = "ghcr.io/kafscale/kafscale-etcd-tools:dev"
 	defaultEtcdStorageSize           = "10Gi"
 	defaultEtcdReplicas              = 3
@@ -338,7 +339,9 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"--name \"$POD_NAME\" " +
 				"--initial-cluster \"$INITIAL_CLUSTER\" " +
 				"--initial-cluster-token \"" + cluster.Name + "-etcd\" " +
-				"--initial-advertise-peer-urls \"$PEER_URL\"\n"
+				"--initial-advertise-peer-urls \"$PEER_URL\" " +
+				"--bump-revision " + strconv.Itoa(etcdRestoreRevisionBump) + " " +
+				"--mark-compacted\n"
 
 			downloadScript := "set -euo pipefail\n" +
 				"DATA_DIR=/var/lib/etcd\n" +
