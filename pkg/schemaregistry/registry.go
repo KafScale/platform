@@ -71,6 +71,7 @@ type Schema struct {
 	Text       string
 	References []Reference
 	Norm       string
+	olderNorm  bool
 }
 
 type SubjectVersion struct {
@@ -98,6 +99,7 @@ type schemaRecord struct {
 	SchemaType string      `json:"schemaType"`
 	Hash       string      `json:"hash"`
 	Norm       string      `json:"norm,omitempty"`
+	NormForm   int         `json:"normForm,omitempty"`
 	References []Reference `json:"references,omitempty"`
 	Schema     string      `json:"schema,omitempty"`
 	S3Key      string      `json:"s3Key,omitempty"`
@@ -432,7 +434,7 @@ func (r *Registry) decodeSchema(ctx context.Context, id int64, value []byte) (*S
 		}
 		text = string(body)
 	}
-	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}, nil
+	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm, olderNorm: rec.NormForm < currentNormForm}, nil
 }
 
 const prefetchBatch = 100
@@ -765,6 +767,7 @@ type recordWriter struct {
 	uploaded string
 	writes   int
 	claimed  int64
+	took     bool
 }
 
 const (
@@ -829,7 +832,7 @@ func (w *recordWriter) claimImport(ctx context.Context, id int64) error {
 	}
 	err := w.r.putMarker(ctx, id, w.p.hash)
 	if errors.Is(err, storage.ErrPreconditionFailed) {
-		err = w.r.reclaimMarker(ctx, id, w.p.hash)
+		w.took, err = w.r.reclaimMarker(ctx, id, w.p.hash)
 	}
 	if err != nil {
 		var regErr *Error
@@ -842,42 +845,41 @@ func (w *recordWriter) claimImport(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) error {
+func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) (bool, error) {
 	key := r.idMarkerKey(id)
 	taken := errNotPermitted("Schema id %d was issued before for a different schema, recorded in S3 at %s", id, key)
 	if r.replacer == nil {
 		data, err := r.s3.DownloadIndex(ctx, key)
 		if err != nil {
-			return fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+			return false, fmt.Errorf("read schema id %d marker from S3: %w", id, err)
 		}
 		if string(data) != hash {
-			return taken
+			return false, taken
 		}
-		return nil
+		return false, nil
 	}
 	obj, err := r.replacer.DownloadIndexObject(ctx, key)
 	if err != nil {
-		return fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+		return false, fmt.Errorf("read schema id %d marker from S3: %w", id, err)
 	}
 	if string(obj.Body) == hash {
-		return nil
+		return false, nil
 	}
 	free, err := r.fenceID(ctx, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !free {
-		return taken
+		return false, taken
 	}
 	err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
 	if errors.Is(err, storage.ErrPreconditionFailed) || errors.Is(err, storage.ErrConditionalConflict) {
-		return taken
+		return false, taken
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
-	log.Printf("reclaimed orphaned schema id marker %s, etcd has no schema with that id", logSafe(key))
-	return nil
+	return true, nil
 }
 
 func (r *Registry) fenceID(ctx context.Context, id int64) (bool, error) {
@@ -989,7 +991,7 @@ func (r *Registry) CheckIDMarkers(ctx context.Context) error {
 
 func (w *recordWriter) record(ctx context.Context) (string, error) {
 	p := w.p
-	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, References: w.req.References}
+	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, NormForm: currentNormForm, References: w.req.References}
 	if len(p.canonical) <= w.r.inlineLimit {
 		rec.Schema = p.canonical
 	} else {
@@ -1119,6 +1121,8 @@ func topVersion(versions map[int]versionEntry) int {
 	return top
 }
 
+const currentNormForm = 1
+
 func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEntry, p *prepared, deleted bool) (int, int64, error) {
 	vs := sortedVersions(versions, deleted)
 	ids := make([]int64, 0, len(vs))
@@ -1144,7 +1148,7 @@ func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEnt
 		if err != nil {
 			return 0, 0, err
 		}
-		if s == nil || s.Type != p.schemaType {
+		if s == nil || s.Type != p.schemaType || !s.olderNorm {
 			continue
 		}
 		refs, err := r.storedReferences(ctx, s)
@@ -1350,6 +1354,13 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 			return 0, 0, err
 		}
 		if existing == nil || existing.Type != p.schemaType || existing.Text != p.canonical || !slices.Equal(existing.References, req.References) {
+			if w.claimed == id && w.r.replacer != nil {
+				var rec schemaRecord
+				if err := json.Unmarshal(kv.Value, &rec); err == nil && rec.Hash != "" {
+					r.settleMarker(ctx, id, rec.Hash)
+				}
+				w.claimed = 0
+			}
 			return 0, 0, errNotPermitted("Schema id %d already holds a different schema", id)
 		}
 		cmps = append(cmps, snap.fence(ik)...)
@@ -1418,6 +1429,9 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		return 0, 0, err
 	}
 	if newID && w.r.s3 != nil {
+		if w.took {
+			log.Printf("reclaimed orphaned schema id marker %s, etcd had no schema with that id", logSafe(r.idMarkerKey(id)))
+		}
 		r.settleMarker(ctx, id, p.hash)
 	}
 	return id, version, nil
