@@ -876,7 +876,7 @@ func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) err
 	if err != nil {
 		return err
 	}
-	log.Printf("reclaimed orphaned schema id %d marker at %q, etcd has no schema with that id", id, key)
+	log.Printf("reclaimed orphaned schema id %d marker at %s, etcd has no schema with that id", id, logSafe(key))
 	return nil
 }
 
@@ -916,7 +916,7 @@ func (r *Registry) settleMarker(ctx context.Context, id int64, hash string) {
 	for attempt := 0; attempt <= maxConflictRetry; attempt++ {
 		obj, err := r.replacer.DownloadIndexObject(ctx, key)
 		if err != nil {
-			log.Printf("check schema id %d marker at %q: %v", id, key, err)
+			log.Printf("check schema id %d marker at %s: %s", id, logSafe(key), logSafe(err.Error()))
 			return
 		}
 		if string(obj.Body) == hash {
@@ -924,15 +924,20 @@ func (r *Registry) settleMarker(ctx context.Context, id int64, hash string) {
 		}
 		err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
 		if err == nil {
-			log.Printf("rewrote schema id %d marker at %q to the schema etcd holds", id, key)
+			log.Printf("rewrote schema id %d marker at %s to the schema etcd holds", id, logSafe(key))
 			return
 		}
 		if !errors.Is(err, storage.ErrPreconditionFailed) && !errors.Is(err, storage.ErrConditionalConflict) {
-			log.Printf("rewrite schema id %d marker at %q: %v", id, key, err)
+			log.Printf("rewrite schema id %d marker at %s: %s", id, logSafe(key), logSafe(err.Error()))
 			return
 		}
 	}
-	log.Printf("schema id %d marker at %q kept changing and may not hold the hash of the schema etcd holds", id, key)
+	log.Printf("schema id %d marker at %s kept changing and may not hold the hash of the schema etcd holds", id, logSafe(key))
+}
+
+func logSafe(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.ReplaceAll(value, "\r", "")
 }
 
 func (r *Registry) CheckIDMarkers(ctx context.Context) error {
