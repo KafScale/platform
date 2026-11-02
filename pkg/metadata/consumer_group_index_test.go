@@ -18,9 +18,12 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -274,11 +277,28 @@ func TestConsumerGroupIndexMigratesLegacyLayout(t *testing.T) {
 func TestConsumerGroupBackfillSkipsDeletedGroup(t *testing.T) {
 	ctx := context.Background()
 	store := newTestEtcdStore(t, ctx, ClusterMetadata{}, testutil.StartEmbeddedEtcd(t))
-	if err := store.backfillConsumerGroupIndex(ctx, "gone"); err != nil {
-		t.Fatal(err)
+	var ids []string
+	for i := 0; i < 250; i++ {
+		id := fmt.Sprintf("g%03d", i)
+		ids = append(ids, id)
+		if i%3 == 0 {
+			continue
+		}
+		putLegacyGroup(t, store.client, id, &metadatapb.ConsumerGroup{GroupId: id, State: "empty"}, 0, time.Now())
 	}
-	if got := indexIDs(t, store.client); got != "" {
-		t.Fatalf("backfill indexed a missing group: %q", got)
+	var want []string
+	for i, id := range ids {
+		if i%3 != 0 {
+			want = append(want, id)
+		}
+	}
+	for range 2 {
+		if err := store.backfillConsumerGroupIndex(ctx, ids); err != nil {
+			t.Fatal(err)
+		}
+		if got := indexIDs(t, store.client); got != strings.Join(want, ",") {
+			t.Fatalf("backfill indexed %q", got)
+		}
 	}
 }
 
@@ -306,5 +326,122 @@ func TestConsumerGroupListingCost(t *testing.T) {
 	measure("retention index listing", func() ([]*metadatapb.ConsumerGroup, error) { return store.ListConsumerGroupsForRetention(ctx, false) })
 	if counter.keys > 2000 {
 		t.Fatalf("index listing read %d keys", counter.keys)
+	}
+}
+
+func TestConsumerGroupBackfillCost10k(t *testing.T) {
+	if os.Getenv("KAFSCALE_GROUP_INDEX_10K") != "1" {
+		t.Skip("set KAFSCALE_GROUP_INDEX_10K=1")
+	}
+	ctx := context.Background()
+	store, counter := newCountingEtcdStore(t, testutil.StartEmbeddedEtcd(t))
+	for i := 0; i < 10000; i++ {
+		id := fmt.Sprintf("group-%05d", i)
+		putLegacyGroup(t, store.client, id, &metadatapb.ConsumerGroup{GroupId: id, State: "empty"}, 10, time.Now())
+	}
+	for _, name := range []string{"first full scan with backfill", "second full scan"} {
+		counter.reset()
+		start := time.Now()
+		groups, err := store.ListConsumerGroupsForRetention(ctx, true)
+		if err != nil || len(groups) != 10000 {
+			t.Fatalf("%s: %d groups, %v", name, len(groups), err)
+		}
+		t.Logf("%s: %d etcd requests, %d keys returned, %s", name, counter.calls, counter.keys, time.Since(start).Round(time.Millisecond))
+	}
+	if got := len(strings.Split(indexIDs(t, store.client), ",")); got != 10000 {
+		t.Fatalf("index has %d keys", got)
+	}
+}
+
+func TestConsumerGroupCreateWithMembersIndexesAfterFailedIndexWrite(t *testing.T) {
+	var fail atomic.Bool
+	interceptor := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if fail.Load() && strings.Contains(fmt.Sprint(req), consumerGroupIndexPrefix) {
+			return errors.New("injected index write failure")
+		}
+		return invoke(ctx, method, req, reply, cc, opts...)
+	}
+	client, err := clientv3.New(clientv3.Config{
+		Endpoints:   testutil.StartEmbeddedEtcd(t),
+		DialTimeout: 5 * time.Second,
+		DialOptions: []grpc.DialOption{grpc.WithUnaryInterceptor(interceptor)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	store := &EtcdStore{client: client}
+	ctx := context.Background()
+	group := &metadatapb.ConsumerGroup{GroupId: "joined", State: "stable", Members: map[string]*metadatapb.GroupMember{"m": {}}}
+	fail.Store(true)
+	_, firstErr := store.putConsumerGroup(ctx, group)
+	fail.Store(false)
+	if _, err := store.putConsumerGroup(ctx, group); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	meta, err := client.Get(ctx, ConsumerGroupKey("joined"), clientv3.WithCountOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := indexIDs(t, client); meta.Count != 1 || got != "joined" {
+		t.Fatalf("after first write error %v and a retry: metadata %d, index %q", firstErr, meta.Count, got)
+	}
+}
+
+func TestConsumerGroupListingReadsOneRevision(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	writer := newEtcdClient(t, endpoints)
+	ctx := context.Background()
+	var pages atomic.Int32
+	var injected atomic.Bool
+	interceptor := func(callCtx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		err := invoke(callCtx, method, req, reply, cc, opts...)
+		if _, ok := reply.(*etcdserverpb.RangeResponse); ok && err == nil && pages.Add(1) == 1 && injected.CompareAndSwap(false, true) {
+			for _, id := range []string{"a-late", "z-late"} {
+				encoded, _ := EncodeConsumerGroup(&metadatapb.ConsumerGroup{GroupId: id, State: "empty"})
+				if _, err := writer.Txn(ctx).Then(clientv3.OpPut(ConsumerGroupKey(id), string(encoded)), clientv3.OpPut(ConsumerGroupIndexKey(id), "")).Commit(); err != nil {
+					return err
+				}
+			}
+		}
+		return err
+	}
+	client, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second, DialOptions: []grpc.DialOption{grpc.WithUnaryInterceptor(interceptor)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	store := &EtcdStore{client: client}
+	for _, id := range []string{"g1", "g2", "g3"} {
+		if _, err := store.putConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: id, State: "empty"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := consumerGroupPageSize
+	consumerGroupPageSize = 1
+	t.Cleanup(func() { consumerGroupPageSize = old })
+	lists := map[string]func() ([]*metadatapb.ConsumerGroup, error){
+		"index":      func() ([]*metadatapb.ConsumerGroup, error) { return store.ListConsumerGroupsForRetention(ctx, false) },
+		"full":       func() ([]*metadatapb.ConsumerGroup, error) { return store.ListConsumerGroupsForRetention(ctx, true) },
+		"listgroups": func() ([]*metadatapb.ConsumerGroup, error) { return store.ListConsumerGroups(ctx) },
+	}
+	for _, name := range []string{"index", "full", "listgroups"} {
+		for _, id := range []string{"a-late", "z-late"} {
+			if _, err := writer.Delete(ctx, ConsumerGroupIndexKey(id)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Delete(ctx, ConsumerGroupKey(id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		pages.Store(0)
+		injected.Store(false)
+		groups, err := lists[name]()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := groupIDs(groups); got != "g1,g2,g3" {
+			t.Fatalf("%s listing mixed revisions: %q", name, got)
+		}
 	}
 }

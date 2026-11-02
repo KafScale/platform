@@ -121,12 +121,14 @@ func (s *EtcdStore) ListConsumerGroupsForRetention(ctx context.Context, full boo
 	for _, id := range indexed {
 		inIndex[id] = true
 	}
+	var missing []string
 	for _, id := range ids {
 		if hasMetadata[id] && !inIndex[id] {
-			if err := s.backfillConsumerGroupIndex(ctx, id); err != nil {
-				return nil, err
-			}
+			missing = append(missing, id)
 		}
+	}
+	if err := s.backfillConsumerGroupIndex(ctx, missing); err != nil {
+		return nil, err
 	}
 	for _, id := range indexed {
 		if _, ok := hasMetadata[id]; !ok {
@@ -137,13 +139,23 @@ func (s *EtcdStore) ListConsumerGroupsForRetention(ctx context.Context, full boo
 	return s.loadConsumerGroups(ctx, ids, rev)
 }
 
-func (s *EtcdStore) backfillConsumerGroupIndex(ctx context.Context, id string) error {
-	_, err := s.client.Txn(ctx).
-		If(clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(id)), "!=", 0)).
-		Then(clientv3.OpPut(ConsumerGroupIndexKey(id), "")).
-		Commit()
-	s.recordEtcdResult(err)
-	return err
+func (s *EtcdStore) backfillConsumerGroupIndex(ctx context.Context, ids []string) error {
+	for start := 0; start < len(ids); start += 100 {
+		ops := make([]clientv3.Op, 0, 100)
+		for _, id := range ids[start:min(start+100, len(ids))] {
+			ops = append(ops, clientv3.OpTxn(
+				[]clientv3.Cmp{clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(id)), "!=", 0)},
+				[]clientv3.Op{clientv3.OpPut(ConsumerGroupIndexKey(id), "")},
+				nil,
+			))
+		}
+		_, err := s.client.Txn(ctx).Then(ops...).Commit()
+		s.recordEtcdResult(err)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *EtcdStore) loadConsumerGroups(ctx context.Context, ids []string, rev int64) ([]*metadatapb.ConsumerGroup, error) {

@@ -87,18 +87,18 @@ func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.Cons
 		if err != nil {
 			return 0, err
 		}
-		resp, err := s.client.Put(ctx, ConsumerGroupKey(group.GroupId), string(payload), clientv3.WithPrevKV())
+		put := clientv3.OpPut(ConsumerGroupKey(group.GroupId), string(payload), clientv3.WithPrevKV())
+		resp, err := s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.CreateRevision(ConsumerGroupIndexKey(group.GroupId)), "=", 0)).
+			Then(put, clientv3.OpPut(ConsumerGroupIndexKey(group.GroupId), "")).
+			Else(put).
+			Commit()
 		s.recordEtcdResult(err)
 		if err != nil {
 			return 0, err
 		}
-		if resp.PrevKv != nil {
-			return resp.PrevKv.CreateRevision, nil
-		}
-		_, err = s.client.Put(ctx, ConsumerGroupIndexKey(group.GroupId), "")
-		s.recordEtcdResult(err)
-		if err != nil {
-			return 0, err
+		if prev := resp.Responses[0].GetResponsePut().PrevKv; prev != nil {
+			return prev.CreateRevision, nil
 		}
 		return resp.Header.Revision, nil
 	}
