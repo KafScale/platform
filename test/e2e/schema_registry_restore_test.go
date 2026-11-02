@@ -217,13 +217,22 @@ func startRegistryUnready(t *testing.T, h *srHarness, addr string) (*exec.Cmd, s
 
 func waitForLogCount(t *testing.T, path, text string, n int, timeout time.Duration) {
 	t.Helper()
-	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+	waitUntil(t, text, timeout, func() bool {
 		data, _ := os.ReadFile(path)
-		if strings.Count(string(data), text) >= n {
-			return
+		return strings.Count(string(data), text) >= n
+	})
+}
+
+func waitReady(t *testing.T, url string) {
+	t.Helper()
+	waitUntil(t, url+" ready", time.Minute, func() bool {
+		resp, err := http.Get(url + "/readyz")
+		if err != nil {
+			return false
 		}
-	}
-	t.Fatalf("%q did not appear %d times in %s", text, n, path)
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
 }
 
 func TestSchemaRegistryEtcdRestoreWhileWatchStartsE2E(t *testing.T) {
@@ -234,6 +243,11 @@ func TestSchemaRegistryEtcdRestoreWhileWatchStartsE2E(t *testing.T) {
 	if etcdDir == "" {
 		t.Skip("set KAFSCALE_E2E_ETCD_DIR to a directory with etcd, etcdctl and etcdutl 3.6")
 	}
+	t.Run("held startup get", func(t *testing.T) { restoreWhileWatchStarts(t, etcdDir, false) })
+	t.Run("failed init and startup gets", func(t *testing.T) { restoreWhileWatchStarts(t, etcdDir, true) })
+}
+
+func restoreWhileWatchStarts(t *testing.T, etcdDir string, failInit bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	work := t.TempDir()
@@ -246,20 +260,20 @@ func TestSchemaRegistryEtcdRestoreWhileWatchStartsE2E(t *testing.T) {
 		cluster:  "n1=" + peer,
 		snapshot: filepath.Join(work, "snapshot.db"),
 	}
-	before := filepath.Join(work, "before")
-	e.start(before)
+	e.start(filepath.Join(work, "before"))
 	cli, err := clientv3.New(clientv3.Config{Endpoints: []string{e.client}, DialTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cli.Close()
-	e.clusterID(cli)
+	clusterBefore := e.clusterID(cli)
 
 	h := &srHarness{t: t, ctx: ctx, work: work, endpoints: []string{e.client}, s3Env: []string{"KAFSCALE_S3_BUCKET="}}
 	h.bin = filepath.Join(work, "kafscale-schema-registry")
 	h.run(nil, "go", "build", "-o", h.bin, filepath.Join(repoRoot(t), "cmd", "schema-registry"))
 	writerAddr := "127.0.0.1:" + pickFreePort(t)
 	writer := h.startRegistry(writerAddr)
+	defer func() { _ = writer.Process.Kill(); _ = writer.Wait() }()
 	writerURL := "http://" + writerAddr
 	srCall(t, http.MethodPut, writerURL+"/config", map[string]string{"compatibility": "NONE"}, &map[string]any{})
 	if id := registerRestoreSchema(t, writerURL, "kept", "Kept"); id != 1 {
@@ -267,32 +281,48 @@ func TestSchemaRegistryEtcdRestoreWhileWatchStartsE2E(t *testing.T) {
 	}
 	e.run("etcdctl", "--endpoints", e.client, "snapshot", "save", e.snapshot)
 	lost := registerRestoreSchema(t, writerURL, "lost", "Lost")
-	_ = writer.Process.Kill()
-	_ = writer.Wait()
-	e.stop()
 
+	proxy := startEtcdProxy(t, e.client)
+	idleH := *h
+	idleH.endpoints = []string{proxy.addr}
 	idleAddr := "127.0.0.1:" + pickFreePort(t)
-	idle, idleLog := startRegistryUnready(t, h, idleAddr)
-	defer func() { _ = idle.Process.Kill(); _ = idle.Wait() }()
 	idleURL := "http://" + idleAddr
-	waitForLogCount(t, idleLog, "read schema id counter from etcd", 1, time.Minute)
-
-	e.start(before)
-	e.clusterID(cli)
+	if failInit {
+		proxy.failRanges.Store(true)
+		proxy.failCount.Store(true)
+	} else {
+		proxy.holdCount.Store(true)
+	}
+	idle, idleLog := startRegistryUnready(t, &idleH, idleAddr)
+	defer func() { _ = idle.Process.Kill(); _ = idle.Wait() }()
+	if failInit {
+		waitForLogCount(t, idleLog, "read schema id counter from etcd", 1, time.Minute)
+		waitUntil(t, "a refused watch baseline read", time.Minute, func() bool { return proxy.countSeen.Load() > 0 })
+		proxy.failRanges.Store(false)
+	} else {
+		waitUntil(t, "a held watch baseline read", time.Minute, func() bool { return proxy.countSeen.Load() > 0 })
+	}
+	waitReady(t, idleURL)
 	lostText := servedSchema(t, idleURL, lost)
+
 	e.stop()
 	e.restore(filepath.Join(work, "restored"))
 	e.start(filepath.Join(work, "restored"))
-	e.clusterID(cli)
+	if got := e.clusterID(cli); got != clusterBefore {
+		t.Fatalf("cluster id changed from %x to %x; this test needs the same cluster id", clusterBefore, got)
+	}
+	proxy.holdCount.Store(false)
+	proxy.failCount.Store(false)
 
 	otherAddr := "127.0.0.1:" + pickFreePort(t)
 	other := h.startRegistry(otherAddr)
 	defer func() { _ = other.Process.Kill(); _ = other.Wait() }()
-	newID := registerRestoreSchema(t, "http://"+otherAddr, "after", "After")
+	otherURL := "http://" + otherAddr
+	newID := registerRestoreSchema(t, otherURL, "after", "After")
 	if newID != lost {
 		t.Fatalf("id after restore %d, want the lost id %d to be given out again without S3", newID, lost)
 	}
-	newText := servedSchema(t, "http://"+otherAddr, newID)
+	newText := servedSchema(t, otherURL, newID)
 
 	var got string
 	for deadline := time.Now().Add(40 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {

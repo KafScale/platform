@@ -73,9 +73,6 @@ func waitFor(ctx context.Context, d time.Duration) bool {
 func (r *Registry) watchOnce(ctx context.Context, from int64) (int64, bool, error) {
 	received := false
 	if from == 0 {
-		from = r.watchBaseline()
-	}
-	if from == 0 {
 		resp, err := r.cli.Get(ctx, counterKey(), clientv3.WithCountOnly())
 		if err != nil {
 			return 0, false, err
@@ -104,12 +101,6 @@ func (r *Registry) watchOnce(ctx context.Context, from int64) (int64, bool, erro
 		return from, received, ctx.Err()
 	}
 	return from, received, errWatchClosed
-}
-
-func (r *Registry) watchBaseline() int64 {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.revision
 }
 
 func (r *Registry) restored(ctx context.Context) {
