@@ -112,8 +112,12 @@ func (r *testRegistry) put(subject string, id, version int, schema string, refs 
 	r.must("POST", "/subjects/"+subject+"/versions", body)
 }
 
-func seedSource(t *testing.T) *testRegistry {
-	src := startTestRegistry(t, nil)
+func seedSource(t *testing.T, wrap ...func(http.Handler) http.Handler) *testRegistry {
+	var w func(http.Handler) http.Handler
+	if len(wrap) > 0 {
+		w = wrap[0]
+	}
+	src := startTestRegistry(t, w)
 	src.must("PUT", "/mode", map[string]string{"mode": "IMPORT"})
 	src.put("user", 3, 1, impUser1)
 	src.put("addr", 10, 1, impAddress)
@@ -390,5 +394,120 @@ func TestSchemaImportSendsAuth(t *testing.T) {
 	}
 	if _, err := runImport(t, "--from", src.url, "--subjects", "("); err == nil {
 		t.Fatal("bad regex accepted")
+	}
+}
+
+func withExtraSubjects(extra map[string]srVersion) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && r.URL.Path == "/subjects" {
+				rec := httptest.NewRecorder()
+				h.ServeHTTP(rec, r)
+				var subjects []string
+				if err := json.Unmarshal(rec.Body.Bytes(), &subjects); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				for s := range extra {
+					subjects = append(subjects, s)
+				}
+				_ = json.NewEncoder(w).Encode(subjects)
+				return
+			}
+			for s, v := range extra {
+				prefix := "/subjects/" + s + "/versions"
+				if r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, prefix) {
+					continue
+				}
+				if r.URL.Path == prefix {
+					_ = json.NewEncoder(w).Encode([]int{v.Version})
+					return
+				}
+				v.Subject = s
+				_ = json.NewEncoder(w).Encode(v)
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+}
+
+func TestSchemaImportSkipsNonDefaultContexts(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		src := seedSource(t, withExtraSubjects(map[string]srVersion{
+			":.ctx1:imp-ctx": {Version: 1, ID: 3, Schema: `{"type":"record","name":"Ctx","fields":[]}`},
+		}))
+		dst := startTestRegistry(t, nil)
+		args := []string{"--from", src.url, "--to", dst.url}
+		if dry {
+			args = append(args, "--dry-run")
+		}
+		out, err := runImport(t, args...)
+		if err == nil || !strings.Contains(err.Error(), "skipped 1 subjects in non-default contexts") {
+			t.Fatalf("dry %v: err %v\n%s", dry, err, out)
+		}
+		for _, want := range []string{
+			"skipped: subject :.ctx1:imp-ctx is in context .ctx1",
+			"imported 7, skipped 0, soft-deleted 2, settings changed 3, conflicts 0, skipped contexts 1",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("dry %v: missing %q\n%s", dry, want, out)
+			}
+		}
+		if dry {
+			continue
+		}
+		if strings.Contains(string(dst.must("GET", "/subjects?deleted=true", nil)), "ctx") {
+			t.Fatalf("context subject reached the target")
+		}
+	}
+}
+
+func TestSchemaImportKeepsDefaultContextPrefix(t *testing.T) {
+	for subject, want := range map[string]string{":.:plain": "", ":.ctx1:x": ".ctx1", "plain": "", ":.ctx1": "", ":x:y": ""} {
+		if got := subjectContext(subject); got != want {
+			t.Fatalf("subjectContext(%q) = %q, want %q", subject, got, want)
+		}
+	}
+}
+
+func TestSchemaImportDryRunFindsSourceIDClash(t *testing.T) {
+	src := seedSource(t, withExtraSubjects(map[string]srVersion{
+		"clash": {Version: 1, ID: 3, Schema: `{"type":"record","name":"Clash","fields":[]}`},
+	}))
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url, "--dry-run")
+	if err == nil || !strings.Contains(err.Error(), "2 conflicts") {
+		t.Fatalf("err %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "conflict: schema id 3 is used by subject") || !strings.Contains(out, "conflicts 2") {
+		t.Fatalf("clash not reported\n%s", out)
+	}
+}
+
+func TestSchemaImportFailedRunPrintsSummary(t *testing.T) {
+	src := seedSource(t)
+	var posts atomic.Int64
+	dst := startTestRegistry(t, func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && posts.Add(1) == 4 {
+				http.Error(w, `{"error_code":42201,"message":"injected"}`, http.StatusUnprocessableEntity)
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
+	})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("err %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"imported 3, skipped 0, soft-deleted 0, settings changed 0, conflicts 0",
+		"the run stopped early; rerun the same command to resume it",
+		"target is still in IMPORT mode",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q\n%s", want, out)
+		}
 	}
 }

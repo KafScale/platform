@@ -208,6 +208,8 @@ type schemaImport struct {
 	items     map[string]*srVersion
 	importing bool
 	tempModes map[string]string
+	contexts  []string
+	planned   map[int64]*srVersion
 
 	imported, skipped, deleted, settings, conflicts int
 }
@@ -225,7 +227,7 @@ func executeSchemaImport(ctx context.Context, stdout io.Writer, cfg schemaImport
 	if err != nil {
 		return fmt.Errorf("--to: %w", err)
 	}
-	im := &schemaImport{cfg: cfg, src: src, dst: dst, out: stdout, items: map[string]*srVersion{}, tempModes: map[string]string{}}
+	im := &schemaImport{cfg: cfg, src: src, dst: dst, out: stdout, items: map[string]*srVersion{}, tempModes: map[string]string{}, planned: map[int64]*srVersion{}}
 	subjects, err := im.plan(ctx)
 	if err != nil {
 		return err
@@ -239,30 +241,57 @@ func executeSchemaImport(ctx context.Context, stdout io.Writer, cfg schemaImport
 		prefix = "dry run: "
 	}
 	_, _ = fmt.Fprintf(stdout, "%splanned %d subjects and %d schema versions from %s\n", prefix, len(subjects), len(order), src.base)
+	runErr := im.run(ctx, order, subjects)
+	_, _ = fmt.Fprintf(stdout, "%simported %d, skipped %d, soft-deleted %d, settings changed %d, conflicts %d, skipped contexts %d\n", prefix, im.imported, im.skipped, im.deleted, im.settings, im.conflicts, len(im.contexts))
+	if !cfg.DryRun {
+		var mode modeBody
+		if err := dst.call(ctx, http.MethodGet, "/mode", nil, &mode); err == nil && mode.Mode == "IMPORT" {
+			if runErr != nil {
+				_, _ = fmt.Fprintln(stdout, "the run stopped early; rerun the same command to resume it")
+			}
+			_, _ = fmt.Fprintf(stdout, "target is still in IMPORT mode; after the last import run switch it with: PUT %s/mode {\"mode\":\"READWRITE\"}\n", dst.base)
+		}
+	}
+	if runErr != nil {
+		return runErr
+	}
+	if im.conflicts > 0 {
+		return fmt.Errorf("schema import found %d conflicts", im.conflicts)
+	}
+	if len(im.contexts) > 0 {
+		return fmt.Errorf("schema import skipped %d subjects in non-default contexts", len(im.contexts))
+	}
+	return nil
+}
+
+func (im *schemaImport) run(ctx context.Context, order []*srVersion, subjects []string) error {
 	for _, v := range order {
 		if err := im.importVersion(ctx, v); err != nil {
+			if rerr := im.restoreModes(ctx); rerr != nil {
+				return errors.Join(err, rerr)
+			}
 			return err
 		}
 	}
 	if err := im.restoreModes(ctx); err != nil {
 		return err
 	}
-	if err := im.syncSettings(ctx, subjects); err != nil {
-		return err
+	return im.syncSettings(ctx, subjects)
+}
+
+func subjectContext(subject string) string {
+	if !strings.HasPrefix(subject, ":.") {
+		return ""
 	}
-	_, _ = fmt.Fprintf(stdout, "%simported %d, skipped %d, soft-deleted %d, settings changed %d, conflicts %d\n", prefix, im.imported, im.skipped, im.deleted, im.settings, im.conflicts)
-	if im.conflicts > 0 {
-		return fmt.Errorf("schema import found %d conflicts", im.conflicts)
+	rest := subject[1:]
+	end := strings.Index(rest, ":")
+	if end < 0 {
+		return ""
 	}
-	if !cfg.DryRun {
-		var mode struct {
-			Mode string `json:"mode"`
-		}
-		if err := dst.call(ctx, http.MethodGet, "/mode", nil, &mode); err == nil && mode.Mode == "IMPORT" {
-			_, _ = fmt.Fprintf(stdout, "target is in IMPORT mode; after the last import run switch it with: PUT %s/mode {\"mode\":\"READWRITE\"}\n", dst.base)
-		}
+	if ctx := rest[:end]; ctx != "." {
+		return ctx
 	}
-	return nil
+	return ""
 }
 
 func (im *schemaImport) plan(ctx context.Context) ([]string, error) {
@@ -272,9 +301,15 @@ func (im *schemaImport) plan(ctx context.Context) ([]string, error) {
 	}
 	var subjects []string
 	for _, s := range all {
-		if im.cfg.Subjects == nil || im.cfg.Subjects.MatchString(s) {
-			subjects = append(subjects, s)
+		if im.cfg.Subjects != nil && !im.cfg.Subjects.MatchString(s) {
+			continue
 		}
+		if c := subjectContext(s); c != "" {
+			im.contexts = append(im.contexts, s)
+			_, _ = fmt.Fprintf(im.out, "skipped: subject %s is in context %s; KafScale has only the default context, so it is not imported\n", s, c)
+			continue
+		}
+		subjects = append(subjects, s)
 	}
 	slices.Sort(subjects)
 	for _, s := range subjects {
@@ -303,6 +338,9 @@ func (im *schemaImport) plan(ctx context.Context) ([]string, error) {
 }
 
 func (im *schemaImport) fetchSubject(ctx context.Context, subject string, only int, dependency bool) error {
+	if c := subjectContext(subject); c != "" {
+		return fmt.Errorf("source subject %s is in context %s, which KafScale does not support", subject, c)
+	}
 	var versions, live []int
 	if err := im.src.call(ctx, http.MethodGet, subjectPath(subject)+"/versions?deleted=true", nil, &versions); err != nil {
 		return fmt.Errorf("list versions of source subject %s: %w", subject, err)
@@ -421,6 +459,11 @@ func (im *schemaImport) importVersion(ctx context.Context, v *srVersion) error {
 		case !isSRCode(err, 40403):
 			return fmt.Errorf("read target schema id %d: %w", v.ID, err)
 		}
+		if prev := im.planned[v.ID]; prev != nil && !sameSchema(v, prev) {
+			im.conflict("schema id %d is used by subject %s version %d and subject %s version %d with different content in the source", v.ID, prev.Subject, prev.Version, v.Subject, v.Version)
+			return nil
+		}
+		im.planned[v.ID] = v
 		if im.cfg.DryRun {
 			_, _ = fmt.Fprintf(im.out, "would import subject %s version %d id %d\n", v.Subject, v.Version, v.ID)
 			im.imported++
