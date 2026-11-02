@@ -41,13 +41,13 @@ const (
 )
 
 type harness struct {
-	t   *testing.T
+	t   testing.TB
 	cli *clientv3.Client
 	reg *Registry
 	srv *httptest.Server
 }
 
-func newClient(t *testing.T, endpoints []string) *clientv3.Client {
+func newClient(t testing.TB, endpoints []string) *clientv3.Client {
 	t.Helper()
 	cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second})
 	if err != nil {
@@ -57,7 +57,7 @@ func newClient(t *testing.T, endpoints []string) *clientv3.Client {
 	return cli
 }
 
-func newHarness(t *testing.T, endpoints []string, cfg Config) *harness {
+func newHarness(t testing.TB, endpoints []string, cfg Config) *harness {
 	t.Helper()
 	if endpoints == nil {
 		endpoints = testutil.StartEmbeddedEtcd(t)

@@ -64,3 +64,23 @@ func TestSchemasStoredByEarlierBuildKeepTheirIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestNewSchemasRecordTheirNormForm(t *testing.T) {
+	h := newHarness(t, nil, Config{})
+	id := h.register("user", schema(userV1))
+	resp, err := h.cli.Get(context.Background(), idKey(id))
+	if err != nil || len(resp.Kvs) == 0 {
+		t.Fatalf("id %d: %v %v", id, resp, err)
+	}
+	var rec schemaRecord
+	if err := json.Unmarshal(resp.Kvs[0].Value, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.NormForm != currentNormForm {
+		t.Fatalf("normForm %d, want %d", rec.NormForm, currentNormForm)
+	}
+	s, err := h.reg.schemaByID(context.Background(), id)
+	if err != nil || s == nil || s.olderNorm {
+		t.Fatalf("schema %+v err %v", s, err)
+	}
+}
