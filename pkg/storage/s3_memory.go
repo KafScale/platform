@@ -17,9 +17,12 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // MemoryS3Client is an in-memory implementation of S3Client for development/testing.
@@ -27,14 +30,21 @@ type MemoryS3Client struct {
 	mu          sync.Mutex
 	data        map[string][]byte
 	index       map[string][]byte
+	indexMeta   map[string]memoryIndexMeta
 	bucketReady bool
+}
+
+type memoryIndexMeta struct {
+	etag     string
+	modified time.Time
 }
 
 // NewMemoryS3Client initializes the in-memory S3 client.
 func NewMemoryS3Client() *MemoryS3Client {
 	return &MemoryS3Client{
-		data:  make(map[string][]byte),
-		index: make(map[string][]byte),
+		data:      make(map[string][]byte),
+		index:     make(map[string][]byte),
+		indexMeta: make(map[string]memoryIndexMeta),
 	}
 }
 
@@ -55,8 +65,17 @@ func (m *MemoryS3Client) UploadSegment(ctx context.Context, key string, body []b
 func (m *MemoryS3Client) UploadIndex(ctx context.Context, key string, body []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.index[key] = append([]byte(nil), body...)
+	m.putIndexLocked(key, body)
 	return nil
+}
+
+func (m *MemoryS3Client) putIndexLocked(key string, body []byte) {
+	if m.indexMeta == nil {
+		m.indexMeta = make(map[string]memoryIndexMeta)
+	}
+	sum := md5.Sum(body)
+	m.index[key] = append([]byte(nil), body...)
+	m.indexMeta[key] = memoryIndexMeta{etag: `"` + hex.EncodeToString(sum[:]) + `"`, modified: time.Now()}
 }
 
 func (m *MemoryS3Client) UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error {
@@ -65,8 +84,29 @@ func (m *MemoryS3Client) UploadIndexIfAbsent(ctx context.Context, key string, bo
 	if _, ok := m.index[key]; ok {
 		return fmt.Errorf("index %s: %w", key, ErrPreconditionFailed)
 	}
-	m.index[key] = append([]byte(nil), body...)
+	m.putIndexLocked(key, body)
 	return nil
+}
+
+func (m *MemoryS3Client) UploadIndexIfMatch(ctx context.Context, key string, body []byte, etag string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.index[key]; !ok || etag == "" || m.indexMeta[key].etag != etag {
+		return fmt.Errorf("index %s: %w", key, ErrPreconditionFailed)
+	}
+	m.putIndexLocked(key, body)
+	return nil
+}
+
+func (m *MemoryS3Client) DownloadIndexObject(ctx context.Context, key string) (IndexObject, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data, ok := m.index[key]
+	if !ok {
+		return IndexObject{}, fmt.Errorf("index %s: %w", key, ErrNotFound)
+	}
+	meta := m.indexMeta[key]
+	return IndexObject{Body: append([]byte(nil), data...), ETag: meta.etag, LastModified: meta.modified}, nil
 }
 
 func (m *MemoryS3Client) DeleteSegment(ctx context.Context, key string) error {
@@ -80,6 +120,7 @@ func (m *MemoryS3Client) DeleteIndex(ctx context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.index, key)
+	delete(m.indexMeta, key)
 	return nil
 }
 

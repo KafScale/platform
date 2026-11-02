@@ -114,16 +114,20 @@ type versionEntry struct {
 }
 
 type Config struct {
-	Client      *clientv3.Client
-	S3          storage.S3Client
-	Namespace   string
-	InlineLimit int
+	Client         *clientv3.Client
+	S3             storage.S3Client
+	Namespace      string
+	InlineLimit    int
+	RequestTimeout time.Duration
 }
 
 type Registry struct {
 	cli          *clientv3.Client
 	s3           storage.S3Client
 	markers      storage.ConditionalIndexWriter
+	replacer     storage.ConditionalIndexReplacer
+	reclaimAfter time.Duration
+	now          func() time.Time
 	namespace    string
 	inlineLimit  int
 	conflicts    atomic.Uint64
@@ -148,6 +152,7 @@ func New(cfg Config) (*Registry, error) {
 		return nil, errors.New("inline limit must be positive")
 	}
 	var markers storage.ConditionalIndexWriter
+	var replacer storage.ConditionalIndexReplacer
 	if cfg.S3 != nil {
 		if cfg.Namespace == "" {
 			return nil, errors.New("s3 namespace required")
@@ -156,16 +161,20 @@ func New(cfg Config) (*Registry, error) {
 		if markers, ok = cfg.S3.(storage.ConditionalIndexWriter); !ok {
 			return nil, errors.New("s3 client does not support conditional writes")
 		}
+		replacer, _ = cfg.S3.(storage.ConditionalIndexReplacer)
 	}
 	return &Registry{
-		writeSem:    make(chan struct{}, 1),
-		cli:         cfg.Client,
-		s3:          cfg.S3,
-		markers:     markers,
-		namespace:   cfg.Namespace,
-		inlineLimit: cfg.InlineLimit,
-		cache:       make(map[int64]*Schema),
-		cacheLimit:  DefaultCacheBytes,
+		writeSem:     make(chan struct{}, 1),
+		cli:          cfg.Client,
+		s3:           cfg.S3,
+		markers:      markers,
+		replacer:     replacer,
+		reclaimAfter: 2 * cfg.RequestTimeout,
+		now:          time.Now,
+		namespace:    cfg.Namespace,
+		inlineLimit:  cfg.InlineLimit,
+		cache:        make(map[int64]*Schema),
+		cacheLimit:   DefaultCacheBytes,
 	}, nil
 }
 
@@ -825,19 +834,50 @@ func (w *recordWriter) claimImport(ctx context.Context, id int64) error {
 	}
 	err := w.r.putMarker(ctx, id, w.p.hash)
 	if errors.Is(err, storage.ErrPreconditionFailed) {
-		data, readErr := w.r.s3.DownloadIndex(ctx, w.r.idMarkerKey(id))
-		if readErr != nil {
-			return fmt.Errorf("read schema id %d marker from S3: %w", id, readErr)
-		}
-		if string(data) != w.p.hash {
-			return errNotPermitted("Schema id %d was issued before for a different schema, recorded in S3 at %s", id, w.r.idMarkerKey(id))
-		}
-		err = nil
+		err = w.r.reclaimMarker(ctx, id, w.p.hash)
 	}
 	if err != nil {
+		var regErr *Error
+		if errors.As(err, &regErr) {
+			return err
+		}
 		return fmt.Errorf("write schema id %d marker to S3: %w", id, err)
 	}
 	w.claimed = id
+	return nil
+}
+
+func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) error {
+	key := r.idMarkerKey(id)
+	taken := errNotPermitted("Schema id %d was issued before for a different schema, recorded in S3 at %s", id, key)
+	if r.replacer == nil {
+		data, err := r.s3.DownloadIndex(ctx, key)
+		if err != nil {
+			return fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+		}
+		if string(data) != hash {
+			return taken
+		}
+		return nil
+	}
+	obj, err := r.replacer.DownloadIndexObject(ctx, key)
+	if err != nil {
+		return fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+	}
+	if string(obj.Body) == hash {
+		return nil
+	}
+	if r.reclaimAfter <= 0 || obj.LastModified.IsZero() || r.now().Sub(obj.LastModified) <= r.reclaimAfter {
+		return taken
+	}
+	err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
+	if errors.Is(err, storage.ErrPreconditionFailed) || errors.Is(err, storage.ErrConditionalConflict) {
+		return taken
+	}
+	if err != nil {
+		return err
+	}
+	log.Printf("reclaimed orphaned schema id %d marker at %s, written %s with no etcd record", id, key, obj.LastModified.UTC().Format(time.RFC3339))
 	return nil
 }
 
@@ -864,6 +904,26 @@ func (r *Registry) CheckIDMarkers(ctx context.Context) error {
 	}
 	if !errors.Is(err, storage.ErrPreconditionFailed) {
 		return fmt.Errorf("S3 conditional write probe at %s: second write gave %w, want 412 PreconditionFailed", key, err)
+	}
+	if r.replacer == nil {
+		return nil
+	}
+	obj, err := r.replacer.DownloadIndexObject(ctx, key)
+	if err != nil {
+		return fmt.Errorf("S3 conditional write probe at %s: read back: %w", key, err)
+	}
+	if obj.ETag == "" {
+		return fmt.Errorf("S3 backend returned no ETag for %s, so orphaned schema id markers cannot be reclaimed with If-Match", key)
+	}
+	err = r.replacer.UploadIndexIfMatch(ctx, key, []byte("probe-stale"), `"0"`)
+	if err == nil {
+		return fmt.Errorf("S3 backend accepted a PutObject with a stale If-Match at %s, so it ignores the condition and orphaned schema id markers cannot be reclaimed safely", key)
+	}
+	if !errors.Is(err, storage.ErrPreconditionFailed) {
+		return fmt.Errorf("S3 conditional write probe at %s: stale If-Match write gave %w, want 412 PreconditionFailed", key, err)
+	}
+	if err := r.replacer.UploadIndexIfMatch(ctx, key, []byte("probe-match"), obj.ETag); err != nil {
+		return fmt.Errorf("S3 conditional write probe at %s: If-Match write with the current ETag failed: %w", key, err)
 	}
 	return nil
 }

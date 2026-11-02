@@ -173,14 +173,44 @@ func (c *awsS3Client) DeleteIndex(ctx context.Context, key string) error {
 }
 
 func (c *awsS3Client) UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error {
-	return c.put(ctx, key, body, true)
+	return c.put(ctx, key, body, true, "")
+}
+
+func (c *awsS3Client) UploadIndexIfMatch(ctx context.Context, key string, body []byte, etag string) error {
+	if etag == "" {
+		return fmt.Errorf("put object %s: empty ETag for a conditional replace", key)
+	}
+	return c.put(ctx, key, body, false, etag)
+}
+
+func (c *awsS3Client) DownloadIndexObject(ctx context.Context, key string) (IndexObject, error) {
+	resp, err := c.api.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if isNotFoundErr(err) {
+			return IndexObject{}, fmt.Errorf("get object %s: %w", key, ErrNotFound)
+		}
+		return IndexObject{}, fmt.Errorf("get object %s: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return IndexObject{}, fmt.Errorf("read body %s: %w", key, err)
+	}
+	obj := IndexObject{Body: data, ETag: aws.ToString(resp.ETag)}
+	if resp.LastModified != nil {
+		obj.LastModified = *resp.LastModified
+	}
+	return obj, nil
 }
 
 func (c *awsS3Client) putObject(ctx context.Context, key string, body []byte) error {
-	return c.put(ctx, key, body, false)
+	return c.put(ctx, key, body, false, "")
 }
 
-func (c *awsS3Client) put(ctx context.Context, key string, body []byte, ifAbsent bool) error {
+func (c *awsS3Client) put(ctx context.Context, key string, body []byte, ifAbsent bool, ifMatch string) error {
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(c.bucket),
 		Key:    aws.String(key),
@@ -189,13 +219,17 @@ func (c *awsS3Client) put(ctx context.Context, key string, body []byte, ifAbsent
 	if ifAbsent {
 		input.IfNoneMatch = aws.String("*")
 	}
+	if ifMatch != "" {
+		input.IfMatch = aws.String(ifMatch)
+	}
+	conditional := ifAbsent || ifMatch != ""
 	if c.kmsKey != "" {
 		input.ServerSideEncryption = types.ServerSideEncryptionAwsKms
 		input.SSEKMSKeyId = aws.String(c.kmsKey)
 	}
 	_, err := c.api.PutObject(ctx, input)
 	if err != nil {
-		if cond := conditionalErr(err); ifAbsent && cond != nil {
+		if cond := conditionalErr(err); conditional && cond != nil {
 			return fmt.Errorf("put object %s: %w: %w", key, cond, err)
 		}
 		if isBucketMissingErr(err) {
