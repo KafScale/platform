@@ -161,6 +161,16 @@ func run(ctx context.Context, getenv func(string) string) error {
 		log.Printf("read schema id counter from etcd: %v", err)
 	}
 	cancel()
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		reg.Watch(watchCtx)
+	}()
+	defer func() {
+		stopWatch()
+		<-watchDone
+	}()
 	srv := &http.Server{Addr: s.addr, Handler: schemaregistry.NewServer(reg, s.timeout), ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
