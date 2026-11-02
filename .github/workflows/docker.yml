@@ -52,6 +52,10 @@ jobs:
             image: kafscale-mcp
             context: .
             file: deploy/docker/mcp.Dockerfile
+          - name: schema-registry
+            image: kafscale-schema-registry
+            context: .
+            file: deploy/docker/schema-registry.Dockerfile
           - name: etcd-tools
             image: kafscale-etcd-tools
             context: .

@@ -23,7 +23,7 @@ LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
 LOCAL_NODE := $(LOCAL_NODE_BIN)/node
 LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
 
-.PHONY: proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
+.PHONY: docker-build-schema-registry test-schema-registry proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -33,6 +33,7 @@ CONSOLE_IMAGE ?= $(REGISTRY)/kafscale-console:dev
 PROXY_IMAGE ?= $(REGISTRY)/kafscale-proxy:dev
 SQL_PROCESSOR_IMAGE ?= $(REGISTRY)/kafscale-sql-processor:dev
 MCP_IMAGE ?= $(REGISTRY)/kafscale-mcp:dev
+SCHEMA_REGISTRY_IMAGE ?= $(REGISTRY)/kafscale-schema-registry:dev
 E2E_CLIENT_IMAGE ?= $(REGISTRY)/kafscale-e2e-client:dev
 ETCD_TOOLS_IMAGE ?= $(REGISTRY)/kafscale-etcd-tools:dev
 ICEBERG_PROCESSOR_IMAGE ?= iceberg-processor:dev
@@ -252,7 +253,7 @@ commit-check: ensure-local-node check fmt test-chart-mtls test-auth-coverage tes
 test-acl: ## Run ACL e2e test (requires KAFSCALE_E2E=1)
 	KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestACLsE2E
 
-docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-e2e-client docker-build-etcd-tools docker-build-sql-processor ## Build all container images
+docker-build: docker-build-broker docker-build-operator docker-build-console docker-build-proxy docker-build-mcp docker-build-schema-registry docker-build-e2e-client docker-build-etcd-tools docker-build-sql-processor ## Build all container images
 	@mkdir -p $(STAMP_DIR)
 
 DOCKER_BUILD_CMD := $(shell \
@@ -302,6 +303,13 @@ $(STAMP_DIR)/mcp.image: $(MCP_SRCS)
 	@mkdir -p $(STAMP_DIR)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(MCP_IMAGE) -f deploy/docker/mcp.Dockerfile .
 	@touch $(STAMP_DIR)/mcp.image
+
+SCHEMA_REGISTRY_SRCS := $(shell find cmd/schema-registry pkg/schemaregistry pkg/storage go.mod go.sum)
+docker-build-schema-registry: $(STAMP_DIR)/schema-registry.image ## Build schema registry container image
+$(STAMP_DIR)/schema-registry.image: $(SCHEMA_REGISTRY_SRCS)
+	@mkdir -p $(STAMP_DIR)
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(SCHEMA_REGISTRY_IMAGE) -f deploy/docker/schema-registry.Dockerfile .
+	@touch $(STAMP_DIR)/schema-registry.image
 
 E2E_CLIENT_SRCS := $(shell find cmd/e2e-client go.mod go.sum)
 docker-build-minio: ## Build the MinIO test image from test/e2e/minio.Dockerfile
@@ -429,6 +437,10 @@ test-consumer-group: release-broker-ports ## Run consumer group persistence e2e 
 test-ops-api: release-broker-ports ## Run ops/admin API e2e (embedded etcd + in-memory S3).
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestOpsAPI -v
+
+test-schema-registry: ## Run schema registry e2e test (needs docker, and python with confluent-kafka 2.16.1 in KAFSCALE_SR_PYTHON or python3)
+	KAFSCALE_E2E=1 \
+	go test -race -tags=e2e ./test/e2e -run '^TestSchemaRegistry(MinIO)?E2E$$' -v -count=1 -timeout=40m
 
 test-mcp: ## Run MCP e2e tests (in-memory metadata store + streamable HTTP).
 	KAFSCALE_E2E=1 \

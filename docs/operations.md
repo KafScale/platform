@@ -287,6 +287,8 @@ When the KafScale operator manages etcd, each cluster pod runs ```restore init c
 - The restore container runs `etcdctl snapshot restore` if the data directory is empty and a snapshot file is present.
 - If no snapshot is available, etcd starts with a clean data directory.
 
+The schema registry keeps its state in the same etcd. After a restore, restart every registry pod. A pod can't always tell that etcd was restored: the restore keeps the cluster id, and the revision soon climbs past what the pod saw. With `--bump-revision` and `--mark-compacted` the revision is higher at once, so no pod notices the restore and every pod keeps serving schemas the snapshot no longer has. A pod that is not restarted can keep schemas it cached before the restore. When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 with a create-only write and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again. See [schema-registry.md](schema-registry.md#storage).
+
 The restore image must include `/bin/sh` and `etcdctl`. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
 ### Topic Recovery On The DR Spine
@@ -498,6 +500,18 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
 - `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
 - `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS module on the unified proxy (default `false`). See [LFS proxy](#lfs-proxy) for its settings.
+
+### Schema registry
+
+See [Schema Registry](schema-registry.md) for what the registry does.
+
+- `KAFSCALE_SCHEMA_REGISTRY_ADDR`: HTTP listen address (default `:8081`).
+- `KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Required.
+- `KAFSCALE_SCHEMA_REGISTRY_ETCD_USERNAME`, `KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD`: Etcd auth for the registry.
+- `KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT`: Time limit for one request as a Go duration (default `10s`). A write that is still retrying when it runs out fails with error code 50002.
+- `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`: Schema text above this size is stored in S3 instead of etcd (default `65536`).
+- `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. Used for schema text above the inline limit and for the schema id records described in [schema-registry.md](schema-registry.md#storage). Without a bucket, schemas above the inline limit are rejected. With a bucket, the backend must support `PutObject` with `If-None-Match: *`, otherwise the registry exits at startup. When `KAFSCALE_S3_PATH_STYLE` is not set, path style addressing is used when `KAFSCALE_S3_ENDPOINT` is set. As in the broker, an unset or blank `KAFSCALE_S3_NAMESPACE` means `default`. With a bucket set and the namespace `default`, the registry logs a warning at startup, because registries on different etcd clusters that use the same bucket and namespace share one schema id space. Set it per cluster, for example to the namespace the operator gives the brokers. The registry needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `<namespace>/@schemas/`.
+- After restoring etcd from a backup, restart the registry pods so that no instance serves cached schemas from before the restore.
 
 ### Console
 

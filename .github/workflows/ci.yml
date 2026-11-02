@@ -86,6 +86,15 @@ jobs:
           kcat -V
           go test -race -tags=e2e ./test/e2e -run '^TestLibrdkafkaCompatibilityE2E$' -count=1 -v -timeout=3m
 
+      - name: Schema registry end-to-end tests
+        env:
+          KAFSCALE_E2E: "1"
+          KAFSCALE_SR_PYTHON: /tmp/sr-venv/bin/python
+        run: |
+          python3 -m venv /tmp/sr-venv
+          /tmp/sr-venv/bin/pip install "confluent-kafka[avro,schemaregistry]==2.16.1"
+          make test-schema-registry
+
       - name: Consumer group recovery end-to-end tests
         env:
           KAFSCALE_E2E: "1"

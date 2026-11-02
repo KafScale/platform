@@ -51,6 +51,7 @@ helm upgrade --install kafscale ./deploy/helm/kafscale \
 | **Console** | Web-based management UI | Enabled |
 | **Proxy** | Kafka protocol proxy (recommended external entrypoint) | Disabled |
 | **MCP** | Model Context Protocol server | Disabled |
+| **Schema Registry** | Confluent compatible schema registry backed by etcd ([docs](../../../docs/schema-registry.md)) | Disabled |
 
 ## Quick Start Examples
 
@@ -104,6 +105,7 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `proxy.*` | Kafka proxy settings (external entrypoint) |
 | `lfsDemos.*` | Optional LFS browser demo UI |
 | `mcp.*` | MCP server settings |
+| `schemaRegistry.*` | Schema registry settings. Needs `schemaRegistry.etcdEndpoints`. No authentication, ClusterIP Service only. A PodDisruptionBudget with `maxUnavailable: 1` is created when `replicas` is above 1 and `podDisruptionBudget.enabled` is true. `s3.pathStyle` takes `true` or `false`, as a boolean or a string, and empty uses path style addressing when `s3.endpoint` is set. Any other value fails the render |
 | `<component>.podSecurityContext` | Pod-level PSA `restricted` defaults (UID/GID `10001`, `runAsNonRoot`, `seccompProfile`) |
 | `<component>.containerSecurityContext` | Container hardening (`readOnlyRootFilesystem`, dropped capabilities) |
 | `proxy.affinity` | Pod affinity override; when empty the chart applies soft hostname anti-affinity |

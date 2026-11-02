@@ -59,6 +59,16 @@ func (m *MemoryS3Client) UploadIndex(ctx context.Context, key string, body []byt
 	return nil
 }
 
+func (m *MemoryS3Client) UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.index[key]; ok {
+		return fmt.Errorf("index %s: %w", key, ErrPreconditionFailed)
+	}
+	m.index[key] = append([]byte(nil), body...)
+	return nil
+}
+
 func (m *MemoryS3Client) DeleteSegment(ctx context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
