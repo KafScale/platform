@@ -69,6 +69,7 @@ type GroupCoordinator struct {
 	mu                 sync.Mutex
 	groups             map[string]*groupState
 	lastRetentionSweep time.Time
+	lastRetentionScan  time.Time
 	releaseMu          sync.Mutex
 	releasing          map[string]struct{}
 }
@@ -76,11 +77,12 @@ type GroupCoordinator struct {
 type CoordinatorConfig struct {
 	CleanupInterval time.Duration
 	// Zero uses the seven-day default; a negative value disables retention.
-	OffsetsRetention       time.Duration
-	RetentionCheckInterval time.Duration
-	AcquireGroup           func(context.Context, string) error
-	ReleaseGroup           func(string)
-	AcquireRetentionSweep  func(context.Context) error
+	OffsetsRetention          time.Duration
+	RetentionCheckInterval    time.Duration
+	RetentionFullScanInterval time.Duration
+	AcquireGroup              func(context.Context, string) error
+	ReleaseGroup              func(string)
+	AcquireRetentionSweep     func(context.Context) error
 	// OwnsGroup gates group mutation and cleanup after coordination lease loss.
 	// Nil permits standalone coordinators without an external lease manager.
 	OwnsGroup func(string) bool
@@ -89,9 +91,10 @@ type CoordinatorConfig struct {
 }
 
 var defaultCoordinatorConfig = CoordinatorConfig{
-	CleanupInterval:        5 * time.Second,
-	OffsetsRetention:       7 * 24 * time.Hour,
-	RetentionCheckInterval: time.Minute,
+	CleanupInterval:           5 * time.Second,
+	OffsetsRetention:          7 * 24 * time.Hour,
+	RetentionCheckInterval:    time.Minute,
+	RetentionFullScanInterval: time.Hour,
 }
 
 type groupState struct {
@@ -143,6 +146,9 @@ func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, c
 		}
 		if cfg.RetentionCheckInterval > 0 {
 			config.RetentionCheckInterval = cfg.RetentionCheckInterval
+		}
+		if cfg.RetentionFullScanInterval > 0 {
+			config.RetentionFullScanInterval = cfg.RetentionFullScanInterval
 		}
 		config.AcquireGroup, config.ReleaseGroup = cfg.AcquireGroup, cfg.ReleaseGroup
 		config.AcquireRetentionSweep = cfg.AcquireRetentionSweep

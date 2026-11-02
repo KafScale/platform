@@ -126,7 +126,7 @@ func (s *EtcdStore) deleteConsumerGroupAndOffsets(ctx context.Context, groupID s
 				cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(chunk[0][0]), "<", revision).WithRange(chunk[len(chunk)-1][1]))
 			}
 			if last == len(ranges) {
-				ops = append(ops, clientv3.OpDelete(ConsumerGroupKey(groupID)))
+				ops = append(ops, clientv3.OpDelete(ConsumerGroupKey(groupID)), clientv3.OpDelete(ConsumerGroupIndexKey(groupID)))
 				cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(prefix), "<", revision).WithRange(end))
 			}
 			result, err := s.client.Txn(ctx).If(cmps...).Then(ops...).Commit()

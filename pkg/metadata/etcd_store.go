@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -287,52 +286,11 @@ func (s *EtcdStore) FetchConsumerGroupRevision(ctx context.Context, groupID stri
 func (s *EtcdStore) ListConsumerGroups(ctx context.Context) ([]*metadatapb.ConsumerGroup, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := s.client.Get(ctx, ConsumerGroupPrefix()+"/", clientv3.WithPrefix(), clientv3.WithKeysOnly())
+	ids, _, rev, err := s.scanConsumerGroupIDs(ctx)
 	if err != nil {
-		s.recordEtcdResult(err)
 		return nil, err
 	}
-	ids := make(map[string]bool)
-	for _, kv := range resp.Kvs {
-		key := string(kv.Key)
-		if id, ok := ParseConsumerGroupID(key); ok {
-			ids[id] = true
-		} else if id, _, _, ok := ParseConsumerOffsetKey(key); ok {
-			ids[id] = true
-		}
-	}
-	groupIDs := make([]string, 0, len(ids))
-	for id := range ids {
-		groupIDs = append(groupIDs, id)
-	}
-	sort.Strings(groupIDs)
-	groups := make([]*metadatapb.ConsumerGroup, 0, len(groupIDs))
-	// Keep transactions below etcd's default 128-operation limit.
-	for start := 0; start < len(groupIDs); start += 100 {
-		end := min(start+100, len(groupIDs))
-		ops := make([]clientv3.Op, 0, end-start)
-		for _, id := range groupIDs[start:end] {
-			ops = append(ops, clientv3.OpGet(ConsumerGroupKey(id), clientv3.WithRev(resp.Header.Revision)))
-		}
-		batch, err := s.client.Txn(ctx).Then(ops...).Commit()
-		if err != nil {
-			s.recordEtcdResult(err)
-			return nil, err
-		}
-		for i, result := range batch.Responses {
-			kvs := result.GetResponseRange().Kvs
-			group := &metadatapb.ConsumerGroup{GroupId: groupIDs[start+i], State: "empty", ProtocolType: "consumer"}
-			if len(kvs) > 0 {
-				group, err = DecodeConsumerGroup(kvs[0].Value)
-				if err != nil {
-					return nil, err
-				}
-			}
-			groups = append(groups, group)
-		}
-	}
-	s.recordEtcdResult(nil)
-	return groups, nil
+	return s.loadConsumerGroups(ctx, ids, rev)
 }
 
 // DeleteConsumerGroup removes only keys owned by this group, including offsets.
@@ -352,7 +310,7 @@ func (s *EtcdStore) DeleteConsumerGroup(ctx context.Context, groupID string) err
 		}
 	}
 	// Remove metadata last so an interrupted deletion remains discoverable for retry.
-	ops = append(ops, clientv3.OpDelete(ConsumerGroupKey(groupID)))
+	ops = append(ops, clientv3.OpDelete(ConsumerGroupKey(groupID)), clientv3.OpDelete(ConsumerGroupIndexKey(groupID)))
 	for start := 0; start < len(ops); start += 100 {
 		_, err = s.client.Txn(ctx).Then(ops[start:min(start+100, len(ops))]...).Commit()
 		if err != nil {

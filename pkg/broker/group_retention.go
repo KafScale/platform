@@ -77,9 +77,12 @@ func (c *GroupCoordinator) cleanupRetainedGroups(now time.Time) {
 		c.retainGroup(ctx, retainer, id, false, cutoff, now)
 	}
 	if c.config.AcquireRetentionSweep != nil && c.config.AcquireRetentionSweep(ctx) != nil {
+		c.mu.Lock()
+		c.lastRetentionScan = time.Time{}
+		c.mu.Unlock()
 		return
 	}
-	groups, err := c.store.ListConsumerGroups(ctx)
+	groups, err := c.listRetentionGroups(ctx, now)
 	if err != nil {
 		slog.Warn("list groups for retention failed", "error", err)
 		return
@@ -93,6 +96,23 @@ func (c *GroupCoordinator) cleanupRetainedGroups(now time.Time) {
 		}
 		c.retainGroup(ctx, retainer, group.GroupId, len(group.Members) > 0, cutoff, now)
 	}
+}
+
+func (c *GroupCoordinator) listRetentionGroups(ctx context.Context, now time.Time) ([]*metadatapb.ConsumerGroup, error) {
+	lister, ok := c.store.(metadata.ConsumerGroupRetentionLister)
+	if !ok {
+		return c.store.ListConsumerGroups(ctx)
+	}
+	c.mu.Lock()
+	full := c.lastRetentionScan.IsZero() || now.Sub(c.lastRetentionScan) >= c.config.RetentionFullScanInterval
+	c.mu.Unlock()
+	groups, err := lister.ListConsumerGroupsForRetention(ctx, full)
+	if err == nil && full {
+		c.mu.Lock()
+		c.lastRetentionScan = now
+		c.mu.Unlock()
+	}
+	return groups, err
 }
 
 func (c *GroupCoordinator) retainGroup(ctx context.Context, retainer metadata.ConsumerGroupRetainer, id string, hasMembers bool, cutoff, now time.Time) {
