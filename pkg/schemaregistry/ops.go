@@ -229,32 +229,36 @@ func (r *Registry) Compatible(ctx context.Context, subject string, version int, 
 	if err != nil {
 		return false, nil, errStore(err)
 	}
-	live := sortedVersions(versions, false)
-	var v int
+	level := effective(snap, configKey(subject), configKey(""), CompatBackward)
+	var targets []int
 	switch {
-	case version == latestVersion && len(live) == 0:
-		v = 0
-	case version > 0 && len(live) == 0:
+	case version == 0:
+		targets = compatTargets(level, versions)
+	case version == latestVersion && len(sortedVersions(versions, false)) == 0:
+	case version > 0 && len(sortedVersions(versions, false)) == 0:
 		return false, nil, errVersionNotFound(version)
 	default:
-		if v, err = pickVersion(subject, versions, version, false); err != nil {
+		v, err := pickVersion(subject, versions, version, false)
+		if err != nil {
 			return false, nil, err
+		}
+		if level != CompatNone {
+			targets = []int{v}
 		}
 	}
 	p, err := r.prepare(ctx, req)
 	if err != nil {
 		return false, nil, storeErr(ctx, err)
 	}
-	if v == 0 || effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatNone {
-		return true, nil, nil
-	}
-	err = r.checkAgainst(ctx, subject, p.canonical, p.refs, v, versions[v].ID)
-	var regErr *Error
-	if errors.As(err, &regErr) && regErr.Code == 40901 {
-		return false, []string{regErr.Message}, nil
-	}
-	if err != nil {
-		return false, nil, storeErr(ctx, err)
+	for _, v := range targets {
+		err = r.checkAgainst(ctx, subject, level, p.canonical, p.refs, v, versions[v].ID)
+		var regErr *Error
+		if errors.As(err, &regErr) && regErr.Code == 40901 {
+			return false, regErr.details, nil
+		}
+		if err != nil {
+			return false, nil, storeErr(ctx, err)
+		}
 	}
 	return true, nil, nil
 }
@@ -603,7 +607,8 @@ func (r *Registry) Compatibility(ctx context.Context, subject string, defaultToG
 }
 
 func (r *Registry) SetCompatibility(ctx context.Context, subject, level string) error {
-	if level != CompatNone && level != CompatBackward {
+	level = strings.ToUpper(level)
+	if _, ok := compatRules[level]; !ok {
 		return errInvalidCompatibility(level)
 	}
 	if subject != "" {

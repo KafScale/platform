@@ -51,6 +51,11 @@ const (
 	ModeImport         = "IMPORT"
 	CompatNone         = "NONE"
 	CompatBackward     = "BACKWARD"
+	CompatBackwardAll  = "BACKWARD_TRANSITIVE"
+	CompatForward      = "FORWARD"
+	CompatForwardAll   = "FORWARD_TRANSITIVE"
+	CompatFull         = "FULL"
+	CompatFullAll      = "FULL_TRANSITIVE"
 	maxReferenceDepth  = 32
 )
 
@@ -395,8 +400,21 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 	if len(resp.Kvs) == 0 {
 		return nil, nil
 	}
+	if s, err = r.decodeSchema(ctx, id, resp.Kvs[0].Value); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	if current && r.resets.Load() == m.gen {
+		r.cacheLocked(s)
+		r.counter = max(r.counter, id)
+	}
+	r.mu.Unlock()
+	return s, nil
+}
+
+func (r *Registry) decodeSchema(ctx context.Context, id int64, value []byte) (*Schema, error) {
 	var rec schemaRecord
-	if err := json.Unmarshal(resp.Kvs[0].Value, &rec); err != nil {
+	if err := json.Unmarshal(value, &rec); err != nil {
 		return nil, fmt.Errorf("decode schema %d: %w", id, err)
 	}
 	text := rec.Schema
@@ -410,14 +428,7 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 		}
 		text = string(body)
 	}
-	s = &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}
-	r.mu.Lock()
-	if current && r.resets.Load() == m.gen {
-		r.cacheLocked(s)
-		r.counter = max(r.counter, id)
-	}
-	r.mu.Unlock()
-	return s, nil
+	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}, nil
 }
 
 func (r *Registry) Init(ctx context.Context) error {
@@ -678,6 +689,11 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	normalized, err := canonicalAvro(req.Schema, refs, true)
 	if err != nil {
 		return nil, errInvalidSchema("%v", err)
+	}
+	if req.Normalize {
+		if _, err := parseAvro(normalized, refs); err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
 	}
 	return &prepared{
 		schemaType: schemaType,
@@ -1007,10 +1023,10 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		}
 		cmps = append(cmps, snap.fence(hk)...)
 	}
-	live := sortedVersions(versions, false)
-	if len(live) > 0 && effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatBackward {
-		prev := live[len(live)-1]
-		if err := r.checkAgainst(ctx, subject, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
+	level := effective(snap, configKey(subject), configKey(""), CompatBackward)
+	targets := compatTargets(level, versions)
+	for _, prev := range targets {
+		if err := r.checkAgainst(ctx, subject, level, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
 			return 0, 0, err
 		}
 		cmps = append(cmps, snap.fence(versionKey(subject, prev))...)
@@ -1064,7 +1080,36 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	return id, version, nil
 }
 
-func (r *Registry) checkAgainst(ctx context.Context, subject, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
+type compatRule struct {
+	backward   bool
+	forward    bool
+	transitive bool
+}
+
+var compatRules = map[string]compatRule{
+	CompatNone:        {},
+	CompatBackward:    {backward: true},
+	CompatBackwardAll: {backward: true, transitive: true},
+	CompatForward:     {forward: true},
+	CompatForwardAll:  {forward: true, transitive: true},
+	CompatFull:        {backward: true, forward: true},
+	CompatFullAll:     {backward: true, forward: true, transitive: true},
+}
+
+func compatTargets(level string, versions map[int]versionEntry) []int {
+	rule := compatRules[level]
+	live := sortedVersions(versions, false)
+	if (!rule.backward && !rule.forward) || len(live) == 0 {
+		return nil
+	}
+	slices.Reverse(live)
+	if !rule.transitive {
+		live = live[:1]
+	}
+	return live
+}
+
+func (r *Registry) checkAgainst(ctx context.Context, subject, level, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
 	prev, err := r.schemaByID(ctx, prevID)
 	if err != nil {
 		return err
@@ -1076,8 +1121,16 @@ func (r *Registry) checkAgainst(ctx context.Context, subject, text string, refs 
 	if err != nil {
 		return err
 	}
-	if err := checkBackward(text, refs, prev.Text, prevRefs); err != nil {
-		return errIncompatible(subject, prevVersion, prev.Text, err.Error())
+	rule := compatRules[level]
+	if rule.backward {
+		if err := checkReads(text, refs, prev.Text, prevRefs); err != nil {
+			return errIncompatible(subject, level, prevVersion, prev.Text, err.Error())
+		}
+	}
+	if rule.forward {
+		if err := checkReads(prev.Text, prevRefs, text, refs); err != nil {
+			return errIncompatible(subject, level, prevVersion, prev.Text, err.Error())
+		}
 	}
 	return nil
 }
