@@ -460,3 +460,27 @@ func assertNotFound(t *testing.T, c client.Client, obj client.Object, ns, name s
 		t.Fatalf("expected %T %s/%s to be absent", obj, ns, name)
 	}
 }
+
+func TestEtcdSnapshotRestoreBumpsRevision(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	cluster := testCluster("restore-bump", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	var script string
+	for _, ic := range sts.Spec.Template.Spec.InitContainers {
+		if ic.Name == "snapshot-restore" {
+			script = strings.Join(ic.Command, " ")
+		}
+	}
+	if !strings.Contains(script, "etcdutl snapshot restore ") {
+		t.Fatalf("no etcdutl snapshot restore in %q", script)
+	}
+	if !strings.Contains(script, "--bump-revision 1000000000 --mark-compacted\n") {
+		t.Fatalf("restore does not bump the revision and mark it compacted: %q", script)
+	}
+}
