@@ -358,3 +358,52 @@ func TestHeartbeatSkipsUnchangedGroupWrite(t *testing.T) {
 		t.Fatalf("heartbeats wrote the group %d times", puts)
 	}
 }
+
+type retentionListingStore struct {
+	*metadata.InMemoryStore
+	mu    sync.Mutex
+	scans []bool
+}
+
+func (s *retentionListingStore) ListConsumerGroupsForRetention(ctx context.Context, full bool) ([]*metadatapb.ConsumerGroup, error) {
+	s.mu.Lock()
+	s.scans = append(s.scans, full)
+	s.mu.Unlock()
+	return s.ListConsumerGroups(ctx)
+}
+
+func TestRetentionUsesIndexBetweenFullScans(t *testing.T) {
+	store := &retentionListingStore{InMemoryStore: metadata.NewInMemoryStore(metadata.ClusterMetadata{})}
+	leased := true
+	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+		CleanupInterval:           time.Hour,
+		OffsetsRetention:          time.Hour,
+		RetentionCheckInterval:    time.Minute,
+		RetentionFullScanInterval: 10 * time.Minute,
+		AcquireRetentionSweep: func(context.Context) error {
+			if leased {
+				return nil
+			}
+			return metadata.ErrNotOwner
+		},
+	})
+	t.Cleanup(c.Stop)
+	start := time.Now()
+	for i, lease := range []bool{true, true, true, false, true, true} {
+		leased = lease
+		minute := i
+		if i >= 2 {
+			minute = i + 9
+		}
+		c.cleanupRetainedGroups(start.Add(time.Duration(minute) * time.Minute))
+	}
+	want := []bool{true, false, true, true, false}
+	if len(store.scans) != len(want) {
+		t.Fatalf("scans %v, want %v", store.scans, want)
+	}
+	for i := range want {
+		if store.scans[i] != want[i] {
+			t.Fatalf("scans %v, want %v", store.scans, want)
+		}
+	}
+}

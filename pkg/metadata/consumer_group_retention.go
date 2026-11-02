@@ -87,13 +87,18 @@ func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.Cons
 		if err != nil {
 			return 0, err
 		}
-		resp, err := s.client.Put(ctx, ConsumerGroupKey(group.GroupId), string(payload), clientv3.WithPrevKV())
+		put := clientv3.OpPut(ConsumerGroupKey(group.GroupId), string(payload), clientv3.WithPrevKV())
+		resp, err := s.client.Txn(ctx).
+			If(clientv3.Compare(clientv3.CreateRevision(ConsumerGroupIndexKey(group.GroupId)), "=", 0)).
+			Then(put, clientv3.OpPut(ConsumerGroupIndexKey(group.GroupId), "")).
+			Else(put).
+			Commit()
 		s.recordEtcdResult(err)
 		if err != nil {
 			return 0, err
 		}
-		if resp.PrevKv != nil {
-			return resp.PrevKv.CreateRevision, nil
+		if prev := resp.Responses[0].GetResponsePut().PrevKv; prev != nil {
+			return prev.CreateRevision, nil
 		}
 		return resp.Header.Revision, nil
 	}
@@ -106,7 +111,11 @@ func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.Cons
 		if err != nil {
 			return 0, err
 		}
-		result, err := s.client.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group.GroupId)), "=", revision)).Then(clientv3.OpPut(ConsumerGroupKey(group.GroupId), string(payload)), clientv3.OpGet(ConsumerGroupKey(group.GroupId))).Commit()
+		ops := []clientv3.Op{clientv3.OpPut(ConsumerGroupKey(group.GroupId), string(payload)), clientv3.OpGet(ConsumerGroupKey(group.GroupId))}
+		if revision == 0 {
+			ops = append(ops, clientv3.OpPut(ConsumerGroupIndexKey(group.GroupId), ""))
+		}
+		result, err := s.client.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(group.GroupId)), "=", revision)).Then(ops...).Commit()
 		s.recordEtcdResult(err)
 		if err != nil {
 			return 0, err
@@ -200,7 +209,7 @@ func (s *EtcdStore) ExpireConsumerGroup(ctx context.Context, id string, cutoff, 
 	}
 	if group == nil {
 		if !found {
-			return false, nil
+			return false, s.dropStaleConsumerGroupIndex(ctx, id, prefix, snapshotRevision)
 		}
 		group = &metadatapb.ConsumerGroup{GroupId: id, State: "empty", ProtocolType: "consumer"}
 	}
@@ -216,7 +225,7 @@ func (s *EtcdStore) ExpireConsumerGroup(ctx context.Context, id string, cutoff, 
 		result, err := s.client.Txn(ctx).If(
 			clientv3.Compare(clientv3.ModRevision(ConsumerGroupKey(id)), "=", revision),
 			clientv3.Compare(clientv3.ModRevision(prefix), "<", snapshotRevision+1).WithRange(clientv3.GetPrefixRangeEnd(prefix)),
-		).Then(clientv3.OpPut(ConsumerGroupKey(id), string(encoded))).Commit()
+		).Then(clientv3.OpPut(ConsumerGroupKey(id), string(encoded)), clientv3.OpPut(ConsumerGroupIndexKey(id), "")).Commit()
 		s.recordEtcdResult(err)
 		if err != nil {
 			return false, err
@@ -230,4 +239,13 @@ func (s *EtcdStore) ExpireConsumerGroup(ctx context.Context, id string, cutoff, 
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *EtcdStore) dropStaleConsumerGroupIndex(ctx context.Context, id, prefix string, snapshotRevision int64) error {
+	_, err := s.client.Txn(ctx).If(
+		clientv3.Compare(clientv3.CreateRevision(ConsumerGroupKey(id)), "=", 0),
+		clientv3.Compare(clientv3.ModRevision(prefix), "<", snapshotRevision+1).WithRange(clientv3.GetPrefixRangeEnd(prefix)),
+	).Then(clientv3.OpDelete(ConsumerGroupIndexKey(id))).Commit()
+	s.recordEtcdResult(err)
+	return err
 }

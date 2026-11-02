@@ -258,6 +258,14 @@ The operator resolves etcd endpoints in this order:
 
 Kafscale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
 
+### Consumer Group Keys In Etcd
+
+- `/kafscale/consumers/<group>/metadata` holds the group metadata.
+- `/kafscale/consumers/<group>/offsets/<topic>/<partition>` holds each committed offset.
+- `/kafscale/consumer-groups/<group>` is an empty index key. Brokers write it in the same etcd transaction as a group's metadata when they create the group, when a member joins a group that has no index key, and when the retention sweep sets or refreshes a group's `EmptySince` time. They delete it with the group.
+
+The retention sweep runs on the broker that holds the `/kafscale/retention-sweeper` lease. Most sweeps list groups from the index keys only, page by page, so a sweep reads one index key and one metadata key per group instead of every offset key name. Once an hour, and on the first sweep after a broker takes the lease, the sweep reads all keys under `/kafscale/consumers/` page by page instead. That full scan finds groups that have offsets but no metadata, and adds index keys, up to 100 per etcd transaction, for groups that have metadata but no index key, which includes every group created before this change or by a broker running an older version. The sweep removes an index key whose group has no metadata and no offsets. Kafka `ListGroups` still reads all keys under `/kafscale/consumers/`, page by page, so it also lists groups that have only offsets.
+
 ### Etcd Availability Signals (clients)
 
 When etcd is unavailable, the broker rejects producer/admin/consumer-group operations with `REQUEST_TIMED_OUT`. Producers see per-partition errors in the Produce response; admin and group APIs return the same code in their response payloads.
@@ -457,7 +465,7 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
 - `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
 - `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
-- `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes` to zero or more; zero disables expiry and omission uses the broker default. Retention is checked once per minute under the group coordination lease.
+- `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes` to zero or more; zero disables expiry and omission uses the broker default. Retention is checked once per minute under the group coordination lease. Groups are listed for the check from the group index, with a full scan of the group and offset keys once an hour; see [Consumer Group Keys In Etcd](#consumer-group-keys-in-etcd).
 - `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
 - `KAFSCALE_LOG_LEVEL` – Log level (`debug`, `info`, `warn`, `error`).
 - `KAFSCALE_TRACE_KAFKA` – Enable protocol tracing (`true/false`).
@@ -783,6 +791,7 @@ spec:
   old schema may already have been pruned; upgrading the CRD does not restore
   them. See [Kafka proxy authentication](kafka-authentication.md) for the full
   configuration and rotation procedure.
+- Upgrading to a version with the consumer group index needs no manual step. Brokers on the old and new versions can run side by side: a group created or deleted by an old broker is fixed up by the next full scan, at most an hour later, and until then it is only swept late. Rolling back leaves the `/kafscale/consumer-groups/` keys in place, and older brokers ignore them.
 - Rollbacks can be performed with `helm rollback kafscale <REVISION>` which restores the previous deployment and service versions.  Brokers are stateless so the recovery window is short.
 
 ## S3 Cost Estimation (Example)
