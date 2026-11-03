@@ -361,20 +361,21 @@ func (p *protoPrinter) enum(e *descriptorpb.EnumDescriptorProto) {
 	p.line("}")
 }
 
-func protoFromDescriptor(text string, refs []resolvedReference) (string, error) {
+func protoFromDescriptor(text string, refs []resolvedReference) (string, bool, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" || strings.ContainsAny(trimmed, " \t\r\n;{") {
-		return text, nil
+		return text, false, nil
 	}
 	data, err := base64.StdEncoding.DecodeString(trimmed)
 	if err != nil {
-		return text, nil
+		return text, false, nil
 	}
 	fd := &descriptorpb.FileDescriptorProto{}
 	if err := proto.Unmarshal(data, fd); err != nil {
-		return "", fmt.Errorf("schema is neither protobuf text nor a base64 FileDescriptorProto: %w", err)
+		return "", false, fmt.Errorf("schema is neither protobuf text nor a base64 FileDescriptorProto: %w", err)
 	}
 	fd.Name = proto.String(protoMainFile)
+	fixMapEntries(fd.GetPackage(), fd.GetMessageType())
 	sources := make(map[string]string, len(refs))
 	for _, ref := range refs {
 		sources[ref.Name] = ref.Text
@@ -394,27 +395,93 @@ func protoFromDescriptor(text string, refs []resolvedReference) (string, error) 
 	if len(fd.GetDependency()) > 0 {
 		deps, err := compiler.Compile(context.Background(), fd.GetDependency()...)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		for _, dep := range deps {
 			if err := registerProtoFile(files, dep); err != nil {
-				return "", err
+				return "", false, err
 			}
 		}
 	}
 	file, err := protodesc.NewFile(fd, files)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	wrapped, err := desc.WrapFile(file)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	out, err := (&protoprint.Printer{OmitComments: protoprint.CommentsAll}).PrintProtoToString(wrapped)
 	if err != nil {
+		return "", false, err
+	}
+	return out, true, nil
+}
+
+func fixMapEntries(scope string, msgs []*descriptorpb.DescriptorProto) {
+	for _, m := range msgs {
+		name := scope + "." + m.GetName()
+		if scope == "" {
+			name = m.GetName()
+		}
+		for _, f := range m.GetField() {
+			if f.GetType() != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || f.GetLabel() != descriptorpb.FieldDescriptorProto_LABEL_REPEATED {
+				continue
+			}
+			tn := f.GetTypeName()
+			short := tn[strings.LastIndex(tn, ".")+1:]
+			for _, n := range m.GetNestedType() {
+				if n.GetName() != short || !n.GetOptions().GetMapEntry() {
+					continue
+				}
+				if !strings.HasPrefix(tn, ".") && tn != short && tn != m.GetName()+"."+short && tn != name+"."+short {
+					continue
+				}
+				want := protoMapEntryName(f.GetName())
+				n.Name = proto.String(want)
+				f.TypeName = proto.String("." + name + "." + want)
+			}
+		}
+		fixMapEntries(name, m.GetNestedType())
+	}
+}
+
+func protoMapEntryName(field string) string {
+	var b strings.Builder
+	up := true
+	for _, r := range field {
+		if r == '_' {
+			up = true
+			continue
+		}
+		if up && r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		up = false
+		b.WriteRune(r)
+	}
+	return b.String() + "Entry"
+}
+
+func descriptorForm(fd protoreflect.FileDescriptor) (string, error) {
+	p := protodesc.ToFileDescriptorProto(fd)
+	p.Name = nil
+	p.SourceCodeInfo = nil
+	var strip func([]*descriptorpb.DescriptorProto)
+	strip = func(msgs []*descriptorpb.DescriptorProto) {
+		for _, m := range msgs {
+			for _, f := range m.GetField() {
+				f.JsonName = nil
+			}
+			strip(m.GetNestedType())
+		}
+	}
+	strip(p.GetMessageType())
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(p)
+	if err != nil {
 		return "", err
 	}
-	return out, nil
+	return base64.StdEncoding.EncodeToString(data), nil
 }
 
 func registerProtoFile(files *protoregistry.Files, fd protoreflect.FileDescriptor) error {
@@ -430,16 +497,20 @@ func registerProtoFile(files *protoregistry.Files, fd protoreflect.FileDescripto
 	return files.RegisterFile(fd)
 }
 
-func prepareProto(text string, refs []resolvedReference, normalize bool) (string, string, error) {
+func prepareProto(text string, refs []resolvedReference, normalize bool) (string, string, string, error) {
 	s, err := parseProto(text, refs)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
+	}
+	desc, err := descriptorForm(s.file)
+	if err != nil {
+		return "", "", "", err
 	}
 	normalized := s.canonical(true)
 	if normalize {
-		return normalized, normalized, nil
+		return normalized, normalized, desc, nil
 	}
-	return s.canonical(false), normalized, nil
+	return s.canonical(false), normalized, desc, nil
 }
 
 type protoDiff struct {

@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
@@ -230,5 +231,77 @@ func TestProtoRegisterLookupAndCompatibility(t *testing.T) {
 	h.ok("GET", "/subjects/common/versions/1", nil, &got)
 	if !strings.Contains(got.Schema, "syntax") {
 		t.Fatalf("default format %q", got.Schema)
+	}
+}
+
+func protoDescriptorBase64(t *testing.T, text string, refs []resolvedReference, edit func(*descriptorpb.FileDescriptorProto)) string {
+	t.Helper()
+	s, err := parseProto(text, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := protodesc.ToFileDescriptorProto(s.file)
+	fd.Name = proto.String("default")
+	fd.SourceCodeInfo = nil
+	if edit != nil {
+		edit(fd)
+	}
+	data, err := proto.Marshal(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+func TestProtoRawTextAndDescriptorDedupe(t *testing.T) {
+	common := "syntax = \"proto3\";\npackage mx.common;\nmessage Money { string currency = 1; int64 units = 2; }\n"
+	text := "syntax = \"proto3\";\npackage mx;\nimport \"mx/common.proto\";\nmessage Ord { string id = 1; mx.common.Money total = 2; message L { string sku = 1; } repeated L lines = 3; oneof o { string a = 4; int32 b = 5; } int32 last = 6; }\n"
+	ref := Reference{Name: "mx/common.proto", Subject: "mx-common", Version: 1}
+	b64 := protoDescriptorBase64(t, text, []resolvedReference{{Name: ref.Name, Text: common}}, nil)
+	h := newHarness(t, nil, Config{})
+	h.register("mx-common", protoSchemaBody(common))
+	for _, order := range [][2]string{{text, b64}, {b64, text}} {
+		subject := fmt.Sprintf("ord-%d", len(order[0]))
+		first := h.register(subject, protoSchemaBody(order[0], ref))
+		second := h.register(subject, protoSchemaBody(order[1], ref))
+		var versions []int
+		h.ok("GET", "/subjects/"+subject+"/versions", nil, &versions)
+		if first != second || len(versions) != 1 {
+			t.Fatalf("subject %s ids %d %d versions %v", subject, first, second, versions)
+		}
+	}
+	h.register("ord-other", protoSchemaBody(strings.Replace(text, "int32 last = 6;", "", 1), ref))
+	var versions []int
+	h.register("ord-other", protoSchemaBody(b64, ref))
+	h.ok("GET", "/subjects/ord-other/versions", nil, &versions)
+	if len(versions) != 2 {
+		t.Fatalf("different schema deduped, versions %v", versions)
+	}
+}
+
+func TestProtoDescriptorRelativeMapEntry(t *testing.T) {
+	text := protoHead + "import \"google/protobuf/timestamp.proto\";\nmessage B { google.protobuf.Timestamp at = 1; map<string, int64> tags = 2; message In { map<string, string> user_labels = 1; } In in = 3; }\n"
+	b64 := protoDescriptorBase64(t, text, nil, func(fd *descriptorpb.FileDescriptorProto) {
+		b := fd.MessageType[0]
+		for _, n := range b.NestedType {
+			if n.GetName() == "TagsEntry" {
+				n.Name = proto.String("tagsEntry")
+			}
+			if n.GetName() == "In" {
+				n.NestedType[0].Name = proto.String("user_labelsEntry")
+				n.Field[0].TypeName = proto.String("user_labelsEntry")
+			}
+		}
+		b.Field[1].TypeName = proto.String("tagsEntry")
+	})
+	h := newHarness(t, nil, Config{})
+	id := h.register("m", protoSchemaBody(b64))
+	var got versionBody
+	h.ok("GET", "/subjects/m/versions/1", nil, &got)
+	if !strings.Contains(got.Schema, "map<string, int64> tags = 2;") || !strings.Contains(got.Schema, "map<string, string> user_labels = 1;") {
+		t.Fatalf("stored %q", got.Schema)
+	}
+	if again := h.register("m", protoSchemaBody(text)); again != id {
+		t.Fatalf("text after descriptor got id %d, want %d", again, id)
 	}
 }
