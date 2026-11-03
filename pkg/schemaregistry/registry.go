@@ -70,7 +70,10 @@ type Schema struct {
 	Type       string
 	Text       string
 	References []Reference
+	Hash       string
 	Norm       string
+	Desc       string
+	FromDesc   bool
 	olderNorm  bool
 }
 
@@ -100,6 +103,8 @@ type schemaRecord struct {
 	Hash       string      `json:"hash"`
 	Norm       string      `json:"norm,omitempty"`
 	NormForm   int         `json:"normForm,omitempty"`
+	Desc       string      `json:"desc,omitempty"`
+	FromDesc   bool        `json:"fromDesc,omitempty"`
 	References []Reference `json:"references,omitempty"`
 	Schema     string      `json:"schema,omitempty"`
 	S3Key      string      `json:"s3Key,omitempty"`
@@ -434,7 +439,7 @@ func (r *Registry) decodeSchema(ctx context.Context, id int64, value []byte) (*S
 		}
 		text = string(body)
 	}
-	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm, olderNorm: rec.NormForm < currentNormForm}, nil
+	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Hash: rec.Hash, Norm: rec.Norm, Desc: rec.Desc, FromDesc: rec.FromDesc, olderNorm: rec.NormForm < currentNormForm}, nil
 }
 
 const prefetchBatch = 100
@@ -656,7 +661,11 @@ func (r *Registry) resolveReferences(ctx context.Context, refs []Reference, dept
 			return nil, err
 		}
 		seen[ref.Name] = true
-		*out = append(*out, resolvedReference{Name: ref.Name, Text: s.Text})
+		rr := resolvedReference{Name: ref.Name, Text: s.Text}
+		if depth == 0 {
+			rr.Subject, rr.Version = ref.Subject, ref.Version
+		}
+		*out = append(*out, rr)
 	}
 	return revs, nil
 }
@@ -699,7 +708,11 @@ func (r *Registry) resolveStoredReferences(ctx context.Context, refs []Reference
 			return err
 		}
 		seen[ref.Name] = true
-		*out = append(*out, resolvedReference{Name: ref.Name, Text: s.Text})
+		rr := resolvedReference{Name: ref.Name, Text: s.Text}
+		if depth == 0 {
+			rr.Subject, rr.Version = ref.Subject, ref.Version
+		}
+		*out = append(*out, rr)
 	}
 	return nil
 }
@@ -710,8 +723,11 @@ type prepared struct {
 	hash       string
 	norm       string
 	guid       string
+	desc       string
+	fromDesc   bool
 	refs       []resolvedReference
 	refRevs    map[string]int64
+	normalize  bool
 }
 
 func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared, error) {
@@ -719,7 +735,7 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	if schemaType == "" {
 		schemaType = schemaTypeAvro
 	}
-	if schemaType != schemaTypeAvro {
+	if schemaType != schemaTypeAvro && schemaType != schemaTypeProtobuf {
 		return nil, errInvalidSchema("schema type %s is not supported", schemaType)
 	}
 	if strings.TrimSpace(req.Schema) == "" {
@@ -732,6 +748,25 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	refRevs, err := r.resolveReferences(ctx, req.References, 0, map[string]bool{}, &refs)
 	if err != nil {
 		return nil, err
+	}
+	p := &prepared{schemaType: schemaType, normalize: req.Normalize, refs: refs, refRevs: refRevs}
+	if schemaType == schemaTypeProtobuf {
+		text, fromDesc, err := protoFromDescriptor(req.Schema, refs)
+		if err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
+		req.Schema = text
+		raw, normalized, desc, err := prepareProto(req.Schema, refs, req.Normalize)
+		if err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
+		p.desc = schemaHash(schemaType, desc, req.References)
+		p.fromDesc = fromDesc
+		p.canonical = req.Schema
+		p.hash = schemaHash(schemaType, raw, req.References)
+		p.norm = schemaHash(schemaType, normalized, req.References)
+		p.guid = schemaGUID(raw, req.References)
+		return p, nil
 	}
 	if _, err := parseAvro(req.Schema, refs); err != nil {
 		return nil, errInvalidSchema("%v", err)
@@ -749,15 +784,11 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 			return nil, errInvalidSchema("%v", err)
 		}
 	}
-	return &prepared{
-		schemaType: schemaType,
-		canonical:  canonical,
-		hash:       schemaHash(schemaType, canonical, req.References),
-		norm:       schemaHash(schemaType, normalized, req.References),
-		guid:       schemaGUID(canonical, req.References),
-		refs:       refs,
-		refRevs:    refRevs,
-	}, nil
+	p.canonical = canonical
+	p.hash = schemaHash(schemaType, canonical, req.References)
+	p.norm = schemaHash(schemaType, normalized, req.References)
+	p.guid = schemaGUID(canonical, req.References)
+	return p, nil
 }
 
 type recordWriter struct {
@@ -991,7 +1022,7 @@ func (r *Registry) CheckIDMarkers(ctx context.Context) error {
 
 func (w *recordWriter) record(ctx context.Context) (string, error) {
 	p := w.p
-	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, NormForm: currentNormForm, References: w.req.References}
+	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, NormForm: currentNormForm, Desc: p.desc, FromDesc: p.fromDesc, References: w.req.References}
 	if len(p.canonical) <= w.r.inlineLimit {
 		rec.Schema = p.canonical
 	} else {
@@ -1138,7 +1169,7 @@ func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEnt
 		if err != nil {
 			return 0, 0, err
 		}
-		if s != nil && s.Type == p.schemaType && s.Norm == p.norm {
+		if s != nil && s.Type == p.schemaType && p.matches(s) {
 			return vs[i], id, nil
 		}
 	}
@@ -1148,7 +1179,7 @@ func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEnt
 		if err != nil {
 			return 0, 0, err
 		}
-		if s == nil || s.Type != p.schemaType || !s.olderNorm {
+		if s == nil || s.Type != schemaTypeAvro || s.Type != p.schemaType || !s.olderNorm {
 			continue
 		}
 		refs, err := r.storedReferences(ctx, s)
@@ -1232,7 +1263,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		return 0, 0, err
 	}
 	for _, prev := range targets {
-		if err := r.checkAgainst(ctx, subject, level, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
+		if err := r.checkAgainst(ctx, subject, level, p.schemaType, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
 			return 0, 0, err
 		}
 		cmps = append(cmps, snap.fence(versionKey(subject, prev))...)
@@ -1315,7 +1346,7 @@ func compatTargets(level string, versions map[int]versionEntry) []int {
 	return live
 }
 
-func (r *Registry) checkAgainst(ctx context.Context, subject, level, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
+func (r *Registry) checkAgainst(ctx context.Context, subject, level, schemaType, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
 	prev, err := r.schemaByID(ctx, prevID)
 	if err != nil {
 		return err
@@ -1328,6 +1359,13 @@ func (r *Registry) checkAgainst(ctx context.Context, subject, level, text string
 		return err
 	}
 	rule := compatRules[level]
+	if prev.Type != schemaType {
+		return errIncompatible(subject, level, prevVersion, prev.Text, fmt.Sprintf("{errorType:\"TYPE_MISMATCH\", description:\"schema type %s does not match %s\"}", schemaType, prev.Type))
+	}
+	checkReads := checkReads
+	if schemaType == schemaTypeProtobuf {
+		checkReads = checkProtoReads
+	}
 	if rule.backward {
 		if err := checkReads(text, refs, prev.Text, prevRefs); err != nil {
 			return errIncompatible(subject, level, prevVersion, prev.Text, err.Error())
@@ -1435,4 +1473,11 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		r.settleMarker(ctx, id, p.hash)
 	}
 	return id, version, nil
+}
+
+func (p *prepared) matches(s *Schema) bool {
+	if p.schemaType == schemaTypeProtobuf {
+		return s.Hash == p.hash || (!p.normalize && s.Desc != "" && s.Desc == p.desc && (p.fromDesc || s.FromDesc))
+	}
+	return s.Norm == p.norm
 }

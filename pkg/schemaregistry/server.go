@@ -77,36 +77,38 @@ func NewServer(reg *Registry, timeout time.Duration) *Server {
 		Help: "Schema registry etcd transactions retried after a compare failed.",
 	}, func() float64 { return float64(reg.Conflicts()) }))
 	routes := map[string]func(http.ResponseWriter, *http.Request) (any, error){
-		"GET /{$}":                       func(http.ResponseWriter, *http.Request) (any, error) { return map[string]any{}, nil },
-		"GET /schemas/types":             func(http.ResponseWriter, *http.Request) (any, error) { return []string{schemaTypeAvro}, nil },
-		"GET /schemas/ids/{id}":          s.getSchema,
-		"GET /schemas/guids/{guid}":      s.getSchemaByGUID,
-		"GET /schemas/ids/{id}/schema":   s.getSchemaText,
-		"GET /schemas/ids/{id}/versions": s.getIDVersions,
-		"GET /schemas/ids/{id}/subjects": s.getIDSubjects,
-		"GET /schemas":                   s.getSchemas,
-		"GET /contexts":                  func(http.ResponseWriter, *http.Request) (any, error) { return []string{"."}, nil },
-		"GET /subjects/{subject}/versions/{version}/referencedby": s.getReferencedBy,
-		"DELETE /config": s.deleteConfig,
-		"POST /compatibility/subjects/{subject}/versions": s.compatibility,
-		"GET /subjects":                                     s.getSubjects,
-		"GET /subjects/{subject}/versions":                  s.getVersions,
-		"GET /subjects/{subject}/versions/{version}":        s.getVersion,
-		"GET /subjects/{subject}/versions/{version}/schema": s.getVersionText,
-		"POST /subjects/{subject}/versions":                 s.register,
-		"POST /subjects/{subject}":                          s.lookup,
-		"DELETE /subjects/{subject}":                        s.deleteSubject,
-		"DELETE /subjects/{subject}/versions/{version}":     s.deleteVersion,
-		"GET /config":                                       s.getConfig,
-		"PUT /config":                                       s.putConfig,
-		"GET /config/{subject}":                             s.getConfig,
-		"PUT /config/{subject}":                             s.putConfig,
-		"DELETE /config/{subject}":                          s.deleteConfig,
-		"GET /mode":                                         s.getMode,
-		"PUT /mode":                                         s.putMode,
-		"GET /mode/{subject}":                               s.getMode,
-		"PUT /mode/{subject}":                               s.putMode,
-		"DELETE /mode/{subject}":                            s.deleteMode,
+		"GET /{$}": func(http.ResponseWriter, *http.Request) (any, error) { return map[string]any{}, nil },
+		"GET /schemas/types": func(http.ResponseWriter, *http.Request) (any, error) {
+			return []string{schemaTypeAvro, schemaTypeProtobuf}, nil
+		},
+		"GET /schemas/ids/{id}":                                     s.getSchema,
+		"GET /schemas/guids/{guid}":                                 s.getSchemaByGUID,
+		"GET /schemas/ids/{id}/schema":                              s.getSchemaText,
+		"GET /schemas/ids/{id}/versions":                            s.getIDVersions,
+		"GET /schemas/ids/{id}/subjects":                            s.getIDSubjects,
+		"GET /schemas":                                              s.getSchemas,
+		"GET /contexts":                                             func(http.ResponseWriter, *http.Request) (any, error) { return []string{"."}, nil },
+		"GET /subjects/{subject}/versions/{version}/referencedby":   s.getReferencedBy,
+		"DELETE /config":                                            s.deleteConfig,
+		"POST /compatibility/subjects/{subject}/versions":           s.compatibility,
+		"GET /subjects":                                             s.getSubjects,
+		"GET /subjects/{subject}/versions":                          s.getVersions,
+		"GET /subjects/{subject}/versions/{version}":                s.getVersion,
+		"GET /subjects/{subject}/versions/{version}/schema":         s.getVersionText,
+		"POST /subjects/{subject}/versions":                         s.register,
+		"POST /subjects/{subject}":                                  s.lookup,
+		"DELETE /subjects/{subject}":                                s.deleteSubject,
+		"DELETE /subjects/{subject}/versions/{version}":             s.deleteVersion,
+		"GET /config":                                               s.getConfig,
+		"PUT /config":                                               s.putConfig,
+		"GET /config/{subject}":                                     s.getConfig,
+		"PUT /config/{subject}":                                     s.putConfig,
+		"DELETE /config/{subject}":                                  s.deleteConfig,
+		"GET /mode":                                                 s.getMode,
+		"PUT /mode":                                                 s.putMode,
+		"GET /mode/{subject}":                                       s.getMode,
+		"PUT /mode/{subject}":                                       s.putMode,
+		"DELETE /mode/{subject}":                                    s.deleteMode,
 		"POST /compatibility/subjects/{subject}/versions/{version}": s.compatibility,
 	}
 	for pattern, fn := range routes {
@@ -224,7 +226,11 @@ func (s *Server) getSchema(_ http.ResponseWriter, r *http.Request) (any, error) 
 		}
 		return nil, err
 	}
-	out := versionBody{GUID: sc.GUID(), SchemaType: sc.Type, References: sc.References, Schema: sc.Text}
+	text, err := s.formatted(r, sc)
+	if err != nil {
+		return nil, err
+	}
+	out := versionBody{GUID: sc.GUID(), SchemaType: sc.Type, References: sc.References, Schema: text}
 	for _, deleted := range []bool{false, true} {
 		owners, err := s.reg.IDVersions(r.Context(), id, deleted)
 		if err != nil {
@@ -351,7 +357,11 @@ func (s *Server) getVersion(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return versionResponse(v, true), nil
+	out := versionResponse(v, true)
+	if out.Schema, err = s.formatted(r, v.Schema); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Server) getVersionText(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -499,4 +509,11 @@ func (s *Server) compatibility(_ http.ResponseWriter, r *http.Request) (any, err
 		out["messages"] = messages
 	}
 	return out, nil
+}
+
+func (s *Server) formatted(r *http.Request, sc *Schema) (string, error) {
+	if sc.Type != schemaTypeProtobuf || r.URL.Query().Get("format") != "serialized" {
+		return sc.Text, nil
+	}
+	return s.reg.serializedProto(r.Context(), sc)
 }

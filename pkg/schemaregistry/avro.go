@@ -28,8 +28,10 @@ import (
 const schemaTypeAvro = "AVRO"
 
 type resolvedReference struct {
-	Name string
-	Text string
+	Name    string
+	Text    string
+	Subject string
+	Version int
 }
 
 func parseAvro(text string, refs []resolvedReference) (avro.Schema, error) {

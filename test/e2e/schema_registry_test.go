@@ -545,6 +545,7 @@ func (h *srHarness) killMidRun(t *testing.T, regA *exec.Cmd, addrA, urlA, urlB s
 }
 
 func (h *srHarness) interop(t *testing.T, brokerAddr, urlA, urlB string) {
+	h.protobufInterop(t, urlA, urlB)
 	h.py("serialize", urlA, "users", "python.hex", srRecords)
 	h.java("serialize", urlB, "users", "java.hex", srRecords)
 	pyFrames := readFrames(t, h.dataPath("python.hex"))
@@ -739,4 +740,31 @@ func decodeFranz(t *testing.T, url string, frames [][]byte) string {
 		fmt.Fprintf(&b, "%s,%d\n", u.Name, u.Age)
 	}
 	return b.String()
+}
+
+func (h *srHarness) protobufInterop(t *testing.T, urlA, urlB string) {
+	h.py("proto-serialize", urlA, "orders", "orders.hex", srRecords)
+	h.py("proto-serialize", urlB, "orders", "orders-b.hex", srRecords)
+	frames := readFrames(t, h.dataPath("orders.hex"))
+	if again := readFrames(t, h.dataPath("orders-b.hex")); !bytes.Equal(frames[0][:5], again[0][:5]) {
+		t.Fatalf("python registered the same protobuf schema under different ids: %x %x", frames[0][:5], again[0][:5])
+	}
+	var want strings.Builder
+	for i := 0; i < srRecords; i++ {
+		fmt.Fprintf(&want, "python-%d,%d,%d\n", i, i, 1000+i)
+	}
+	if got := h.py("proto-deserialize", urlB, "orders", "orders.hex", 0); got != want.String() {
+		t.Fatalf("python protobuf decode:\n%s\nwant:\n%s", got, want.String())
+	}
+	client, err := sr.NewClient(sr.URLs(urlB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := client.SchemaByVersion(h.ctx, "orders-value", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Type != sr.TypeProtobuf || !strings.Contains(s.Schema.Schema, "message Order {") {
+		t.Fatalf("protobuf schema stored as %v %q", s.Type, s.Schema.Schema)
+	}
 }

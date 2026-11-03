@@ -251,7 +251,7 @@ func (r *Registry) Compatible(ctx context.Context, subject string, version int, 
 		return false, nil, storeErr(ctx, err)
 	}
 	for _, v := range targets {
-		err = r.checkAgainst(ctx, subject, level, p.canonical, p.refs, v, versions[v].ID)
+		err = r.checkAgainst(ctx, subject, level, p.schemaType, p.canonical, p.refs, v, versions[v].ID)
 		var regErr *Error
 		if errors.As(err, &regErr) && regErr.Code == 40901 {
 			return false, regErr.details, nil

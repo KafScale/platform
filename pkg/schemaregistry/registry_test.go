@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,7 +149,7 @@ func TestRegisterAndReadEndpoints(t *testing.T) {
 	h.ok("GET", "/", nil, &root)
 	var types []string
 	h.ok("GET", "/schemas/types", nil, &types)
-	if len(types) != 1 || types[0] != "AVRO" {
+	if !slices.Equal(types, []string{"AVRO", "PROTOBUF"}) {
 		t.Fatalf("types %v", types)
 	}
 	id1 := h.register("users-value", schema(userV1))
