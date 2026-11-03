@@ -66,12 +66,12 @@ func schemaHash(schemaType, canonical string, refs []Reference) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func checkBackward(newText string, newRefs []resolvedReference, oldText string, oldRefs []resolvedReference) error {
-	reader, err := parseAvro(newText, newRefs)
+func checkReads(readerText string, readerRefs []resolvedReference, writerText string, writerRefs []resolvedReference) error {
+	reader, err := parseAvro(readerText, readerRefs)
 	if err != nil {
 		return err
 	}
-	writer, err := parseAvro(oldText, oldRefs)
+	writer, err := parseAvro(writerText, writerRefs)
 	if err != nil {
 		return err
 	}

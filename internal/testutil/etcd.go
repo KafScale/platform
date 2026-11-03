@@ -33,7 +33,7 @@ var embeddedEtcdStartMu sync.Mutex
 
 // StartEmbeddedEtcd launches an embedded etcd server on random ports and
 // registers cleanup via t.Cleanup. Returns the endpoints (e.g. ["http://127.0.0.1:PORT"]).
-func StartEmbeddedEtcd(t *testing.T) []string {
+func StartEmbeddedEtcd(t testing.TB) []string {
 	t.Helper()
 
 	embeddedEtcdStartMu.Lock()
@@ -60,7 +60,7 @@ func StartEmbeddedEtcd(t *testing.T) []string {
 	return nil
 }
 
-func startEmbeddedEtcdOnce(t *testing.T) ([]string, error) {
+func startEmbeddedEtcdOnce(t testing.TB) ([]string, error) {
 	t.Helper()
 
 	cfg := embed.NewConfig()
@@ -106,7 +106,7 @@ func isEmbeddedEtcdBindError(err error) bool {
 		strings.Contains(msg, "address already in use")
 }
 
-func freeLocalPort(t *testing.T) int {
+func freeLocalPort(t testing.TB) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -116,7 +116,7 @@ func freeLocalPort(t *testing.T) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-func mustURL(t *testing.T, raw string) url.URL {
+func mustURL(t testing.TB, raw string) url.URL {
 	t.Helper()
 	parsed, err := url.Parse(raw)
 	if err != nil {
@@ -125,7 +125,7 @@ func mustURL(t *testing.T, raw string) url.URL {
 	return *parsed
 }
 
-func etcdLogPath(t *testing.T) string {
+func etcdLogPath(t testing.TB) string {
 	t.Helper()
 	dir := os.TempDir()
 	return filepath.Join(dir, fmt.Sprintf("etcd-test-%d.log", time.Now().UnixNano()))

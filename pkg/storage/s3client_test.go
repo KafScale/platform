@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
@@ -35,6 +36,8 @@ type fakeS3 struct {
 	putInputs    []*s3.PutObjectInput
 	getInput     *s3.GetObjectInput
 	getData      []byte
+	getETag      *string
+	getModified  *time.Time
 	deleteKey    *string
 	putErr       error
 	getErr       error
@@ -55,7 +58,9 @@ func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFn
 		return nil, f.getErr
 	}
 	return &s3.GetObjectOutput{
-		Body: io.NopCloser(bytes.NewReader(f.getData)),
+		Body:         io.NopCloser(bytes.NewReader(f.getData)),
+		ETag:         f.getETag,
+		LastModified: f.getModified,
 	}, nil
 }
 
@@ -473,5 +478,64 @@ func TestMemoryUploadIndexIfAbsent(t *testing.T) {
 	}
 	if data, _ := m.DownloadIndex(ctx, "k"); string(data) != "a" {
 		t.Fatalf("overwritten with %s", data)
+	}
+}
+
+func TestAWSUploadIndexIfMatch(t *testing.T) {
+	ctx := context.Background()
+	modified := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	api := &fakeS3{getData: []byte("v"), getETag: aws.String(`"abc"`), getModified: &modified}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api).(ConditionalIndexReplacer)
+	obj, err := client.DownloadIndexObject(ctx, "k")
+	if err != nil || string(obj.Body) != "v" || obj.ETag != `"abc"` || !obj.LastModified.Equal(modified) {
+		t.Fatalf("object %+v %v", obj, err)
+	}
+	if err := client.UploadIndexIfMatch(ctx, "k", []byte("w"), obj.ETag); err != nil {
+		t.Fatal(err)
+	}
+	put := api.putInputs[len(api.putInputs)-1]
+	if aws.ToString(put.IfMatch) != `"abc"` || put.IfNoneMatch != nil {
+		t.Fatalf("IfMatch %q IfNoneMatch %v", aws.ToString(put.IfMatch), put.IfNoneMatch)
+	}
+	if err := client.UploadIndexIfMatch(ctx, "k", []byte("w"), ""); err == nil {
+		t.Fatal("empty ETag accepted")
+	}
+	api.putErr = &fakeAPIError{code: "PreconditionFailed"}
+	if err := client.UploadIndexIfMatch(ctx, "k", []byte("w"), `"abc"`); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("stale ETag gave %v", err)
+	}
+	api.getErr = &fakeAPIError{code: "NoSuchKey"}
+	if _, err := client.DownloadIndexObject(ctx, "k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing object gave %v", err)
+	}
+}
+
+func TestMemoryUploadIndexIfMatch(t *testing.T) {
+	m := NewMemoryS3Client()
+	ctx := context.Background()
+	if err := m.UploadIndexIfMatch(ctx, "k", []byte("a"), `"x"`); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("missing key gave %v", err)
+	}
+	if err := m.UploadIndexIfAbsent(ctx, "k", []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	obj, err := m.DownloadIndexObject(ctx, "k")
+	if err != nil || obj.ETag == "" || obj.LastModified.IsZero() {
+		t.Fatalf("object %+v %v", obj, err)
+	}
+	if err := m.UploadIndexIfMatch(ctx, "k", []byte("b"), `"stale"`); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("stale ETag gave %v", err)
+	}
+	if err := m.UploadIndexIfMatch(ctx, "k", []byte("b"), obj.ETag); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UploadIndexIfMatch(ctx, "k", []byte("c"), obj.ETag); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("reused ETag gave %v", err)
+	}
+	if err := m.DeleteIndex(ctx, "k"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DownloadIndexObject(ctx, "k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted key gave %v", err)
 	}
 }

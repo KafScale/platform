@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -433,7 +434,7 @@ func (s *Server) putConfig(_ http.ResponseWriter, r *http.Request) (any, error) 
 	if err := s.reg.SetCompatibility(r.Context(), r.PathValue("subject"), body.Compatibility); err != nil {
 		return nil, err
 	}
-	return map[string]string{"compatibility": body.Compatibility}, nil
+	return map[string]string{"compatibility": strings.ToUpper(body.Compatibility)}, nil
 }
 
 func (s *Server) deleteConfig(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -474,7 +475,7 @@ func (s *Server) deleteMode(_ http.ResponseWriter, r *http.Request) (any, error)
 }
 
 func (s *Server) compatibility(_ http.ResponseWriter, r *http.Request) (any, error) {
-	version := latestVersion
+	version := 0
 	if r.PathValue("version") != "" {
 		v, err := pathVersion(r)
 		if err != nil {

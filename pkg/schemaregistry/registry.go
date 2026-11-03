@@ -51,6 +51,11 @@ const (
 	ModeImport         = "IMPORT"
 	CompatNone         = "NONE"
 	CompatBackward     = "BACKWARD"
+	CompatBackwardAll  = "BACKWARD_TRANSITIVE"
+	CompatForward      = "FORWARD"
+	CompatForwardAll   = "FORWARD_TRANSITIVE"
+	CompatFull         = "FULL"
+	CompatFullAll      = "FULL_TRANSITIVE"
 	maxReferenceDepth  = 32
 )
 
@@ -66,6 +71,7 @@ type Schema struct {
 	Text       string
 	References []Reference
 	Norm       string
+	olderNorm  bool
 }
 
 type SubjectVersion struct {
@@ -93,6 +99,7 @@ type schemaRecord struct {
 	SchemaType string      `json:"schemaType"`
 	Hash       string      `json:"hash"`
 	Norm       string      `json:"norm,omitempty"`
+	NormForm   int         `json:"normForm,omitempty"`
 	References []Reference `json:"references,omitempty"`
 	Schema     string      `json:"schema,omitempty"`
 	S3Key      string      `json:"s3Key,omitempty"`
@@ -119,6 +126,7 @@ type Registry struct {
 	cli          *clientv3.Client
 	s3           storage.S3Client
 	markers      storage.ConditionalIndexWriter
+	replacer     storage.ConditionalIndexReplacer
 	namespace    string
 	inlineLimit  int
 	conflicts    atomic.Uint64
@@ -143,6 +151,7 @@ func New(cfg Config) (*Registry, error) {
 		return nil, errors.New("inline limit must be positive")
 	}
 	var markers storage.ConditionalIndexWriter
+	var replacer storage.ConditionalIndexReplacer
 	if cfg.S3 != nil {
 		if cfg.Namespace == "" {
 			return nil, errors.New("s3 namespace required")
@@ -151,12 +160,14 @@ func New(cfg Config) (*Registry, error) {
 		if markers, ok = cfg.S3.(storage.ConditionalIndexWriter); !ok {
 			return nil, errors.New("s3 client does not support conditional writes")
 		}
+		replacer, _ = cfg.S3.(storage.ConditionalIndexReplacer)
 	}
 	return &Registry{
 		writeSem:    make(chan struct{}, 1),
 		cli:         cfg.Client,
 		s3:          cfg.S3,
 		markers:     markers,
+		replacer:    replacer,
 		namespace:   cfg.Namespace,
 		inlineLimit: cfg.InlineLimit,
 		cache:       make(map[int64]*Schema),
@@ -395,8 +406,21 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 	if len(resp.Kvs) == 0 {
 		return nil, nil
 	}
+	if s, err = r.decodeSchema(ctx, id, resp.Kvs[0].Value); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	if current && r.resets.Load() == m.gen {
+		r.cacheLocked(s)
+		r.counter = max(r.counter, id)
+	}
+	r.mu.Unlock()
+	return s, nil
+}
+
+func (r *Registry) decodeSchema(ctx context.Context, id int64, value []byte) (*Schema, error) {
 	var rec schemaRecord
-	if err := json.Unmarshal(resp.Kvs[0].Value, &rec); err != nil {
+	if err := json.Unmarshal(value, &rec); err != nil {
 		return nil, fmt.Errorf("decode schema %d: %w", id, err)
 	}
 	text := rec.Schema
@@ -410,14 +434,55 @@ func (r *Registry) schemaByID(ctx context.Context, id int64) (*Schema, error) {
 		}
 		text = string(body)
 	}
-	s = &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm}
-	r.mu.Lock()
-	if current && r.resets.Load() == m.gen {
-		r.cacheLocked(s)
-		r.counter = max(r.counter, id)
+	return &Schema{ID: id, Type: rec.SchemaType, Text: text, References: rec.References, Norm: rec.Norm, olderNorm: rec.NormForm < currentNormForm}, nil
+}
+
+const prefetchBatch = 100
+
+func (r *Registry) prefetch(ctx context.Context, ids []int64) error {
+	r.mu.RLock()
+	var missing []int64
+	for _, id := range ids {
+		if s := r.cache[id]; s == nil || id > r.counter {
+			missing = append(missing, id)
+		}
 	}
-	r.mu.Unlock()
-	return s, nil
+	r.mu.RUnlock()
+	for len(missing) > 0 {
+		batch := missing[:min(prefetchBatch, len(missing))]
+		missing = missing[len(batch):]
+		ops := make([]clientv3.Op, 0, len(batch))
+		for _, id := range batch {
+			ops = append(ops, clientv3.OpGet(idKey(id)))
+		}
+		m := r.mark()
+		resp, err := r.cli.Txn(ctx).Then(ops...).Commit()
+		if err != nil {
+			return err
+		}
+		current := r.observe(&m, resp.Header)
+		var found []*Schema
+		for i, op := range resp.Responses {
+			kvs := op.GetResponseRange().Kvs
+			if len(kvs) == 0 {
+				continue
+			}
+			s, err := r.decodeSchema(ctx, batch[i], kvs[0].Value)
+			if err != nil {
+				return err
+			}
+			found = append(found, s)
+		}
+		r.mu.Lock()
+		if current && r.resets.Load() == m.gen {
+			for _, s := range found {
+				r.cacheLocked(s)
+				r.counter = max(r.counter, s.ID)
+			}
+		}
+		r.mu.Unlock()
+	}
+	return nil
 }
 
 func (r *Registry) Init(ctx context.Context) error {
@@ -679,6 +744,11 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	if err != nil {
 		return nil, errInvalidSchema("%v", err)
 	}
+	if req.Normalize {
+		if _, err := parseAvro(normalized, refs); err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
+	}
 	return &prepared{
 		schemaType: schemaType,
 		canonical:  canonical,
@@ -697,6 +767,7 @@ type recordWriter struct {
 	uploaded string
 	writes   int
 	claimed  int64
+	took     bool
 }
 
 const (
@@ -761,20 +832,114 @@ func (w *recordWriter) claimImport(ctx context.Context, id int64) error {
 	}
 	err := w.r.putMarker(ctx, id, w.p.hash)
 	if errors.Is(err, storage.ErrPreconditionFailed) {
-		data, readErr := w.r.s3.DownloadIndex(ctx, w.r.idMarkerKey(id))
-		if readErr != nil {
-			return fmt.Errorf("read schema id %d marker from S3: %w", id, readErr)
-		}
-		if string(data) != w.p.hash {
-			return errNotPermitted("Schema id %d was issued before for a different schema, recorded in S3 at %s", id, w.r.idMarkerKey(id))
-		}
-		err = nil
+		w.took, err = w.r.reclaimMarker(ctx, id, w.p.hash)
 	}
 	if err != nil {
+		var regErr *Error
+		if errors.As(err, &regErr) {
+			return err
+		}
 		return fmt.Errorf("write schema id %d marker to S3: %w", id, err)
 	}
 	w.claimed = id
 	return nil
+}
+
+func (r *Registry) reclaimMarker(ctx context.Context, id int64, hash string) (bool, error) {
+	key := r.idMarkerKey(id)
+	taken := errNotPermitted("Schema id %d was issued before for a different schema, recorded in S3 at %s", id, key)
+	if r.replacer == nil {
+		data, err := r.s3.DownloadIndex(ctx, key)
+		if err != nil {
+			return false, fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+		}
+		if string(data) != hash {
+			return false, taken
+		}
+		return false, nil
+	}
+	obj, err := r.replacer.DownloadIndexObject(ctx, key)
+	if err != nil {
+		return false, fmt.Errorf("read schema id %d marker from S3: %w", id, err)
+	}
+	if string(obj.Body) == hash {
+		return false, nil
+	}
+	free, err := r.fenceID(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !free {
+		return false, taken
+	}
+	err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
+	if errors.Is(err, storage.ErrPreconditionFailed) || errors.Is(err, storage.ErrConditionalConflict) {
+		return false, taken
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *Registry) fenceID(ctx context.Context, id int64) (bool, error) {
+	for attempt := 0; attempt <= maxConflictRetry; attempt++ {
+		snap, err := r.read(ctx, []string{counterKey(), idKey(id)}, nil)
+		if err != nil {
+			return false, err
+		}
+		if snap[idKey(id)] != nil {
+			return false, nil
+		}
+		n, err := snap.int(counterKey())
+		if err != nil {
+			return false, err
+		}
+		if n >= id {
+			return true, nil
+		}
+		cmps := append(snap.fence(counterKey()), clientv3.Compare(clientv3.CreateRevision(idKey(id)), "=", 0))
+		ok, err := r.commit(ctx, cmps, []clientv3.Op{clientv3.OpPut(counterKey(), strconv.FormatInt(id, 10))})
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (r *Registry) settleMarker(ctx context.Context, id int64, hash string) {
+	if r.replacer == nil {
+		return
+	}
+	key := r.idMarkerKey(id)
+	for attempt := 0; attempt <= maxConflictRetry; attempt++ {
+		obj, err := r.replacer.DownloadIndexObject(ctx, key)
+		if err != nil {
+			log.Printf("check schema id marker %s: %s", logSafe(key), logSafe(err.Error()))
+			return
+		}
+		if string(obj.Body) == hash {
+			return
+		}
+		err = r.replacer.UploadIndexIfMatch(ctx, key, []byte(hash), obj.ETag)
+		if err == nil {
+			log.Printf("rewrote schema id marker %s to the schema etcd holds", logSafe(key))
+			return
+		}
+		if !errors.Is(err, storage.ErrPreconditionFailed) && !errors.Is(err, storage.ErrConditionalConflict) {
+			log.Printf("rewrite schema id marker %s: %s", logSafe(key), logSafe(err.Error()))
+			return
+		}
+	}
+	log.Printf("schema id marker %s kept changing and may not hold the hash of the schema etcd holds", logSafe(key))
+}
+
+func logSafe(value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	return strings.ReplaceAll(value, "\r", "")
 }
 
 func (r *Registry) CheckIDMarkers(ctx context.Context) error {
@@ -801,12 +966,32 @@ func (r *Registry) CheckIDMarkers(ctx context.Context) error {
 	if !errors.Is(err, storage.ErrPreconditionFailed) {
 		return fmt.Errorf("S3 conditional write probe at %s: second write gave %w, want 412 PreconditionFailed", key, err)
 	}
+	if r.replacer == nil {
+		return nil
+	}
+	obj, err := r.replacer.DownloadIndexObject(ctx, key)
+	if err != nil {
+		return fmt.Errorf("S3 conditional write probe at %s: read back: %w", key, err)
+	}
+	if obj.ETag == "" {
+		return fmt.Errorf("S3 backend returned no ETag for %s, so orphaned schema id markers cannot be reclaimed with If-Match", key)
+	}
+	err = r.replacer.UploadIndexIfMatch(ctx, key, []byte("probe-stale"), `"0"`)
+	if err == nil {
+		return fmt.Errorf("S3 backend accepted a PutObject with a stale If-Match at %s, so it ignores the condition and orphaned schema id markers cannot be reclaimed safely", key)
+	}
+	if !errors.Is(err, storage.ErrPreconditionFailed) {
+		return fmt.Errorf("S3 conditional write probe at %s: stale If-Match write gave %w, want 412 PreconditionFailed", key, err)
+	}
+	if err := r.replacer.UploadIndexIfMatch(ctx, key, []byte("probe-match"), obj.ETag); err != nil {
+		return fmt.Errorf("S3 conditional write probe at %s: If-Match write with the current ETag failed: %w", key, err)
+	}
 	return nil
 }
 
 func (w *recordWriter) record(ctx context.Context) (string, error) {
 	p := w.p
-	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, References: w.req.References}
+	rec := schemaRecord{SchemaType: p.schemaType, Hash: p.hash, Norm: p.norm, NormForm: currentNormForm, References: w.req.References}
 	if len(p.canonical) <= w.r.inlineLimit {
 		rec.Schema = p.canonical
 	} else {
@@ -936,8 +1121,17 @@ func topVersion(versions map[int]versionEntry) int {
 	return top
 }
 
+const currentNormForm = 1
+
 func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEntry, p *prepared, deleted bool) (int, int64, error) {
 	vs := sortedVersions(versions, deleted)
+	ids := make([]int64, 0, len(vs))
+	for _, v := range vs {
+		ids = append(ids, versions[v].ID)
+	}
+	if err := r.prefetch(ctx, ids); err != nil {
+		return 0, 0, err
+	}
 	for i := len(vs) - 1; i >= 0; i-- {
 		id := versions[vs[i]].ID
 		s, err := r.schemaByID(ctx, id)
@@ -945,6 +1139,27 @@ func (r *Registry) subjectMatch(ctx context.Context, versions map[int]versionEnt
 			return 0, 0, err
 		}
 		if s != nil && s.Type == p.schemaType && s.Norm == p.norm {
+			return vs[i], id, nil
+		}
+	}
+	for i := len(vs) - 1; i >= 0; i-- {
+		id := versions[vs[i]].ID
+		s, err := r.schemaByID(ctx, id)
+		if err != nil {
+			return 0, 0, err
+		}
+		if s == nil || s.Type != p.schemaType || !s.olderNorm {
+			continue
+		}
+		refs, err := r.storedReferences(ctx, s)
+		if err != nil {
+			return 0, 0, err
+		}
+		normalized, err := canonicalAvro(s.Text, refs, true)
+		if err != nil {
+			continue
+		}
+		if schemaHash(s.Type, normalized, s.References) == p.norm {
 			return vs[i], id, nil
 		}
 	}
@@ -1007,10 +1222,17 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		}
 		cmps = append(cmps, snap.fence(hk)...)
 	}
-	live := sortedVersions(versions, false)
-	if len(live) > 0 && effective(snap, configKey(subject), configKey(""), CompatBackward) == CompatBackward {
-		prev := live[len(live)-1]
-		if err := r.checkAgainst(ctx, subject, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
+	level := effective(snap, configKey(subject), configKey(""), CompatBackward)
+	targets := compatTargets(level, versions)
+	targetIDs := make([]int64, 0, len(targets))
+	for _, prev := range targets {
+		targetIDs = append(targetIDs, versions[prev].ID)
+	}
+	if err := r.prefetch(ctx, targetIDs); err != nil {
+		return 0, 0, err
+	}
+	for _, prev := range targets {
+		if err := r.checkAgainst(ctx, subject, level, p.canonical, p.refs, prev, versions[prev].ID); err != nil {
 			return 0, 0, err
 		}
 		cmps = append(cmps, snap.fence(versionKey(subject, prev))...)
@@ -1064,7 +1286,36 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	return id, version, nil
 }
 
-func (r *Registry) checkAgainst(ctx context.Context, subject, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
+type compatRule struct {
+	backward   bool
+	forward    bool
+	transitive bool
+}
+
+var compatRules = map[string]compatRule{
+	CompatNone:        {},
+	CompatBackward:    {backward: true},
+	CompatBackwardAll: {backward: true, transitive: true},
+	CompatForward:     {forward: true},
+	CompatForwardAll:  {forward: true, transitive: true},
+	CompatFull:        {backward: true, forward: true},
+	CompatFullAll:     {backward: true, forward: true, transitive: true},
+}
+
+func compatTargets(level string, versions map[int]versionEntry) []int {
+	rule := compatRules[level]
+	live := sortedVersions(versions, false)
+	if (!rule.backward && !rule.forward) || len(live) == 0 {
+		return nil
+	}
+	slices.Reverse(live)
+	if !rule.transitive {
+		live = live[:1]
+	}
+	return live
+}
+
+func (r *Registry) checkAgainst(ctx context.Context, subject, level, text string, refs []resolvedReference, prevVersion int, prevID int64) error {
 	prev, err := r.schemaByID(ctx, prevID)
 	if err != nil {
 		return err
@@ -1076,8 +1327,16 @@ func (r *Registry) checkAgainst(ctx context.Context, subject, text string, refs 
 	if err != nil {
 		return err
 	}
-	if err := checkBackward(text, refs, prev.Text, prevRefs); err != nil {
-		return errIncompatible(subject, prevVersion, prev.Text, err.Error())
+	rule := compatRules[level]
+	if rule.backward {
+		if err := checkReads(text, refs, prev.Text, prevRefs); err != nil {
+			return errIncompatible(subject, level, prevVersion, prev.Text, err.Error())
+		}
+	}
+	if rule.forward {
+		if err := checkReads(prev.Text, prevRefs, text, refs); err != nil {
+			return errIncompatible(subject, level, prevVersion, prev.Text, err.Error())
+		}
 	}
 	return nil
 }
@@ -1095,6 +1354,13 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 			return 0, 0, err
 		}
 		if existing == nil || existing.Type != p.schemaType || existing.Text != p.canonical || !slices.Equal(existing.References, req.References) {
+			if w.claimed == id && w.r.replacer != nil {
+				var rec schemaRecord
+				if err := json.Unmarshal(kv.Value, &rec); err == nil && rec.Hash != "" {
+					r.settleMarker(ctx, id, rec.Hash)
+				}
+				w.claimed = 0
+			}
 			return 0, 0, errNotPermitted("Schema id %d already holds a different schema", id)
 		}
 		cmps = append(cmps, snap.fence(ik)...)
@@ -1161,6 +1427,12 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	ok, err := r.commit(ctx, cmps, ops)
 	if err != nil || !ok {
 		return 0, 0, err
+	}
+	if newID && w.r.s3 != nil {
+		if w.took {
+			log.Printf("reclaimed orphaned schema id marker %s, etcd had no schema with that id", logSafe(r.idMarkerKey(id)))
+		}
+		r.settleMarker(ctx, id, p.hash)
 	}
 	return id, version, nil
 }

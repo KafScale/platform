@@ -41,13 +41,13 @@ const (
 )
 
 type harness struct {
-	t   *testing.T
+	t   testing.TB
 	cli *clientv3.Client
 	reg *Registry
 	srv *httptest.Server
 }
 
-func newClient(t *testing.T, endpoints []string) *clientv3.Client {
+func newClient(t testing.TB, endpoints []string) *clientv3.Client {
 	t.Helper()
 	cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second})
 	if err != nil {
@@ -57,7 +57,7 @@ func newClient(t *testing.T, endpoints []string) *clientv3.Client {
 	return cli
 }
 
-func newHarness(t *testing.T, endpoints []string, cfg Config) *harness {
+func newHarness(t testing.TB, endpoints []string, cfg Config) *harness {
 	t.Helper()
 	if endpoints == nil {
 		endpoints = testutil.StartEmbeddedEtcd(t)
@@ -275,7 +275,7 @@ func TestErrorCodes(t *testing.T) {
 		h.fail("GET", "/subjects/s/versions/"+v+"/schema", nil, 422, 42202)
 		h.fail("POST", "/compatibility/subjects/s/versions/"+v, schema(userV1), 422, 42202)
 	}
-	h.fail("PUT", "/config", map[string]string{"compatibility": "FULL"}, 422, 42203)
+	h.fail("PUT", "/config", map[string]string{"compatibility": "FULLY"}, 422, 42203)
 	h.fail("PUT", "/config/s", map[string]string{"compatibility": "bogus"}, 422, 42203)
 	h.fail("PUT", "/mode", map[string]string{"mode": "bogus"}, 422, 42204)
 	h.fail("POST", "/subjects/s/versions", map[string]any{"schema": userV2, "id": 5}, 422, 42205)
@@ -622,7 +622,7 @@ func TestCompatibilityEndpoint(t *testing.T) {
 		t.Fatalf("compatible %+v", out)
 	}
 	h.ok("POST", "/compatibility/subjects/s/versions/1?verbose=true", schema(userV3), &out)
-	if out.IsCompatible || len(out.Messages) != 1 {
+	if out.IsCompatible || len(out.Messages) != 4 {
 		t.Fatalf("incompatible %+v", out)
 	}
 	h.ok("POST", "/compatibility/subjects/s/versions/1?verbose=true", schema(userV2), &out)

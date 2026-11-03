@@ -303,13 +303,6 @@ func TestOrphanMarkerSkipsOnlyItsID(t *testing.T) {
 	}
 	h.ok("PUT", "/mode/imp", map[string]string{"mode": "IMPORT"}, nil)
 	h.ok("POST", "/subjects/imp/versions", map[string]any{"schema": address, "id": 2}, nil)
-	_, data := h.do("POST", "/subjects/imp/versions", map[string]any{"schema": userV2, "id": 1})
-	if !strings.Contains(string(data), "42205") || !strings.Contains(string(data), "prod/@schemas/ids/00000000000000000001") {
-		t.Fatalf("import over orphan: %s", data)
-	}
-	if err := s3.DeleteIndex(context.Background(), h.reg.idMarkerKey(1)); err != nil {
-		t.Fatal(err)
-	}
 	h.ok("POST", "/subjects/imp/versions", map[string]any{"schema": userV2, "id": 1}, nil)
 	if _, data := h.do("GET", "/schemas/ids/1/schema", nil); string(data) != userV2 {
 		t.Fatalf("id 1 serves %s", data)

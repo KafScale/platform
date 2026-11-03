@@ -297,6 +297,9 @@ func (w *avroWriter) object(o *jsonObject) error {
 func (w *avroWriter) named(o *jsonObject, kind string) error {
 	name, _ := o.str("name")
 	ns, hasNS := o.str("namespace")
+	if w.normalize && ns == "" {
+		hasNS = false
+	}
 	typeSpace, short := splitName(name, ns, hasNS, w.space)
 	full := fullName(typeSpace, short)
 	if w.defined[full] {
@@ -517,6 +520,9 @@ func javaDouble(f float64) string {
 		return s
 	}
 	s := strconv.FormatFloat(f, 'e', -1, 64)
+	if !strings.Contains(s[:strings.IndexByte(s, 'e')], ".") {
+		s = strconv.FormatFloat(f, 'e', 1, 64)
+	}
 	mant, exp, _ := strings.Cut(s, "e")
 	if !strings.Contains(mant, ".") {
 		mant += ".0"

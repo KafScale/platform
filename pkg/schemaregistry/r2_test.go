@@ -144,7 +144,6 @@ func TestRestoredEtcdNeverReissuesIDs(t *testing.T) {
 		}
 	}
 	a.ok("PUT", "/mode/imp", map[string]string{"mode": "IMPORT"}, nil)
-	a.fail("POST", "/subjects/imp/versions", map[string]any{"schema": person, "references": []Reference{{Name: "example.Address", Subject: "t", Version: 1}}, "id": 2}, 422, 42205)
 	a.ok("POST", "/subjects/imp/versions", map[string]any{"schema": userV2, "id": 2}, nil)
 }
 

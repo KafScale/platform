@@ -397,11 +397,7 @@ func (h *srHarness) confluentMigration(t *testing.T, brokerAddr, urlA, urlB stri
 		Schema  string `json:"schema"`
 	}
 	srCall(t, http.MethodGet, cpURL+"/subjects/legacy-value/versions/1", nil, &source)
-	var mode map[string]any
-	srCall(t, http.MethodPut, urlA+"/mode/legacy-value", map[string]string{"mode": "IMPORT"}, &mode)
-	var reg map[string]any
-	srCall(t, http.MethodPost, urlA+"/subjects/legacy-value/versions", map[string]any{"schema": source.Schema, "id": source.ID, "version": source.Version}, &reg)
-	srCall(t, http.MethodPut, urlA+"/mode/legacy-value", map[string]string{"mode": "READWRITE"}, &mode)
+	h.importFromConfluent(t, cpURL, urlA)
 
 	frames := readFrames(t, h.dataPath("legacy.hex"))
 	for _, f := range frames {

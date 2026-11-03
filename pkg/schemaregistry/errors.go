@@ -15,12 +15,16 @@
 
 package schemaregistry
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type Error struct {
 	Status  int
 	Code    int
 	Message string
+	details []string
 }
 
 func (e *Error) Error() string {
@@ -56,7 +60,7 @@ func errInvalidVersion(version string) *Error {
 }
 
 func errInvalidCompatibility(level string) *Error {
-	return newError(422, 42203, "Invalid compatibility level %q. Supported levels are NONE and BACKWARD.", level)
+	return newError(422, 42203, "Invalid compatibility level %q. Valid values are NONE, BACKWARD, BACKWARD_TRANSITIVE, FORWARD, FORWARD_TRANSITIVE, FULL and FULL_TRANSITIVE.", level)
 }
 
 func errInvalidMode(mode string) *Error {
@@ -71,8 +75,11 @@ func errReferenceExists(subject string, version int) *Error {
 	return newError(422, 42206, "One or more references exist to the schema {subject=%s,version=%d}.", subject, version)
 }
 
-func errIncompatible(subject string, version int, oldSchema, reason string) *Error {
-	return newError(409, 40901, "Schema being registered is incompatible with an earlier schema for subject %q, details: [%s, {oldSchemaVersion: %d}, {oldSchema: '%s'}, {compatibility: 'BACKWARD'}]", subject, reason, version, oldSchema)
+func errIncompatible(subject, level string, version int, oldSchema, reason string) *Error {
+	details := []string{reason, fmt.Sprintf("{oldSchemaVersion: %d}", version), fmt.Sprintf("{oldSchema: '%s'}", oldSchema), fmt.Sprintf("{validateFields: 'false', compatibility: '%s'}", level)}
+	err := newError(409, 40901, "Schema being registered is incompatible with an earlier schema for subject %q, details: [%s]", subject, strings.Join(details, ", "))
+	err.details = details
+	return err
 }
 
 func errSubjectSoftDeleted(subject string) *Error {

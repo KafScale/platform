@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -29,6 +30,17 @@ var ErrConditionalConflict = errors.New("conditional request conflict")
 
 type ConditionalIndexWriter interface {
 	UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error
+}
+
+type IndexObject struct {
+	Body         []byte
+	ETag         string
+	LastModified time.Time
+}
+
+type ConditionalIndexReplacer interface {
+	DownloadIndexObject(ctx context.Context, key string) (IndexObject, error)
+	UploadIndexIfMatch(ctx context.Context, key string, body []byte, etag string) error
 }
 
 // ByteRange represents an inclusive byte range for reads.
