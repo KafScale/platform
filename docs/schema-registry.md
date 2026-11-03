@@ -38,7 +38,8 @@ Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_
 
 ### What it supports
 
-- Schema type: Avro only. `GET /schemas/types` returns `["AVRO"]`. Protobuf and JSON Schema are rejected with 42201.
+- Schema types: Avro and Protobuf. `GET /schemas/types` returns `["AVRO", "PROTOBUF"]`. JSON Schema is rejected with 42201. A schema without `schemaType` is Avro.
+- Protobuf schemas are `.proto` text in proto2 or proto3 syntax. Imports are resolved through references, where the reference `name` is the import path, and the well known types under `google/protobuf/` are always available. Compatibility follows the Confluent Schema Registry 8.4.0 Protobuf rules for all seven levels, including changes inside referenced schemas. Two schemas that differ only in comments and whitespace get the same id. With `normalize=true`, they also match when they differ in the order of imports, fields, enum values or options, in proto2 `syntax`, or in written versus fully qualified type names, as in Confluent. `GET /schemas/ids/{id}?format=serialized` and `GET /subjects/{subject}/versions/{version}?format=serialized` return a Protobuf schema as a base64 `FileDescriptorProto`, which confluent-kafka-python requests when it decodes.
 - Compatibility levels: `NONE`, `BACKWARD` (the default), `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL` and `FULL_TRANSITIVE`, as in Confluent Schema Registry 8.4.0. `BACKWARD` means the new schema can read data written with the old one, `FORWARD` means the old schema can read data written with the new one, and `FULL` means both. The plain levels check against the latest live version of the subject, the `_TRANSITIVE` levels against every live version. Soft deleted versions are not checked. `PUT /config` accepts the level in any case and returns it in upper case. Other values are rejected with 42203.
 - Modes: `READWRITE` (the default), `READONLY` and `IMPORT`.
 - Schema references, resolved by subject and version, nested up to 32 levels.
@@ -49,7 +50,7 @@ Endpoints:
 | Method | Path | Query parameters |
 |--------|------|------------------|
 | GET | `/schemas/types` | |
-| GET | `/schemas/ids/{id}` | |
+| GET | `/schemas/ids/{id}` | `format` |
 | GET | `/schemas/guids/{guid}` | |
 | GET | `/schemas/ids/{id}/schema` | |
 | GET | `/schemas/ids/{id}/versions` | `deleted` |
@@ -58,7 +59,7 @@ Endpoints:
 | GET | `/contexts` | |
 | GET | `/subjects` | `deleted` |
 | GET | `/subjects/{subject}/versions` | `deleted` |
-| GET | `/subjects/{subject}/versions/{version}` | `deleted` |
+| GET | `/subjects/{subject}/versions/{version}` | `deleted`, `format` |
 | GET | `/subjects/{subject}/versions/{version}/schema` | |
 | GET | `/subjects/{subject}/versions/{version}/referencedby` | |
 | POST | `/subjects/{subject}/versions` | `normalize` |
@@ -136,7 +137,10 @@ Checked against Confluent Schema Registry 8.4.0:
 - `POST /subjects/{subject}/versions` with an empty body `{}` returns 42201. Confluent returns 42201 for a new subject and the latest version for an existing subject.
 - The size limit for schema text is 1 MiB. Confluent limits the size of the stored record, which is slightly above 1 MiB of schema text.
 - Error messages use different wording. An incompatible schema gets the same four details as in Confluent, the reason, `{oldSchemaVersion: n}`, `{oldSchema: '...'}` and `{validateFields: 'false', compatibility: '<level>'}`, but the reason is a plain sentence where Confluent returns an `errorType`, a `description` and `additionalInfo`.
-- Only Avro is supported.
+- Avro and Protobuf are supported. JSON Schema is not.
+- Protobuf schemas are stored and returned as submitted. Confluent stores them in its own formatted text, so a Protobuf schema registered directly in both registries gets a different `guid`. Schemas imported from Confluent keep Confluent's text and `guid`.
+- A Protobuf schema given as a base64 `FileDescriptorProto` is rejected with 42201. Confluent accepts it.
+- A proto3 enum whose first value is not zero is rejected with 42201. Confluent accepts it.
 - A hard delete keeps the id. Confluent forgets an id once no subject uses it and gives the schema a new id when it is registered again.
 - When one schema is stored under several ids by import, registering it in a new subject returns the first id. Confluent returns the latest.
 - Named types defined inside referenced schemas are always known to the referencing schema.
