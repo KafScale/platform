@@ -92,3 +92,5 @@ limitations under the License.
 - On coordinator takeover, recovered heartbeat times receive a five-second expiry margin for clock skew. Locally received heartbeats return to the configured session timeout.
 
 - Topics that already exist with names outside the allowed characters, such as names with `@` or `/`, keep loading and accept Produce and Fetch as before. Only new creates are rejected. A topic named `<name>@<N>` shares an S3 prefix with generation N of `<name>`, so do not delete and re-create `<name>` while it exists. Move its data to a topic with a valid name and delete it first.
+
+- Schema registry rollback: rolling back to a main build from between #277 and #282 registers duplicate versions for 5 of the 54 edge schemas in our upgrade test. These are the Avro schemas with the `5e-324` and `1e-323` double defaults, registered with and without `normalize=true`, and the schema with an empty nested namespace registered with `normalize=true`. Those builds do not match the hashes that #282 stores, so re-registering one of these schemas creates a new version and id. Rolling back to the #282 review build 035b209 is safe.
