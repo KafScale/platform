@@ -293,6 +293,7 @@ func TestProtoDescriptorRelativeMapEntry(t *testing.T) {
 			}
 		}
 		b.Field[1].TypeName = proto.String("tagsEntry")
+		b.Field[1].Type = nil
 	})
 	h := newHarness(t, nil, Config{})
 	id := h.register("m", protoSchemaBody(b64))
@@ -303,5 +304,38 @@ func TestProtoDescriptorRelativeMapEntry(t *testing.T) {
 	}
 	if again := h.register("m", protoSchemaBody(text)); again != id {
 		t.Fatalf("text after descriptor got id %d, want %d", again, id)
+	}
+}
+
+func TestProtoDescriptorUnsetMapType(t *testing.T) {
+	text := "syntax = \"proto3\";\npackage mx;\nimport \"google/protobuf/timestamp.proto\";\nmessage B { google.protobuf.Timestamp at = 1; map<string, int64> m = 2; oneof o { string x = 3; int32 y = 4; } }\n"
+	b64 := protoDescriptorBase64(t, text, nil, func(fd *descriptorpb.FileDescriptorProto) {
+		b := fd.MessageType[0]
+		b.NestedType[0].Name = proto.String("mEntry")
+		b.Field[1].TypeName = proto.String("mEntry")
+		b.Field[1].Type = nil
+	})
+	h := newHarness(t, nil, Config{})
+	h.register("w", protoSchemaBody(b64))
+	var got versionBody
+	h.ok("GET", "/subjects/w/versions/1", nil, &got)
+	if !strings.Contains(got.Schema, "map<string, int64> m = 2;") {
+		t.Fatalf("stored %q", got.Schema)
+	}
+}
+
+func TestProtoDescriptorFormKeepsCustomJSONName(t *testing.T) {
+	plain, err := parseProto(protoHead+"message M { string user_id = 1; }", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom, err := parseProto(protoHead+"message M { string user_id = 1 [json_name = \"uid\"]; }", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := descriptorForm(plain.file)
+	b, _ := descriptorForm(custom.file)
+	if a == b {
+		t.Fatal("custom json_name ignored")
 	}
 }

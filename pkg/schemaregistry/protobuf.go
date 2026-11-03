@@ -425,7 +425,8 @@ func fixMapEntries(scope string, msgs []*descriptorpb.DescriptorProto) {
 			name = m.GetName()
 		}
 		for _, f := range m.GetField() {
-			if f.GetType() != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE || f.GetLabel() != descriptorpb.FieldDescriptorProto_LABEL_REPEATED {
+			unset := f.Type == nil && f.GetTypeName() != ""
+			if (f.GetType() != descriptorpb.FieldDescriptorProto_TYPE_MESSAGE && !unset) || f.GetLabel() != descriptorpb.FieldDescriptorProto_LABEL_REPEATED {
 				continue
 			}
 			tn := f.GetTypeName()
@@ -440,6 +441,7 @@ func fixMapEntries(scope string, msgs []*descriptorpb.DescriptorProto) {
 				want := protoMapEntryName(f.GetName())
 				n.Name = proto.String(want)
 				f.TypeName = proto.String("." + name + "." + want)
+				f.Type = descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum()
 			}
 		}
 		fixMapEntries(name, m.GetNestedType())
@@ -463,6 +465,23 @@ func protoMapEntryName(field string) string {
 	return b.String() + "Entry"
 }
 
+func protoJSONName(name string) string {
+	var b strings.Builder
+	up := false
+	for _, r := range name {
+		if r == '_' {
+			up = true
+			continue
+		}
+		if up && r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
+		up = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func descriptorForm(fd protoreflect.FileDescriptor) (string, error) {
 	p := protodesc.ToFileDescriptorProto(fd)
 	p.Name = nil
@@ -471,7 +490,9 @@ func descriptorForm(fd protoreflect.FileDescriptor) (string, error) {
 	strip = func(msgs []*descriptorpb.DescriptorProto) {
 		for _, m := range msgs {
 			for _, f := range m.GetField() {
-				f.JsonName = nil
+				if f.GetJsonName() == protoJSONName(f.GetName()) {
+					f.JsonName = nil
+				}
 			}
 			strip(m.GetNestedType())
 		}
