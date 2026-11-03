@@ -226,7 +226,11 @@ func (s *Server) getSchema(_ http.ResponseWriter, r *http.Request) (any, error) 
 		}
 		return nil, err
 	}
-	out := versionBody{GUID: sc.GUID(), SchemaType: sc.Type, References: sc.References, Schema: sc.Text}
+	text, err := s.formatted(r, sc)
+	if err != nil {
+		return nil, err
+	}
+	out := versionBody{GUID: sc.GUID(), SchemaType: sc.Type, References: sc.References, Schema: text}
 	for _, deleted := range []bool{false, true} {
 		owners, err := s.reg.IDVersions(r.Context(), id, deleted)
 		if err != nil {
@@ -353,7 +357,11 @@ func (s *Server) getVersion(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	return versionResponse(v, true), nil
+	out := versionResponse(v, true)
+	if out.Schema, err = s.formatted(r, v.Schema); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Server) getVersionText(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -501,4 +509,11 @@ func (s *Server) compatibility(_ http.ResponseWriter, r *http.Request) (any, err
 		out["messages"] = messages
 	}
 	return out, nil
+}
+
+func (s *Server) formatted(r *http.Request, sc *Schema) (string, error) {
+	if sc.Type != schemaTypeProtobuf || r.URL.Query().Get("format") != "serialized" {
+		return sc.Text, nil
+	}
+	return s.reg.serializedProto(r.Context(), sc)
 }

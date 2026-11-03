@@ -16,8 +16,13 @@
 package schemaregistry
 
 import (
+	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 const protoHead = "syntax = \"proto3\";\npackage a;\n"
@@ -143,4 +148,25 @@ func TestProtoRegisterLookupAndCompatibility(t *testing.T) {
 		t.Fatalf("changed reference reported compatible")
 	}
 	h.fail("POST", "/subjects/r/versions", protoSchemaBody(main), 422, 42201)
+	var serialized versionBody
+	h.ok("GET", "/schemas/ids/"+fmt.Sprint(rid)+"?format=serialized", nil, &serialized)
+	data, err := base64.StdEncoding.DecodeString(serialized.Schema)
+	if err != nil {
+		t.Fatalf("serialized schema %q: %v", serialized.Schema, err)
+	}
+	var fd descriptorpb.FileDescriptorProto
+	if err := proto.Unmarshal(data, &fd); err != nil {
+		t.Fatal(err)
+	}
+	if fd.GetPackage() != "a" || fd.GetMessageType()[0].GetName() != "R" || strings.Join(fd.GetDependency(), ",") != "c.proto,google/protobuf/timestamp.proto" {
+		t.Fatalf("descriptor %v", &fd)
+	}
+	h.ok("GET", "/subjects/common/versions/1?format=serialized", nil, &got)
+	if strings.Contains(got.Schema, "syntax") {
+		t.Fatalf("version not serialized %q", got.Schema)
+	}
+	h.ok("GET", "/subjects/common/versions/1", nil, &got)
+	if !strings.Contains(got.Schema, "syntax") {
+		t.Fatalf("default format %q", got.Schema)
+	}
 }

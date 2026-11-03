@@ -17,6 +17,7 @@ package schemaregistry
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"slices"
@@ -26,6 +27,8 @@ import (
 	"github.com/bufbuild/protocompile"
 	"github.com/bufbuild/protocompile/ast"
 	"github.com/bufbuild/protocompile/linker"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
@@ -792,4 +795,22 @@ func (c *protoCtx) messageType(o, u protoreflect.MessageDescriptor) {
 	if len(sub.incompatible()) > 0 {
 		c.add("FIELD_NAMED_TYPE_CHANGED")
 	}
+}
+
+func (r *Registry) serializedProto(ctx context.Context, s *Schema) (string, error) {
+	refs, err := r.storedReferences(ctx, s)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := parseProto(s.Text, refs)
+	if err != nil {
+		return "", err
+	}
+	fd := protodesc.ToFileDescriptorProto(parsed.file)
+	fd.Name = nil
+	data, err := proto.Marshal(fd)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(data), nil
 }
