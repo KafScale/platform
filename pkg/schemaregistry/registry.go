@@ -745,6 +745,11 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	}
 	p := &prepared{schemaType: schemaType, normalize: req.Normalize, refs: refs, refRevs: refRevs}
 	if schemaType == schemaTypeProtobuf {
+		text, err := protoFromDescriptor(req.Schema, refs)
+		if err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
+		req.Schema = text
 		raw, normalized, err := prepareProto(req.Schema, refs, req.Normalize)
 		if err != nil {
 			return nil, errInvalidSchema("%v", err)

@@ -50,6 +50,7 @@ func TestProtoCompatibilityRules(t *testing.T) {
 		{"type renamed", "message M { N n = 1; }\nmessage N { int32 x = 1; }", "message M { O n = 1; }\nmessage O { int32 x = 1; }", "FIELD_NAMED_TYPE_CHANGED"},
 		{"oneof field moved in", "message M { int32 a = 1; int32 b = 2; }", "message M { oneof o { int32 a = 1; int32 b = 2; } }", "MULTIPLE_FIELDS_MOVED_TO_ONEOF"},
 		{"enum value added", "enum E { A = 0; }\nmessage M { E e = 1; }", "enum E { A = 0; B = 1; }\nmessage M { E e = 1; }", ""},
+		{"field moved to existing oneof", "message M { oneof o { int32 a = 1; } int32 b = 2; }", "message M { oneof o { int32 a = 1; int32 b = 2; } }", "FIELD_MOVED_TO_EXISTING_ONEOF"},
 		{"enum to int", "enum E { A = 0; }\nmessage M { E e = 1; }", "message M { int32 e = 1; }", ""},
 	}
 	for _, c := range cases {
@@ -60,6 +61,13 @@ func TestProtoCompatibilityRules(t *testing.T) {
 		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 			t.Errorf("%s: got %v, want %s", c.name, err, c.want)
 		}
+	}
+	proto2 := "syntax = \"proto2\";\npackage a;\n"
+	if err := checkProtoReads(proto2+"message M { repeated string a = 1; }", nil, proto2+"message M { optional string a = 1; }", nil); err != nil {
+		t.Fatalf("string label change %v", err)
+	}
+	if err := checkProtoReads(proto2+"message M { repeated int32 a = 1; }", nil, proto2+"message M { optional int32 a = 1; }", nil); err == nil {
+		t.Fatalf("number label change reported compatible")
 	}
 	if err := checkProtoReads("syntax = \"proto3\";\npackage b;\nmessage M {}", nil, protoHead+"message M {}", nil); err == nil || !strings.Contains(err.Error(), "PACKAGE_CHANGED") {
 		t.Fatalf("package change %v", err)
@@ -93,6 +101,13 @@ func TestProtoCanonicalForm(t *testing.T) {
 		{protoHead + "message M { int32 b = 2; int32 a = 1; }", protoHead + "message M { int32 a = 1; int32 b = 2; }", false, true},
 		{protoHead + "message M { int32 a = 1; }", protoHead + "message M { int64 a = 1; }", false, false},
 	}
+	mapped, err := parseProto(protoHead+m+"message M { map<string, N> m = 1; }", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mapped.canonical(true); !strings.Contains(got, "map<string, .a.N> m = 1") {
+		t.Fatalf("normalized map %q", got)
+	}
 	for i, p := range pairs {
 		if got := same(p.a, p.b, false); got != p.raw {
 			t.Errorf("pair %d raw equal %v, want %v", i, got, p.raw)
@@ -101,6 +116,53 @@ func TestProtoCanonicalForm(t *testing.T) {
 			t.Errorf("pair %d normalized equal %v, want %v", i, got, p.norm)
 		}
 	}
+}
+
+func TestProtoDescriptorInput(t *testing.T) {
+	h := newHarness(t, nil, Config{})
+	h.register("common", protoSchemaBody("syntax = \"proto3\";\npackage c;\nmessage C { string x = 1; }"))
+	text := protoHead + "import \"c.proto\";\nimport \"google/protobuf/timestamp.proto\";\nmessage R { c.C c = 1; google.protobuf.Timestamp t = 2; map<string, int32> m = 3; oneof o { string s = 4; int64 n = 5; } }"
+	ref := Reference{Name: "c.proto", Subject: "common", Version: 1}
+	id := h.register("r", protoSchemaBody(text, ref))
+	var serialized versionBody
+	h.ok("GET", "/schemas/ids/"+fmt.Sprint(id)+"?format=serialized", nil, &serialized)
+	data, err := base64.StdEncoding.DecodeString(serialized.Schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fd descriptorpb.FileDescriptorProto
+	if err := proto.Unmarshal(data, &fd); err != nil {
+		t.Fatal(err)
+	}
+	if fd.GetName() != "default" {
+		t.Fatalf("serialized file name %q", fd.GetName())
+	}
+	var got versionBody
+	h.ok("POST", "/subjects/r", protoSchemaBody(serialized.Schema, ref), &got)
+	if got.ID != id {
+		t.Fatalf("descriptor lookup %+v", got)
+	}
+	again := h.register("d", protoSchemaBody(serialized.Schema, ref))
+	if again != id {
+		t.Fatalf("descriptor register id %d, want %d", again, id)
+	}
+	fd.MessageType[0].Field = append(fd.MessageType[0].Field, &descriptorpb.FieldDescriptorProto{Name: proto.String("extra"), Number: proto.Int32(9), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), JsonName: proto.String("extra")})
+	data, err = proto.Marshal(&fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.register("d", protoSchemaBody(base64.StdEncoding.EncodeToString(data), ref))
+	h.ok("GET", "/subjects/d/versions/2", nil, &got)
+	if !strings.Contains(got.Schema, "string extra = 9;") || !strings.Contains(got.Schema, "import \"c.proto\";") {
+		t.Fatalf("descriptor stored as %q", got.Schema)
+	}
+	if _, err := parseProto(got.Schema, []resolvedReference{{Name: "c.proto", Text: "syntax = \"proto3\";\npackage c;\nmessage C { string x = 1; }"}}); err != nil {
+		t.Fatalf("stored text does not parse: %v", err)
+	}
+	if id2 := h.register("d", protoSchemaBody(base64.StdEncoding.EncodeToString(data), ref)); id2 != id+1 {
+		t.Fatalf("descriptor register again %d", id2)
+	}
+	h.fail("POST", "/subjects/d/versions", protoSchemaBody("bm90IGEgZGVzY3JpcHRvcg==", ref), 422, 42201)
 }
 
 func TestProtoRegisterLookupAndCompatibility(t *testing.T) {

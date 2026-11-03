@@ -27,9 +27,12 @@ import (
 	"github.com/bufbuild/protocompile"
 	"github.com/bufbuild/protocompile/ast"
 	"github.com/bufbuild/protocompile/linker"
+	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/desc/protoprint"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
@@ -356,6 +359,75 @@ func (p *protoPrinter) enum(e *descriptorpb.EnumDescriptorProto) {
 		p.line(parts...)
 	}
 	p.line("}")
+}
+
+func protoFromDescriptor(text string, refs []resolvedReference) (string, error) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || strings.ContainsAny(trimmed, " \t\r\n;{") {
+		return text, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil {
+		return text, nil
+	}
+	fd := &descriptorpb.FileDescriptorProto{}
+	if err := proto.Unmarshal(data, fd); err != nil {
+		return "", fmt.Errorf("schema is neither protobuf text nor a base64 FileDescriptorProto: %w", err)
+	}
+	fd.Name = proto.String(protoMainFile)
+	sources := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		sources[ref.Name] = ref.Text
+	}
+	compiler := protocompile.Compiler{
+		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
+			Accessor: func(path string) (io.ReadCloser, error) {
+				src, ok := sources[path]
+				if !ok {
+					return nil, fmt.Errorf("import %q is not a reference of this schema", path)
+				}
+				return io.NopCloser(strings.NewReader(src)), nil
+			},
+		}),
+	}
+	files := &protoregistry.Files{}
+	if len(fd.GetDependency()) > 0 {
+		deps, err := compiler.Compile(context.Background(), fd.GetDependency()...)
+		if err != nil {
+			return "", err
+		}
+		for _, dep := range deps {
+			if err := registerProtoFile(files, dep); err != nil {
+				return "", err
+			}
+		}
+	}
+	file, err := protodesc.NewFile(fd, files)
+	if err != nil {
+		return "", err
+	}
+	wrapped, err := desc.WrapFile(file)
+	if err != nil {
+		return "", err
+	}
+	out, err := (&protoprint.Printer{OmitComments: protoprint.CommentsAll}).PrintProtoToString(wrapped)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+func registerProtoFile(files *protoregistry.Files, fd protoreflect.FileDescriptor) error {
+	if _, err := files.FindFileByPath(fd.Path()); err == nil {
+		return nil
+	}
+	imports := fd.Imports()
+	for i := 0; i < imports.Len(); i++ {
+		if err := registerProtoFile(files, imports.Get(i).FileDescriptor); err != nil {
+			return err
+		}
+	}
+	return files.RegisterFile(fd)
 }
 
 func prepareProto(text string, refs []resolvedReference, normalize bool) (string, string, error) {
@@ -807,7 +879,7 @@ func (r *Registry) serializedProto(ctx context.Context, s *Schema) (string, erro
 		return "", err
 	}
 	fd := protodesc.ToFileDescriptorProto(parsed.file)
-	fd.Name = nil
+	fd.Name = proto.String("default")
 	data, err := proto.Marshal(fd)
 	if err != nil {
 		return "", err
