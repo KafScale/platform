@@ -35,6 +35,8 @@ limitations under the License.
 
 ## Bug fixes
 
+- Broker shutdown closes idle Kafka connections and closes active connections after their in-flight response. Clients rediscover their consumer group coordinator instead of continuing to use sockets whose broker has released its coordination leases (#285).
+
 - Concurrent heartbeats on one broker no longer starve offset commits for the same consumer group. Group writes queue independently, and waiting requests respect their deadlines; etcd comparisons still protect against membership changes from other brokers.
 
 - Protobuf descriptor printing uses `jhump/protoreflect/v2`, removing the v1 dependency. Map-entry repair rejects references to entries in the wrong scope instead of silently rewriting them (#284).

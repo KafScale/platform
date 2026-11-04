@@ -82,7 +82,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		s.wg.Add(1)
 		go func(c net.Conn) {
 			defer s.wg.Done()
-			s.handleConnection(c)
+			s.handleConnectionUntil(ctx, c)
 		}(conn)
 	}
 }
@@ -101,6 +101,12 @@ func (s *Server) ListenAddress() string {
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
+	s.handleConnectionUntil(context.Background(), conn)
+}
+
+// Shutdown stops new requests and closes idle sockets. A handler already running
+// keeps its independent context and can send its response before the socket closes.
+func (s *Server) handleConnectionUntil(shutdown context.Context, conn net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var readerDone chan struct{}
 	defer func() {
@@ -158,8 +164,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 	for {
 		var frame *protocol.Frame
 		select {
+		case <-shutdown.Done():
+			return
 		case frame = <-frames:
-			if frame == nil || ctx.Err() != nil {
+			if frame == nil || ctx.Err() != nil || shutdown.Err() != nil {
 				return
 			}
 		case <-ctx.Done():
