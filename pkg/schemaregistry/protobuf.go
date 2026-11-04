@@ -27,8 +27,7 @@ import (
 	"github.com/bufbuild/protocompile"
 	"github.com/bufbuild/protocompile/ast"
 	"github.com/bufbuild/protocompile/linker"
-	"github.com/jhump/protoreflect/desc"
-	"github.com/jhump/protoreflect/desc/protoprint"
+	"github.com/jhump/protoreflect/v2/protoprint"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -407,11 +406,7 @@ func protoFromDescriptor(text string, refs []resolvedReference) (string, bool, e
 	if err != nil {
 		return "", false, err
 	}
-	wrapped, err := desc.WrapFile(file)
-	if err != nil {
-		return "", false, err
-	}
-	out, err := (&protoprint.Printer{OmitComments: protoprint.CommentsAll}).PrintProtoToString(wrapped)
+	out, err := (&protoprint.Printer{OmitComments: protoprint.CommentsAll}).PrintProtoToString(file)
 	if err != nil {
 		return "", false, err
 	}
@@ -435,7 +430,7 @@ func fixMapEntries(scope string, msgs []*descriptorpb.DescriptorProto) {
 				if n.GetName() != short || !n.GetOptions().GetMapEntry() {
 					continue
 				}
-				if !strings.HasPrefix(tn, ".") && tn != short && tn != m.GetName()+"."+short && tn != name+"."+short {
+				if tn != "."+name+"."+short && tn != short && tn != m.GetName()+"."+short && tn != name+"."+short {
 					continue
 				}
 				want := protoMapEntryName(f.GetName())

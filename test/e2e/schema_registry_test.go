@@ -241,7 +241,7 @@ func (h *srHarness) checkTools() {
 	h.run(nil, h.docker[0], append(h.docker[1:], "pull", "-q", srConfluentImage)...)
 	h.run(nil, h.docker[0], append(h.docker[1:], "pull", "-q", srMavenImage)...)
 	h.run(nil, h.docker[0], append(h.docker[1:], "pull", "-q", srKafkaImage)...)
-	h.maven("package")
+	h.maven("compile")
 	h.dataPath("")
 }
 

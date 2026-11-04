@@ -35,6 +35,10 @@ limitations under the License.
 
 ## Bug fixes
 
+- Concurrent heartbeats on one broker no longer starve offset commits for the same consumer group. Group writes queue independently, and waiting requests respect their deadlines; etcd comparisons still protect against membership changes from other brokers.
+
+- Protobuf descriptor printing uses `jhump/protoreflect/v2`, removing the v1 dependency. Map-entry repair rejects references to entries in the wrong scope instead of silently rewriting them (#284).
+
 - The consumer group retention sweep no longer reads every offset key name to list groups. Brokers now keep an index key per group under `/kafscale/consumer-groups/`, and most sweeps read only the index, page by page. At 1,000 groups with 10 partitions each, a sweep listing reads 2,000 keys instead of 12,000, and no single etcd response holds more than 1,000 keys instead of 11,000. A full scan of the group and offset keys still runs once an hour, and on the first sweep after a broker takes the sweeper lease, to find groups that have only offsets and to add index keys for existing groups. It needs no manual migration, and old and new brokers can run together during a rolling upgrade. `ListGroups` now reads its keys page by page as well (#279).
 
 - Schema registry pods now notice an etcd snapshot restore and clear their schema cache without a restart. Each pod watches its etcd keys and resets when the watch reports a compaction. The operator now restores etcd snapshots with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, which triggers this. Manual restores should use the same flags or restart the registry pods. See `docs/schema-registry.md` and `docs/operations.md`.
@@ -84,6 +88,8 @@ limitations under the License.
 - When one LFS record in a produce request fails, the proxy deletes the objects it already uploaded for earlier records in that request (#263).
 
 ## Upgrade notes
+
+- Building from source requires Go 1.26 or newer, as required by the maintained Protobuf reflection library.
 
 - Empty groups written by older brokers receive a full retention period from first discovery. Apply the updated KafscaleCluster CRD before setting `spec.config.offsetsRetentionMinutes`; omit it for the seven-day default or set it to `0` to disable automatic expiry.
 

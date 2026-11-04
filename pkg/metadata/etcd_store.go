@@ -47,12 +47,14 @@ type etcdError struct{ err error }
 
 // EtcdStore uses etcd for offset persistence while delegating metadata to an in-memory snapshot.
 type EtcdStore struct {
-	client    *clientv3.Client
-	metadata  *InMemoryStore
-	cancel    context.CancelFunc
-	available int32
-	lastError atomic.Value // stores etcdError
-	persistMu sync.Mutex   // serializes snapshot read/write to avoid out-of-order etcd puts
+	client       *clientv3.Client
+	metadata     *InMemoryStore
+	cancel       context.CancelFunc
+	available    int32
+	lastError    atomic.Value // stores etcdError
+	persistMu    sync.Mutex   // serializes snapshot read/write to avoid out-of-order etcd puts
+	groupWriteMu sync.Mutex
+	groupWrites  map[string]*consumerGroupWrite
 
 	storageNamespace string
 }

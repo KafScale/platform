@@ -254,6 +254,11 @@ func (s *InMemoryStore) CommitMemberConsumerOffset(ctx context.Context, group st
 func (s *EtcdStore) commitConsumerOffset(ctx context.Context, group string, createRevision int64, memberID string, generation int32, topic string, partition int32, offset int64, meta string, requireGroup, simple bool) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	unlock, err := s.lockConsumerGroupWrite(ctx, group)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	for conflicts := 0; conflicts < 3; {
 		current, revision, _, err := s.groupSnapshot(ctx, group)
 		if err != nil {
