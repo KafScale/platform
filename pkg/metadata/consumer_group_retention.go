@@ -81,6 +81,11 @@ func (s *EtcdStore) putConsumerGroup(ctx context.Context, group *metadatapb.Cons
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	unlock, err := s.lockConsumerGroupWrite(ctx, group.GroupId)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	// Active membership clears retention without adding a read to heartbeats.
 	if len(group.Members) > 0 {
 		payload, err := EncodeConsumerGroup(retainedGroup(group, nil, time.Now()))

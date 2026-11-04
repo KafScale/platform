@@ -35,6 +35,8 @@ limitations under the License.
 
 ## Bug fixes
 
+- Concurrent heartbeats on one broker no longer starve offset commits for the same consumer group. Group writes queue independently, and waiting requests respect their deadlines; etcd comparisons still protect against membership changes from other brokers.
+
 - Protobuf descriptor printing uses `jhump/protoreflect/v2`, removing the v1 dependency. Map-entry repair rejects references to entries in the wrong scope instead of silently rewriting them (#284).
 
 - The consumer group retention sweep no longer reads every offset key name to list groups. Brokers now keep an index key per group under `/kafscale/consumer-groups/`, and most sweeps read only the index, page by page. At 1,000 groups with 10 partitions each, a sweep listing reads 2,000 keys instead of 12,000, and no single etcd response holds more than 1,000 keys instead of 11,000. A full scan of the group and offset keys still runs once an hour, and on the first sweep after a broker takes the sweeper lease, to find groups that have only offsets and to add index keys for existing groups. It needs no manual migration, and old and new brokers can run together during a rolling upgrade. `ListGroups` now reads its keys page by page as well (#279).
