@@ -29,7 +29,7 @@ make commit-check
 
 ## Prerequisites
 
-- Go 1.25.2+ (required by `go.mod`)
+- Go 1.26.0+ (required by `go.mod`)
 - `buf` (https://buf.build/docs/installation/) for protobuf builds
 - `protoc` plus the `protoc-gen-go` and `protoc-gen-go-grpc` plugins (installed automatically by `buf` if you use the managed mode)
 - Docker + Kubernetes CLI tools if you plan to iterate on the operator

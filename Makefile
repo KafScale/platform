@@ -15,7 +15,7 @@
 
 SHELL := /bin/bash
 
-GO_MIN_VERSION := 1.25
+GO_MIN_VERSION := 1.26
 NODE_MIN_VERSION := 24
 NPM_MIN_VERSION := 11
 LOCAL_NODE_DIR := $(abspath .tools/node)

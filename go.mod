@@ -1,6 +1,6 @@
 module github.com/KafScale/platform
 
-go 1.25.2
+go 1.26.0
 
 toolchain go1.26.10
 
@@ -13,7 +13,7 @@ require (
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/google/uuid v1.6.0
 	github.com/hamba/avro/v2 v2.30.0
-	github.com/jhump/protoreflect v1.17.0
+	github.com/jhump/protoreflect/v2 v2.0.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/twmb/franz-go v1.20.7
@@ -26,7 +26,7 @@ require (
 	go.uber.org/zap v1.27.1
 	golang.org/x/sync v0.22.0
 	google.golang.org/grpc v1.83.2
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	k8s.io/api v0.35.1
 	k8s.io/apimachinery v0.35.1
 	k8s.io/client-go v0.35.1
