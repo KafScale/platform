@@ -182,7 +182,38 @@ func (l *s3Lister) listCompleted(ctx context.Context, filter map[string]map[int3
 		return segments[i].BaseOffset < segments[j].BaseOffset
 	})
 
-	return segments, nil
+	return latestSegments(segments), nil
+}
+
+// Without etcd, only the newest generation visible in S3 can be identified.
+func latestSegments(segments []SegmentRef) []SegmentRef {
+	latest := make(map[string]int64)
+	for _, segment := range segments {
+		generation := segmentGeneration(segment)
+		if generation > latest[segment.Topic] {
+			latest[segment.Topic] = generation
+		}
+	}
+	return filterGenerations(segments, latest)
+}
+
+func segmentGeneration(segment SegmentRef) int64 {
+	_, suffix, found := strings.Cut(strings.TrimPrefix(segment.CheckpointTopic(), segment.Topic), "@")
+	if !found {
+		return 0
+	}
+	generation, _ := strconv.ParseInt(suffix, 10, 64)
+	return generation
+}
+
+func filterGenerations(segments []SegmentRef, current map[string]int64) []SegmentRef {
+	out := make([]SegmentRef, 0, len(segments))
+	for _, segment := range segments {
+		if segmentGeneration(segment) == current[segment.Topic] {
+			out = append(out, segment)
+		}
+	}
+	return out
 }
 
 func (l *s3Lister) hasFooterMagic(ctx context.Context, key string) (bool, error) {
@@ -232,19 +263,35 @@ func newEtcdLister(cfg processorconfig.Config, s3Lister *s3Lister, strict bool) 
 
 func (l *etcdLister) ListCompleted(ctx context.Context) ([]SegmentRef, error) {
 	filter, ok, err := l.topicPartitions(ctx)
+	if err != nil && l.strict {
+		return nil, err
+	}
+	if !ok && l.strict {
+		return nil, fmt.Errorf("metadata snapshot not found in etcd")
+	}
+	segments, err := l.s3.listCompleted(ctx, filter)
 	if err != nil {
-		if l.strict {
+		return nil, err
+	}
+	return l.currentSegments(ctx, segments)
+}
+
+func (l *etcdLister) currentSegments(ctx context.Context, segments []SegmentRef) ([]SegmentRef, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	resp, err := l.client.Get(ctx, metadata.TopicGenerationPrefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, err
+	}
+	current := make(map[string]int64, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		generation, err := strconv.ParseInt(string(kv.Value), 10, 64)
+		if err != nil {
 			return nil, err
 		}
-		return l.s3.listCompleted(ctx, nil)
+		current[strings.TrimPrefix(string(kv.Key), metadata.TopicGenerationPrefix)] = generation
 	}
-	if !ok {
-		if l.strict {
-			return nil, fmt.Errorf("metadata snapshot not found in etcd")
-		}
-		return l.s3.listCompleted(ctx, nil)
-	}
-	return l.s3.listCompleted(ctx, filter)
+	return filterGenerations(segments, current), nil
 }
 
 func (l *etcdLister) topicPartitions(ctx context.Context) (map[string]map[int32]struct{}, bool, error) {

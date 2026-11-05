@@ -167,3 +167,87 @@ func TestRetireTopicGuardsGeneration(t *testing.T) {
 		t.Fatal("unexpected storage name")
 	}
 }
+
+func TestRetireTopicPreservesOffsetsWhenGroupContainsTopicPath(t *testing.T) {
+	ctx := context.Background()
+	store := newRetireStore(t, ctx)
+	group := "reader/offsets/orders/nested"
+	if err := store.CommitConsumerOffset(ctx, group, "payments", 0, 42, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteTopic(ctx, "orders"); err != nil {
+		t.Fatal(err)
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, group, "payments", 0); err != nil || offset != 42 {
+		t.Fatalf("deleting orders removed payments offset: %d %v", offset, err)
+	}
+}
+
+type retireHookKV struct {
+	clientv3.KV
+	hook func()
+}
+
+func (k retireHookKV) Txn(ctx context.Context) clientv3.Txn {
+	return &retireHookTxn{Txn: k.KV.Txn(ctx), hook: k.hook}
+}
+
+type retireHookTxn struct {
+	clientv3.Txn
+	hook    func()
+	retires bool
+}
+
+func (tx *retireHookTxn) If(cmps ...clientv3.Cmp) clientv3.Txn {
+	tx.Txn = tx.Txn.If(cmps...)
+	return tx
+}
+func (tx *retireHookTxn) Then(ops ...clientv3.Op) clientv3.Txn {
+	for _, op := range ops {
+		if op.IsPut() && string(op.KeyBytes()) == TopicGenerationKey("orders") {
+			tx.retires = true
+		}
+	}
+	tx.Txn = tx.Txn.Then(ops...)
+	return tx
+}
+func (tx *retireHookTxn) Commit() (*clientv3.TxnResponse, error) {
+	resp, err := tx.Txn.Commit()
+	if err == nil && resp.Succeeded && tx.retires {
+		tx.hook()
+	}
+	return resp, err
+}
+func TestRetireTopicLargeCleanupPreservesNewGenerationOffsets(t *testing.T) {
+	ctx := context.Background()
+	store := newRetireStore(t, ctx)
+	for i := range 300 {
+		if _, err := store.client.Put(ctx, consumerOffsetKey(fmt.Sprintf("g%03d", i), "orders", 0), `{"offset":1}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := consumerOffsetKey("g299", "orders", 0)
+	original := store.client.KV
+	base := store
+	store = &EtcdStore{metadata: base.metadata, storageNamespace: base.storageNamespace,
+		client: &clientv3.Client{KV: retireHookKV{KV: original, hook: func() {
+			// Model a new-generation commit after the retirement transaction but before
+			// later cleanup batches. Its revision must survive the old cleanup.
+			if _, err := original.Put(ctx, key, `{"offset":42}`); err != nil {
+				t.Error(err)
+			}
+		}}}}
+	if err := store.DeleteTopic(ctx, "orders"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := store.client.Get(ctx, "/kafscale/consumers/", clientv3.WithPrefix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Kvs) != 1 || string(resp.Kvs[0].Key) != key {
+		t.Fatalf("unexpected remaining offsets: %v", resp.Kvs)
+	}
+	if offset, _, err := store.FetchConsumerOffset(ctx, "g299", "orders", 0); err != nil || offset != 42 {
+		t.Fatalf("new generation offset removed: %d %v", offset, err)
+	}
+}

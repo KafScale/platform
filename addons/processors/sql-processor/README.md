@@ -80,3 +80,8 @@ server:
 ```
 
 For full configuration and operational guidance, use the user guide.
+
+When etcd authentication is enabled, configure `metadata.etcd.username` and
+`metadata.etcd.password`, or set `KAFSQL_METADATA_ETCD_USERNAME` and
+`KAFSQL_METADATA_ETCD_PASSWORD`. Both metadata and generation reads use these
+credentials. Generation client initialization is retried after an error.

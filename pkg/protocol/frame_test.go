@@ -92,3 +92,66 @@ func TestWriteFrameWithDeadlineStalledReader(t *testing.T) {
 		t.Fatal("write did not time out")
 	}
 }
+
+// A client can keep each chunk below the idle timeout but must still finish
+// the complete response within the overall frame limit.
+func TestWriteFrameWithDeadlineTrickleLimit(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- writeFrameWithLimits(server, bytes.Repeat([]byte{1}, 12*ResponseWriteChunk), time.Second, 150*time.Millisecond)
+	}()
+	read := make(chan int, 1)
+	go func() {
+		chunks := 0
+		defer func() { read <- chunks }()
+		if _, err := io.ReadFull(client, make([]byte, 4)); err != nil {
+			return
+		}
+		buf := make([]byte, ResponseWriteChunk)
+		for range 12 {
+			time.Sleep(25 * time.Millisecond)
+			if _, err := io.ReadFull(client, buf); err != nil {
+				return
+			}
+			chunks++
+		}
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("trickle reader bypassed total frame limit")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("trickle reader kept response alive")
+	}
+	_ = server.Close()
+	if chunks := <-read; chunks < 1 || chunks >= 12 {
+		t.Fatalf("reader completed %d chunks before the overall deadline", chunks)
+	}
+}
+
+type deadlineRecordingConn struct {
+	net.Conn
+	deadlines []time.Time
+}
+
+func (c *deadlineRecordingConn) SetWriteDeadline(deadline time.Time) error {
+	c.deadlines = append(c.deadlines, deadline)
+	return nil
+}
+func (c *deadlineRecordingConn) Write(data []byte) (int, error) { return len(data), nil }
+func TestWriteFrameWithDeadlineCapsLongIdleTimeout(t *testing.T) {
+	conn := &deadlineRecordingConn{}
+	start := time.Now()
+	if err := WriteFrameWithDeadline(conn, []byte{1}, 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	for _, deadline := range conn.deadlines {
+		if !deadline.IsZero() && deadline.After(start.Add(5*time.Minute+time.Second)) {
+			t.Fatal("no overall five-minute cap")
+		}
+	}
+}

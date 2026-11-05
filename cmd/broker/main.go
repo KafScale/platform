@@ -1056,6 +1056,11 @@ func offsetFetchErrorTopics(req *kmsg.OffsetFetchRequest, errorCode int16) []kms
 }
 
 func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHeader, req *kmsg.ProduceRequest) ([]byte, error) {
+	if req.TimeoutMillis > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
+		defer cancel()
+	}
 	start := time.Now()
 	defer func() {
 		h.recordProduceLatency(time.Since(start))
@@ -1141,6 +1146,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 				if errors.Is(err, metadata.ErrInvalidTopic) {
 					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					p.ErrorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, storage.ErrObjectStorage) {
 					code, message := h.backpressureError()
 					p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
@@ -2165,7 +2172,7 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 				return nil, err
 			}
 			plog := storage.NewPartitionLog(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
-				if err := h.store.UpdateOffsets(cbCtx, topic, partition, artifact.LastOffset); err != nil {
+				if err := h.updateLogOffsets(cbCtx, topic, storageName, partition, artifact.LastOffset); err != nil {
 					h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
 				}
 			}, h.recordS3Op, h.s3sem)
@@ -2175,7 +2182,7 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 				return nil, fmt.Errorf("%w: %w", storage.ErrObjectStorage, err)
 			}
 			if lastOffset >= nextOffset {
-				if err := h.store.UpdateOffsets(ctx, topic, partition, lastOffset); err != nil {
+				if err := h.updateLogOffsets(ctx, topic, storageName, partition, lastOffset); err != nil {
 					h.logger.Error("sync offsets from S3 failed", "error", err, "topic", topic, "partition", partition)
 				}
 			}

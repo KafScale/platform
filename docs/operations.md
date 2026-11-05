@@ -433,7 +433,7 @@ the broker first, or do not gate the install on proxy readiness.
 ### Broker
 
 - `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
-- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – How long a write of a Kafka response may wait for a slow client on the broker and proxy (default `30000` milliseconds; nonpositive uses the default). The response is written in 256 KiB pieces and the timeout restarts before each piece. A piece only waits when the socket send buffer is full, and the kernel lets it continue once a large part of that buffer has drained, roughly a third to a half of it. So a client must read that much of the send buffer within each timeout, which can be several MB on a fast link, not 256 KiB. A large response to a client that keeps reading at that pace does not time out. On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value; for the proxy chart, set `proxy.responseWriteTimeoutMs`. The proxy logs a warning and uses the default when an integer setting is not a number. A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
+- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – How long a write of a Kafka response may wait for a slow client on the broker and proxy (default `30000` milliseconds; nonpositive uses the default). The response is written in 256 KiB pieces and the idle timeout restarts before each piece. The complete frame has a five-minute deadline, including clients that keep reading slowly. A piece only waits when the socket send buffer is full, and the kernel lets it continue once a large part of that buffer has drained, roughly a third to a half of it. So a client must read that much of the send buffer within each timeout, which can be several MB on a fast link, not 256 KiB. A large response to a client that keeps reading at that pace can continue until the overall five-minute limit. On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value; for the proxy chart, set `proxy.responseWriteTimeoutMs`. The proxy logs a warning and uses the default when an integer setting is not a number. A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
 - `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
 - `KAFSCALE_BROKER_PORT` – Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
 - `KAFSCALE_BROKER_ID` – Broker node ID.
@@ -918,3 +918,30 @@ API types or upgrading Kubernetes API dependencies, regenerate those fields
 with `python3 hack/update_affinity_schema.py` (requires Go and PyYAML).
 `python3 hack/update_affinity_schema.py --check` checks for drift while preserving
 the other manually maintained CRD fields.
+
+### Produce deadlines and topic generations
+
+A positive Produce `TimeoutMillis` bounds broker processing, including partition
+lease acquisition, log restoration and the acknowledged S3 flush. An expired
+request returns `REQUEST_TIMED_OUT`; a timeout does not prove that no data was
+written, so normal producer retry and idempotence rules still apply. A
+nonpositive value adds no request deadline; the transport and storage timeouts
+still apply. With `acks=0` the broker sends no response.
+
+Persisted Fetch responses return complete record batches. The first batch can
+exceed `max.partition.fetch.bytes`, allowing consumers to make progress.
+
+Topic deletion advances the etcd generation and retires the old storage prefix.
+Topics deleted before upgrading to generation-aware deletion have no retirement
+marker. Their old objects remain under `<namespace>/<topic>/`; recreating the
+same name can recover those objects as generation 0. Before recreating such a
+topic, archive or remove its exact old segment and LFS prefixes, or use a new
+topic name. The upgrade cannot infer earlier deletions and does not remove old
+objects automatically.
+
+Configure etcd for processors that must exclude deleted topics. Iceberg's `auto`
+or `etcd` discovery checks the current generation even without checkpoints and
+fails closed when generation metadata cannot be read. S3-only discovery can
+select the newest visible generation, but cannot detect a deletion for which no
+new segments exist. SQL uses the same generation metadata when etcd endpoints
+are configured.

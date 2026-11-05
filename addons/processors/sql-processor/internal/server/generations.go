@@ -57,18 +57,20 @@ func (e *etcdGenerations) Generations(ctx context.Context) (map[string]int64, er
 func (s *Server) getGenerations() (generationSource, error) {
 	s.generationsMu.Lock()
 	defer s.generationsMu.Unlock()
-	if s.generationsInit {
+	if s.generationsInit && s.generationsErr == nil {
 		return s.generations, s.generationsErr
 	}
 	s.generationsInit = true
 	if len(s.cfg.Metadata.Etcd.Endpoints) == 0 {
+		s.generationsErr = nil
 		return nil, nil
 	}
-	client, err := clientv3.New(clientv3.Config{Endpoints: s.cfg.Metadata.Etcd.Endpoints, DialTimeout: 5 * time.Second})
+	client, err := clientv3.New(clientv3.Config{Endpoints: s.cfg.Metadata.Etcd.Endpoints, Username: s.cfg.Metadata.Etcd.Username, Password: s.cfg.Metadata.Etcd.Password, DialTimeout: 5 * time.Second})
 	if err != nil {
 		s.generationsErr = err
 		return nil, err
 	}
+	s.generationsErr = nil
 	s.generations = &etcdGenerations{client: client}
 	return s.generations, nil
 }

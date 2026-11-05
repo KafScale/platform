@@ -257,6 +257,8 @@ func NewEtcdResolver(cfg config.Config) (*EtcdResolver, error) {
 	}
 	cli, err := clientv3.New(clientv3.Config{
 		Endpoints:   cfg.Metadata.Etcd.Endpoints,
+		Username:    cfg.Metadata.Etcd.Username,
+		Password:    cfg.Metadata.Etcd.Password,
 		DialTimeout: 5 * time.Second,
 	})
 	if err != nil {
@@ -310,11 +312,13 @@ type snapshotPayload struct {
 }
 
 type snapshotTopic struct {
+	Topic      string
 	Name       string
 	Partitions []snapshotPartition
 }
 
 type snapshotPartition struct {
+	Partition      int32
 	PartitionIndex int32
 }
 
@@ -323,7 +327,14 @@ func (p snapshotPayload) toSnapshot() Snapshot {
 	for _, topic := range p.Topics {
 		parts := make([]int32, 0, len(topic.Partitions))
 		for _, partition := range topic.Partitions {
-			parts = append(parts, partition.PartitionIndex)
+			index := partition.PartitionIndex
+			if topic.Topic != "" {
+				index = partition.Partition
+			}
+			parts = append(parts, index)
+		}
+		if topic.Topic != "" {
+			topic.Name = topic.Topic
 		}
 		topics = append(topics, Topic{
 			Name:       topic.Name,

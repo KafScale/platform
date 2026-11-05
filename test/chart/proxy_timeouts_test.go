@@ -62,10 +62,16 @@ func TestProxyTimeoutValues(t *testing.T) {
 	if env = render("-f", writeValues("proxy:\n"+tls)); env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"] != "1000" {
 		t.Fatalf("default handshake timeout rendered %q", env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"])
 	}
-	for _, empty := range []string{`""`, "null"} {
+	for _, empty := range []string{`""`, "null", "0"} {
 		env = render("-f", writeValues("proxy:\n"+tls+"    handshakeTimeoutMs: "+empty+"\n"))
 		if value, ok := env["KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS"]; ok && value != "" {
 			t.Fatalf("handshakeTimeoutMs %s rendered %q", empty, value)
+		}
+	}
+	for _, invalid := range []string{"-1", "60001"} {
+		args := []string{"template", "timeouts", chart, "--set", "proxy.enabled=true", "--set", "proxy.security.handshakeTimeoutMs=" + invalid}
+		if data, err := exec.Command("helm", args...).CombinedOutput(); err == nil {
+			t.Fatalf("handshakeTimeoutMs %s rendered successfully: %s", invalid, data)
 		}
 	}
 }

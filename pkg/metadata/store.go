@@ -165,8 +165,12 @@ func filterTopics(all []protocol.MetadataTopic, requested []string) []protocol.M
 		if topic, ok := index[name]; ok {
 			result = append(result, topic)
 		} else {
+			code := int16(protocol.UNKNOWN_TOPIC_OR_PARTITION)
+			if ValidateTopicName(name) != nil {
+				code = protocol.INVALID_TOPIC_EXCEPTION
+			}
 			result = append(result, protocol.MetadataTopic{
-				ErrorCode: 3, // UNKNOWN_TOPIC_OR_PARTITION
+				ErrorCode: code,
 				Topic:     kmsg.StringPtr(name),
 			})
 		}
@@ -262,6 +266,9 @@ func (s *InMemoryStore) NextOffset(ctx context.Context, topic string, partition 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if !topicHasPartition(s.state.Topics, topic, partition) {
+		if ValidateTopicName(topic) != nil {
+			return 0, ErrInvalidTopic
+		}
 		return 0, ErrUnknownTopic
 	}
 	return s.offsets[partitionKey(topic, partition)], nil
@@ -276,6 +283,9 @@ func (s *InMemoryStore) UpdateOffsets(ctx context.Context, topic string, partiti
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !topicHasPartition(s.state.Topics, topic, partition) {
+		return ErrUnknownTopic
+	}
 	s.offsets[partitionKey(topic, partition)] = lastOffset + 1
 	return nil
 }

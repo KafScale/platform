@@ -46,7 +46,7 @@ func TestPartitionLogMultiFlushAllOffsetsReadable(t *testing.T) {
 
 	const n = 30 // ~10 flush rotations + a buffered tail
 	for i := 0; i < n; i++ {
-		batch, err := NewRecordBatchFromBytes(make([]byte, 70))
+		batch, err := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 2))
 		if err != nil {
 			t.Fatalf("NewRecordBatchFromBytes: %v", err)
 		}
