@@ -119,7 +119,13 @@ func (s *Server) handleConnectionUntil(shutdown context.Context, conn net.Conn) 
 	// Socket metadata is available even when no authentication hook is configured.
 	ctx = ContextWithConnInfo(ctx, &ConnContext{RemoteAddr: conn.RemoteAddr().String()})
 	if s.ConnContextFunc != nil {
+		// Admission may read a partial PROXY header or perform a handshake.
+		// Close the raw socket on shutdown only while this hook is running;
+		// admitted requests retain their normal response-draining behavior.
+		rawConn := conn
+		stopAdmissionClose := context.AfterFunc(shutdown, func() { _ = rawConn.Close() })
 		wrapped, info, err := s.ConnContextFunc(conn)
+		stopAdmissionClose()
 		if err != nil {
 			log.Printf("connection context setup failed: %v", err)
 			return

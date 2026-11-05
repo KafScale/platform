@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func startShutdownTestServer(t *testing.T, h Handler) (*Server, net.Conn, context.CancelFunc, <-chan error) {
+func startShutdownTestServer(t *testing.T, h Handler, hooks ...ConnContextFunc) (*Server, net.Conn, context.CancelFunc, <-chan error) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -39,6 +40,9 @@ func startShutdownTestServer(t *testing.T, h Handler) (*Server, net.Conn, contex
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	s := &Server{Addr: addr, Handler: h}
+	if len(hooks) > 0 {
+		s.ConnContextFunc = hooks[0]
+	}
 	done := make(chan error, 1)
 	go func() { done <- s.ListenAndServe(ctx) }()
 	var conn net.Conn
@@ -91,6 +95,40 @@ func TestServerShutdownClosesIdleConnections(t *testing.T) {
 	assertServerDrained(t, s, conn, done)
 }
 
+func TestServerShutdownInterruptsProxyAdmission(t *testing.T) {
+	for size := 0; size < 5; size++ {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			server, client := net.Pipe()
+			t.Cleanup(func() { _ = server.Close(); _ = client.Close() })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			started := make(chan struct{})
+			s := &Server{Handler: &testHandler{}, ConnContextFunc: func(conn net.Conn) (net.Conn, *ConnContext, error) {
+				close(started)
+				wrapped, _, err := ReadProxyProtocol(conn)
+				return wrapped, nil, err
+			}}
+			s.wg.Add(1)
+			go func() { defer s.wg.Done(); s.handleConnectionUntil(ctx, server) }()
+			<-started
+			if size > 0 {
+				_ = client.SetWriteDeadline(time.Now().Add(time.Second))
+				if _, err := client.Write([]byte("PROXY")[:size]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			done := make(chan struct{})
+			go func() { s.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("shutdown blocked on incomplete PROXY header")
+			}
+		})
+	}
+}
+
 type shutdownDrainHandler struct {
 	started, finish chan struct{}
 	ctxErr          chan error
@@ -107,7 +145,9 @@ func (h *shutdownDrainHandler) Handle(ctx context.Context, header *protocol.Requ
 
 func TestServerShutdownDrainsInFlightResponse(t *testing.T) {
 	h := &shutdownDrainHandler{started: make(chan struct{}), finish: make(chan struct{}), ctxErr: make(chan error, 1)}
-	s, conn, cancel, done := startShutdownTestServer(t, h)
+	s, conn, cancel, done := startShutdownTestServer(t, h, func(conn net.Conn) (net.Conn, *ConnContext, error) {
+		return conn, nil, nil
+	})
 	if err := protocol.WriteFrame(conn, buildMetadataRequest()); err != nil {
 		t.Fatal(err)
 	}
