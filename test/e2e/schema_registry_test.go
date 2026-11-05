@@ -398,6 +398,7 @@ func (h *srHarness) confluentMigration(t *testing.T, brokerAddr, urlA, urlB stri
 	}
 	srCall(t, http.MethodGet, cpURL+"/subjects/legacy-value/versions/1", nil, &source)
 	h.importFromConfluent(t, cpURL, urlA)
+	h.protobufCrossSubjectImport(t, cpURL, urlA)
 
 	frames := readFrames(t, h.dataPath("legacy.hex"))
 	for _, f := range frames {

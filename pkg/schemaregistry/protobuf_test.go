@@ -339,3 +339,21 @@ func TestProtoDescriptorFormKeepsCustomJSONName(t *testing.T) {
 		t.Fatal("custom json_name ignored")
 	}
 }
+
+func TestProtoDescriptorCrossSubjectIDReuse(t *testing.T) {
+	common := `syntax = "proto3"; package cross.common; message Money { string currency = 1; }`
+	text := `syntax = "proto3"; package cross; import "common.proto"; message Order { string id = 1; cross.common.Money total = 2; }`
+	ref := Reference{Name: "common.proto", Subject: "common", Version: 1}
+	serialized := protoDescriptorBase64(t, text, []resolvedReference{{Name: ref.Name, Text: common}}, nil)
+	for _, order := range [][2]string{{text, serialized}, {serialized, text}} {
+		t.Run(fmt.Sprint(len(order[0])), func(t *testing.T) {
+			h := newHarness(t, nil, Config{})
+			h.register("common", protoSchemaBody(common))
+			first := h.register("orders-a", protoSchemaBody(order[0], ref))
+			second := h.register("orders-b", protoSchemaBody(order[1], ref))
+			if second != first {
+				t.Fatalf("same referenced schema received ids %d and %d across subjects", first, second)
+			}
+		})
+	}
+}
