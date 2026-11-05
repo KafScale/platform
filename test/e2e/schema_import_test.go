@@ -166,3 +166,65 @@ func (h *srHarness) importFromConfluent(t *testing.T, cpURL, url string) {
 	srCall(t, http.MethodPut, url+"/mode", map[string]string{"mode": "READWRITE"}, nil)
 	srCall(t, http.MethodPut, url+"/config", map[string]string{"compatibility": "BACKWARD"}, nil)
 }
+
+// Compare the cross-subject descriptor case with a live Confluent registry,
+// then re-import its real export without allocating any new schema IDs.
+func (h *srHarness) protobufCrossSubjectImport(t *testing.T, cpURL, url string) {
+	t.Helper()
+	type registered struct {
+		ID int `json:"id"`
+	}
+	register := func(base, subject, text string, refs []map[string]any) int {
+		t.Helper()
+		var out registered
+		body := map[string]any{"schemaType": "PROTOBUF", "schema": text}
+		if len(refs) > 0 {
+			body["references"] = refs
+		}
+		if code := srCall(t, http.MethodPost, base+"/subjects/"+subject+"/versions", body, &out); code != http.StatusOK {
+			t.Fatalf("register %s: HTTP %d", subject, code)
+		}
+		return out.ID
+	}
+	common := `syntax = "proto3"; package parity.common; message Money { string currency = 1; }`
+	text := `syntax = "proto3"; package parity; import "parity/common.proto"; message Order { parity.common.Money total = 1; }`
+	register(cpURL, "parity-common", common, nil)
+	refs := []map[string]any{{"name": "parity/common.proto", "subject": "parity-common", "version": 1}}
+	first := register(cpURL, "parity-text", text, refs)
+	var serialized struct {
+		Schema string `json:"schema"`
+	}
+	if code := srCall(t, http.MethodGet, fmt.Sprintf("%s/schemas/ids/%d?format=serialized", cpURL, first), nil, &serialized); code != http.StatusOK {
+		t.Fatal(code)
+	}
+	if second := register(cpURL, "parity-descriptor", serialized.Schema, refs); second != first {
+		t.Fatalf("Confluent cross-subject IDs %d and %d", first, second)
+	}
+	cli := filepath.Join(h.work, "kafscale-cli")
+	imported := h.run(nil, cli, "schema", "import", "--from", cpURL, "--to", url, "--force")
+	if !strings.Contains(imported, "conflicts 0") {
+		t.Fatalf("real Protobuf export import: %s", imported)
+	}
+	var stored registered
+	srCall(t, http.MethodGet, url+"/subjects/parity-text/versions/1", nil, &stored)
+	if stored.ID != first {
+		t.Fatalf("import changed Protobuf ID: %d, want %d", stored.ID, first)
+	}
+	srCall(t, http.MethodPut, url+"/mode", map[string]string{"mode": "READWRITE"}, nil)
+	// Exercise the fixed path against a schema imported from Confluent, rather
+	// than one generated locally by KafScale's descriptor printer.
+	if got := register(url, "parity-descriptor-again", serialized.Schema, refs); got != first {
+		t.Fatalf("KafScale cross-subject ID %d, want Confluent ID %d", got, first)
+	}
+	before := srGet(t, url+"/schemas")
+	repeated := h.run(nil, cli, "schema", "import", "--from", cpURL, "--to", url, "--force")
+	if !strings.Contains(repeated, "imported 0, skipped") || !strings.Contains(repeated, "conflicts 0") {
+		t.Fatalf("real export re-import changed IDs: %s", repeated)
+	}
+	if after := srGet(t, url+"/schemas"); after != before {
+		t.Fatalf("re-import changed registered schemas\nbefore: %s\nafter: %s", before, after)
+	}
+	// Keep the original migration scenario's subsequent registrations writable.
+	srCall(t, http.MethodPut, url+"/mode", map[string]string{"mode": "READWRITE"}, nil)
+	srCall(t, http.MethodPut, url+"/config", map[string]string{"compatibility": "BACKWARD"}, nil)
+}

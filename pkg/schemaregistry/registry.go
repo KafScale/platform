@@ -1214,6 +1214,11 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	hk := hashKey(p.schemaType, p.hash)
 	lk := latestKey(subject)
 	keys := []string{counterKey(), hk, modeKey(""), modeKey(subject), configKey(""), configKey(subject)}
+	var ak string
+	if p.schemaType == schemaTypeProtobuf && !p.normalize {
+		ak = p.protoAliasKey()
+		keys = append(keys, ak)
+	}
 	if req.ID > 0 {
 		keys = append(keys, idKey(req.ID))
 	}
@@ -1253,6 +1258,30 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 		}
 		cmps = append(cmps, snap.fence(hk)...)
 	}
+	// Descriptor equivalence is permitted only when either schema came from a
+	// descriptor. Keep these aliases separate from native text hashes and key
+	// them by the request representation to preserve text-only identity rules.
+	if id == 0 && ak != "" {
+		cmps = append(cmps, snap.fence(hk)...)
+		if kv := snap[ak]; kv != nil {
+			if id, err = strconv.ParseInt(string(kv.Value), 10, 64); err != nil {
+				return 0, 0, err
+			}
+			cmps = append(cmps, snap.fence(ak)...)
+		} else {
+			match, matchID, err := r.protoGlobalMatch(ctx, p)
+			if err != nil {
+				return 0, 0, err
+			}
+			if match != nil {
+				id = matchID
+				cmps = append(cmps,
+					clientv3.Compare(clientv3.ModRevision(string(match.Key)), "=", match.ModRevision),
+					clientv3.Compare(clientv3.CreateRevision(ak), "=", 0))
+				ops = append(ops, clientv3.OpPut(ak, strconv.FormatInt(id, 10)))
+			}
+		}
+	}
 	level := effective(snap, configKey(subject), configKey(""), CompatBackward)
 	targets := compatTargets(level, versions)
 	targetIDs := make([]int64, 0, len(targets))
@@ -1273,7 +1302,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	if top > 0 {
 		cmps = append(cmps, snap.fence(versionKey(subject, top))...)
 	}
-	if snap[hk] == nil {
+	if id == 0 {
 		n, err := snap.int(counterKey())
 		if err != nil {
 			return 0, 0, err
@@ -1473,6 +1502,55 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 		r.settleMarker(ctx, id, p.hash)
 	}
 	return id, version, nil
+}
+
+func (p *prepared) protoAliasKey() string {
+	kind := "text"
+	if p.fromDesc {
+		kind = "descriptor"
+	}
+	return keyPrefix + "protobuf-alias/" + kind + "/" + p.hash
+}
+
+// protoGlobalMatch reads only stored metadata, including for schemas kept in S3.
+// Paging at one revision bounds memory and preserves a consistent candidate set.
+func (r *Registry) protoGlobalMatch(ctx context.Context, p *prepared) (*mvccpb.KeyValue, int64, error) {
+	prefix := keyPrefix + "ids/"
+	start, end := prefix, clientv3.GetPrefixRangeEnd(prefix)
+	var revision, id int64
+	var match *mvccpb.KeyValue
+	for {
+		m := r.mark()
+		resp, err := r.cli.Get(ctx, start, clientv3.WithRange(end), clientv3.WithLimit(64), clientv3.WithRev(revision))
+		if err != nil {
+			return nil, 0, err
+		}
+		r.observe(&m, resp.Header)
+		if revision == 0 {
+			revision = resp.Header.Revision
+		}
+		for _, kv := range resp.Kvs {
+			candidate, err := strconv.ParseInt(strings.TrimPrefix(string(kv.Key), prefix), 10, 64)
+			if err != nil {
+				continue
+			} // Skip the id's subject membership keys.
+			var rec schemaRecord
+			if err := json.Unmarshal(kv.Value, &rec); err != nil {
+				return nil, 0, err
+			}
+			if rec.SchemaType != schemaTypeProtobuf {
+				continue
+			}
+			stored := &Schema{Hash: rec.Hash, Desc: rec.Desc, FromDesc: rec.FromDesc}
+			if p.matches(stored) && (match == nil || kv.CreateRevision < match.CreateRevision) {
+				match, id = kv, candidate
+			}
+		}
+		if !resp.More {
+			return match, id, nil
+		}
+		start = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
 }
 
 func (p *prepared) matches(s *Schema) bool {
