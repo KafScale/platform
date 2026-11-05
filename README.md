@@ -65,6 +65,8 @@ KafScale targets this common case by:
 
 KafScale is used in production environments, but there are no warranties or guarantees.
 
+- Why: [Kafka on object storage, an open source option you can self-host](https://www.novatechflow.com/2025/12/kafka-on-object-storage-was-inevitable.html)
+
 ---
 
 ## Kafka Brokers Are a Legacy Artifact
