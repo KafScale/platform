@@ -146,6 +146,9 @@ func (s *EtcdStore) NextOffset(ctx context.Context, topic string, partition int3
 		return 0, err
 	}
 	if !exists {
+		if ValidateTopicName(topic) != nil {
+			return 0, ErrInvalidTopic
+		}
 		return 0, ErrUnknownTopic
 	}
 	key := offsetKey(topic, partition)
@@ -171,12 +174,48 @@ func (s *EtcdStore) NextOffset(ctx context.Context, topic string, partition int3
 
 // UpdateOffsets stores the next offset (last + 1) so future producers pick up from there.
 func (s *EtcdStore) UpdateOffsets(ctx context.Context, topic string, partition int32, lastOffset int64) error {
+	return s.updateOffsets(ctx, topic, partition, lastOffset, "")
+}
+
+// UpdateOffsetsForStorage fences callbacks from logs belonging to a retired topic.
+func (s *EtcdStore) UpdateOffsetsForStorage(ctx context.Context, topic string, partition int32, lastOffset int64, storageTopic string) error {
+	return s.updateOffsets(ctx, topic, partition, lastOffset, storageTopic)
+}
+
+func (s *EtcdStore) updateOffsets(ctx context.Context, topic string, partition int32, lastOffset int64, storageTopic string) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	next := lastOffset + 1
-	_, err := s.client.Put(ctx, offsetKey(topic, partition), strconv.FormatInt(next, 10))
+	read, err := s.client.Txn(ctx).Then(clientv3.OpGet(snapshotKey()), clientv3.OpGet(TopicGenerationKey(topic))).Commit()
 	s.recordEtcdResult(err)
-	return err
+	if err != nil {
+		return err
+	}
+	s.metadata.mu.RLock()
+	state := cloneMetadata(s.metadata.state)
+	s.metadata.mu.RUnlock()
+	snapshot := read.Responses[0].GetResponseRange().Kvs
+	if len(snapshot) > 0 {
+		if err := json.Unmarshal(snapshot[0].Value, &state); err != nil {
+			return err
+		}
+	}
+	if !topicHasPartition(state.Topics, topic, partition) {
+		return ErrUnknownTopic
+	}
+	generations := read.Responses[1].GetResponseRange().Kvs
+	var generation int64
+	if len(generations) > 0 {
+		generation, err = strconv.ParseInt(string(generations[0].Value), 10, 64)
+		if err != nil {
+			return err
+		}
+	}
+	if storageTopic != "" && TopicStorageName(topic, generation) != storageTopic {
+		return ErrTopicGenerationChanged
+	}
+	return s.commitGuarded(ctx, generationIs(TopicGenerationKey(topic), generation), []clientv3.Op{
+		clientv3.OpPut(offsetKey(topic, partition), strconv.FormatInt(lastOffset+1, 10)),
+	})
 }
 
 func offsetKey(topic string, partition int32) string {

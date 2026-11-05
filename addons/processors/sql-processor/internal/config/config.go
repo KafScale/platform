@@ -76,6 +76,8 @@ type MetaConfig struct {
 
 type EtcdConfig struct {
 	Endpoints []string `yaml:"endpoints"`
+	Username  string   `yaml:"username"`
+	Password  string   `yaml:"password"`
 }
 
 type SnapshotConfig struct {
@@ -286,6 +288,8 @@ func applyEnvOverrides(cfg *Config) {
 
 	setString(&cfg.Metadata.Discovery, "KAFSQL_METADATA_DISCOVERY")
 	setCSV(&cfg.Metadata.Etcd.Endpoints, "KAFSQL_METADATA_ETCD_ENDPOINTS")
+	setString(&cfg.Metadata.Etcd.Username, "KAFSQL_METADATA_ETCD_USERNAME")
+	setString(&cfg.Metadata.Etcd.Password, "KAFSQL_METADATA_ETCD_PASSWORD")
 	setInt(&cfg.Metadata.Snapshot.TTLSeconds, "KAFSQL_METADATA_SNAPSHOT_TTL_SECONDS")
 	setString(&cfg.Metadata.Snapshot.Key, "KAFSQL_METADATA_SNAPSHOT_KEY")
 

@@ -35,7 +35,7 @@ func TestPartitionLogFlushWindowOffsetReadable(t *testing.T) {
 
 	const n = 4
 	for i := 0; i < n; i++ {
-		batch, err := NewRecordBatchFromBytes(make([]byte, 70))
+		batch, err := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 2))
 		if err != nil {
 			t.Fatalf("NewRecordBatchFromBytes: %v", err)
 		}

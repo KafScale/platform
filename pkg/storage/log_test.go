@@ -16,6 +16,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -48,6 +49,7 @@ func TestPartitionLogAppendFlush(t *testing.T) {
 	}, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, err := NewRecordBatchFromBytes(batchData)
 	if err != nil {
 		t.Fatalf("NewRecordBatchFromBytes: %v", err)
@@ -84,6 +86,7 @@ func TestPartitionLogRead(t *testing.T) {
 	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -162,6 +165,7 @@ func TestPartitionLogReportsS3Uploads(t *testing.T) {
 	}, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -189,6 +193,7 @@ func TestPartitionLogRestoreFromS3(t *testing.T) {
 	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -389,6 +394,7 @@ func TestPartitionLogFlushErrorPreservesBuffer(t *testing.T) {
 	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -441,6 +447,7 @@ func TestPartitionLogRestoreFromS3SkipsOrphanedSegment(t *testing.T) {
 	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -504,6 +511,7 @@ func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
 	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -627,6 +635,7 @@ func TestPartitionLogReadNoCacheNoIndex(t *testing.T) {
 	}, nil, nil, nil)
 
 	batchData := make([]byte, 70)
+	binary.BigEndian.PutUint32(batchData[8:12], uint32(len(batchData)-12))
 	batch, _ := NewRecordBatchFromBytes(batchData)
 	if _, err := log.AppendBatch(context.Background(), batch); err != nil {
 		t.Fatalf("AppendBatch: %v", err)
@@ -669,13 +678,13 @@ func TestPartitionLogReadMaxBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Read with maxBytes = 10 (should truncate)
+	// A first batch larger than maxBytes must still be returned whole.
 	data, err := log.Read(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	if len(data) > 10 {
-		t.Fatalf("expected max 10 bytes, got %d", len(data))
+	if len(data) != len(batch1.Bytes) {
+		t.Fatalf("expected whole first batch (%d bytes), got %d", len(batch1.Bytes), len(data))
 	}
 }
 
@@ -777,21 +786,21 @@ func TestFindIndexEntry(t *testing.T) {
 func TestSliceFullSegmentData(t *testing.T) {
 	// Build data with header (32 bytes) + body + footer (16 bytes)
 	header := make([]byte, 32)
-	body := []byte("BODY_DATA_HERE!")
+	body := makeRecordBatch(1, 0)
 	footer := make([]byte, segmentFooterLen)
 	copy(footer, "END!")
 	data := append(header, body...)
 	data = append(data, footer...)
 
 	result := sliceFullSegmentData(data, 0)
-	if string(result) != "BODY_DATA_HERE!" {
+	if !bytes.Equal(result, body) {
 		t.Fatalf("expected body data, got %q", result)
 	}
 
 	// With maxBytes
 	result = sliceFullSegmentData(data, 4)
-	if string(result) != "BODY" {
-		t.Fatalf("expected 'BODY', got %q", result)
+	if !bytes.Equal(result, body) {
+		t.Fatalf("expected complete first batch, got %d bytes", len(result))
 	}
 
 	// Very short data (< header)
@@ -871,6 +880,7 @@ func (f *fakeS3WithList) ListObjectsV2(ctx context.Context, params *s3.ListObjec
 func makeBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32, marker byte) []byte {
 	const size = 70
 	data := make([]byte, size)
+	binary.BigEndian.PutUint32(data[8:12], uint32(size-12))
 	binary.BigEndian.PutUint64(data[0:8], uint64(baseOffset))
 	binary.BigEndian.PutUint32(data[23:27], uint32(lastOffsetDelta))
 	binary.BigEndian.PutUint32(data[57:61], uint32(messageCount))

@@ -155,6 +155,11 @@ func (p *Processor) Run(ctx context.Context) error {
 				continue
 			}
 
+			if hasLease && !containsLeaseSegments(segments, activeLease) {
+				stopRenew()
+				_ = p.store.ReleaseLease(ctx, activeLease)
+				hasLease = false
+			}
 			if !hasLease {
 				for _, seg := range segments {
 					lease, err := p.store.ClaimLease(ctx, seg.CheckpointTopic(), seg.Partition, ownerID)
@@ -328,4 +333,13 @@ func (p *Processor) startLeaseRenewal(ctx context.Context, lease checkpoint.Leas
 		cancel()
 		<-done
 	}
+}
+
+func containsLeaseSegments(segments []discovery.SegmentRef, lease checkpoint.Lease) bool {
+	for _, segment := range segments {
+		if segment.CheckpointTopic() == lease.Topic && segment.Partition == lease.Partition {
+			return true
+		}
+	}
+	return false
 }

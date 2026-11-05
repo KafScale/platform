@@ -68,6 +68,9 @@ const DefaultResponseWriteTimeout = 30 * time.Second
 
 const ResponseWriteChunk = 256 << 10
 
+// DefaultResponseWriteLimit bounds the whole frame, including trickle readers.
+const DefaultResponseWriteLimit = 5 * time.Minute
+
 func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration) error {
 	if timeout <= 0 {
 		timeout = DefaultResponseWriteTimeout
@@ -75,10 +78,15 @@ func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration
 	if len(payload) > int(^uint32(0)>>1) {
 		return fmt.Errorf("payload too large: %d", len(payload))
 	}
+	return writeFrameWithLimits(conn, payload, timeout, DefaultResponseWriteLimit)
+}
+
+func writeFrameWithLimits(conn net.Conn, payload []byte, timeout, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
 	defer conn.SetWriteDeadline(time.Time{})
 	var lengthBuf [4]byte
 	binary.BigEndian.PutUint32(lengthBuf[:], uint32(len(payload)))
-	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+	if err := conn.SetWriteDeadline(earlierWriteDeadline(deadline, timeout)); err != nil {
 		return err
 	}
 	if _, err := conn.Write(lengthBuf[:]); err != nil {
@@ -86,7 +94,7 @@ func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration
 	}
 	for start := 0; start < len(payload); start += ResponseWriteChunk {
 		end := min(start+ResponseWriteChunk, len(payload))
-		if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		if err := conn.SetWriteDeadline(earlierWriteDeadline(deadline, timeout)); err != nil {
 			return err
 		}
 		if _, err := conn.Write(payload[start:end]); err != nil {
@@ -94,4 +102,12 @@ func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration
 		}
 	}
 	return nil
+}
+
+func earlierWriteDeadline(limit time.Time, idle time.Duration) time.Time {
+	deadline := time.Now().Add(idle)
+	if deadline.After(limit) {
+		return limit
+	}
+	return deadline
 }

@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"path"
 	"strconv"
-	"strings"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -129,7 +128,8 @@ func (s *EtcdStore) RetireTopic(ctx context.Context, name, namespace string) err
 	for _, key := range offsetKeys[:first] {
 		ops = append(ops, clientv3.OpDelete(key))
 	}
-	if err := s.commitGuarded(ctx, generationIs(genKey, generation), ops); err != nil {
+	retiredRevision, err := s.commitGuardedAt(ctx, generationIs(genKey, generation), ops)
+	if err != nil {
 		return err
 	}
 	if err := s.metadata.DeleteTopic(ctx, name); err != nil && !errors.Is(err, ErrUnknownTopic) {
@@ -137,11 +137,16 @@ func (s *EtcdStore) RetireTopic(ctx context.Context, name, namespace string) err
 	}
 	rest := offsetKeys[first:]
 	for len(rest) > 0 {
-		batch := rest[:min(len(rest), maxTxnOps)]
+		// Each conditional delete uses a nested transaction plus its delete op.
+		batch := rest[:min(len(rest), maxTxnOps/2)]
 		rest = rest[len(batch):]
 		ops := make([]clientv3.Op, 0, len(batch))
 		for _, key := range batch {
-			ops = append(ops, clientv3.OpDelete(key))
+			// A recreated topic may already have committed to this same key.
+			ops = append(ops, clientv3.OpTxn(
+				[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "<", retiredRevision+1)},
+				[]clientv3.Op{clientv3.OpDelete(key)}, nil,
+			))
 		}
 		if err := s.commitGuarded(ctx, clientv3.Compare(clientv3.Value(genKey), "=", next), ops); err != nil {
 			return err
@@ -158,17 +163,22 @@ func generationIs(key string, generation int64) clientv3.Cmp {
 }
 
 func (s *EtcdStore) commitGuarded(ctx context.Context, guard clientv3.Cmp, ops []clientv3.Op) error {
+	_, err := s.commitGuardedAt(ctx, guard, ops)
+	return err
+}
+
+func (s *EtcdStore) commitGuardedAt(ctx context.Context, guard clientv3.Cmp, ops []clientv3.Op) (int64, error) {
 	txnCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	resp, err := s.client.Txn(txnCtx).If(guard).Then(ops...).Commit()
 	s.recordEtcdResult(err)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !resp.Succeeded {
-		return ErrTopicGenerationChanged
+		return 0, ErrTopicGenerationChanged
 	}
-	return nil
+	return resp.Header.Revision, nil
 }
 
 func (s *EtcdStore) consumerOffsetKeys(ctx context.Context, topic string) ([]string, error) {
@@ -179,10 +189,9 @@ func (s *EtcdStore) consumerOffsetKeys(ctx context.Context, topic string) ([]str
 	if err != nil {
 		return nil, err
 	}
-	marker := fmt.Sprintf("/offsets/%s/", topic)
 	var keys []string
 	for _, kv := range resp.Kvs {
-		if strings.Contains(string(kv.Key), marker) {
+		if _, keyTopic, _, ok := ParseConsumerOffsetKey(string(kv.Key)); ok && keyTopic == topic {
 			keys = append(keys, string(kv.Key))
 		}
 	}

@@ -59,17 +59,57 @@ func (h *handler) startTopicDeleteWatch(ctx context.Context) {
 	go h.watchTopicDeletes(ctx, etcdStore.EtcdClient())
 }
 
-func (h *handler) watchTopicDeletes(ctx context.Context, cli *clientv3.Client) {
-	for {
-		for resp := range cli.Watch(ctx, metadata.TopicGenerationPrefix, clientv3.WithPrefix()) {
+type topicDeleteClient interface {
+	Get(context.Context, string, ...clientv3.OpOption) (*clientv3.GetResponse, error)
+	Watch(context.Context, string, ...clientv3.OpOption) clientv3.WatchChan
+}
+
+func (h *handler) watchTopicDeletes(ctx context.Context, cli topicDeleteClient) {
+	var revision int64
+	for ctx.Err() == nil {
+		if revision == 0 {
+			resp, err := cli.Get(ctx, metadata.TopicGenerationPrefix, clientv3.WithPrefix())
+			if err != nil {
+				if !waitTopicWatchRetry(ctx) {
+					return
+				}
+				continue
+			}
+			for _, kv := range resp.Kvs {
+				h.dropTopicLogs(strings.TrimPrefix(string(kv.Key), metadata.TopicGenerationPrefix))
+			}
+			revision = resp.Header.Revision
+		}
+		for resp := range cli.Watch(ctx, metadata.TopicGenerationPrefix, clientv3.WithPrefix(), clientv3.WithRev(revision+1)) {
+			if resp.Err() != nil {
+				if resp.CompactRevision > 0 {
+					revision = 0
+				}
+				break
+			}
 			for _, ev := range resp.Events {
 				h.dropTopicLogs(strings.TrimPrefix(string(ev.Kv.Key), metadata.TopicGenerationPrefix))
 			}
+			revision = resp.Header.Revision
 		}
-		select {
-		case <-ctx.Done():
+		if !waitTopicWatchRetry(ctx) {
 			return
-		case <-time.After(time.Second):
 		}
 	}
+}
+
+func waitTopicWatchRetry(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(time.Second):
+		return true
+	}
+}
+
+func (h *handler) updateLogOffsets(ctx context.Context, topic, storageTopic string, partition int32, lastOffset int64) error {
+	if store, ok := h.store.(*metadata.EtcdStore); ok {
+		return store.UpdateOffsetsForStorage(ctx, topic, partition, lastOffset, storageTopic)
+	}
+	return h.store.UpdateOffsets(ctx, topic, partition, lastOffset)
 }

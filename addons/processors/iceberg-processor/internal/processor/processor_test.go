@@ -286,3 +286,52 @@ func TestProcessorCheckpointsRecreatedTopicByStorageName(t *testing.T) {
 		t.Fatalf("unexpected writes %+v", sinkWriter.all)
 	}
 }
+
+type changingGenerationLister struct{ polls int }
+
+func (l *changingGenerationLister) ListCompleted(ctx context.Context) ([]discovery.SegmentRef, error) {
+	l.polls++
+	storageTopic := "orders"
+	if l.polls > 1 {
+		storageTopic = "orders@1"
+	}
+	return []discovery.SegmentRef{{Topic: "orders", StorageTopic: storageTopic, Partition: 0, SegmentKey: storageTopic}}, nil
+}
+func TestProcessorReleasesRetiredGenerationLease(t *testing.T) {
+	store := &testStore{}
+	writer := &testSink{writes: make(chan struct{}, 2)}
+	p := &Processor{cfg: config.Config{Processor: config.ProcessorConfig{PollIntervalSeconds: 1}}, discover: &changingGenerationLister{}, decode: &testDecoder{records: map[string][]decoder.Record{"orders": {{Topic: "orders", Partition: 0, Offset: 0}}, "orders@1": {{Topic: "orders", Partition: 0, Offset: 0}}}}, store: store, sink: writer}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	for range 2 {
+		select {
+		case <-writer.writes:
+		case <-ctx.Done():
+			t.Fatal("new generation was blocked by the retired lease")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.claimed) != 2 || store.claimed[1].Topic != "orders@1" {
+		t.Fatal(store.claimed)
+	}
+	if atomic.LoadInt32(&store.releaseCalls) != 2 {
+		t.Fatal("retired lease was not released")
+	}
+	if containsLeaseSegments([]discovery.SegmentRef{{Topic: "orders", Partition: 1}}, checkpoint.Lease{Topic: "orders", Partition: 0}) {
+		t.Fatal("matched wrong partition")
+	}
+}
+
+func TestLeaseSegmentsMatchCurrentGeneration(t *testing.T) {
+	segments := []discovery.SegmentRef{{Topic: "orders", StorageTopic: "orders@2", Partition: 0}}
+	if !containsLeaseSegments(segments, checkpoint.Lease{Topic: "orders@2", Partition: 0}) {
+		t.Fatal("current generation lease not found")
+	}
+}

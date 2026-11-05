@@ -188,7 +188,7 @@ Limits:
 | `KAFSCALE_PROXY_IDENTITY_KEY_FILE` | Proxy and brokers | `key` in `identitySecretRef` | none | Shared forwarding key file |
 | `KAFSCALE_PROXY_TLS_MAX_HANDSHAKES` | Proxy | `maxHandshakes` | 64 | Concurrent TLS handshake slots, 1 to 60000 |
 | `KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP` | Proxy | `maxHandshakesPerIP` | 8 | Pending connections per source IP, 1 to 60000 |
-| `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` | Proxy | `handshakeTimeoutMs` | 1000 | Total handshake deadline in ms, 1 to 60000 |
+| `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` | Proxy | `handshakeTimeoutMs` | 1000 | Total handshake deadline in ms, 1 to 60000. In Helm, 0 or an empty value uses the default. |
 | `KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS` | Proxy | `handshakeQueueMs` | 100 | Wait for a handshake slot in ms, 1 to 60000 |
 
 Helm values live under `proxy.security`. CRD fields live under `spec.security`.

@@ -164,7 +164,7 @@ func TestKafkaCliProduce(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		consumeArgs = append(consumeArgs, "--network=host")
 	}
-	consumeScript := fmt.Sprintf("%s --bootstrap-server %s --topic %s --from-beginning --max-messages %d", consumerCmd, bootstrap, topic, messageCount)
+	consumeScript := fmt.Sprintf("%s --bootstrap-server %s --topic %s --from-beginning --max-messages %d --consumer-property max.partition.fetch.bytes=1", consumerCmd, bootstrap, topic, messageCount)
 	consumeArgs = append(consumeArgs, image, "sh", "-c", consumeScript)
 	t.Log("kafka cli: running consumer")
 	consumed := runCmdGetOutput(t, ctx, "docker", consumeArgs...)

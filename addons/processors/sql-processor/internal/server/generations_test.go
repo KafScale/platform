@@ -67,8 +67,8 @@ func TestListCurrentSegmentsErrors(t *testing.T) {
 	srv = New(config.Config{}, nil)
 	srv.generationsInit = true
 	srv.generationsErr = errors.New("dial failed")
-	if _, err := srv.listCurrentSegments(context.Background(), &mockLister{}); err == nil {
-		t.Fatal("expected source error")
+	if _, err := srv.listCurrentSegments(context.Background(), &mockLister{}); err != nil {
+		t.Fatalf("cached initialization failure should be retried: %v", err)
 	}
 	if _, err := srv.listCurrentSegments(context.Background(), &errLister{}); err == nil {
 		t.Fatal("expected list error")
@@ -101,5 +101,19 @@ func TestGetGenerationsUsesEtcdOnlyWhenConfigured(t *testing.T) {
 	}
 	if again, _ := srv.getGenerations(); again != source {
 		t.Fatal("expected cached source")
+	}
+}
+
+func TestGetGenerationsRetriesClientInitialization(t *testing.T) {
+	srv := New(config.Config{Metadata: config.MetaConfig{Etcd: config.EtcdConfig{Endpoints: []string{"127.0.0.1:1"}}}}, nil)
+	srv.generationsInit = true
+	srv.generationsErr = errors.New("transient initialization failure")
+	source, err := srv.getGenerations()
+	if err != nil || source == nil {
+		t.Fatalf("initialization did not recover: %v", err)
+	}
+	defer source.(*etcdGenerations).client.Close()
+	if again, err := srv.getGenerations(); err != nil || again != source {
+		t.Fatal("healthy client was not cached")
 	}
 }

@@ -294,7 +294,9 @@ LFS module also needs `proxy.security.aclSecretRef`, matching the brokers' ACL
 Secret. Admission defaults are 64 concurrent TLS handshakes, eight pending
 connections per source IP, a 1,000 ms total deadline, and a 100 ms queue wait.
 Override them with `proxy.security.maxHandshakes`, `maxHandshakesPerIP`,
-`handshakeTimeoutMs`, and `handshakeQueueMs`.
+`handshakeTimeoutMs`, and `handshakeQueueMs`. Set `handshakeTimeoutMs` to an integer
+from 1 through 60000; 0, null or an empty value uses the 1000 ms default. Helm
+rejects other values before deployment.
 
 For existing installations, apply the CRDs explicitly before configuring
 `spec.security`; Helm does not upgrade schemas from `crds/`. Operator-managed

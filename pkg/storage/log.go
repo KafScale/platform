@@ -17,6 +17,7 @@ package storage
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -585,7 +586,7 @@ func (l *PartitionLog) Read(ctx context.Context, offset int64, maxBytes int32) (
 		return body, nil
 	}
 	if rangeReadUsed {
-		return data, nil
+		return limitRecordBatchesFromOffset(data, offset, maxBytes), nil
 	}
 	body, err := l.sliceCachedSegment(seg, entries, offset, maxBytes, data)
 	if err != nil {
@@ -635,7 +636,7 @@ func (l *PartitionLog) startPrefetch(ctx context.Context, nextIndex int) {
 
 func (l *PartitionLog) sliceCachedSegment(seg segmentRange, entries []*IndexEntry, offset int64, maxBytes int32, data []byte) ([]byte, error) {
 	if len(entries) == 0 {
-		return sliceFullSegmentData(data, maxBytes), nil
+		return append([]byte(nil), limitRecordBatchesFromOffset(segmentBody(data), offset, maxBytes)...), nil
 	}
 	start, end := l.computeSegmentRange(seg, entries, offset, maxBytes)
 	if start < 0 || end < start {
@@ -644,10 +645,14 @@ func (l *PartitionLog) sliceCachedSegment(seg segmentRange, entries []*IndexEntr
 	if end >= int64(len(data)) {
 		end = int64(len(data)) - 1
 	}
-	return append([]byte(nil), data[start:end+1]...), nil
+	return append([]byte(nil), limitRecordBatchesFromOffset(data[start:end+1], offset, maxBytes)...), nil
 }
 
 func sliceFullSegmentData(data []byte, maxBytes int32) []byte {
+	return append([]byte(nil), limitRecordBatches(segmentBody(data), maxBytes)...)
+}
+
+func segmentBody(data []byte) []byte {
 	const headerLen = 32
 	start := headerLen
 	if start > len(data) {
@@ -660,11 +665,7 @@ func sliceFullSegmentData(data []byte, maxBytes int32) []byte {
 	if end < start {
 		end = len(data)
 	}
-	body := append([]byte(nil), data[start:end]...)
-	if maxBytes > 0 && len(body) > int(maxBytes) {
-		body = body[:maxBytes]
-	}
-	return body
+	return data[start:end]
 }
 
 func (l *PartitionLog) segmentRangeForOffset(seg segmentRange, entries []*IndexEntry, offset int64, maxBytes int32) (bool, *ByteRange) {
@@ -689,10 +690,13 @@ func (l *PartitionLog) computeSegmentRange(seg segmentRange, entries []*IndexEnt
 		return -1, -1
 	}
 	end := endLimit - 1
-	if maxBytes > 0 {
-		maxEnd := start + int64(maxBytes) - 1
-		if maxEnd < end {
-			end = maxEnd
+	// Index entries are batch boundaries. Round the download up to one before
+	// the next boundary, then apply the byte budget to complete batches.
+	for _, next := range entries {
+		position := int64(next.Position)
+		if position > start && (maxBytes <= 0 || position-start >= int64(maxBytes)) {
+			end = min(end, position-1)
+			break
 		}
 	}
 	return start, end
@@ -725,4 +729,32 @@ func findIndexEntry(entries []*IndexEntry, offset int64) *IndexEntry {
 		}
 	}
 	return entries[0]
+}
+
+// limitRecordBatches preserves the first batch even when it exceeds the budget.
+// Later batches must fit whole; a partial batch is never sent to a consumer.
+func limitRecordBatches(data []byte, maxBytes int32) []byte {
+	return limitRecordBatchesFromOffset(data, 0, maxBytes)
+}
+
+func limitRecordBatchesFromOffset(data []byte, offset int64, maxBytes int32) []byte {
+	start, end := 0, 0
+	for len(data)-end >= batchFrameHeaderLen {
+		size := int64(binary.BigEndian.Uint32(data[end+8:end+12])) + batchFrameHeaderLen
+		if size < recordBatchHeaderLen || size > int64(len(data)-end) {
+			break
+		}
+		next := end + int(size)
+		base := int64(binary.BigEndian.Uint64(data[end : end+8]))
+		delta := int64(int32(binary.BigEndian.Uint32(data[end+23 : end+27])))
+		if end == start && base+delta < offset {
+			start, end = next, next
+			continue
+		}
+		if end > start && (maxBytes <= 0 || next-start > int(maxBytes)) {
+			break
+		}
+		end = next
+	}
+	return data[start:end]
 }

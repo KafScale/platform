@@ -14,6 +14,11 @@
 # limitations under the License.
 
 {{- if .Values.proxy.enabled }}
+{{- with .Values.proxy.security.handshakeTimeoutMs }}
+{{- if or (not (regexMatch "^[0-9]+$" (toString .))) (gt (int64 .) 60000) }}
+{{- fail "proxy.security.handshakeTimeoutMs must be 1..60000, or 0/empty for the default" }}
+{{- end }}
+{{- end }}
 {{- if or .Values.proxy.security.tlsSecretRef .Values.proxy.security.identitySecretRef }}
 {{- $_ := required "proxy.security.tlsSecretRef is required for mTLS" .Values.proxy.security.tlsSecretRef }}
 {{- $_ := required "proxy.security.identitySecretRef is required for mTLS" .Values.proxy.security.identitySecretRef }}
@@ -73,7 +78,7 @@ spec:
               value: {{ .Values.proxy.security.maxHandshakes | quote }}
             - name: KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP
               value: {{ .Values.proxy.security.maxHandshakesPerIP | quote }}
-{{- if .Values.proxy.security.handshakeTimeoutMs }}
+{{- if (int64 (default 0 .Values.proxy.security.handshakeTimeoutMs)) }}
             - name: KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS
               value: {{ .Values.proxy.security.handshakeTimeoutMs | int64 | quote }}
 {{- end }}
