@@ -825,22 +825,31 @@ func waitForPodDeletion(t *testing.T, ctx context.Context, namespace, selector s
 	}
 	t.Fatalf("timed out waiting for pods with selector %s to be deleted", selector)
 }
-func portCheckTargets(t *testing.T, ctx context.Context, namespace, host string) []string {
+func serviceEndpointIPs(t *testing.T, ctx context.Context, namespace, service string) []string {
 	t.Helper()
-	svc := strings.Split(host, ".")[0]
-	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", svc, "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpointslices",
+		"-l", "kubernetes.io/service-name="+service,
+		"-o", "jsonpath={.items[*].endpoints[*].addresses[*]}")
 	seen := map[string]struct{}{}
-	var targets []string
-	for _, ip := range strings.Fields(strings.TrimSpace(string(out))) {
-		if ip == "" {
+	var ips []string
+	for _, raw := range strings.Fields(strings.TrimSpace(string(out))) {
+		parsed := net.ParseIP(raw)
+		if parsed == nil {
 			continue
 		}
+		ip := parsed.String()
 		if _, ok := seen[ip]; ok {
 			continue
 		}
 		seen[ip] = struct{}{}
-		targets = append(targets, ip)
+		ips = append(ips, ip)
 	}
+	return ips
+}
+
+func portCheckTargets(t *testing.T, ctx context.Context, namespace, host string) []string {
+	t.Helper()
+	targets := serviceEndpointIPs(t, ctx, namespace, strings.Split(host, ".")[0])
 	if len(targets) == 0 {
 		return []string{host}
 	}
@@ -903,13 +912,11 @@ func ensureNamespace(t *testing.T, ctx context.Context, namespace string) {
 
 func minioAPIEndpoint(t *testing.T, ctx context.Context, namespace string) string {
 	t.Helper()
-	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", "minio", "-o", "jsonpath={.subsets[*].addresses[*].ip}")
-	for _, ip := range strings.Fields(strings.TrimSpace(string(out))) {
-		if ip != "" {
-			return "http://" + ip + ":9000"
-		}
+	ips := serviceEndpointIPs(t, ctx, namespace, "minio")
+	if len(ips) == 0 {
+		return "http://minio." + namespace + ".svc.cluster.local:9000"
 	}
-	return "http://minio." + namespace + ".svc.cluster.local:9000"
+	return "http://" + ips[0] + ":9000"
 }
 
 func applyMinio(t *testing.T, ctx context.Context, namespace, image string) {
