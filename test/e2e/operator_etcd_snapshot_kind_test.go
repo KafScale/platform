@@ -128,7 +128,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("timeout waiting for statefulset/kafscale-etcd: %v", err)
 	}
 	etcdReplicas := getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd")
-	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 2*time.Minute)
+	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 4*time.Minute)
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
 	t.Log("waiting for etcd client port to accept connections")

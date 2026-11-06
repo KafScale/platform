@@ -512,6 +512,12 @@ func TestSnapshotDownloadUsesAWSCLITimeouts(t *testing.T) {
 	if !strings.Contains(script, "--cli-read-timeout 5") {
 		t.Fatalf("download script missing --cli-read-timeout 5: %q", script)
 	}
+	if !strings.Contains(script, "timeout 5 aws") {
+		t.Fatalf("download script missing timeout 5 around aws: %q", script)
+	}
+	if !strings.Contains(script, "*.db)") {
+		t.Fatalf("download script must accept only keys ending in .db: %q", script)
+	}
 	if got := envValue(download.Env, "AWS_MAX_ATTEMPTS"); got != "1" {
 		t.Fatalf("AWS_MAX_ATTEMPTS = %q, want 1", got)
 	}
