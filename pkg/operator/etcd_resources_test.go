@@ -566,3 +566,48 @@ func readyEtcdMemberPod(cluster *kafscalev1alpha1.KafscaleCluster, name, ip stri
 	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
 	return pod
 }
+
+func TestEtcdSingleReplicaUsesPodIP(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdReplicasEnv, "1")
+	cluster := testCluster("single", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	var etcd *corev1.Container
+	for i := range sts.Spec.Template.Spec.Containers {
+		if sts.Spec.Template.Spec.Containers[i].Name == "etcd" {
+			etcd = &sts.Spec.Template.Spec.Containers[i]
+			break
+		}
+	}
+	if etcd == nil {
+		t.Fatalf("etcd container missing")
+	}
+	joined := strings.Join(etcd.Args, "\n")
+	if !strings.Contains(joined, "--advertise-client-urls=http://$(POD_IP):2379") {
+		t.Fatalf("single replica should advertise pod IP: %q", joined)
+	}
+	if !strings.Contains(joined, "--initial-advertise-peer-urls=http://$(POD_IP):2380") {
+		t.Fatalf("single replica should advertise peer pod IP: %q", joined)
+	}
+	if !strings.Contains(joined, "--initial-cluster=single-etcd-0=http://$(POD_IP):2380") {
+		t.Fatalf("single replica initial-cluster should use pod IP: %q", joined)
+	}
+	if !hasFieldRef(etcd.Env, "POD_IP", "status.podIP") {
+		t.Fatalf("POD_IP env missing")
+	}
+}
+
+func hasFieldRef(env []corev1.EnvVar, name, field string) bool {
+	for _, e := range env {
+		if e.Name == name && e.ValueFrom != nil && e.ValueFrom.FieldRef != nil && e.ValueFrom.FieldRef.FieldPath == field {
+			return true
+		}
+	}
+	return false
+}
