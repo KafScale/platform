@@ -234,6 +234,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=3")
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
+	redirectServiceToReadyEndpoint(t, ctx, kindNamespace, "kafscale-etcd-client", 2379)
 	waitForEtcdSnapshotContains(t, ctx, kindNamespace, restoreTopic, 2*time.Minute)
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
@@ -847,6 +848,21 @@ func prepareKindClusterNetworking(t *testing.T, ctx context.Context) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "scale", "deployment/coredns", "--replicas=1")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=60s")
 	restartKindKubeProxy(t, ctx)
+}
+
+func redirectServiceToReadyEndpoint(t *testing.T, ctx context.Context, namespace, service string, port int) {
+	t.Helper()
+	cip := strings.TrimSpace(string(runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "svc", service, "-o", "jsonpath={.spec.clusterIP}")))
+	ips := serviceEndpointIPs(t, ctx, namespace, service)
+	if cip == "" || cip == "None" || len(ips) == 0 {
+		t.Logf("skip service redirect for %s", service)
+		return
+	}
+	node := strings.TrimSpace(string(runCmdWithOutput(t, ctx, "kubectl", "get", "nodes", "-o", "jsonpath={.items[0].metadata.name}")))
+	dest := fmt.Sprintf("%s:%d", ips[0], port)
+	t.Logf("redirect %s cluster IP %s:%d to %s", service, cip, port, dest)
+	runCmdGetOutput(t, ctx, "docker", "exec", node, "iptables", "-t", "nat", "-I", "KUBE-SERVICES", "1",
+		"-p", "tcp", "-d", cip, "--dport", strconv.Itoa(port), "-j", "DNAT", "--to-destination", dest)
 }
 
 func restartKindKubeProxy(t *testing.T, ctx context.Context) {
