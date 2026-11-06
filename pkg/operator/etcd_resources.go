@@ -277,6 +277,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				{Name: "AWS_REGION", Value: cluster.Spec.S3.Region},
 				{Name: "AWS_DEFAULT_REGION", Value: cluster.Spec.S3.Region},
 				{Name: "AWS_EC2_METADATA_DISABLED", Value: "true"},
+				{Name: "AWS_MAX_ATTEMPTS", Value: "1"},
 				{Name: "SNAPSHOT_BUCKET", Value: bucket},
 				{Name: "SNAPSHOT_PREFIX", Value: prefix},
 			}
@@ -347,6 +348,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"DATA_DIR=/var/lib/etcd\n" +
 				"ENDPOINT_OPT=\"\"\n" +
 				"if [ -n \"${AWS_ENDPOINT_URL:-}\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
+				"AWS_TIMEOUT_OPT=\"--cli-connect-timeout 2 --cli-read-timeout 5\"\n" +
 				"if [ -d \"$DATA_DIR/member\" ] && [ \"$(ls -A \"$DATA_DIR\")\" ]; then\n" +
 				"  echo \"etcd data dir not empty; skipping snapshot download\"\n" +
 				"  exit 0\n" +
@@ -357,8 +359,8 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"LATEST=\"\"\n" +
 				"attempt=0\n" +
 				"while [ $attempt -lt 15 ]; do\n" +
-				"  LISTING=$(aws $ENDPOINT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'Contents[].Key' --output text 2>&1 || true)\n" +
-				"  LATEST=$(aws $ENDPOINT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'Contents[?ends_with(Key, `.db`)] | sort_by(@,&LastModified)[-1].Key' --output text 2>&1 | tr -d '\\r' || true)\n" +
+				"  LISTING=$(aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'Contents[].Key' --output text 2>&1 || true)\n" +
+				"  LATEST=$(aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'Contents[?ends_with(Key, `.db`)] | sort_by(@,&LastModified)[-1].Key' --output text 2>&1 | tr -d '\\r' || true)\n" +
 				"  if [ \"$LATEST\" = \"None\" ]; then LATEST=\"\"; fi\n" +
 				"  if [ -n \"$LATEST\" ]; then\n" +
 				"    break\n" +
@@ -374,7 +376,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  echo \"no snapshot found in $BASE\"\n" +
 				"  exit 0\n" +
 				"fi\n" +
-				"aws $ENDPOINT_OPT s3 cp \"s3://$SNAPSHOT_BUCKET/$LATEST\" /snapshots/etcd-snapshot.db\n"
+				"aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3 cp \"s3://$SNAPSHOT_BUCKET/$LATEST\" /snapshots/etcd-snapshot.db\n"
 
 			sts.Spec.Template.Spec.InitContainers = []corev1.Container{
 				{

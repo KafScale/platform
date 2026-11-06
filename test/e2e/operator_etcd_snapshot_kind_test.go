@@ -771,6 +771,28 @@ func waitForPodPhase(ctx context.Context, namespace, podName, phase string, time
 	return fmt.Errorf("timed out waiting for pod %s phase %s", podName, phase)
 }
 
+func waitForPodSucceeded(ctx context.Context, namespace, podName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for time.Now().Before(deadline) {
+		out, err := exec.CommandContext(ctx, "kubectl", "-n", namespace, "get", "pod", podName, "-o", "jsonpath={.status.phase}").Output()
+		if err == nil {
+			last = strings.TrimSpace(string(out))
+			if last == "Succeeded" {
+				return nil
+			}
+			if last == "Failed" {
+				return fmt.Errorf("pod %s phase Failed", podName)
+			}
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if last == "" {
+		return fmt.Errorf("timed out waiting for pod %s phase Succeeded", podName)
+	}
+	return fmt.Errorf("timed out waiting for pod %s phase Succeeded (last phase %s)", podName, last)
+}
+
 func waitForServiceEndpoints(t *testing.T, ctx context.Context, namespace, service string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -812,16 +834,23 @@ func runPortCheckPod(t *testing.T, ctx context.Context, namespace, image, host s
 	}
 	if err := execCommand(ctx, "kubectl", "-n", namespace, "run", podName, "--restart=Never",
 		"--image", image,
+		"--image-pull-policy=IfNotPresent",
 		"--env", "KAFSCALE_E2E_MODE=probe",
 		"--env", "KAFSCALE_E2E_ADDRS="+strings.Join(addrs, ","),
 		"--env", "KAFSCALE_E2E_PROBE_RETRIES=30",
 		"--env", "KAFSCALE_E2E_PROBE_SLEEP_MS=500"); err != nil {
 		return fmt.Errorf("start port check pod: %w", err)
 	}
-	if err := execCommand(ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+podName, "--timeout=60s"); err != nil {
+	if err := waitForPodSucceeded(ctx, namespace, podName, 2*time.Minute); err != nil {
+		describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "pod/"+podName)
 		logs := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "logs", "pod/"+podName)
+		events := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "events",
+			"--field-selector=involvedObject.name="+podName, "--sort-by=.lastTimestamp")
+		svc := strings.Split(host, ".")[0]
+		endpoints := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", svc, "-o", "wide")
 		_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
-		return fmt.Errorf("port check failed: %w\nlogs:\n%s", err, string(logs))
+		return fmt.Errorf("port check failed: %w\npod status:\n%s\nevents:\n%s\nendpoints/%s:\n%s\nlogs:\n%s",
+			err, truncateOutput(string(describe)), truncateOutput(string(events)), svc, truncateOutput(string(endpoints)), truncateOutput(string(logs)))
 	}
 	_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
 	return nil

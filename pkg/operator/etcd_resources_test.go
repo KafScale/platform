@@ -484,3 +484,47 @@ func TestEtcdSnapshotRestoreBumpsRevision(t *testing.T) {
 		t.Fatalf("restore does not bump the revision and mark it compacted: %q", script)
 	}
 }
+
+func TestSnapshotDownloadUsesAWSCLITimeouts(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	cluster := testCluster("snap-timeouts", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	var download *corev1.Container
+	for i := range sts.Spec.Template.Spec.InitContainers {
+		if sts.Spec.Template.Spec.InitContainers[i].Name == "snapshot-download" {
+			download = &sts.Spec.Template.Spec.InitContainers[i]
+			break
+		}
+	}
+	if download == nil {
+		t.Fatalf("snapshot-download init container missing")
+	}
+	script := strings.Join(download.Command, "\n")
+	if !strings.Contains(script, "--cli-connect-timeout 2") {
+		t.Fatalf("download script missing --cli-connect-timeout 2: %q", script)
+	}
+	if !strings.Contains(script, "--cli-read-timeout 5") {
+		t.Fatalf("download script missing --cli-read-timeout 5: %q", script)
+	}
+	if got := envValue(download.Env, "AWS_MAX_ATTEMPTS"); got != "1" {
+		t.Fatalf("AWS_MAX_ATTEMPTS = %q, want 1", got)
+	}
+	for _, fragment := range []string{"s3api list-objects-v2", "s3 cp "} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("download script missing %q: %q", fragment, script)
+		}
+	}
+	awsIdx := strings.Index(script, "aws $ENDPOINT_OPT")
+	if awsIdx < 0 {
+		t.Fatalf("download script has no aws invocation: %q", script)
+	}
+	if !strings.Contains(script[awsIdx:], "$AWS_TIMEOUT_OPT") && !strings.Contains(script[awsIdx:], "--cli-connect-timeout") {
+		t.Fatalf("aws invocations missing timeout flags: %q", script)
+	}
+}
