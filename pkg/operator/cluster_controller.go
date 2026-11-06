@@ -264,6 +264,13 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 	}
 	if brokerHost != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_BROKER_HOST", Value: brokerHost})
+	} else {
+		env = append(env, corev1.EnvVar{
+			Name: "KAFSCALE_BROKER_HOST",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+			},
+		})
 	}
 	if strings.TrimSpace(cluster.Spec.S3.Endpoint) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
