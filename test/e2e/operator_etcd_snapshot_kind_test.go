@@ -20,6 +20,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
@@ -840,21 +841,45 @@ func prepareKindClusterNetworking(t *testing.T, ctx context.Context) {
 func serviceEndpointIPs(t *testing.T, ctx context.Context, namespace, service string) []string {
 	t.Helper()
 	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpointslices",
-		"-l", "kubernetes.io/service-name="+service,
-		"-o", "jsonpath={.items[*].endpoints[*].addresses[*]}")
+		"-l", "kubernetes.io/service-name="+service, "-o", "json")
+	var payload struct {
+		Items []struct {
+			Endpoints []struct {
+				Addresses  []string `json:"addresses"`
+				Conditions struct {
+					Ready       *bool `json:"ready"`
+					Terminating *bool `json:"terminating"`
+				} `json:"conditions"`
+			} `json:"endpoints"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Logf("parse endpointslices for %s: %v", service, err)
+		return nil
+	}
 	seen := map[string]struct{}{}
 	var ips []string
-	for _, raw := range strings.Fields(strings.TrimSpace(string(out))) {
-		parsed := net.ParseIP(raw)
-		if parsed == nil {
-			continue
+	for _, item := range payload.Items {
+		for _, ep := range item.Endpoints {
+			if ep.Conditions.Terminating != nil && *ep.Conditions.Terminating {
+				continue
+			}
+			if ep.Conditions.Ready != nil && !*ep.Conditions.Ready {
+				continue
+			}
+			for _, raw := range ep.Addresses {
+				parsed := net.ParseIP(raw)
+				if parsed == nil {
+					continue
+				}
+				ip := parsed.String()
+				if _, ok := seen[ip]; ok {
+					continue
+				}
+				seen[ip] = struct{}{}
+				ips = append(ips, ip)
+			}
 		}
-		ip := parsed.String()
-		if _, ok := seen[ip]; ok {
-			continue
-		}
-		seen[ip] = struct{}{}
-		ips = append(ips, ip)
 	}
 	return ips
 }
@@ -880,13 +905,21 @@ func serviceDialAddr(t *testing.T, ctx context.Context, namespace, service strin
 func runPortCheckPod(t *testing.T, ctx context.Context, namespace, image, host string, ports []int) error {
 	t.Helper()
 	var lastErr error
-	for _, target := range portCheckTargets(t, ctx, namespace, host) {
-		t.Logf("port check %s via %s", host, target)
-		if err := runPortCheckPodOnce(t, ctx, namespace, image, host, target, ports); err != nil {
-			lastErr = err
-			continue
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		targets := portCheckTargets(t, ctx, namespace, host)
+		for _, target := range targets {
+			t.Logf("port check %s via %s", host, target)
+			if err := runPortCheckPodOnce(t, ctx, namespace, image, host, target, ports); err != nil {
+				lastErr = err
+				continue
+			}
+			return nil
 		}
-		return nil
+		if len(targets) == 0 {
+			lastErr = fmt.Errorf("port check has no ready targets for %s", host)
+		}
+		time.Sleep(3 * time.Second)
 	}
 	if lastErr == nil {
 		return fmt.Errorf("port check has no targets for %s", host)
