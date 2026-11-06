@@ -236,10 +236,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
 	redirectServiceToReadyEndpoint(t, ctx, kindNamespace, "kafscale-etcd-client", 2379)
 	waitForEtcdSnapshotContains(t, ctx, kindNamespace, restoreTopic, 2*time.Minute)
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
-	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
+	pointBrokersAtReadyEtcd(t, ctx, kindNamespace)
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 
 	t.Log("testing broker restart durability: produce before restart, consume after restart")
@@ -266,6 +264,15 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "consume", brokerAddr, topic, messageCount, 60); err != nil {
 		t.Fatalf("consume after restart: %v", err)
 	}
+
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
+	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
+	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
+	redirectServiceToReadyEndpoint(t, ctx, kindNamespace, "kafscale-etcd-client", 2379)
+	pointBrokersAtReadyEtcd(t, ctx, kindNamespace)
+	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 
 	t.Log("testing S3 outage handling: stop MinIO, assert produce fails, recover on restart")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/minio", "--replicas=0")
@@ -861,8 +868,29 @@ func redirectServiceToReadyEndpoint(t *testing.T, ctx context.Context, namespace
 	node := strings.TrimSpace(string(runCmdWithOutput(t, ctx, "kubectl", "get", "nodes", "-o", "jsonpath={.items[0].metadata.name}")))
 	dest := fmt.Sprintf("%s:%d", ips[0], port)
 	t.Logf("redirect %s cluster IP %s:%d to %s", service, cip, port, dest)
-	runCmdGetOutput(t, ctx, "docker", "exec", node, "iptables", "-t", "nat", "-I", "KUBE-SERVICES", "1",
-		"-p", "tcp", "-d", cip, "--dport", strconv.Itoa(port), "-j", "DNAT", "--to-destination", dest)
+	script := fmt.Sprintf(`dest=%s; cip=%s; port=%s; podip=%s;
+for bin in iptables iptables-nft iptables-legacy; do
+  command -v "$bin" >/dev/null 2>&1 || continue
+  "$bin" -t nat -I PREROUTING 1 -p tcp -d "$cip" --dport "$port" -j DNAT --to-destination "$dest" || true
+  "$bin" -t nat -I OUTPUT 1 -p tcp -d "$cip" --dport "$port" -j DNAT --to-destination "$dest" || true
+  "$bin" -t nat -I POSTROUTING 1 -p tcp -d "$podip" --dport "$port" -j MASQUERADE || true
+  "$bin" -t nat -I KUBE-SERVICES 1 -p tcp -d "$cip" --dport "$port" -j DNAT --to-destination "$dest" || true
+done
+`, dest, cip, strconv.Itoa(port), ips[0])
+	runCmdGetOutput(t, ctx, "docker", "exec", node, "bash", "-c", script)
+}
+
+func pointBrokersAtReadyEtcd(t *testing.T, ctx context.Context, namespace string) {
+	t.Helper()
+	ips := serviceEndpointIPs(t, ctx, namespace, "kafscale-etcd-client")
+	if len(ips) == 0 {
+		t.Fatalf("no ready etcd endpoints to point brokers at")
+	}
+	eps := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		eps = append(eps, "http://"+ip+":2379")
+	}
+	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "set", "env", "statefulset/kafscale-broker", "KAFSCALE_ETCD_ENDPOINTS="+strings.Join(eps, ","))
 }
 
 func restartKindKubeProxy(t *testing.T, ctx context.Context) {
