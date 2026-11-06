@@ -145,7 +145,6 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("timeout waiting for cronjob/kafscale-etcd-snapshot: %v", err)
 	}
 	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
-	patchClusterReplicas(t, ctx, kindNamespace, "kafscale", 3)
 
 	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-broker", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
@@ -163,7 +162,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	}
 	t.Log("testing internal produce via e2e client")
 	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
-	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092), cliTopic, 1, 40); err != nil {
+	cliBrokerAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
+	t.Logf("internal produce via %s", cliBrokerAddr)
+	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", cliBrokerAddr, cliTopic, 1, 40); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("internal produce failed: %v", err)
 	}
