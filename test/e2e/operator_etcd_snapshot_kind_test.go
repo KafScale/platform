@@ -116,7 +116,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE="+etcdToolsImage,
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1",
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1",
-		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio."+kindNamespace+".svc.cluster.local:9000",
+		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT="+minioAPIEndpoint(t, ctx, kindNamespace),
 	)
 	waitForDeploymentEnvValue(t, ctx, kindNamespace, operatorDeployment, "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE", etcdToolsImage, 2*time.Minute)
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
@@ -637,7 +637,7 @@ func listSnapshotObjects(t *testing.T, ctx context.Context, namespace string) []
 		"--env", "AWS_DEFAULT_REGION=us-east-1",
 		"--env", "AWS_EC2_METADATA_DISABLED=true",
 		"--command", "--", "sh", "-c",
-		"aws --endpoint-url http://minio."+namespace+".svc.cluster.local:9000 s3api list-objects-v2 --bucket "+bucket+" --prefix etcd-snapshots/ --query 'Contents[].Key' --output text"); err != nil {
+		"aws --endpoint-url "+minioAPIEndpoint(t, ctx, namespace)+" s3api list-objects-v2 --bucket "+bucket+" --prefix etcd-snapshots/ --query 'Contents[].Key' --output text"); err != nil {
 		t.Fatalf("start s3 list pod: %v", err)
 	}
 	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+podName, "--timeout=60s")
@@ -657,7 +657,7 @@ func listTopicObjects(t *testing.T, ctx context.Context, namespace, topic string
 		"--env", "AWS_DEFAULT_REGION=us-east-1",
 		"--env", "AWS_EC2_METADATA_DISABLED=true",
 		"--command", "--", "sh", "-c",
-		"aws --endpoint-url http://minio."+namespace+".svc.cluster.local:9000 s3api list-objects-v2 --bucket kafscale-snapshots --prefix "+prefix+" --query 'Contents[].Key' --output text"); err != nil {
+		"aws --endpoint-url "+minioAPIEndpoint(t, ctx, namespace)+" s3api list-objects-v2 --bucket kafscale-snapshots --prefix "+prefix+" --query 'Contents[].Key' --output text"); err != nil {
 		t.Fatalf("start s3 topic list pod: %v", err)
 	}
 	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+podName, "--timeout=60s")
@@ -901,6 +901,17 @@ func ensureNamespace(t *testing.T, ctx context.Context, namespace string) {
 	runCmdWithInput(t, ctx, "kubectl", string(manifest), "apply", "-f", "-")
 }
 
+func minioAPIEndpoint(t *testing.T, ctx context.Context, namespace string) string {
+	t.Helper()
+	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", "minio", "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+	for _, ip := range strings.Fields(strings.TrimSpace(string(out))) {
+		if ip != "" {
+			return "http://" + ip + ":9000"
+		}
+	}
+	return "http://minio." + namespace + ".svc.cluster.local:9000"
+}
+
 func applyMinio(t *testing.T, ctx context.Context, namespace, image string) {
 	t.Helper()
 	manifest := fmt.Sprintf(`
@@ -977,11 +988,11 @@ spec:
   s3:
     bucket: kafscale-snapshots
     region: us-east-1
-    endpoint: http://minio.%s.svc.cluster.local:9000
+    endpoint: %s
     credentialsSecretRef: kafscale-s3-credentials
   etcd:
     endpoints: []
-`, namespace, replicas, namespace)
+`, namespace, replicas, minioAPIEndpoint(t, ctx, namespace))
 	runCmdWithInput(t, ctx, "kubectl", manifest, "apply", "-f", "-")
 }
 
