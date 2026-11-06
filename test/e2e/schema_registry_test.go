@@ -51,8 +51,8 @@ const (
 )
 
 type srUser struct {
-	Name string `avro:"name"`
-	Age  int    `avro:"age"`
+	Name string `avro:"name" json:"name"`
+	Age  int    `avro:"age" json:"age"`
 }
 
 type srHarness struct {
@@ -208,6 +208,15 @@ func (h *srHarness) runScenarios() {
 		defer func() { h.t = parent }()
 		h.interop(t, brokerAddr, urlA, urlB)
 	})
+
+	t.Run("json-three-instances", func(t *testing.T) {
+		h.t = t
+		defer func() { h.t = parent }()
+		addrC := freeAddr(t)
+		regC := h.startRegistry(addrC)
+		defer stopBroker(t, regC)
+		h.jsonConcurrent(t, []string{urlA, urlB, "http://" + addrC})
+	})
 	if h.after != nil && !parent.Failed() {
 		h.after(urlA)
 	}
@@ -229,6 +238,7 @@ func (h *srHarness) checkTools() {
 	if out := strings.TrimSpace(h.run(nil, h.python, "-c", "import confluent_kafka; print(confluent_kafka.version()[0] if isinstance(confluent_kafka.version(), tuple) else confluent_kafka.version())")); out != "2.16.1" {
 		t.Fatalf("confluent-kafka 2.16.1 is required, found %s", out)
 	}
+	h.run(nil, h.python, "-c", "from confluent_kafka.schema_registry.json_schema import JSONSerializer, JSONDeserializer")
 	h.m2 = os.Getenv("KAFSCALE_E2E_M2")
 	if h.m2 == "" {
 		h.m2 = filepath.Join(os.TempDir(), "kafscale-e2e-m2")
@@ -425,6 +435,7 @@ func (h *srHarness) confluentMigration(t *testing.T, brokerAddr, urlA, urlB stri
 	if next.ID <= source.ID {
 		t.Fatalf("new id %d must be above imported id %d", next.ID, source.ID)
 	}
+	h.jsonParity(t, cpURL, urlA)
 }
 
 func (h *srHarness) container(t *testing.T, name string, args ...string) {
@@ -547,6 +558,7 @@ func (h *srHarness) killMidRun(t *testing.T, regA *exec.Cmd, addrA, urlA, urlB s
 
 func (h *srHarness) interop(t *testing.T, brokerAddr, urlA, urlB string) {
 	h.protobufInterop(t, urlA, urlB)
+	h.jsonInterop(t, brokerAddr, urlA, urlB)
 	h.py("serialize", urlA, "users", "python.hex", srRecords)
 	h.java("serialize", urlB, "users", "java.hex", srRecords)
 	pyFrames := readFrames(t, h.dataPath("python.hex"))
@@ -767,5 +779,59 @@ func (h *srHarness) protobufInterop(t *testing.T, urlA, urlB string) {
 	}
 	if s.Type != sr.TypeProtobuf || !strings.Contains(s.Schema.Schema, "message Order {") {
 		t.Fatalf("protobuf schema stored as %v %q", s.Type, s.Schema.Schema)
+	}
+}
+
+const srJSONSchema = `{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"],"additionalProperties":false}`
+
+func (h *srHarness) jsonInterop(t *testing.T, brokerAddr, urlA, urlB string) {
+	h.py("json-serialize", urlA, "json-users", "json-python.hex", srRecords)
+	h.java("json-serialize", urlB, "json-users", "json-java.hex", srRecords)
+	client, err := sr.NewClient(sr.URLs(urlA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss, err := client.CreateSchema(h.ctx, "json-users-value", sr.Schema{Type: sr.TypeJSON, Schema: srJSONSchema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var serde sr.Serde
+	serde.Register(ss.ID, srUser{}, sr.EncodeFn(json.Marshal), sr.DecodeFn(func(data []byte, v any) error { return json.Unmarshal(data, v) }))
+	var goFrames [][]byte
+	for i := range srRecords {
+		data, err := serde.Encode(srUser{Name: fmt.Sprintf("go-%d", i), Age: i})
+		if err != nil {
+			t.Fatal(err)
+		}
+		goFrames = append(goFrames, data)
+	}
+	writeFrames(t, h.dataPath("json-go.hex"), goFrames)
+	for _, source := range []string{"python", "java", "go"} {
+		file := "json-" + source + ".hex"
+		frames := readFrames(t, h.dataPath(file))
+		for _, frame := range frames {
+			if len(frame) < 5 || frame[0] != 0 || int(binary.BigEndian.Uint32(frame[1:5])) != ss.ID {
+				t.Fatalf("%s frame has unexpected schema ID: %x", source, frame)
+			}
+		}
+		mirrored := mirror(t, h.ctx, brokerAddr, "json-users-"+source, frames)
+		writeFrames(t, h.dataPath(file), mirrored)
+		want := expectedUsers(source)
+		for _, decode := range []func(string, string, string, string, int) string{h.py, h.java} {
+			if got := decode("json-deserialize", urlB, "json-users", file, 0); got != want {
+				t.Fatalf("JSON decode of %s: %s, want %s", source, got, want)
+			}
+		}
+		var got strings.Builder
+		for _, frame := range mirrored {
+			var user srUser
+			if err := serde.Decode(frame, &user); err != nil {
+				t.Fatal(err)
+			}
+			fmt.Fprintf(&got, "%s,%d\n", user.Name, user.Age)
+		}
+		if got.String() != want {
+			t.Fatalf("franz-go JSON decode: %s, want %s", got.String(), want)
+		}
 	}
 }

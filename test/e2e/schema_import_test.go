@@ -85,6 +85,12 @@ func seedConfluentForImport(t *testing.T, cpURL string) {
 	must(http.MethodDelete, "/subjects/imp-hard/versions/1", nil)
 	must(http.MethodDelete, "/subjects/imp-hard/versions/1?permanent=true", nil)
 	register("imp-shared", user1)
+
+	must(http.MethodPut, "/config/imp-json", map[string]string{"compatibility": "NONE"})
+	must(http.MethodPost, "/subjects/imp-json-leaf/versions", map[string]any{"schemaType": "JSON", "schema": `{"type":"string","minLength":1}`})
+	must(http.MethodPost, "/subjects/imp-json/versions", map[string]any{"schemaType": "JSON", "schema": `{"type":"object","properties":{"name":{"$ref":"leaf.json"}}}`, "references": []map[string]any{{"name": "leaf.json", "subject": "imp-json-leaf", "version": 1}}})
+	must(http.MethodPost, "/subjects/imp-json/versions", map[string]any{"schemaType": "JSON", "schema": `{"type":"object","properties":{"name":{"type":"string"}},"title":"next"}`})
+	must(http.MethodDelete, "/subjects/imp-json/versions/2", nil)
 	must(http.MethodPut, "/config/imp-user", map[string]string{"compatibility": "FULL_TRANSITIVE"})
 	must(http.MethodPut, "/config", map[string]string{"compatibility": "FORWARD"})
 	must(http.MethodPut, "/mode/imp-addr", map[string]string{"mode": "READONLY"})
@@ -136,16 +142,16 @@ func (h *srHarness) importFromConfluent(t *testing.T, cpURL, url string) {
 	h.run(nil, "go", "build", "-o", cli, filepath.Join(repoRoot(t), "cmd", "kafscale-cli"))
 	dry := h.run(nil, cli, "schema", "import", "--from", cpURL, "--to", url, "--dry-run")
 	t.Logf("dry run:\n%s", dry)
-	if !strings.Contains(dry, "dry run: imported 9, skipped 0, soft-deleted 2, settings changed 3, conflicts 0") {
+	if !strings.Contains(dry, "dry run: imported 12, skipped 0, soft-deleted 3, settings changed 4, conflicts 0") {
 		t.Fatalf("dry run summary:\n%s", dry)
 	}
 	first := h.run(nil, cli, "schema", "import", "--from", cpURL, "--to", url)
 	t.Logf("import:\n%s", first)
-	if !strings.Contains(first, "imported 9, skipped 0, soft-deleted 2, settings changed 3, conflicts 0") {
+	if !strings.Contains(first, "imported 12, skipped 0, soft-deleted 3, settings changed 4, conflicts 0") {
 		t.Fatalf("import summary:\n%s", first)
 	}
 	again := h.run(nil, cli, "schema", "import", "--from", cpURL, "--to", url)
-	if !strings.Contains(again, "imported 0, skipped 9, soft-deleted 0, settings changed 0, conflicts 0") {
+	if !strings.Contains(again, "imported 0, skipped 12, soft-deleted 0, settings changed 0, conflicts 0") {
 		t.Fatalf("rerun summary:\n%s", again)
 	}
 	src, dst := dumpForImport(t, cpURL), dumpForImport(t, url)

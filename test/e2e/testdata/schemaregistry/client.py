@@ -15,6 +15,8 @@
 
 import sys
 
+JSON_SCHEMA = '{"type":"object","properties":{"name":{"type":"string"},"age":{"type":"integer"}},"required":["name","age"],"additionalProperties":false}'
+
 from confluent_kafka.schema_registry import (
     SchemaRegistryClient,
     dual_schema_id_deserializer,
@@ -66,6 +68,21 @@ def main():
     mode, url, topic, path = sys.argv[1:5]
     client = SchemaRegistryClient({"url": url})
     ctx = SerializationContext(topic, MessageField.VALUE)
+    if mode.startswith("json-"):
+        from confluent_kafka.schema_registry.json_schema import JSONSerializer, JSONDeserializer
+        if mode == "json-serialize":
+            serializer = JSONSerializer(JSON_SCHEMA, client)
+            with open(path, "w") as out:
+                for i in range(int(sys.argv[5])):
+                    out.write(serializer({"name": "python-%d" % i, "age": i}, ctx).hex() + "\n")
+        else:
+            deserializer = JSONDeserializer(JSON_SCHEMA, schema_registry_client=client)
+            with open(path) as src:
+                for line in src:
+                    if line.strip():
+                        record = deserializer(bytes.fromhex(line.strip()), ctx)
+                        print("%s,%d" % (record["name"], record["age"]))
+        return
     if mode.startswith("proto-"):
         protobuf(mode, client, ctx, path, int(sys.argv[5]))
         return

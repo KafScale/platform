@@ -438,7 +438,7 @@ test-ops-api: release-broker-ports ## Run ops/admin API e2e (embedded etcd + in-
 	KAFSCALE_E2E=1 \
 	go test -tags=e2e ./test/e2e -run TestOpsAPI -v
 
-test-schema-registry: ## Run schema registry e2e test (needs docker, and python with confluent-kafka 2.16.1 and its avro and protobuf extras in KAFSCALE_SR_PYTHON or python3)
+test-schema-registry: ## Run schema registry e2e test (needs docker, and python with confluent-kafka 2.16.1 and its avro, json and protobuf extras in KAFSCALE_SR_PYTHON or python3)
 	KAFSCALE_E2E=1 \
 	go test -race -tags=e2e ./test/e2e -run '^TestSchemaRegistry(MinIO)?E2E$$' -v -count=1 -timeout=40m
 

@@ -661,7 +661,7 @@ func (r *Registry) resolveReferences(ctx context.Context, refs []Reference, dept
 			return nil, err
 		}
 		seen[ref.Name] = true
-		rr := resolvedReference{Name: ref.Name, Text: s.Text}
+		rr := resolvedReference{Name: ref.Name, Text: s.Text, Type: s.Type}
 		if depth == 0 {
 			rr.Subject, rr.Version = ref.Subject, ref.Version
 		}
@@ -708,7 +708,7 @@ func (r *Registry) resolveStoredReferences(ctx context.Context, refs []Reference
 			return err
 		}
 		seen[ref.Name] = true
-		rr := resolvedReference{Name: ref.Name, Text: s.Text}
+		rr := resolvedReference{Name: ref.Name, Text: s.Text, Type: s.Type}
 		if depth == 0 {
 			rr.Subject, rr.Version = ref.Subject, ref.Version
 		}
@@ -735,7 +735,7 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 	if schemaType == "" {
 		schemaType = schemaTypeAvro
 	}
-	if schemaType != schemaTypeAvro && schemaType != schemaTypeProtobuf {
+	if schemaType != schemaTypeAvro && schemaType != schemaTypeProtobuf && schemaType != schemaTypeJSON {
 		return nil, errInvalidSchema("schema type %s is not supported", schemaType)
 	}
 	if strings.TrimSpace(req.Schema) == "" {
@@ -750,6 +750,20 @@ func (r *Registry) prepare(ctx context.Context, req RegisterRequest) (*prepared,
 		return nil, err
 	}
 	p := &prepared{schemaType: schemaType, normalize: req.Normalize, refs: refs, refRevs: refRevs}
+	if schemaType == schemaTypeJSON {
+		canonical, err := canonicalJSONSchema(req.Schema, req.Normalize)
+		if err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
+		if _, err := parseJSONSchema(canonical, refs); err != nil {
+			return nil, errInvalidSchema("%v", err)
+		}
+		p.canonical = canonical
+		p.hash = schemaHash(schemaType, canonical, req.References)
+		p.norm = p.hash
+		p.guid = schemaGUID(canonical, req.References)
+		return p, nil
+	}
 	if schemaType == schemaTypeProtobuf {
 		text, fromDesc, err := protoFromDescriptor(req.Schema, refs)
 		if err != nil {
@@ -1213,7 +1227,7 @@ func (r *Registry) commit(ctx context.Context, cmps []clientv3.Cmp, ops []client
 func (r *Registry) tryRegister(ctx context.Context, subject string, req RegisterRequest, p *prepared, w *recordWriter) (int64, int, error) {
 	hk := hashKey(p.schemaType, p.hash)
 	lk := latestKey(subject)
-	keys := []string{counterKey(), hk, modeKey(""), modeKey(subject), configKey(""), configKey(subject)}
+	keys := []string{counterKey(), hk, guidKey(p.guid), modeKey(""), modeKey(subject), configKey(""), configKey(subject)}
 	var ak string
 	if p.schemaType == schemaTypeProtobuf && !p.normalize {
 		ak = p.protoAliasKey()
@@ -1225,6 +1239,21 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	snap, err := r.read(ctx, keys, []string{subjectPrefix(subject)})
 	if err != nil {
 		return 0, 0, err
+	}
+	// GUIDs intentionally follow Confluent's type-independent digest. A new
+	// type must never overwrite the GUID of an existing schema of another type.
+	if value := snap.str(guidKey(p.guid)); value != "" {
+		id, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, 0, err
+		}
+		existing, err := r.schemaByID(ctx, id)
+		if err != nil {
+			return 0, 0, err
+		}
+		if existing == nil || existing.Type != p.schemaType {
+			return 0, 0, errNotPermitted("Schema GUID already holds a different schema type")
+		}
 	}
 	versions, err := snap.versions(subject)
 	if err != nil {
@@ -1248,7 +1277,7 @@ func (r *Registry) tryRegister(ctx context.Context, subject string, req Register
 	if req.ID > 0 || req.Version > 0 {
 		return 0, 0, errNotPermitted("Schema id and version can only be set in IMPORT mode")
 	}
-	cmps := snap.fence(lk, modeKey(""), modeKey(subject), configKey(""), configKey(subject))
+	cmps := snap.fence(lk, guidKey(p.guid), modeKey(""), modeKey(subject), configKey(""), configKey(subject))
 	cmps = append(cmps, refFence(p.refRevs)...)
 	var ops []clientv3.Op
 	var id int64
@@ -1394,6 +1423,8 @@ func (r *Registry) checkAgainst(ctx context.Context, subject, level, schemaType,
 	checkReads := checkReads
 	if schemaType == schemaTypeProtobuf {
 		checkReads = checkProtoReads
+	} else if schemaType == schemaTypeJSON {
+		checkReads = checkJSONReads
 	}
 	if rule.backward {
 		if err := checkReads(text, refs, prev.Text, prevRefs); err != nil {
@@ -1412,7 +1443,7 @@ func (r *Registry) tryImport(ctx context.Context, subject string, req RegisterRe
 	id := req.ID
 	ik := idKey(id)
 	lk := latestKey(subject)
-	cmps := snap.fence(lk, modeKey(""), modeKey(subject))
+	cmps := snap.fence(lk, guidKey(p.guid), modeKey(""), modeKey(subject))
 	cmps = append(cmps, refFence(p.refRevs)...)
 	var ops []clientv3.Op
 	if kv := snap[ik]; kv != nil {
@@ -1554,6 +1585,9 @@ func (r *Registry) protoGlobalMatch(ctx context.Context, p *prepared) (*mvccpb.K
 }
 
 func (p *prepared) matches(s *Schema) bool {
+	if p.schemaType == schemaTypeJSON {
+		return s.Hash == p.hash
+	}
 	if p.schemaType == schemaTypeProtobuf {
 		return s.Hash == p.hash || (!p.normalize && s.Desc != "" && s.Desc == p.desc && (p.fromDesc || s.FromDesc))
 	}

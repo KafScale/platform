@@ -79,7 +79,7 @@ func NewServer(reg *Registry, timeout time.Duration) *Server {
 	routes := map[string]func(http.ResponseWriter, *http.Request) (any, error){
 		"GET /{$}": func(http.ResponseWriter, *http.Request) (any, error) { return map[string]any{}, nil },
 		"GET /schemas/types": func(http.ResponseWriter, *http.Request) (any, error) {
-			return []string{schemaTypeAvro, schemaTypeProtobuf}, nil
+			return []string{schemaTypeAvro, schemaTypeJSON, schemaTypeProtobuf}, nil
 		},
 		"GET /schemas/ids/{id}":                                     s.getSchema,
 		"GET /schemas/guids/{guid}":                                 s.getSchemaByGUID,
