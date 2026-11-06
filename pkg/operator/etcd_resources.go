@@ -352,9 +352,8 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 					},
 				)
 			}
-			replicas := int(etcdReplicas())
-			initialCluster := buildEtcdInitialCluster(cluster, replicas)
-			peerURL := etcdAdvertisePeerURL(cluster, replicas)
+			peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
+			initialCluster := buildEtcdInitialCluster(cluster, int(etcdReplicas()))
 			restoreScript := "set -euo pipefail\n" +
 				"DATA_DIR=/var/lib/etcd\n" +
 				"if [ -d \"$DATA_DIR/member\" ] && [ \"$(ls -A \"$DATA_DIR\")\" ]; then\n" +
@@ -370,7 +369,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  exit 1\n" +
 				"fi\n" +
 				"INITIAL_CLUSTER=\"" + initialCluster + "\"\n" +
-				"PEER_URL=\"" + peerURL + "\"\n" +
+				"PEER_URL=\"http://${POD_NAME}." + peerSvc + ".${POD_NAMESPACE}.svc.cluster.local:2380\"\n" +
 				"etcdutl snapshot restore /snapshots/etcd-snapshot.db " +
 				"--data-dir \"$DATA_DIR\" " +
 				"--name \"$POD_NAME\" " +
@@ -445,7 +444,6 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 						{Name: "ETCDCTL_API", Value: "3"},
 						{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 						{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
-						{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "snapshots", MountPath: "/snapshots"},
@@ -465,7 +463,6 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 			Env: []corev1.EnvVar{
 				{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
 				{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
-				{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
 			},
 			Command: []string{"etcd"},
 			Args:    etcdArgs(cluster),
@@ -502,10 +499,10 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 }
 
 func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
-	replicas := int(etcdReplicas())
-	initialCluster := buildEtcdInitialCluster(cluster, replicas)
-	peerURL := etcdAdvertisePeerURL(cluster, replicas)
-	clientURL := etcdAdvertiseClientURL(cluster, replicas)
+	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
+	initialCluster := buildEtcdInitialCluster(cluster, int(etcdReplicas()))
+	peerURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2380", peerSvc)
+	clientURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2379", peerSvc)
 	return []string{
 		"--name=$(POD_NAME)",
 		"--data-dir=/var/lib/etcd",
@@ -532,13 +529,10 @@ func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 }
 
 func buildEtcdInitialCluster(cluster *kafscalev1alpha1.KafscaleCluster, replicas int) string {
+	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
 	if replicas < 1 {
 		replicas = 1
 	}
-	if replicas == 1 {
-		return fmt.Sprintf("%s-etcd-0=%s", cluster.Name, etcdAdvertisePeerURL(cluster, replicas))
-	}
-	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
 	members := make([]string, 0, replicas)
 	for i := 0; i < replicas; i++ {
 		member := fmt.Sprintf(
@@ -548,22 +542,6 @@ func buildEtcdInitialCluster(cluster *kafscalev1alpha1.KafscaleCluster, replicas
 		members = append(members, member)
 	}
 	return strings.Join(members, ",")
-}
-
-func etcdAdvertisePeerURL(cluster *kafscalev1alpha1.KafscaleCluster, replicas int) string {
-	if replicas <= 1 {
-		return "http://$(POD_IP):2380"
-	}
-	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
-	return fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2380", peerSvc)
-}
-
-func etcdAdvertiseClientURL(cluster *kafscalev1alpha1.KafscaleCluster, replicas int) string {
-	if replicas <= 1 {
-		return "http://$(POD_IP):2379"
-	}
-	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
-	return fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2379", peerSvc)
 }
 
 func reconcileEtcdPDB(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {

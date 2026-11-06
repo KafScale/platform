@@ -113,7 +113,6 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "set", "env", "deployment/"+operatorDeployment,
 		"BROKER_IMAGE="+brokerImage,
 		"KAFSCALE_OPERATOR_ETCD_ENDPOINTS=",
-		"KAFSCALE_OPERATOR_ETCD_REPLICAS=1",
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE="+etcdToolsImage,
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1",
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1",
