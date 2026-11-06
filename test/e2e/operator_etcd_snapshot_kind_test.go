@@ -130,6 +130,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("timeout waiting for statefulset/kafscale-etcd: %v", err)
 	}
 	etcdReplicas := getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=ready", "pod/kafscale-etcd-0", "--timeout=4m")
+	restartKindKubeProxy(t, ctx)
 	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 4*time.Minute)
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
@@ -834,6 +836,11 @@ func prepareKindClusterNetworking(t *testing.T, ctx context.Context) {
 	t.Helper()
 	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "scale", "deployment/coredns", "--replicas=1")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=60s")
+	restartKindKubeProxy(t, ctx)
+}
+
+func restartKindKubeProxy(t *testing.T, ctx context.Context) {
+	t.Helper()
 	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "restart", "daemonset/kube-proxy")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/kube-proxy", "--timeout=90s")
 }
