@@ -153,16 +153,20 @@ func managedEtcdPodIPEndpoints(ctx context.Context, c client.Client, cluster *ka
 	if err := c.List(ctx, &pods, client.InNamespace(cluster.Namespace), client.MatchingLabels(etcdLabels(cluster))); err != nil {
 		return nil
 	}
+	memberPrefix := fmt.Sprintf("%s-etcd-", cluster.Name)
 	seen := map[string]struct{}{}
 	var endpoints []string
 	for _, pod := range pods.Items {
 		if pod.DeletionTimestamp != nil {
 			continue
 		}
-		ip := strings.TrimSpace(pod.Status.PodIP)
-		if ip == "" {
+		if !managedEtcdMemberPod(pod.Name, memberPrefix) {
 			continue
 		}
+		if !podHasReadyIP(pod) {
+			continue
+		}
+		ip := strings.TrimSpace(pod.Status.PodIP)
 		ep := "http://" + ip + ":2379"
 		if _, ok := seen[ep]; ok {
 			continue
@@ -854,6 +858,30 @@ func etcdMaintenanceShellScript() string {
 		"  etcdctl --endpoints=\"${ep}\" alarm disarm\n" +
 		"  sleep 2\n" +
 		"done\n"
+}
+
+func managedEtcdMemberPod(name, memberPrefix string) bool {
+	suffix := strings.TrimPrefix(name, memberPrefix)
+	if suffix == name {
+		return false
+	}
+	_, err := strconv.Atoi(suffix)
+	return err == nil
+}
+
+func podHasReadyIP(pod corev1.Pod) bool {
+	if strings.TrimSpace(pod.Status.PodIP) == "" {
+		return false
+	}
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 func managedEtcdMemberClientEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {

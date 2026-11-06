@@ -159,7 +159,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	t.Log("testing internal produce via e2e client")
 	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092), cliTopic, 1, 40); err != nil {
-		t.Fatalf("internal produce failed: %v", err)
+		env := runCmdWithOutput(t, ctx, "kubectl", "-n", kindNamespace, "get", "pod", "kafscale-broker-0", "-o", "jsonpath={.spec.containers[0].env}")
+		blog := runCmdWithOutput(t, ctx, "kubectl", "-n", kindNamespace, "logs", "kafscale-broker-0", "--tail=80")
+		t.Fatalf("internal produce failed: %v\nbroker env:\n%s\nbroker-0 logs:\n%s", err, truncateOutput(string(env)), truncateOutput(string(blog)))
 	}
 
 	restoreTopic := fmt.Sprintf("restore-%08x", rand.Uint32())
