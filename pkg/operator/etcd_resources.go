@@ -139,8 +139,7 @@ func cleanEndpoints(list []string) []string {
 }
 
 func managedEtcdEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
-	host := fmt.Sprintf("%s-etcd-client.%s.svc.cluster.local:2379", cluster.Name, cluster.Namespace)
-	return []string{"http://" + host}
+	return managedEtcdMemberClientEndpoints(cluster)
 }
 
 func reconcileEtcdResources(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {

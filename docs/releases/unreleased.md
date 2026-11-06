@@ -39,6 +39,8 @@ limitations under the License.
 
 - The managed etcd snapshot-download init container now passes `--cli-connect-timeout 2` and `--cli-read-timeout 5` on AWS CLI calls, sets `AWS_MAX_ATTEMPTS=1`, and wraps those calls in `timeout`, so a hung object listing cannot block etcd startup. Lookup errors are not treated as snapshot keys. When the bucket has no snapshot the 15-attempt loop still exits 0 (#295).
 
+- Managed etcd clients use the per-member headless addresses (`<cluster>-etcd-<n>.<cluster>-etcd.<ns>.svc.cluster.local:2379`) instead of the etcd-client ClusterIP (#295).
+
 - Broker shutdown closes idle Kafka connections and closes active connections after their in-flight response. Clients rediscover their consumer group coordinator instead of continuing to use sockets whose broker has released its coordination leases (#285).
 
 - Concurrent heartbeats on one broker no longer starve offset commits for the same consumer group. Group writes queue independently, and waiting requests respect their deadlines; etcd comparisons still protect against membership changes from other brokers.

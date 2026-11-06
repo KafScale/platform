@@ -88,8 +88,9 @@ func TestEnsureEtcdCreatesManagedCluster(t *testing.T) {
 	if !res.Managed {
 		t.Fatalf("expected managed etcd resolution")
 	}
-	if len(res.Endpoints) != 1 {
-		t.Fatalf("unexpected endpoints: %v", res.Endpoints)
+	want := managedEtcdMemberClientEndpoints(cluster)
+	if !reflect.DeepEqual(res.Endpoints, want) {
+		t.Fatalf("unexpected endpoints: %v, want %v", res.Endpoints, want)
 	}
 
 	assertFound(t, c, &appsv1.StatefulSet{}, cluster.Namespace, cluster.Name+"-etcd")
