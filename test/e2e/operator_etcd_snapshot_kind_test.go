@@ -133,7 +133,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	}
 	etcdReplicas := getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd")
 	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
+	waitForReadyPods(t, ctx, kindNamespace, etcdMemberPodSelector(), 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
 	t.Log("waiting for etcd client port to accept connections")
 	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-etcd-client."+kindNamespace+".svc.cluster.local", []int{2379}); err != nil {
@@ -224,7 +224,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd", 0, 180*time.Second)
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pvc", "-l", "app=kafscale-etcd,cluster=kafscale", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=3")
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale", 2*time.Minute)
+	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
 	waitForEtcdSnapshotContains(t, ctx, kindNamespace, restoreTopic, 2*time.Minute)
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
@@ -247,7 +247,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	brokerPod := getPodByLabel(t, ctx, kindNamespace, "app=kafscale-broker")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", brokerPod)
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,job-name!=etcd-snapshot-manual", 2*time.Minute)
+	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 2*time.Minute)
 
 	time.Sleep(1 * time.Second)
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "consume", brokerAddr, topic, messageCount, 60); err != nil {
@@ -285,9 +285,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
 
 	t.Log("testing etcd HA: deleting one member and waiting for ready")
-	etcdPod := getPodByLabel(t, ctx, kindNamespace, "app=kafscale-etcd")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", etcdPod)
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=ready", "pod", "-l", "app=kafscale-etcd", "--timeout=180s")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", "kafscale-etcd-0")
+	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 180*time.Second)
 
 	t.Log("testing etcd member loss: snapshots still run after member delete")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
@@ -1218,7 +1217,7 @@ func getEtcdSnapshot(t *testing.T, ctx context.Context, namespace string) []byte
 	t.Helper()
 	pod := "kafscale-etcd-0"
 	if out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "pod", pod, "-o", "name"); err != nil || strings.TrimSpace(string(out)) == "" {
-		pod = getPodByLabel(t, ctx, namespace, "app=kafscale-etcd")
+		pod = getPodByLabel(t, ctx, namespace, etcdMemberPodSelector())
 	}
 	endpoint := fmt.Sprintf("http://kafscale-etcd-client.%s.svc.cluster.local:2379", namespace)
 	return runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "exec", pod, "--",
