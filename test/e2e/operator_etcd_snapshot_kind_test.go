@@ -47,6 +47,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	}
 
 	requireBinaries(t, "docker", "kind", "kubectl", "helm")
+	if _, err := kindKubeProxyMode(); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx := context.Background()
 
@@ -57,14 +60,13 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 			deleteKindCluster(t, ctx, clusterName)
 		}
 		if !kindClusterExists(ctx, clusterName) {
-			runCmdGetOutput(t, ctx, "kind", "create", "cluster", "--name", clusterName, "--wait", "180s")
+			createKindCluster(t, ctx, clusterName)
 			created = true
 		}
 	}
 	ensureKindKubeconfig(t, ctx, clusterName)
 	waitForKubeAPI(t, ctx, 5*time.Minute)
 	waitForNodesReady(t, ctx, 2*time.Minute)
-	prepareKindClusterNetworking(t, ctx)
 	t.Cleanup(func() {
 		if created {
 			_ = execCommand(ctx, "kind", "delete", "cluster", "--name", clusterName)
@@ -118,21 +120,19 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE="+etcdToolsImage,
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1",
 		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET=1",
-		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT="+minioAPIEndpoint(t, ctx, kindNamespace),
+		"KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT=http://minio."+kindNamespace+".svc.cluster.local:9000",
 	)
 	waitForDeploymentEnvValue(t, ctx, kindNamespace, operatorDeployment, "KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE", etcdToolsImage, 2*time.Minute)
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
 
 	applyS3Secret(t, ctx, kindNamespace)
-	applyClusterManifest(t, ctx, kindNamespace, 1)
+	applyClusterManifest(t, ctx, kindNamespace, 3)
 	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-etcd", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("timeout waiting for statefulset/kafscale-etcd: %v", err)
 	}
 	etcdReplicas := getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=ready", "pod/kafscale-etcd-0", "--timeout=4m")
-	restartKindKubeProxy(t, ctx)
-	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 4*time.Minute)
+	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", etcdReplicas, 2*time.Minute)
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
 	t.Log("waiting for etcd client port to accept connections")
@@ -145,7 +145,6 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("timeout waiting for cronjob/kafscale-etcd-snapshot: %v", err)
 	}
 	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
-	suspendKindEtcdCronJobs(t, ctx, kindNamespace)
 
 	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-broker", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
@@ -163,10 +162,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	}
 	t.Log("testing internal produce via e2e client")
 	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
-	cliBrokerAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
-	t.Logf("internal produce via %s", cliBrokerAddr)
-	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", cliBrokerAddr, cliTopic, 1, 40); err != nil {
-		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
+	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", "kafscale-broker."+kindNamespace+".svc.cluster.local:9092", cliTopic, 1, 40); err != nil {
 		t.Fatalf("internal produce failed: %v", err)
 	}
 
@@ -200,7 +196,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("external access check failed: %v", err)
 	}
 	t.Log("external access: host e2e client finished")
-	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", "", 9092)
+	internalHost := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local", kindNamespace)
+	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", internalHost, 9092)
 	patchClusterReplicas(t, ctx, kindNamespace, "kafscale", 3)
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
@@ -222,34 +219,22 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	t.Log("testing etcd restore from snapshot")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=0")
 	waitForDeploymentReplicas(t, ctx, kindNamespace, operatorDeployment, 0, 2*time.Minute)
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "horizontalpodautoscaler", "kafscale-broker", "--ignore-not-found=true")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-broker", "--replicas=1")
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	_ = execCommand(ctx, "kubectl", "-n", kindNamespace, "wait", "--for=delete", "pod/kafscale-broker-1", "--timeout=2m")
-	_ = execCommand(ctx, "kubectl", "-n", kindNamespace, "wait", "--for=delete", "pod/kafscale-broker-2", "--timeout=2m")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=0")
 	waitForStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd", 0, 180*time.Second)
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pvc", "-l", "app=kafscale-etcd,cluster=kafscale", "--ignore-not-found=true")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=1")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=ready", "pod/kafscale-etcd-0", "--timeout=4m")
-	restartKindKubeProxy(t, ctx)
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=3")
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale", 2*time.Minute)
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-etcd-client", 2*time.Minute)
-	redirectServiceToReadyEndpoint(t, ctx, kindNamespace, "kafscale-etcd-client", 2379)
 	waitForEtcdSnapshotContains(t, ctx, kindNamespace, restoreTopic, 2*time.Minute)
-	pointBrokersAtReadyEtcd(t, ctx, kindNamespace)
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
+	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
 
 	t.Log("testing broker restart durability: produce before restart, consume after restart")
-	brokerAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
-	t.Logf("produce before restart via %s", brokerAddr)
+	brokerAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9092", kindNamespace)
 	topic := fmt.Sprintf("restart-%08x", rand.Uint32())
 	messageCount := 5
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", brokerAddr, topic, messageCount, 40); err != nil {
-		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("produce before restart: %v", err)
 	}
 	time.Sleep(600 * time.Millisecond)
@@ -262,24 +247,12 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	brokerPod := getPodByLabel(t, ctx, kindNamespace, "app=kafscale-broker")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", brokerPod)
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
-	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	brokerAddr = serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
-	t.Logf("consume after restart via %s", brokerAddr)
+	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,job-name!=etcd-snapshot-manual", 2*time.Minute)
 
 	time.Sleep(1 * time.Second)
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "consume", brokerAddr, topic, messageCount, 60); err != nil {
 		t.Fatalf("consume after restart: %v", err)
 	}
-
-	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
-	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
-	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	redirectServiceToReadyEndpoint(t, ctx, kindNamespace, "kafscale-etcd-client", 2379)
-	pointBrokersAtReadyEtcd(t, ctx, kindNamespace)
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 
 	t.Log("testing S3 outage handling: stop MinIO, assert produce fails, recover on restart")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/minio", "--replicas=0")
@@ -293,7 +266,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForServiceEndpoints(t, ctx, kindNamespace, "minio", 2*time.Minute)
 	touchClusterAnnotation(t, ctx, kindNamespace, "kafscale")
 	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 3*time.Minute)
-	metricsAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9093)
+	metricsAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9093", kindNamespace)
 	if err := runE2EMetricsProbe(t, ctx, kindNamespace, e2eClientImage, metricsAddr, 90); err != nil {
 		t.Fatalf("expected broker S3 health to recover after MinIO restart: %v", err)
 	}
@@ -493,10 +466,10 @@ func waitForStatefulSetReadyByLabel(t *testing.T, ctx context.Context, namespace
 			continue
 		}
 		out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "statefulset", name,
-			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas} {.status.updatedReplicas} {.status.currentRevision} {.status.updateRevision}")
+			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas}")
 		if err == nil {
 			fields := strings.Fields(string(out))
-			if len(fields) == 5 && fields[0] == fields[1] && fields[0] == fields[2] && fields[0] != "0" && fields[3] == fields[4] {
+			if len(fields) == 2 && fields[0] == fields[1] && fields[0] != "0" {
 				return
 			}
 		}
@@ -511,10 +484,10 @@ func waitForStatefulSetReadyByName(t *testing.T, ctx context.Context, namespace,
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "statefulset", name,
-			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas} {.status.updatedReplicas} {.status.currentRevision} {.status.updateRevision}")
+			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas}")
 		if err == nil {
 			fields := strings.Fields(string(out))
-			if len(fields) == 5 && fields[0] == fields[1] && fields[0] == fields[2] && fields[0] != "0" && fields[3] == fields[4] {
+			if len(fields) == 2 && fields[0] == fields[1] && fields[0] != "0" {
 				return
 			}
 		}
@@ -668,7 +641,7 @@ func listSnapshotObjects(t *testing.T, ctx context.Context, namespace string) []
 		"--env", "AWS_DEFAULT_REGION=us-east-1",
 		"--env", "AWS_EC2_METADATA_DISABLED=true",
 		"--command", "--", "sh", "-c",
-		"aws --endpoint-url "+minioAPIEndpoint(t, ctx, namespace)+" s3api list-objects-v2 --bucket "+bucket+" --prefix etcd-snapshots/ --query 'Contents[].Key' --output text"); err != nil {
+		"aws --endpoint-url http://minio."+namespace+".svc.cluster.local:9000 s3api list-objects-v2 --bucket "+bucket+" --prefix etcd-snapshots/ --query 'Contents[].Key' --output text"); err != nil {
 		t.Fatalf("start s3 list pod: %v", err)
 	}
 	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+podName, "--timeout=60s")
@@ -688,7 +661,7 @@ func listTopicObjects(t *testing.T, ctx context.Context, namespace, topic string
 		"--env", "AWS_DEFAULT_REGION=us-east-1",
 		"--env", "AWS_EC2_METADATA_DISABLED=true",
 		"--command", "--", "sh", "-c",
-		"aws --endpoint-url "+minioAPIEndpoint(t, ctx, namespace)+" s3api list-objects-v2 --bucket kafscale-snapshots --prefix "+prefix+" --query 'Contents[].Key' --output text"); err != nil {
+		"aws --endpoint-url http://minio."+namespace+".svc.cluster.local:9000 s3api list-objects-v2 --bucket kafscale-snapshots --prefix "+prefix+" --query 'Contents[].Key' --output text"); err != nil {
 		t.Fatalf("start s3 topic list pod: %v", err)
 	}
 	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+podName, "--timeout=60s")
@@ -802,28 +775,6 @@ func waitForPodPhase(ctx context.Context, namespace, podName, phase string, time
 	return fmt.Errorf("timed out waiting for pod %s phase %s", podName, phase)
 }
 
-func waitForPodSucceeded(ctx context.Context, namespace, podName string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	last := ""
-	for time.Now().Before(deadline) {
-		out, err := exec.CommandContext(ctx, "kubectl", "-n", namespace, "get", "pod", podName, "-o", "jsonpath={.status.phase}").Output()
-		if err == nil {
-			last = strings.TrimSpace(string(out))
-			if last == "Succeeded" {
-				return nil
-			}
-			if last == "Failed" {
-				return fmt.Errorf("pod %s phase Failed", podName)
-			}
-		}
-		time.Sleep(300 * time.Millisecond)
-	}
-	if last == "" {
-		return fmt.Errorf("timed out waiting for pod %s phase Succeeded", podName)
-	}
-	return fmt.Errorf("timed out waiting for pod %s phase Succeeded (last phase %s)", podName, last)
-}
-
 func waitForServiceEndpoints(t *testing.T, ctx context.Context, namespace, service string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -856,71 +807,6 @@ func waitForPodDeletion(t *testing.T, ctx context.Context, namespace, selector s
 	}
 	t.Fatalf("timed out waiting for pods with selector %s to be deleted", selector)
 }
-
-func suspendKindEtcdCronJobs(t *testing.T, ctx context.Context, namespace string) {
-	t.Helper()
-	for _, name := range []string{"kafscale-etcd-snapshot", "kafscale-etcd-maintenance", "kafscale-etcd-maintenance-check"} {
-		runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "patch", "cronjob/"+name, "--type=merge", "-p", `{"spec":{"suspend":true}}`)
-	}
-	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "jobs", "-o", "jsonpath={.items[*].metadata.name}")
-	for _, name := range strings.Fields(string(out)) {
-		if strings.Contains(name, "etcd-maintenance") {
-			runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "delete", "job", name, "--ignore-not-found=true")
-		}
-	}
-}
-
-func prepareKindClusterNetworking(t *testing.T, ctx context.Context) {
-	t.Helper()
-	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "scale", "deployment/coredns", "--replicas=1")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=60s")
-	restartKindKubeProxy(t, ctx)
-}
-
-func redirectServiceToReadyEndpoint(t *testing.T, ctx context.Context, namespace, service string, port int) {
-	t.Helper()
-	cip := strings.TrimSpace(string(runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "svc", service, "-o", "jsonpath={.spec.clusterIP}")))
-	ips := serviceEndpointIPs(t, ctx, namespace, service)
-	if cip == "" || cip == "None" || len(ips) == 0 {
-		t.Logf("skip service redirect for %s", service)
-		return
-	}
-	node := strings.TrimSpace(string(runCmdWithOutput(t, ctx, "kubectl", "get", "nodes", "-o", "jsonpath={.items[0].metadata.name}")))
-	dest := fmt.Sprintf("%s:%d", ips[0], port)
-	t.Logf("redirect %s cluster IP %s:%d to %s", service, cip, port, dest)
-	script := fmt.Sprintf(`dest=%s; cip=%s; port=%s; podip=%s;
-for bin in iptables iptables-nft iptables-legacy; do
-  command -v "$bin" >/dev/null 2>&1 || continue
-  "$bin" -t nat -I PREROUTING 1 -p tcp -d "$cip" --dport "$port" -j DNAT --to-destination "$dest" || true
-  "$bin" -t nat -I OUTPUT 1 -p tcp -d "$cip" --dport "$port" -j DNAT --to-destination "$dest" || true
-  "$bin" -t nat -I POSTROUTING 1 -p tcp -d "$podip" --dport "$port" -j MASQUERADE || true
-  "$bin" -t nat -I KUBE-SERVICES 1 -p tcp -d "$cip" --dport "$port" -j DNAT --to-destination "$dest" || true
-done
-`, dest, cip, strconv.Itoa(port), ips[0])
-	runCmdGetOutput(t, ctx, "docker", "exec", node, "bash", "-c", script)
-}
-
-func pointBrokersAtReadyEtcd(t *testing.T, ctx context.Context, namespace string) {
-	t.Helper()
-	ips := serviceEndpointIPs(t, ctx, namespace, "kafscale-etcd-client")
-	if len(ips) == 0 {
-		t.Fatalf("no ready etcd endpoints to point brokers at")
-	}
-	eps := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		eps = append(eps, "http://"+ip+":2379")
-	}
-	t.Logf("pointing brokers at etcd %s", strings.Join(eps, ","))
-	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "set", "env", "statefulset/kafscale-broker", "KAFSCALE_ETCD_ENDPOINTS="+strings.Join(eps, ","))
-	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "rollout", "status", "statefulset/kafscale-broker", "--timeout=120s")
-}
-
-func restartKindKubeProxy(t *testing.T, ctx context.Context) {
-	t.Helper()
-	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "restart", "daemonset/kube-proxy")
-	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/kube-proxy", "--timeout=90s")
-}
-
 func serviceEndpointIPs(t *testing.T, ctx context.Context, namespace, service string) []string {
 	t.Helper()
 	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpointslices",
@@ -967,75 +853,33 @@ func serviceEndpointIPs(t *testing.T, ctx context.Context, namespace, service st
 	return ips
 }
 
-func portCheckTargets(t *testing.T, ctx context.Context, namespace, host string) []string {
-	t.Helper()
-	targets := serviceEndpointIPs(t, ctx, namespace, strings.Split(host, ".")[0])
-	if len(targets) == 0 {
-		return []string{host}
-	}
-	return targets
-}
-
-func serviceDialAddr(t *testing.T, ctx context.Context, namespace, service string, port int) string {
-	t.Helper()
-	ips := serviceEndpointIPs(t, ctx, namespace, service)
-	if len(ips) == 0 {
-		return fmt.Sprintf("%s.%s.svc.cluster.local:%d", service, namespace, port)
-	}
-	return fmt.Sprintf("%s:%d", ips[0], port)
-}
-
 func runPortCheckPod(t *testing.T, ctx context.Context, namespace, image, host string, ports []int) error {
-	t.Helper()
-	var lastErr error
-	deadline := time.Now().Add(2 * time.Minute)
-	for time.Now().Before(deadline) {
-		targets := portCheckTargets(t, ctx, namespace, host)
-		for _, target := range targets {
-			t.Logf("port check %s via %s", host, target)
-			if err := runPortCheckPodOnce(t, ctx, namespace, image, host, target, ports); err != nil {
-				lastErr = err
-				continue
-			}
-			return nil
-		}
-		if len(targets) == 0 {
-			lastErr = fmt.Errorf("port check has no ready targets for %s", host)
-		}
-		time.Sleep(3 * time.Second)
-	}
-	if lastErr == nil {
-		return fmt.Errorf("port check has no targets for %s", host)
-	}
-	return lastErr
-}
-
-func runPortCheckPodOnce(t *testing.T, ctx context.Context, namespace, image, host, target string, ports []int) error {
 	t.Helper()
 	podName := fmt.Sprintf("kafscale-portcheck-%d", time.Now().UnixNano())
 	var addrs []string
 	for _, port := range ports {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", target, port))
+		addrs = append(addrs, fmt.Sprintf("%s:%d", host, port))
 	}
 	if err := execCommand(ctx, "kubectl", "-n", namespace, "run", podName, "--restart=Never",
 		"--image", image,
-		"--image-pull-policy=IfNotPresent",
 		"--env", "KAFSCALE_E2E_MODE=probe",
 		"--env", "KAFSCALE_E2E_ADDRS="+strings.Join(addrs, ","),
 		"--env", "KAFSCALE_E2E_PROBE_RETRIES=30",
 		"--env", "KAFSCALE_E2E_PROBE_SLEEP_MS=500"); err != nil {
 		return fmt.Errorf("start port check pod: %w", err)
 	}
-	if err := waitForPodSucceeded(ctx, namespace, podName, 2*time.Minute); err != nil {
+	if err := execCommand(ctx, "kubectl", "-n", namespace, "wait", "--for=jsonpath={.status.phase}=Succeeded", "pod/"+podName, "--timeout=120s"); err != nil {
 		describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "pod/"+podName)
 		logs := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "logs", "pod/"+podName)
 		events := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "events",
 			"--field-selector=involvedObject.name="+podName, "--sort-by=.lastTimestamp")
 		svc := strings.Split(host, ".")[0]
-		endpoints := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", svc, "-o", "wide")
+		slices := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpointslices",
+			"-l", "kubernetes.io/service-name="+svc, "-o", "yaml")
+		ips := serviceEndpointIPs(t, ctx, namespace, svc)
 		_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
-		return fmt.Errorf("port check of %s failed: %w\npod status:\n%s\nevents:\n%s\nendpoints/%s:\n%s\nlogs:\n%s",
-			target, err, truncateOutput(string(describe)), truncateOutput(string(events)), svc, truncateOutput(string(endpoints)), truncateOutput(string(logs)))
+		return fmt.Errorf("port check of %s failed: %w\npod status:\n%s\nevents:\n%s\nendpointslice ips %s: %s\nendpointslices/%s:\n%s\nlogs:\n%s",
+			host, err, truncateOutput(string(describe)), truncateOutput(string(events)), svc, strings.Join(ips, ","), svc, truncateOutput(string(slices)), truncateOutput(string(logs)))
 	}
 	_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
 	return nil
@@ -1045,15 +889,6 @@ func ensureNamespace(t *testing.T, ctx context.Context, namespace string) {
 	t.Helper()
 	manifest := runCmdWithOutput(t, ctx, "kubectl", "create", "namespace", namespace, "--dry-run=client", "-o", "yaml")
 	runCmdWithInput(t, ctx, "kubectl", string(manifest), "apply", "-f", "-")
-}
-
-func minioAPIEndpoint(t *testing.T, ctx context.Context, namespace string) string {
-	t.Helper()
-	ips := serviceEndpointIPs(t, ctx, namespace, "minio")
-	if len(ips) == 0 {
-		return "http://minio." + namespace + ".svc.cluster.local:9000"
-	}
-	return "http://" + ips[0] + ":9000"
 }
 
 func applyMinio(t *testing.T, ctx context.Context, namespace, image string) {
@@ -1132,11 +967,11 @@ spec:
   s3:
     bucket: kafscale-snapshots
     region: us-east-1
-    endpoint: %s
+    endpoint: http://minio.%s.svc.cluster.local:9000
     credentialsSecretRef: kafscale-s3-credentials
   etcd:
     endpoints: []
-`, namespace, replicas, minioAPIEndpoint(t, ctx, namespace))
+`, namespace, replicas, namespace)
 	runCmdWithInput(t, ctx, "kubectl", manifest, "apply", "-f", "-")
 }
 
@@ -1385,8 +1220,9 @@ func getEtcdSnapshot(t *testing.T, ctx context.Context, namespace string) []byte
 	if out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "pod", pod, "-o", "name"); err != nil || strings.TrimSpace(string(out)) == "" {
 		pod = getPodByLabel(t, ctx, namespace, "app=kafscale-etcd")
 	}
+	endpoint := fmt.Sprintf("http://kafscale-etcd-client.%s.svc.cluster.local:2379", namespace)
 	return runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "exec", pod, "--",
-		"etcdctl", "--endpoints=http://127.0.0.1:2379", "get", "/kafscale/metadata/snapshot")
+		"etcdctl", "--endpoints="+endpoint, "get", "/kafscale/metadata/snapshot")
 }
 
 func splitImage(image string) (string, string) {

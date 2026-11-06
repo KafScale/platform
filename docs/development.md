@@ -196,6 +196,7 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 - `KAFSCALE_E2E_KIND` – Enable kind-based e2e.
 - `KAFSCALE_KIND_CLUSTER` – Kind cluster name.
 - `KAFSCALE_KIND_RECREATE` – Force kind cluster recreation.
+- `KAFSCALE_KIND_KUBE_PROXY_MODE` set to `nftables` creates the kind cluster with `networking.kubeProxyMode: nftables`. Leave it unset to keep kind's default. Any other value fails the test.
 - `KAFSCALE_E2E_DEMO` – Run demo stack test.
 - `KAFSCALE_E2E_OPEN_UI` – Open UI during demo test.
 - `KAFSCALE_E2E_DEBUG` – Enable debug output in e2e tests.
