@@ -158,7 +158,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	}
 	t.Log("testing internal produce via e2e client")
 	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
-	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", "kafscale-broker."+kindNamespace+".svc.cluster.local:9092", cliTopic, 1, 40); err != nil {
+	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092), cliTopic, 1, 40); err != nil {
 		t.Fatalf("internal produce failed: %v", err)
 	}
 
@@ -227,7 +227,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
 
 	t.Log("testing broker restart durability: produce before restart, consume after restart")
-	brokerAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9092", kindNamespace)
+	brokerAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
 	topic := fmt.Sprintf("restart-%08x", rand.Uint32())
 	messageCount := 5
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", brokerAddr, topic, messageCount, 40); err != nil {
@@ -262,7 +262,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForServiceEndpoints(t, ctx, kindNamespace, "minio", 2*time.Minute)
 	touchClusterAnnotation(t, ctx, kindNamespace, "kafscale")
 	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 3*time.Minute)
-	metricsAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9093", kindNamespace)
+	metricsAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9093)
 	if err := runE2EMetricsProbe(t, ctx, kindNamespace, e2eClientImage, metricsAddr, 90); err != nil {
 		t.Fatalf("expected broker S3 health to recover after MinIO restart: %v", err)
 	}
@@ -856,6 +856,15 @@ func portCheckTargets(t *testing.T, ctx context.Context, namespace, host string)
 	return targets
 }
 
+func serviceDialAddr(t *testing.T, ctx context.Context, namespace, service string, port int) string {
+	t.Helper()
+	ips := serviceEndpointIPs(t, ctx, namespace, service)
+	if len(ips) == 0 {
+		return fmt.Sprintf("%s.%s.svc.cluster.local:%d", service, namespace, port)
+	}
+	return fmt.Sprintf("%s:%d", ips[0], port)
+}
+
 func runPortCheckPod(t *testing.T, ctx context.Context, namespace, image, host string, ports []int) error {
 	t.Helper()
 	var lastErr error
@@ -1248,9 +1257,8 @@ func getEtcdSnapshot(t *testing.T, ctx context.Context, namespace string) []byte
 	if out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "pod", pod, "-o", "name"); err != nil || strings.TrimSpace(string(out)) == "" {
 		pod = getPodByLabel(t, ctx, namespace, "app=kafscale-etcd")
 	}
-	endpoint := fmt.Sprintf("http://kafscale-etcd-client.%s.svc.cluster.local:2379", namespace)
 	return runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "exec", pod, "--",
-		"etcdctl", "--endpoints="+endpoint, "get", "/kafscale/metadata/snapshot")
+		"etcdctl", "--endpoints=http://127.0.0.1:2379", "get", "/kafscale/metadata/snapshot")
 }
 
 func splitImage(image string) (string, string) {
