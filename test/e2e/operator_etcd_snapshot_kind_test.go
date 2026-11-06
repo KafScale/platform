@@ -63,6 +63,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	ensureKindKubeconfig(t, ctx, clusterName)
 	waitForKubeAPI(t, ctx, 5*time.Minute)
 	waitForNodesReady(t, ctx, 2*time.Minute)
+	prepareKindClusterNetworking(t, ctx)
 	t.Cleanup(func() {
 		if created {
 			_ = execCommand(ctx, "kind", "delete", "cluster", "--name", clusterName)
@@ -122,7 +123,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
 
 	applyS3Secret(t, ctx, kindNamespace)
-	applyClusterManifest(t, ctx, kindNamespace, 3)
+	applyClusterManifest(t, ctx, kindNamespace, 1)
 	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-etcd", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("timeout waiting for statefulset/kafscale-etcd: %v", err)
@@ -141,6 +142,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("timeout waiting for cronjob/kafscale-etcd-snapshot: %v", err)
 	}
 	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
+	patchClusterReplicas(t, ctx, kindNamespace, "kafscale", 3)
 
 	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-broker", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
@@ -159,6 +161,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	t.Log("testing internal produce via e2e client")
 	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092), cliTopic, 1, 40); err != nil {
+		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("internal produce failed: %v", err)
 	}
 
@@ -825,6 +828,15 @@ func waitForPodDeletion(t *testing.T, ctx context.Context, namespace, selector s
 	}
 	t.Fatalf("timed out waiting for pods with selector %s to be deleted", selector)
 }
+
+func prepareKindClusterNetworking(t *testing.T, ctx context.Context) {
+	t.Helper()
+	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "scale", "deployment/coredns", "--replicas=1")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=60s")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "restart", "daemonset/kube-proxy")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", "kube-system", "rollout", "status", "daemonset/kube-proxy", "--timeout=90s")
+}
+
 func serviceEndpointIPs(t *testing.T, ctx context.Context, namespace, service string) []string {
 	t.Helper()
 	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpointslices",
