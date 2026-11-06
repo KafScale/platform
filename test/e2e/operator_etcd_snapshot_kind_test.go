@@ -196,8 +196,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("external access check failed: %v", err)
 	}
 	t.Log("external access: host e2e client finished")
-	internalHost := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local", kindNamespace)
-	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", internalHost, 9092)
+	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", "", 9092)
 	patchClusterReplicas(t, ctx, kindNamespace, "kafscale", 3)
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
@@ -235,6 +234,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	topic := fmt.Sprintf("restart-%08x", rand.Uint32())
 	messageCount := 5
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", brokerAddr, topic, messageCount, 40); err != nil {
+		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("produce before restart: %v", err)
 	}
 	time.Sleep(600 * time.Millisecond)
