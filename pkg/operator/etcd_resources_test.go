@@ -513,7 +513,13 @@ func TestSnapshotDownloadUsesAWSCLITimeouts(t *testing.T) {
 		t.Fatalf("download script missing --cli-read-timeout 5: %q", script)
 	}
 	if !strings.Contains(script, "timeout 5 aws") {
-		t.Fatalf("download script missing timeout 5 around aws: %q", script)
+		t.Fatalf("download script missing timeout 5 around list-objects-v2: %q", script)
+	}
+	if strings.Contains(script, "timeout 30") {
+		t.Fatalf("s3 cp must not use an absolute transfer deadline: %q", script)
+	}
+	if !strings.Contains(script, "aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3 cp") {
+		t.Fatalf("s3 cp missing AWS CLI inactivity timeouts: %q", script)
 	}
 	if !strings.Contains(script, "*.db)") {
 		t.Fatalf("download script must accept only keys ending in .db: %q", script)

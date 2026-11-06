@@ -380,7 +380,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  echo \"no snapshot found in $BASE\"\n" +
 				"  exit 0\n" +
 				"fi\n" +
-				"timeout 30 aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3 cp \"s3://$SNAPSHOT_BUCKET/$LATEST\" /snapshots/etcd-snapshot.db\n"
+				"aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3 cp \"s3://$SNAPSHOT_BUCKET/$LATEST\" /snapshots/etcd-snapshot.db\n"
 
 			sts.Spec.Template.Spec.InitContainers = []corev1.Container{
 				{
