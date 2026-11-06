@@ -145,6 +145,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		t.Fatalf("timeout waiting for cronjob/kafscale-etcd-snapshot: %v", err)
 	}
 	waitForCondition(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
+	suspendKindEtcdCronJobs(t, ctx, kindNamespace)
 
 	if err := waitForResource(t, ctx, kindNamespace, "statefulset", "kafscale-broker", 2*time.Minute); err != nil {
 		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
@@ -854,6 +855,19 @@ func waitForPodDeletion(t *testing.T, ctx context.Context, namespace, selector s
 		time.Sleep(300 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for pods with selector %s to be deleted", selector)
+}
+
+func suspendKindEtcdCronJobs(t *testing.T, ctx context.Context, namespace string) {
+	t.Helper()
+	for _, name := range []string{"kafscale-etcd-snapshot", "kafscale-etcd-maintenance", "kafscale-etcd-maintenance-check"} {
+		runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "patch", "cronjob/"+name, "--type=merge", "-p", `{"spec":{"suspend":true}}`)
+	}
+	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "jobs", "-o", "jsonpath={.items[*].metadata.name}")
+	for _, name := range strings.Fields(string(out)) {
+		if strings.Contains(name, "etcd-maintenance") {
+			runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "delete", "job", name, "--ignore-not-found=true")
+		}
+	}
 }
 
 func prepareKindClusterNetworking(t *testing.T, ctx context.Context) {
