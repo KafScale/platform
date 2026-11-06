@@ -825,12 +825,51 @@ func waitForPodDeletion(t *testing.T, ctx context.Context, namespace, selector s
 	}
 	t.Fatalf("timed out waiting for pods with selector %s to be deleted", selector)
 }
+func portCheckTargets(t *testing.T, ctx context.Context, namespace, host string) []string {
+	t.Helper()
+	svc := strings.Split(host, ".")[0]
+	out := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", svc, "-o", "jsonpath={.subsets[*].addresses[*].ip}")
+	seen := map[string]struct{}{}
+	var targets []string
+	for _, ip := range strings.Fields(strings.TrimSpace(string(out))) {
+		if ip == "" {
+			continue
+		}
+		if _, ok := seen[ip]; ok {
+			continue
+		}
+		seen[ip] = struct{}{}
+		targets = append(targets, ip)
+	}
+	if len(targets) == 0 {
+		return []string{host}
+	}
+	return targets
+}
+
 func runPortCheckPod(t *testing.T, ctx context.Context, namespace, image, host string, ports []int) error {
+	t.Helper()
+	var lastErr error
+	for _, target := range portCheckTargets(t, ctx, namespace, host) {
+		t.Logf("port check %s via %s", host, target)
+		if err := runPortCheckPodOnce(t, ctx, namespace, image, host, target, ports); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	if lastErr == nil {
+		return fmt.Errorf("port check has no targets for %s", host)
+	}
+	return lastErr
+}
+
+func runPortCheckPodOnce(t *testing.T, ctx context.Context, namespace, image, host, target string, ports []int) error {
 	t.Helper()
 	podName := fmt.Sprintf("kafscale-portcheck-%d", time.Now().UnixNano())
 	var addrs []string
 	for _, port := range ports {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", host, port))
+		addrs = append(addrs, fmt.Sprintf("%s:%d", target, port))
 	}
 	if err := execCommand(ctx, "kubectl", "-n", namespace, "run", podName, "--restart=Never",
 		"--image", image,
@@ -849,8 +888,8 @@ func runPortCheckPod(t *testing.T, ctx context.Context, namespace, image, host s
 		svc := strings.Split(host, ".")[0]
 		endpoints := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "endpoints", svc, "-o", "wide")
 		_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
-		return fmt.Errorf("port check failed: %w\npod status:\n%s\nevents:\n%s\nendpoints/%s:\n%s\nlogs:\n%s",
-			err, truncateOutput(string(describe)), truncateOutput(string(events)), svc, truncateOutput(string(endpoints)), truncateOutput(string(logs)))
+		return fmt.Errorf("port check of %s failed: %w\npod status:\n%s\nevents:\n%s\nendpoints/%s:\n%s\nlogs:\n%s",
+			target, err, truncateOutput(string(describe)), truncateOutput(string(events)), svc, truncateOutput(string(endpoints)), truncateOutput(string(logs)))
 	}
 	_ = execCommand(ctx, "kubectl", "-n", namespace, "delete", "pod", podName, "--ignore-not-found=true")
 	return nil
