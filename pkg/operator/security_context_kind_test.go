@@ -113,10 +113,10 @@ func TestRestrictedWorkloadsKind(t *testing.T) {
 		reconcileEtcdStatefulSet(ctx, c, scheme, cluster),
 		reconcileEtcdSnapshotCronJob(ctx, c, scheme, cluster),
 		reconcileEtcdMaintenanceCronJobs(ctx, c, scheme, cluster),
-		r.reconcileLfsProxyResources(ctx, cluster, managedEtcdEndpoints(ctx, nil, cluster)),
+		r.reconcileLfsProxyResources(ctx, cluster, managedEtcdEndpoints(cluster)),
 		r.reconcileBrokerHeadlessService(ctx, cluster),
 		r.reconcileBrokerService(ctx, cluster),
-		r.reconcileBrokerDeployment(ctx, cluster, managedEtcdEndpoints(ctx, nil, cluster)),
+		r.reconcileBrokerDeployment(ctx, cluster, managedEtcdEndpoints(cluster)),
 	} {
 		if err != nil {
 			t.Fatal(err)

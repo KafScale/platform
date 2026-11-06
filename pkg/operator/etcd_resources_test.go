@@ -535,22 +535,3 @@ func TestSnapshotDownloadUsesAWSCLITimeouts(t *testing.T) {
 		t.Fatalf("aws invocations missing timeout flags: %q", script)
 	}
 }
-
-func TestManagedEtcdEndpointsUsePodIPs(t *testing.T) {
-	t.Setenv(operatorEtcdEndpointsEnv, "")
-	cluster := testCluster("managed-ips", nil)
-	scheme := testScheme(t)
-	p0 := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "managed-ips-etcd-0", Namespace: "default", Labels: etcdLabels(cluster)}}
-	p0.Status.PodIP = "10.1.0.10"
-	p1 := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "managed-ips-etcd-1", Namespace: "default", Labels: etcdLabels(cluster)}}
-	p1.Status.PodIP = "10.1.0.11"
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, p0, p1).Build()
-	res, err := EnsureEtcd(context.Background(), c, scheme, cluster)
-	if err != nil {
-		t.Fatalf("EnsureEtcd: %v", err)
-	}
-	want := []string{"http://10.1.0.10:2379", "http://10.1.0.11:2379"}
-	if !reflect.DeepEqual(res.Endpoints, want) {
-		t.Fatalf("endpoints = %v, want %v", res.Endpoints, want)
-	}
-}

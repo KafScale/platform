@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -111,7 +110,7 @@ func EnsureEtcd(ctx context.Context, c client.Client, scheme *runtime.Scheme, cl
 	if err := reconcileEtcdResources(ctx, c, scheme, cluster); err != nil {
 		return EtcdResolution{}, err
 	}
-	return EtcdResolution{Endpoints: managedEtcdEndpoints(ctx, c, cluster), Managed: true}, nil
+	return EtcdResolution{Endpoints: managedEtcdEndpoints(cluster), Managed: true}, nil
 }
 
 func parseEnvEndpoints(key string) []string {
@@ -139,39 +138,8 @@ func cleanEndpoints(list []string) []string {
 	return out
 }
 
-func managedEtcdEndpoints(ctx context.Context, c client.Client, cluster *kafscalev1alpha1.KafscaleCluster) []string {
-	if c != nil {
-		if endpoints := managedEtcdPodIPEndpoints(ctx, c, cluster); len(endpoints) > 0 {
-			return endpoints
-		}
-	}
+func managedEtcdEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 	return managedEtcdMemberClientEndpoints(cluster)
-}
-
-func managedEtcdPodIPEndpoints(ctx context.Context, c client.Client, cluster *kafscalev1alpha1.KafscaleCluster) []string {
-	var pods corev1.PodList
-	if err := c.List(ctx, &pods, client.InNamespace(cluster.Namespace), client.MatchingLabels(etcdLabels(cluster))); err != nil {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	var endpoints []string
-	for _, pod := range pods.Items {
-		if pod.DeletionTimestamp != nil {
-			continue
-		}
-		ip := strings.TrimSpace(pod.Status.PodIP)
-		if ip == "" {
-			continue
-		}
-		ep := "http://" + ip + ":2379"
-		if _, ok := seen[ep]; ok {
-			continue
-		}
-		seen[ep] = struct{}{}
-		endpoints = append(endpoints, ep)
-	}
-	sort.Strings(endpoints)
-	return endpoints
 }
 
 func reconcileEtcdResources(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
@@ -614,7 +582,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 				SecurityContext: restrictedContainerSecurityContext(),
 				Image:           etcdctlImage,
 				Env: []corev1.EnvVar{
-					{Name: "ETCD_ENDPOINTS", Value: strings.Join(managedEtcdEndpoints(ctx, c, cluster), ",")},
+					{Name: "ETCD_ENDPOINTS", Value: strings.Join(managedEtcdEndpoints(cluster), ",")},
 					{Name: "ETCDCTL_API", Value: "3"},
 				},
 				Command: []string{"etcdctl"},
