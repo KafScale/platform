@@ -220,6 +220,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	t.Log("testing etcd restore from snapshot")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=0")
 	waitForDeploymentReplicas(t, ctx, kindNamespace, operatorDeployment, 0, 2*time.Minute)
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "horizontalpodautoscaler", "kafscale-broker", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-broker", "--replicas=1")
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	_ = execCommand(ctx, "kubectl", "-n", kindNamespace, "wait", "--for=delete", "pod/kafscale-broker-1", "--timeout=2m")
@@ -486,10 +487,10 @@ func waitForStatefulSetReadyByLabel(t *testing.T, ctx context.Context, namespace
 			continue
 		}
 		out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "statefulset", name,
-			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas}")
+			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas} {.status.updatedReplicas} {.status.currentRevision} {.status.updateRevision}")
 		if err == nil {
 			fields := strings.Fields(string(out))
-			if len(fields) == 2 && fields[0] == fields[1] && fields[0] != "0" {
+			if len(fields) == 5 && fields[0] == fields[1] && fields[0] == fields[2] && fields[0] != "0" && fields[3] == fields[4] {
 				return
 			}
 		}
@@ -504,10 +505,10 @@ func waitForStatefulSetReadyByName(t *testing.T, ctx context.Context, namespace,
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		out, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "get", "statefulset", name,
-			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas}")
+			"-o", "jsonpath={.status.readyReplicas} {.spec.replicas} {.status.updatedReplicas} {.status.currentRevision} {.status.updateRevision}")
 		if err == nil {
 			fields := strings.Fields(string(out))
-			if len(fields) == 2 && fields[0] == fields[1] && fields[0] != "0" {
+			if len(fields) == 5 && fields[0] == fields[1] && fields[0] == fields[2] && fields[0] != "0" && fields[3] == fields[4] {
 				return
 			}
 		}
@@ -890,7 +891,9 @@ func pointBrokersAtReadyEtcd(t *testing.T, ctx context.Context, namespace string
 	for _, ip := range ips {
 		eps = append(eps, "http://"+ip+":2379")
 	}
+	t.Logf("pointing brokers at etcd %s", strings.Join(eps, ","))
 	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "set", "env", "statefulset/kafscale-broker", "KAFSCALE_ETCD_ENDPOINTS="+strings.Join(eps, ","))
+	runCmdGetOutput(t, ctx, "kubectl", "-n", namespace, "rollout", "status", "statefulset/kafscale-broker", "--timeout=120s")
 }
 
 func restartKindKubeProxy(t *testing.T, ctx context.Context) {
