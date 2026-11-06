@@ -540,15 +540,11 @@ func TestManagedEtcdEndpointsUsePodIPs(t *testing.T) {
 	t.Setenv(operatorEtcdEndpointsEnv, "")
 	cluster := testCluster("managed-ips", nil)
 	scheme := testScheme(t)
-	p0 := readyEtcdMemberPod(cluster, "managed-ips-etcd-0", "10.1.0.10")
-	p1 := readyEtcdMemberPod(cluster, "managed-ips-etcd-1", "10.1.0.11")
-	job := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "managed-ips-etcd-snapshot-abc", Namespace: "default", Labels: etcdLabels(cluster)}}
-	job.Status.Phase = corev1.PodRunning
-	job.Status.PodIP = "10.1.0.99"
-	job.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
-	pending := readyEtcdMemberPod(cluster, "managed-ips-etcd-2", "10.1.0.12")
-	pending.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, p0, p1, job, pending).Build()
+	p0 := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "managed-ips-etcd-0", Namespace: "default", Labels: etcdLabels(cluster)}}
+	p0.Status.PodIP = "10.1.0.10"
+	p1 := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "managed-ips-etcd-1", Namespace: "default", Labels: etcdLabels(cluster)}}
+	p1.Status.PodIP = "10.1.0.11"
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, p0, p1).Build()
 	res, err := EnsureEtcd(context.Background(), c, scheme, cluster)
 	if err != nil {
 		t.Fatalf("EnsureEtcd: %v", err)
@@ -557,12 +553,4 @@ func TestManagedEtcdEndpointsUsePodIPs(t *testing.T) {
 	if !reflect.DeepEqual(res.Endpoints, want) {
 		t.Fatalf("endpoints = %v, want %v", res.Endpoints, want)
 	}
-}
-
-func readyEtcdMemberPod(cluster *kafscalev1alpha1.KafscaleCluster, name, ip string) *corev1.Pod {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Labels: etcdLabels(cluster)}}
-	pod.Status.Phase = corev1.PodRunning
-	pod.Status.PodIP = ip
-	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
-	return pod
 }
