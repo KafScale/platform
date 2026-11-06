@@ -170,7 +170,7 @@ func TestProtoRegisterLookupAndCompatibility(t *testing.T) {
 	h := newHarness(t, nil, Config{})
 	var types []string
 	h.ok("GET", "/schemas/types", nil, &types)
-	if strings.Join(types, ",") != "AVRO,PROTOBUF" {
+	if strings.Join(types, ",") != "AVRO,JSON,PROTOBUF" {
 		t.Fatalf("types %v", types)
 	}
 	v1 := protoHead + "message M { string a = 1; }"

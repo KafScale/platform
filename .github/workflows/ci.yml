@@ -92,7 +92,7 @@ jobs:
           KAFSCALE_SR_PYTHON: /tmp/sr-venv/bin/python
         run: |
           python3 -m venv /tmp/sr-venv
-          /tmp/sr-venv/bin/pip install "confluent-kafka[avro,protobuf,schemaregistry]==2.16.1"
+          /tmp/sr-venv/bin/pip install "confluent-kafka[avro,json,protobuf,schemaregistry]==2.16.1"
           make test-schema-registry
 
       - name: Consumer group recovery end-to-end tests

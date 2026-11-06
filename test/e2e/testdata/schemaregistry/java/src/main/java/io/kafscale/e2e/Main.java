@@ -15,6 +15,11 @@
 
 package io.kafscale.e2e;
 
+import io.confluent.kafka.serializers.json.KafkaJsonSchemaSerializer;
+import io.confluent.kafka.serializers.json.KafkaJsonSchemaDeserializer;
+import io.confluent.kafka.schemaregistry.json.JsonSchemaUtils;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import java.nio.charset.StandardCharsets;
@@ -39,6 +44,32 @@ public final class Main {
         String topic = args[2];
         Path file = Path.of(args[3]);
         Map<String, Object> config = Map.of("schema.registry.url", url, "auto.register.schemas", "serialize".equals(mode));
+        if (mode.startsWith("json-")) {
+            ObjectMapper mapper = new ObjectMapper();
+            if ("json-serialize".equals(mode)) {
+                JsonNode jsonSchema = mapper.readTree("{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"integer\"}},\"required\":[\"name\",\"age\"],\"additionalProperties\":false}");
+                List<String> lines = new ArrayList<>();
+                try (KafkaJsonSchemaSerializer<JsonNode> serializer = new KafkaJsonSchemaSerializer<>()) {
+                    serializer.configure(Map.of("schema.registry.url", url), false);
+                    for (int i = 0; i < Integer.parseInt(args[4]); i++) {
+                        JsonNode record = mapper.valueToTree(Map.of("name", "java-" + i, "age", i));
+                        lines.add(HexFormat.of().formatHex(serializer.serialize(topic, JsonSchemaUtils.envelope(jsonSchema, record))));
+                    }
+                }
+                Files.write(file, lines, StandardCharsets.UTF_8);
+            } else {
+                try (KafkaJsonSchemaDeserializer<JsonNode> deserializer = new KafkaJsonSchemaDeserializer<>()) {
+                    deserializer.configure(Map.of("schema.registry.url", url, "json.value.type", JsonNode.class.getName()), false);
+                    for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                        if (!line.isBlank()) {
+                            JsonNode record = deserializer.deserialize(topic, HexFormat.of().parseHex(line.trim()));
+                            System.out.println(record.get("name").asText() + "," + record.get("age").asInt());
+                        }
+                    }
+                }
+            }
+            return;
+        }
         if ("guid-serialize".equals(mode)) {
             Schema schema = new Schema.Parser().parse(SCHEMA);
             List<String> lines = new ArrayList<>();

@@ -149,7 +149,7 @@ func TestRegisterAndReadEndpoints(t *testing.T) {
 	h.ok("GET", "/", nil, &root)
 	var types []string
 	h.ok("GET", "/schemas/types", nil, &types)
-	if !slices.Equal(types, []string{"AVRO", "PROTOBUF"}) {
+	if !slices.Equal(types, []string{"AVRO", "JSON", "PROTOBUF"}) {
 		t.Fatalf("types %v", types)
 	}
 	id1 := h.register("users-value", schema(userV1))

@@ -11,11 +11,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/aws/smithy-go v1.24.2
 	github.com/bufbuild/protocompile v0.14.1
+	github.com/dlclark/regexp2 v1.11.5
 	github.com/google/uuid v1.6.0
 	github.com/hamba/avro/v2 v2.30.0
 	github.com/jhump/protoreflect/v2 v2.0.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/twmb/franz-go v1.20.7
 	github.com/twmb/franz-go/pkg/kadm v1.17.1
 	github.com/twmb/franz-go/pkg/kmsg v1.12.0

@@ -28,6 +28,7 @@ import (
 const schemaTypeAvro = "AVRO"
 
 type resolvedReference struct {
+	Type    string
 	Name    string
 	Text    string
 	Subject string
