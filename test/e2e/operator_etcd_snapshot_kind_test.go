@@ -243,6 +243,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 
 	t.Log("testing broker restart durability: produce before restart, consume after restart")
 	brokerAddr := serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
+	t.Logf("produce before restart via %s", brokerAddr)
 	topic := fmt.Sprintf("restart-%08x", rand.Uint32())
 	messageCount := 5
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", brokerAddr, topic, messageCount, 40); err != nil {
@@ -260,6 +261,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", brokerPod)
 	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-etcd,cluster=kafscale,!job-name", 2*time.Minute)
+	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
+	brokerAddr = serviceDialAddr(t, ctx, kindNamespace, "kafscale-broker", 9092)
+	t.Logf("consume after restart via %s", brokerAddr)
 
 	time.Sleep(1 * time.Second)
 	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "consume", brokerAddr, topic, messageCount, 60); err != nil {
