@@ -66,7 +66,10 @@ func TestSnapshotDownloadRenderedScript(t *testing.T) {
 		{name: "health_only_last_page", prefix: "snap", objects: objects("snap/", true)[:1002], want: "snap/a.db", calls: 1},
 		{name: "partial_stdout_nonzero", prefix: "snap", objects: objects("snap/", false), raw: `"snap/partial.db"`, failures: 1, exit: 1, want: "snap/z.db", calls: 2},
 		{name: "partial_stdout_timeout", prefix: "snap", objects: objects("snap/", false), raw: `"snap/partial.db"`, failures: 1, exit: 124, want: "snap/z.db", calls: 2},
-		{name: "persistent_partial_failure", prefix: "snap", raw: `"snap/partial.db"`, failures: 15, exit: 1, calls: 15},
+		{name: "persistent_partial_failure", prefix: "snap", raw: `"snap/partial.db"`, failures: 15, exit: 1, calls: 15, wantError: "could not list snapshots successfully"},
+		{name: "persistent_no_output_failure", prefix: "snap", failures: 15, exit: 1, calls: 15, wantError: "could not list snapshots successfully"},
+		{name: "failures_then_empty", prefix: "snap", failures: 2, exit: 1, calls: 15},
+		{name: "failures_then_snapshot", prefix: "snap", raw: `"snap/partial.db"`, failures: 2, exit: 1, objects: objects("snap/", false), want: "snap/z.db", calls: 3},
 		{name: "multiple_keys", prefix: "snap", raw: "snap/a.db\nsnap/b.db", calls: 15, wantError: "could not decode snapshot listing"},
 		{name: "multiple_json_keys", prefix: "snap", raw: `["snap/a.db","snap/b.db"]`, calls: 15, wantError: "could not decode snapshot listing"},
 		{name: "invalid_suffix", prefix: "snap", raw: `"snap/a.db.sha256"`, calls: 15},
@@ -203,7 +206,8 @@ counter = root / "calls"
 count = int(counter.read_text()) + 1 if counter.exists() else 1
 counter.write_text(str(count))
 if count <= fixture["failures"]:
-    print(fixture["raw"] if option("--output") == "json" else prefix + "partial.db")
+    if fixture["raw"]:
+        print(fixture["raw"] if option("--output") == "json" else prefix + "partial.db")
     sys.exit(fixture["exit"])
 if fixture["raw"] and not fixture["failures"]:
     print(fixture["raw"])

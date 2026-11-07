@@ -360,6 +360,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"BASE=\"s3://$SNAPSHOT_BUCKET\"\n" +
 				"PREFIX=\"$SNAPSHOT_PREFIX\"\n" +
 				"if [ -n \"$PREFIX\" ]; then BASE=\"$BASE/$PREFIX\"; PREFIX=\"$PREFIX/\"; fi\n" +
+				"LISTING_SUCCEEDED=0\n" +
 				"DECODE_FAILED=0\n" +
 				"LATEST=\"\"\n" +
 				"attempt=0\n" +
@@ -367,6 +368,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  LATEST=\"\"\n" +
 				"  if LISTING=$(timeout 120 aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'sort_by(Contents[?ends_with(Key, `.db`)] || `[]`, &LastModified)[-1].Key' --output json); then\n" +
 				"    if LATEST=$(printf '%s' \"$LISTING\" | python -c 'import json,sys; key=json.load(sys.stdin); assert key is None or isinstance(key, type(u\"\")); sys.stdout.write((key.encode(\"utf-8\") if sys.version_info[0] == 2 else key) if key is not None else \"\")'); then\n" +
+				"      LISTING_SUCCEEDED=1\n" +
 				"      DECODE_FAILED=0\n" +
 				"      case \"$LATEST\" in\n" +
 				"        *.db) ;;\n" +
@@ -389,6 +391,10 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"done\n" +
 				"if [ $DECODE_FAILED -ne 0 ]; then\n" +
 				"  echo \"could not decode snapshot listing in $BASE\" >&2\n" +
+				"  exit 1\n" +
+				"fi\n" +
+				"if [ $LISTING_SUCCEEDED -eq 0 ]; then\n" +
+				"  echo \"could not list snapshots successfully in $BASE after $attempt attempts\" >&2\n" +
 				"  exit 1\n" +
 				"fi\n" +
 				"if [ -z \"$LATEST\" ]; then\n" +
