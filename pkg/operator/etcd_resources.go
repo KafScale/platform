@@ -353,20 +353,27 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  echo \"etcd data dir not empty; skipping snapshot download\"\n" +
 				"  exit 0\n" +
 				"fi\n" +
+				"if ! command -v python >/dev/null 2>&1; then\n" +
+				"  echo \"python is required to decode etcd snapshot listings; check KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE\" >&2\n" +
+				"  exit 1\n" +
+				"fi\n" +
 				"BASE=\"s3://$SNAPSHOT_BUCKET\"\n" +
 				"PREFIX=\"$SNAPSHOT_PREFIX\"\n" +
 				"if [ -n \"$PREFIX\" ]; then BASE=\"$BASE/$PREFIX\"; PREFIX=\"$PREFIX/\"; fi\n" +
+				"DECODE_FAILED=0\n" +
 				"LATEST=\"\"\n" +
 				"attempt=0\n" +
 				"while [ $attempt -lt 15 ]; do\n" +
 				"  LATEST=\"\"\n" +
 				"  if LISTING=$(timeout 120 aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'sort_by(Contents[?ends_with(Key, `.db`)] || `[]`, &LastModified)[-1].Key' --output json); then\n" +
 				"    if LATEST=$(printf '%s' \"$LISTING\" | python -c 'import json,sys; key=json.load(sys.stdin); assert key is None or isinstance(key, type(u\"\")); sys.stdout.write((key.encode(\"utf-8\") if sys.version_info[0] == 2 else key) if key is not None else \"\")'); then\n" +
+				"      DECODE_FAILED=0\n" +
 				"      case \"$LATEST\" in\n" +
 				"        *.db) ;;\n" +
 				"        *) LATEST=\"\" ;;\n" +
 				"      esac\n" +
 				"    else\n" +
+				"      DECODE_FAILED=1\n" +
 				"      LATEST=\"\"\n" +
 				"      echo \"invalid snapshot listing in $BASE\" >&2\n" +
 				"    fi\n" +
@@ -380,6 +387,10 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"  echo \"no snapshot found in $BASE (attempt $attempt)\"\n" +
 				"  sleep 2\n" +
 				"done\n" +
+				"if [ $DECODE_FAILED -ne 0 ]; then\n" +
+				"  echo \"could not decode snapshot listing in $BASE\" >&2\n" +
+				"  exit 1\n" +
+				"fi\n" +
 				"if [ -z \"$LATEST\" ]; then\n" +
 				"  echo \"no snapshot found in $BASE\"\n" +
 				"  exit 0\n" +

@@ -35,6 +35,14 @@ func TestSnapshotDownloadRenderedScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeout, err := exec.LookPath("timeout")
+	if err != nil {
+		t.Fatal(err)
+	}
 	objects := func(prefix string, newestFirst bool) []map[string]string {
 		result := []map[string]string{{"Key": prefix + "a.db", "LastModified": "2026-11-01T00:00:00Z"}}
 		for i := 0; i < 1001; i++ {
@@ -47,9 +55,11 @@ func TestSnapshotDownloadRenderedScript(t *testing.T) {
 		return result
 	}
 	tests := []struct {
-		name, prefix, want, raw string
-		objects                 []map[string]string
-		failures, exit, calls   int
+		name, prefix, want, raw     string
+		objects                     []map[string]string
+		missingPython, brokenPython bool
+		wantError                   string
+		failures, exit, calls       int
 	}{
 		{name: "newest_on_last_page", prefix: "snap", objects: objects("snap/", false), want: "snap/z.db", calls: 1},
 		{name: "newest_on_first_page", prefix: "snap", objects: objects("snap/", true), want: "snap/a.db", calls: 1},
@@ -57,9 +67,14 @@ func TestSnapshotDownloadRenderedScript(t *testing.T) {
 		{name: "partial_stdout_nonzero", prefix: "snap", objects: objects("snap/", false), raw: `"snap/partial.db"`, failures: 1, exit: 1, want: "snap/z.db", calls: 2},
 		{name: "partial_stdout_timeout", prefix: "snap", objects: objects("snap/", false), raw: `"snap/partial.db"`, failures: 1, exit: 124, want: "snap/z.db", calls: 2},
 		{name: "persistent_partial_failure", prefix: "snap", raw: `"snap/partial.db"`, failures: 15, exit: 1, calls: 15},
-		{name: "multiple_keys", prefix: "snap", raw: "snap/a.db\nsnap/b.db", calls: 15},
-		{name: "multiple_json_keys", prefix: "snap", raw: `["snap/a.db","snap/b.db"]`, calls: 15},
+		{name: "multiple_keys", prefix: "snap", raw: "snap/a.db\nsnap/b.db", calls: 15, wantError: "could not decode snapshot listing"},
+		{name: "multiple_json_keys", prefix: "snap", raw: `["snap/a.db","snap/b.db"]`, calls: 15, wantError: "could not decode snapshot listing"},
 		{name: "invalid_suffix", prefix: "snap", raw: `"snap/a.db.sha256"`, calls: 15},
+		{name: "missing_python", prefix: "snap", missingPython: true, wantError: "python is required to decode etcd snapshot listings"},
+		{name: "broken_python", prefix: "snap", brokenPython: true, calls: 15, wantError: "could not decode snapshot listing"},
+		{name: "malformed_successful_listing", prefix: "snap", raw: `{broken`, calls: 15, wantError: "could not decode snapshot listing"},
+		{name: "invalid_then_empty", prefix: "snap", raw: `{broken`, failures: 1, calls: 15},
+		{name: "invalid_then_snapshot", prefix: "snap", raw: `{broken`, failures: 1, objects: objects("snap/", false), want: "snap/z.db", calls: 2},
 		{name: "empty_bucket", prefix: "snap", calls: 15},
 		{name: "no_snapshots", prefix: "snap", objects: []map[string]string{{"Key": "snap/health/check.txt", "LastModified": "2026-11-07"}}, calls: 15},
 		{name: "literal_metacharacters", prefix: "s[nap].*+?$^(x)|'`", objects: objects("s[nap].*+?$^(x)|'`/", false), want: "s[nap].*+?$^(x)|'`/z.db", calls: 1},
@@ -103,18 +118,37 @@ func TestSnapshotDownloadRenderedScript(t *testing.T) {
 			if err = os.WriteFile(filepath.Join(dir, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 				t.Fatal(err)
 			}
-			if err = os.Symlink(python, filepath.Join(dir, "python")); err != nil {
+			if tt.brokenPython {
+				if err = os.WriteFile(filepath.Join(dir, "python"), []byte("#!/bin/sh\nexit 7\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			} else if !tt.missingPython {
+				if err = os.Symlink(python, filepath.Join(dir, "python")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = os.Symlink(timeout, filepath.Join(dir, "timeout")); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("PATH", dir)
 			t.Setenv("SNAPSHOT_STUB_DIR", dir)
 			t.Setenv("SNAPSHOT_BUCKET", "backups")
 			t.Setenv("SNAPSHOT_PREFIX", tt.prefix)
 			t.Setenv("AWS_MAX_ATTEMPTS", "1")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			out, err := exec.CommandContext(ctx, "bash", "-c", script).CombinedOutput()
-			if err != nil {
+			out, err := exec.CommandContext(ctx, bash, "-c", script).CombinedOutput()
+			if tt.wantError != "" {
+				if err == nil {
+					t.Fatalf("invalid decoder/listing returned success\n%s", out)
+				}
+				if !strings.Contains(string(out), tt.wantError) {
+					t.Fatalf("missing error %q\n%s", tt.wantError, out)
+				}
+				if strings.Contains(string(out), "no snapshot found in s3://backups/snap\n") {
+					t.Fatalf("invalid decoder/listing treated as empty bucket\n%s", out)
+				}
+			} else if err != nil {
 				t.Fatalf("rendered script: %v\n%s", err, out)
 			}
 			copied, err := os.ReadFile(filepath.Join(dir, "copied.json"))
@@ -135,6 +169,9 @@ func TestSnapshotDownloadRenderedScript(t *testing.T) {
 				}
 			}
 			count, err := os.ReadFile(filepath.Join(dir, "calls"))
+			if tt.calls == 0 && os.IsNotExist(err) {
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
