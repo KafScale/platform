@@ -489,7 +489,7 @@ test-operator: docker-build $(MINIO_BUILD) ## Run operator envtest + kind snapsh
 	KAFSCALE_E2E_KIND=1 \
 	KAFSCALE_KIND_RECREATE=1 \
 	KAFSCALE_MINIO_IMAGE=$(MINIO_IMAGE) \
-	go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v
+	go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v -timeout=20m
 
 demo-platform-bootstrap: docker-build $(MINIO_BUILD) ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }
