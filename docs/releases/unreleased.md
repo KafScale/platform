@@ -37,7 +37,7 @@ limitations under the License.
 
 ## Bug fixes
 
-- The managed etcd snapshot-download init container now passes `--cli-connect-timeout 2` and `--cli-read-timeout 5` on AWS CLI calls, sets `AWS_MAX_ATTEMPTS=1`, and wraps `list-objects-v2` in `timeout`, so a hung listing cannot block etcd startup. Snapshot copies keep those inactivity deadlines and are not given an absolute transfer deadline. Lookup errors are not treated as snapshot keys. When the bucket has no snapshot the 15-attempt loop still exits 0 (#295).
+- The managed etcd snapshot-download init container now passes `--cli-connect-timeout 2` and `--cli-read-timeout 5` on AWS CLI calls, sets `AWS_MAX_ATTEMPTS=1`, and bounds each complete `list-objects-v2` lookup to 120 seconds. JSON output selects one newest `.db` snapshot across all pages, including prefixes with accumulated health objects. Failed or timed-out listings are discarded and retried. Snapshot copies keep those inactivity deadlines and are not given an absolute transfer deadline. Lookup errors are not treated as snapshot keys. When the bucket has no snapshot the 15-attempt loop still exits 0 (#295).
 
 - Broker shutdown closes idle Kafka connections and closes active connections after their in-flight response. Clients rediscover their consumer group coordinator instead of continuing to use sockets whose broker has released its coordination leases (#285).
 

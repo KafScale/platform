@@ -359,21 +359,25 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"LATEST=\"\"\n" +
 				"attempt=0\n" +
 				"while [ $attempt -lt 15 ]; do\n" +
-				"  LISTING=$(timeout 5 aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'Contents[].Key' --output text 2>&1 || true)\n" +
-				"  LATEST=$(timeout 5 aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'Contents[?ends_with(Key, `.db`)] | sort_by(@,&LastModified)[-1].Key' --output text 2>/dev/null | tr -d '\\r' || true)\n" +
-				"  if [ \"$LATEST\" = \"None\" ]; then LATEST=\"\"; fi\n" +
-				"  case \"$LATEST\" in\n" +
-				"    *.db) ;;\n" +
-				"    *) LATEST=\"\" ;;\n" +
-				"  esac\n" +
+				"  LATEST=\"\"\n" +
+				"  if LISTING=$(timeout 120 aws $ENDPOINT_OPT $AWS_TIMEOUT_OPT s3api list-objects-v2 --bucket \"$SNAPSHOT_BUCKET\" --prefix \"$PREFIX\" --query 'sort_by(Contents[?ends_with(Key, `.db`)] || `[]`, &LastModified)[-1].Key' --output json); then\n" +
+				"    if LATEST=$(printf '%s' \"$LISTING\" | python -c 'import json,sys; key=json.load(sys.stdin); assert key is None or isinstance(key, type(u\"\")); sys.stdout.write((key.encode(\"utf-8\") if sys.version_info[0] == 2 else key) if key is not None else \"\")'); then\n" +
+				"      case \"$LATEST\" in\n" +
+				"        *.db) ;;\n" +
+				"        *) LATEST=\"\" ;;\n" +
+				"      esac\n" +
+				"    else\n" +
+				"      LATEST=\"\"\n" +
+				"      echo \"invalid snapshot listing in $BASE\" >&2\n" +
+				"    fi\n" +
+				"  else\n" +
+				"    echo \"snapshot listing failed in $BASE; retrying\" >&2\n" +
+				"  fi\n" +
 				"  if [ -n \"$LATEST\" ]; then\n" +
 				"    break\n" +
 				"  fi\n" +
 				"  attempt=$((attempt+1))\n" +
 				"  echo \"no snapshot found in $BASE (attempt $attempt)\"\n" +
-				"  if [ -n \"$LISTING\" ]; then\n" +
-				"    echo \"snapshot listing: $LISTING\"\n" +
-				"  fi\n" +
 				"  sleep 2\n" +
 				"done\n" +
 				"if [ -z \"$LATEST\" ]; then\n" +
