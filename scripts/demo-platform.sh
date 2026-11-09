@@ -247,6 +247,8 @@ EOF
   "replicas":1,
   "image":"${PROXY_IMAGE}",
   "imagePullPolicy":"IfNotPresent",
+  "advertisedHost":"127.0.0.1",
+  "advertisedPort":39092,
   "backends":["kafscale-broker.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:9092"],
   "http":{"enabled":true},
   "s3":{"forcePathStyle":true,"ensureBucket":true}
