@@ -683,7 +683,6 @@ lfs-demo: demo-platform-bootstrap ## Start the LFS proxy demo stack on kind (bro
 	@kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
 	  PROXY_IMAGE=$(PROXY_IMAGE) \
-	  MINIO_REGION=$(MINIO_REGION) \
 	  scripts/demo-platform.sh lfs
 
 iceberg-demo: KAFSCALE_DEMO_PROXY=0
