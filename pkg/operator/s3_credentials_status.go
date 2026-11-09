@@ -1,0 +1,90 @@
+// Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package operator
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+)
+
+const s3CredentialsConditionType = "S3Credentials"
+
+func (r *ClusterReconciler) populateS3CredentialsStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) {
+	condition := r.s3CredentialsCondition(ctx, cluster)
+	previous := meta.FindStatusCondition(cluster.Status.Conditions, s3CredentialsConditionType)
+	changed := previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason
+	if changed && condition.Status == metav1.ConditionFalse {
+		ctrl.LoggerFrom(ctx).Info("WARNING: S3 credentials secret is not usable; brokers, snapshot jobs and the LFS proxy fall back to the default AWS credential chain",
+			"cluster", cluster.Namespace+"/"+cluster.Name,
+			"secret", cluster.Spec.S3.CredentialsSecretRef,
+			"reason", condition.Reason)
+	}
+	meta.SetStatusCondition(&cluster.Status.Conditions, condition)
+}
+
+func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) metav1.Condition {
+	condition := metav1.Condition{
+		Type:               s3CredentialsConditionType,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.NewTime(time.Now()),
+	}
+	name := strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef)
+	if name == "" {
+		condition.Reason = "SecretNotReferenced"
+		condition.Message = "No spec.s3.credentialsSecretRef is set; workloads use the default AWS credential chain."
+		return condition
+	}
+	secret := &corev1.Secret{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, secret); err != nil {
+		condition.Status = metav1.ConditionFalse
+		if apierrors.IsNotFound(err) {
+			condition.Reason = "SecretNotFound"
+			condition.Message = fmt.Sprintf("Secret %s does not exist; workloads fall back to the default AWS credential chain.", name)
+		} else {
+			condition.Reason = "SecretReadFailed"
+			condition.Message = fmt.Sprintf("Secret %s cannot be read: %v; workloads fall back to the default AWS credential chain.", name, err)
+		}
+		return condition
+	}
+	switch {
+	case secretHasKeyPair(secret, awsAccessKeyEnv, awsSecretKeyEnv):
+		condition.Reason = "SecretKeysFound"
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s.", name, awsAccessKeyEnv, awsSecretKeyEnv)
+	case secretHasKeyPair(secret, s3AccessKeyEnv, s3SecretKeyEnv):
+		condition.Reason = "SecretKeysFound"
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s.", name, s3AccessKeyEnv, s3SecretKeyEnv)
+	default:
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = "SecretKeysMissing"
+		condition.Message = fmt.Sprintf("Secret %s holds neither %s and %s nor %s and %s; workloads fall back to the default AWS credential chain.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+	}
+	return condition
+}
+
+func secretHasKeyPair(secret *corev1.Secret, accessKey, secretKey string) bool {
+	return strings.TrimSpace(string(secret.Data[accessKey])) != "" && strings.TrimSpace(string(secret.Data[secretKey])) != ""
+}

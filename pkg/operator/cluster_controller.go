@@ -78,6 +78,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	r.populateS3CredentialsStatus(ctx, &cluster)
 	if err := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); err != nil {
 		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", err.Error())
 		return ctrl.Result{}, err
