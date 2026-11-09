@@ -76,6 +76,7 @@ type GroupCoordinator struct {
 
 // CoordinatorConfig preserves the published v1.6.3 configuration, including
 // comparability and unkeyed literals.
+//
 // Deprecated: use CoordinatorOptions with NewGroupCoordinatorWithOptions.
 // Removal requires an announced future breaking release; none is scheduled.
 type CoordinatorConfig struct {
@@ -145,6 +146,7 @@ type assignmentTopic struct {
 }
 
 // NewGroupCoordinator constructs a coordinator using the published configuration.
+//
 // Deprecated: use NewGroupCoordinatorWithOptions for retention and lease hooks.
 func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, cfg *CoordinatorConfig) *GroupCoordinator {
 	var options *CoordinatorOptions
