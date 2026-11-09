@@ -174,10 +174,13 @@ brokers and snapshot jobs use, kept the LFS proxy pods in
 `CreateContainerConfigError`. The proxy now accepts either pair. No migration is
 needed: secrets with the `AWS_` keys work as before and keep priority when both
 pairs are present. A secret that has neither pair, or does not exist, no longer
-blocks the pod; the proxy then uses the default AWS credential chain. The
-operator flags such a secret with the `S3Credentials` condition set to `False`
-and a warning in its log, and the proxy logs which credential source it uses at
-startup, so check both if LFS uploads fail with S3 access errors after the
+blocks the pod; the proxy then uses the default AWS credential chain if one is
+available. The operator flags such a secret, and one it cannot read, with the
+`S3Credentials` condition set to `False` and a warning in its log. When the
+secret holds only part of a pair, the condition message names the keys found,
+because the etcd snapshot jobs can fail on such a secret instead of falling
+back. The proxy logs which credential source it uses at startup, so check both
+the condition and that log if LFS uploads fail with S3 access errors after the
 upgrade.
 
 ## Validation scope and rerun commands

@@ -38,10 +38,11 @@ func (r *ClusterReconciler) populateS3CredentialsStatus(ctx context.Context, clu
 	previous := meta.FindStatusCondition(cluster.Status.Conditions, s3CredentialsConditionType)
 	changed := previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason
 	if changed && condition.Status == metav1.ConditionFalse {
-		ctrl.LoggerFrom(ctx).Info("WARNING: S3 credentials secret is not usable; brokers, snapshot jobs and the LFS proxy fall back to the default AWS credential chain",
+		ctrl.LoggerFrom(ctx).Info("WARNING: S3 credentials secret is not usable or could not be verified",
 			"cluster", cluster.Namespace+"/"+cluster.Name,
 			"secret", cluster.Spec.S3.CredentialsSecretRef,
-			"reason", condition.Reason)
+			"reason", condition.Reason,
+			"message", condition.Message)
 	}
 	meta.SetStatusCondition(&cluster.Status.Conditions, condition)
 }
@@ -63,10 +64,10 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 		condition.Status = metav1.ConditionFalse
 		if apierrors.IsNotFound(err) {
 			condition.Reason = "SecretNotFound"
-			condition.Message = fmt.Sprintf("Secret %s does not exist; workloads fall back to the default AWS credential chain.", name)
+			condition.Message = fmt.Sprintf("Secret %s does not exist, so workloads get no static keys from it and use the default AWS credential chain if one is available.", name)
 		} else {
 			condition.Reason = "SecretReadFailed"
-			condition.Message = fmt.Sprintf("Secret %s cannot be read: %v; workloads fall back to the default AWS credential chain.", name, err)
+			condition.Message = fmt.Sprintf("The operator could not read or verify secret %s: %v. It cannot tell which keys the workloads receive.", name, err)
 		}
 		return condition
 	}
@@ -80,11 +81,25 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 	default:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMissing"
-		condition.Message = fmt.Sprintf("Secret %s holds neither %s and %s nor %s and %s; workloads fall back to the default AWS credential chain.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+		if found := secretCredentialKeys(secret); len(found) > 0 {
+			condition.Message = fmt.Sprintf("Secret %s holds only part of a key pair (%s) and needs %s and %s or %s and %s. The brokers and the LFS proxy get no complete key pair from it and use the default AWS credential chain if one is available. The etcd snapshot jobs can fail instead, because the AWS CLI rejects an access key without a secret key.", name, strings.Join(found, ", "), awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+		} else {
+			condition.Message = fmt.Sprintf("Secret %s holds neither %s and %s nor %s and %s, so workloads get no static keys from it and use the default AWS credential chain if one is available.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+		}
 	}
 	return condition
 }
 
 func secretHasKeyPair(secret *corev1.Secret, accessKey, secretKey string) bool {
 	return strings.TrimSpace(string(secret.Data[accessKey])) != "" && strings.TrimSpace(string(secret.Data[secretKey])) != ""
+}
+
+func secretCredentialKeys(secret *corev1.Secret) []string {
+	var found []string
+	for _, key := range []string{awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv} {
+		if strings.TrimSpace(string(secret.Data[key])) != "" {
+			found = append(found, key)
+		}
+	}
+	return found
 }

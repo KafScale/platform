@@ -45,19 +45,26 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
 
+	const chain = "use the default AWS credential chain if one is available."
+	const partial = " and needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY or KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY. The brokers and the LFS proxy get no complete key pair from it and " + chain + " The etcd snapshot jobs can fail instead, because the AWS CLI rejects an access key without a secret key."
 	cases := []struct {
-		name       string
-		secretRef  string
-		secret     map[string]string
-		wantStatus metav1.ConditionStatus
-		wantReason string
-		wantWarn   bool
+		name        string
+		secretRef   string
+		secret      map[string]string
+		readErr     bool
+		wantStatus  metav1.ConditionStatus
+		wantReason  string
+		wantMessage string
+		wantWarn    bool
 	}{
-		{name: "no secret reference", wantStatus: metav1.ConditionTrue, wantReason: "SecretNotReferenced"},
-		{name: "missing secret", secretRef: "s3-creds", wantStatus: metav1.ConditionFalse, wantReason: "SecretNotFound", wantWarn: true},
-		{name: "secret without a key pair", secretRef: "s3-creds", secret: map[string]string{"AWS_ACCESS_KEY_ID": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true},
-		{name: "kafscale keys", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, wantStatus: metav1.ConditionTrue, wantReason: "SecretKeysFound"},
-		{name: "aws keys", secretRef: "s3-creds", secret: map[string]string{"AWS_ACCESS_KEY_ID": "ak", "AWS_SECRET_ACCESS_KEY": "sk"}, wantStatus: metav1.ConditionTrue, wantReason: "SecretKeysFound"},
+		{name: "no secret reference", wantStatus: metav1.ConditionTrue, wantReason: "SecretNotReferenced", wantMessage: "No spec.s3.credentialsSecretRef is set; workloads use the default AWS credential chain."},
+		{name: "missing secret", secretRef: "s3-creds", wantStatus: metav1.ConditionFalse, wantReason: "SecretNotFound", wantWarn: true, wantMessage: "Secret s3-creds does not exist, so workloads get no static keys from it and " + chain},
+		{name: "unreadable secret", secretRef: "s3-creds", readErr: true, wantStatus: metav1.ConditionFalse, wantReason: "SecretReadFailed", wantWarn: true, wantMessage: "The operator could not read or verify secret s3-creds: secret read denied. It cannot tell which keys the workloads receive."},
+		{name: "secret without credential keys", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_SESSION_TOKEN": "tok", "AWS_ACCESS_KEY_ID": "  "}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true, wantMessage: "Secret s3-creds holds neither AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY nor KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY, so workloads get no static keys from it and " + chain},
+		{name: "secret with only an access key", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ak"}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true, wantMessage: "Secret s3-creds holds only part of a key pair (KAFSCALE_S3_ACCESS_KEY)" + partial},
+		{name: "secret without a key pair", secretRef: "s3-creds", secret: map[string]string{"AWS_ACCESS_KEY_ID": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true, wantMessage: "Secret s3-creds holds only part of a key pair (AWS_ACCESS_KEY_ID, KAFSCALE_S3_SECRET_KEY)" + partial},
+		{name: "kafscale keys", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, wantStatus: metav1.ConditionTrue, wantReason: "SecretKeysFound", wantMessage: "Secret s3-creds holds KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY."},
+		{name: "aws keys", secretRef: "s3-creds", secret: map[string]string{"AWS_ACCESS_KEY_ID": "ak", "AWS_SECRET_ACCESS_KEY": "sk"}, wantStatus: metav1.ConditionTrue, wantReason: "SecretKeysFound", wantMessage: "Secret s3-creds holds AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,7 +87,18 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 			if err := autoscalingv2.AddToScheme(scheme); err != nil {
 				t.Fatalf("add autoscaling scheme: %v", err)
 			}
-			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(objects...).Build()
+			builder := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(objects...)
+			if tc.readErr {
+				builder = builder.WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if _, ok := obj.(*corev1.Secret); ok {
+							return errors.New("secret read denied")
+						}
+						return cl.Get(ctx, key, obj, opts...)
+					},
+				})
+			}
+			c := builder.Build()
 			r := &ClusterReconciler{Client: c, Scheme: scheme, Publisher: NewSnapshotPublisher(c)}
 
 			var logs bytes.Buffer
@@ -101,6 +119,12 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 			cond := meta.FindStatusCondition(got.Status.Conditions, "S3Credentials")
 			if cond == nil || cond.Status != tc.wantStatus || cond.Reason != tc.wantReason {
 				t.Fatalf("S3Credentials condition = %+v, want status %s reason %s", cond, tc.wantStatus, tc.wantReason)
+			}
+			if cond.Message != tc.wantMessage {
+				t.Fatalf("S3Credentials message = %q, want %q", cond.Message, tc.wantMessage)
+			}
+			if strings.Contains(cond.Message, "fall back") {
+				t.Fatalf("S3Credentials message claims a fallback: %q", cond.Message)
 			}
 			if ready := meta.FindStatusCondition(got.Status.Conditions, "Ready"); ready == nil || ready.Status != metav1.ConditionTrue {
 				t.Fatalf("Ready condition = %+v, want True", ready)
