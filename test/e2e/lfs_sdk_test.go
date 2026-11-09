@@ -24,6 +24,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/rand"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -124,8 +127,31 @@ func lfsProxyHTTPURL(t *testing.T) string {
 		return ""
 	}
 	port := envOrDefaultLocal("LFS_PROXY_HTTP_PORT", "8080")
-	path := envOrDefaultLocal("LFS_PROXY_HTTP_PATH", "/lfs/produce")
-	return fmt.Sprintf("http://%s:%s%s", host, port, path)
+	return fmt.Sprintf("http://%s:%s", host, port)
+}
+
+func TestLfsProxyHTTPURLFromServiceHostPostsToProducePath(t *testing.T) {
+	paths := make(chan string, 8)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths <- r.URL.Path
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+	t.Setenv("LFS_PROXY_HTTP_URL", "")
+	t.Setenv("LFS_PROXY_SERVICE_HOST", host)
+	t.Setenv("LFS_PROXY_HTTP_PORT", port)
+
+	_, err = lfs.NewProducer(lfsProxyHTTPURL(t)).Produce(context.Background(), "topic", "key", bytes.NewReader([]byte("payload")))
+	if err == nil {
+		t.Fatal("expected produce error from test server")
+	}
+	if got := <-paths; got != "/lfs/produce" {
+		t.Fatalf("produce request path = %q, want /lfs/produce", got)
+	}
 }
 
 func s3ConfigFromEnv() (lfs.S3Config, error) {
