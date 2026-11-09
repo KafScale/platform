@@ -135,7 +135,8 @@ expected value:
 | any other value | Resolution fails with an unsupported checksum algorithm error. |
 
 The proxy writes the SHA-256 of the stored object to `sha256` for every
-algorithm, and every SDK envelope decoder requires the field to be present. A mismatch
+algorithm, and every SDK envelope decoder rejects an envelope whose `sha256` is
+missing or empty before it reads the object. A mismatch
 rejects resolution before a record is returned. Objects whose SHA-256 matches
 the expected value return their exact bytes. With `none`, the SDKs still
 validate SHA-256. The Go resolver in `pkg/lfs` validates `checksum` with the

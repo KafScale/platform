@@ -104,6 +104,18 @@ class LfsResolverTest {
         assertEquals("unsupported checksum algorithm: sha1", err.getMessage());
     }
 
+    @Test
+    void rejectsEmptySha256BeforeFetching() {
+        String envelope = "{\"kfs_lfs\":1,\"bucket\":\"b\",\"key\":\"k\",\"sha256\":\"\"}";
+        LfsResolver resolver = new LfsResolver(key -> {
+            throw new AssertionError("unexpected S3 fetch");
+        }, true, 0);
+
+        java.io.IOException err = assertThrows(java.io.IOException.class,
+                () -> resolver.resolve(envelope.getBytes(StandardCharsets.UTF_8)));
+        assertEquals("invalid envelope: missing required fields", err.getMessage());
+    }
+
     private static byte[] largePayload() {
         byte[] payload = new byte[262144];
         Arrays.fill(payload, (byte) 42);

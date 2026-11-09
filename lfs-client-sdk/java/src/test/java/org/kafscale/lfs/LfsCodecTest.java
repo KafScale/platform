@@ -26,4 +26,11 @@ class LfsCodecTest {
         assertTrue(LfsCodec.isEnvelope(data));
         assertFalse(LfsCodec.isEnvelope("plain".getBytes()));
     }
+
+    @Test
+    void rejectsEmptySha256() {
+        byte[] data = "{\"kfs_lfs\":1,\"bucket\":\"b\",\"key\":\"k\",\"sha256\":\"\"}".getBytes();
+        java.io.IOException err = assertThrows(java.io.IOException.class, () -> LfsCodec.decode(data));
+        assertEquals("invalid envelope: missing required fields", err.getMessage());
+    }
 }
