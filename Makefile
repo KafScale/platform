@@ -679,6 +679,8 @@ demo-platform: demo-platform-bootstrap ## Launch a full platform demo on kind (o
 lfs-demo: KAFSCALE_DEMO_PROXY=0
 lfs-demo: KAFSCALE_DEMO_CONSOLE=0
 lfs-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
+lfs-demo: KAFSCALE_DEMO_ADVERTISED_HOST=kafscale-broker.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local
+lfs-demo: KAFSCALE_DEMO_ADVERTISED_PORT=9092
 lfs-demo: demo-platform-bootstrap ## Start the LFS proxy demo stack on kind (broker, LFS proxy, MinIO).
 	@kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
