@@ -53,7 +53,7 @@ Pull requests must include strict test coverage for the changes they introduce. 
   - `make test-consumer-group` (if group behavior is affected)
 - Extend e2e coverage when fixing bugs so regressions are caught earlier.
 
-CI will run `go test ./...` and enforce a coverage floor.
+CI will run `go test ./...` and enforce a coverage floor. It also runs the LFS SDK unit tests for Node, the browser (`lfs-client-sdk/js-browser`), Python and Java. The Java `LfsProducerIntegrationTest` needs Docker images that CI does not build, so CI excludes it; run it locally with `mvn test` in `lfs-client-sdk/java` when those images exist.
 
 ## Build and Test Tooling (FLOSS)
 

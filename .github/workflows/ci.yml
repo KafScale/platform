@@ -55,6 +55,11 @@ jobs:
           export PATH="$PWD/.tools/node/bin:$PATH"
           npm --prefix lfs-client-sdk/js ci --ignore-scripts
           npm --prefix lfs-client-sdk/js test
+      - name: Run browser SDK tests
+        run: |
+          export PATH="$PWD/.tools/node/bin:$PATH"
+          npm --prefix lfs-client-sdk/js-browser ci --ignore-scripts
+          npm --prefix lfs-client-sdk/js-browser test
       - name: Build pinned MinIO test fixture
         run: docker build -t kafscale-minio:lfs-integrity -f test/e2e/minio.Dockerfile .
       - name: Run real S3 corruption probe
@@ -77,6 +82,31 @@ jobs:
       - name: Stop MinIO test fixture
         if: always()
         run: docker rm -f lfs-integrity-minio || true
+
+  lfs-sdk-tests:
+    name: LFS SDK Python and Java Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: lfs-client-sdk/python/pyproject.toml
+      - name: Run Python SDK tests
+        working-directory: lfs-client-sdk/python
+        run: |
+          python -m pip install . pytest
+          python -m pytest
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+          cache-dependency-path: lfs-client-sdk/java/pom.xml
+      - name: Run Java SDK tests without the Docker integration test
+        working-directory: lfs-client-sdk/java
+        run: mvn -B test -Dtest='!LfsProducerIntegrationTest' -Dsurefire.failIfNoSpecifiedTests=false
 
   go-test:
     name: Go Test Suite
