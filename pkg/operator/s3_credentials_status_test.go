@@ -18,6 +18,7 @@ package operator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -30,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -114,5 +116,71 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 				t.Fatalf("log contains secret values:\n%s", logs.String())
 			}
 		})
+	}
+}
+
+func TestClusterReconcilerPersistsS3CredentialsOnFailedReconcile(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
+	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
+
+	cluster := &kafscalev1alpha1.KafscaleCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+		Spec: kafscalev1alpha1.KafscaleClusterSpec{
+			S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+		},
+	}
+	scheme := testScheme(t)
+	if err := autoscalingv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("add autoscaling scheme: %v", err)
+	}
+	brokerErr := errors.New("broker statefulset create failed")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(cluster).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*appsv1.StatefulSet); ok && obj.GetName() == "demo-broker" {
+				return brokerErr
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme, Publisher: NewSnapshotPublisher(c)}
+
+	var logs bytes.Buffer
+	ctx := ctrl.LoggerInto(context.Background(), zap.New(zap.WriteTo(&logs)))
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"}}
+	reconcileFails := func(step string) {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, req); !errors.Is(err, brokerErr) {
+			t.Fatalf("Reconcile %s: err = %v, want %v", step, err, brokerErr)
+		}
+	}
+	persisted := func() *metav1.Condition {
+		t.Helper()
+		var got kafscalev1alpha1.KafscaleCluster
+		if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+			t.Fatalf("get cluster: %v", err)
+		}
+		return meta.FindStatusCondition(got.Status.Conditions, "S3Credentials")
+	}
+
+	reconcileFails("with a missing secret")
+	reconcileFails("again with a missing secret")
+	if cond := persisted(); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "SecretNotFound" {
+		t.Fatalf("S3Credentials condition after failed reconciles = %+v, want False SecretNotFound", cond)
+	}
+	if warnings := strings.Count(logs.String(), "S3 credentials secret is not usable"); warnings != 1 {
+		t.Fatalf("expected one warning over two failed reconciles, got %d:\n%s", warnings, logs.String())
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "s3-creds", Namespace: "default"},
+		Data:       map[string][]byte{"KAFSCALE_S3_ACCESS_KEY": []byte("ak"), "KAFSCALE_S3_SECRET_KEY": []byte("sk")},
+	}
+	if err := c.Create(context.Background(), secret); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	reconcileFails("after fixing the secret")
+	if cond := persisted(); cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "SecretKeysFound" {
+		t.Fatalf("S3Credentials condition after fixing the secret = %+v, want True SecretKeysFound", cond)
 	}
 }

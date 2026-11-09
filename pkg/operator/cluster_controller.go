@@ -27,6 +27,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,22 +87,8 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
 	r.pollManagedEtcdHealth(ctx, &cluster, etcdResolution)
 	r.populateEtcdMaintenanceStatus(ctx, &cluster, etcdResolution)
-	if err := r.deleteLegacyBrokerDeployment(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerDeployment(ctx, &cluster, etcdResolution.Endpoints); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerHeadlessService(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerService(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileLfsProxyResources(ctx, &cluster, etcdResolution.Endpoints); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerHPA(ctx, &cluster); err != nil {
+	if err := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); err != nil {
+		r.persistStatusAfterFailure(ctx, &cluster)
 		return ctrl.Result{}, err
 	}
 	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
@@ -128,6 +115,44 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+	if err := r.deleteLegacyBrokerDeployment(ctx, cluster); err != nil {
+		return err
+	}
+	if err := r.reconcileBrokerDeployment(ctx, cluster, endpoints); err != nil {
+		return err
+	}
+	if err := r.reconcileBrokerHeadlessService(ctx, cluster); err != nil {
+		return err
+	}
+	if err := r.reconcileBrokerService(ctx, cluster); err != nil {
+		return err
+	}
+	if err := r.reconcileLfsProxyResources(ctx, cluster, endpoints); err != nil {
+		return err
+	}
+	return r.reconcileBrokerHPA(ctx, cluster)
+}
+
+func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) {
+	stored := &kafscalev1alpha1.KafscaleCluster{}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(cluster), stored); err != nil {
+		if !apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).Error(err, "read cluster before persisting status")
+		}
+		return
+	}
+	if equality.Semantic.DeepEqual(stored.Status, cluster.Status) {
+		return
+	}
+	updated := stored.DeepCopy()
+	updated.Status = *cluster.Status.DeepCopy()
+	patch := client.MergeFromWithOptions(stored, client.MergeFromWithOptimisticLock{})
+	if err := r.Client.Status().Patch(ctx, updated, patch); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+		ctrl.LoggerFrom(ctx).Error(err, "persist cluster status after a failed reconcile")
+	}
 }
 
 func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
