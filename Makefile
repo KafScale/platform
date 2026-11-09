@@ -23,7 +23,7 @@ LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
 LOCAL_NODE := $(LOCAL_NODE_BIN)/node
 LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
 
-.PHONY: docker-build-schema-registry test-schema-registry proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
+.PHONY: docker-build-schema-registry test-schema-registry proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap lfs-demo iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -499,7 +499,16 @@ demo-platform-bootstrap: docker-build $(MINIO_BUILD) ## Bootstrap a full platfor
 	@TMP_ROOT=$${TMPDIR:-/tmp}; rm -f "$$TMP_ROOT"/kafscale-kind-kubeconfig.* /tmp/kafscale-kind-kubeconfig.* 2>/dev/null || true
 	@$(MAKE) clean-kind-all
 	@kind delete cluster --name $(KAFSCALE_KIND_CLUSTER) >/dev/null 2>&1 || true
-	@if ! kind get clusters | grep -q '^$(KAFSCALE_KIND_CLUSTER)$$'; then kind create cluster --name $(KAFSCALE_KIND_CLUSTER); fi
+	@if ! kind get clusters | grep -q '^$(KAFSCALE_KIND_CLUSTER)$$'; then \
+	  case "$(KAFSCALE_KIND_KUBE_PROXY_MODE)" in \
+	    "") kind create cluster --name $(KAFSCALE_KIND_CLUSTER) ;; \
+	    nftables) cfg=$$(mktemp); \
+	      printf 'kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\nnetworking:\n  kubeProxyMode: nftables\n' > "$$cfg"; \
+	      status=0; kind create cluster --name $(KAFSCALE_KIND_CLUSTER) --config "$$cfg" || status=$$?; \
+	      rm -f "$$cfg"; exit $$status ;; \
+	    *) echo "KAFSCALE_KIND_KUBE_PROXY_MODE=$(KAFSCALE_KIND_KUBE_PROXY_MODE) is not supported; set nftables or leave it unset" >&2; exit 1 ;; \
+	  esac; \
+	fi
 	@kind get kubeconfig --name $(KAFSCALE_KIND_CLUSTER) > $(KAFSCALE_KIND_KUBECONFIG)
 	@if [ "$(KAFSCALE_DEMO_PROXY)" = "1" ]; then KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) scripts/demo-platform.sh metallb; fi
 	@kind load docker-image $(BROKER_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
@@ -666,6 +675,16 @@ demo-platform: demo-platform-bootstrap ## Launch a full platform demo on kind (o
 		KAFSCALE_DEMO_TOPICS=demo-topic-1,demo-topic-2 \
 		go run ./cmd/demo-workload; \
 	'
+
+lfs-demo: KAFSCALE_DEMO_PROXY=0
+lfs-demo: KAFSCALE_DEMO_CONSOLE=0
+lfs-demo: KAFSCALE_DEMO_BROKER_REPLICAS=1
+lfs-demo: demo-platform-bootstrap ## Start the LFS proxy demo stack on kind (broker, LFS proxy, MinIO).
+	@kind load docker-image $(PROXY_IMAGE) --name $(KAFSCALE_KIND_CLUSTER)
+	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
+	  PROXY_IMAGE=$(PROXY_IMAGE) \
+	  MINIO_REGION=$(MINIO_REGION) \
+	  scripts/demo-platform.sh lfs
 
 iceberg-demo: KAFSCALE_DEMO_PROXY=0
 iceberg-demo: KAFSCALE_DEMO_CONSOLE=0
