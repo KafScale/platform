@@ -2273,7 +2273,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			ResourceKind: "retention sweeper",
 		})
 	}
-	coordinatorConfig := &broker.CoordinatorConfig{OffsetsRetention: offsetsRetentionFromEnv()}
+	coordinatorConfig := &broker.CoordinatorOptions{OffsetsRetention: offsetsRetentionFromEnv()}
 	if groupLeaseManager != nil {
 		coordinatorConfig.OwnsGroup = groupLeaseManager.Owns
 		coordinatorConfig.AcquireGroup = groupLeaseManager.Acquire
@@ -2303,7 +2303,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			CacheEnabled:      true,
 			Logger:            logger,
 		},
-		coordinator:          broker.NewGroupCoordinator(store, brokerInfo, coordinatorConfig),
+		coordinator:          broker.NewGroupCoordinatorWithOptions(store, brokerInfo, coordinatorConfig),
 		leaseManager:         leaseManager,
 		groupLeaseManager:    groupLeaseManager,
 		retentionSweepLease:  retentionSweepLease,

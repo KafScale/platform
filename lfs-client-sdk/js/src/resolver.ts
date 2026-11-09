@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { decodeEnvelope, isLfsEnvelope, LfsEnvelope } from './envelope.js';
 
@@ -37,7 +38,11 @@ export class LfsResolver {
       throw new Error('payload exceeds max size');
     }
     if (this.validateChecksum) {
-      // checksum validation placeholder (sha256)
+      const expected = env.checksum || env.sha256;
+      const actual = createHash('sha256').update(payload).digest('hex');
+      if (actual !== expected) {
+        throw new Error(`checksum mismatch: expected ${expected}, got ${actual}`);
+      }
     }
     return { envelope: env, payload, isEnvelope: true };
   }

@@ -43,6 +43,19 @@ jobs:
       - name: Validate docker-compose.yaml
         run: docker compose -f deploy/docker-compose/docker-compose.yaml config --quiet
 
+  js-lfs-integrity:
+    name: JavaScript LFS Integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Install repository Node version
+        run: bash scripts/ensure_local_node.sh
+      - name: Check resolver integrity regressions
+        run: |
+          export PATH="$PWD/.tools/node/bin:$PATH"
+          npm --prefix lfs-client-sdk/js install --ignore-scripts
+          npm --prefix lfs-client-sdk/js test
+
   go-test:
     name: Go Test Suite
     runs-on: ubuntu-latest
@@ -62,6 +75,11 @@ jobs:
 
       - name: Prepare Go build cache
         run: mkdir -p "$GOCACHE"
+
+      - name: Check published Go API compatibility
+        run: |
+          git fetch --no-tags origin 092291b78b8abf1e5bde6cafd92550e9726b46e0
+          bash scripts/check_go_api_compatibility.sh
 
       - name: Run go vet ./...
         run: go vet ./...

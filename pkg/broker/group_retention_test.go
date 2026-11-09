@@ -36,7 +36,7 @@ func TestCoordinatorRetentionLifecycle(t *testing.T) {
 				retention = -1
 			}
 			deleted := 0
-			c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{CleanupInterval: time.Hour, OffsetsRetention: retention, GroupDeleted: func(string) { deleted++ }})
+			c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{CleanupInterval: time.Hour, OffsetsRetention: retention, GroupDeleted: func(string) { deleted++ }})
 			t.Cleanup(c.Stop)
 			now := time.Now()
 			old := now.Add(-48 * time.Hour).UTC().Format(time.RFC3339Nano)
@@ -63,7 +63,7 @@ func TestCoordinatorRetentionLifecycle(t *testing.T) {
 				t.Fatalf("deletion callback count=%d disabled=%t", deleted, disabled)
 			}
 			// Recovery must preserve the original Empty timestamp, not restart it.
-			restarted := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{CleanupInterval: time.Hour, OffsetsRetention: retention})
+			restarted := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{CleanupInterval: time.Hour, OffsetsRetention: retention})
 			t.Cleanup(restarted.Stop)
 			restarted.cleanupRetainedGroups(now.Add(time.Minute))
 			if group, _ := store.FetchConsumerGroup(ctx, "expired"); (group == nil) == disabled {
@@ -102,7 +102,7 @@ func TestRetentionRequiresOwnership(t *testing.T) {
 				t.Fatal(err)
 			}
 			owned := false
-			c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{CleanupInterval: time.Hour, OffsetsRetention: time.Hour, OwnsGroup: func(string) bool { return owned }, AcquireGroup: func(context.Context, string) error {
+			c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{CleanupInterval: time.Hour, OffsetsRetention: time.Hour, OwnsGroup: func(string) bool { return owned }, AcquireGroup: func(context.Context, string) error {
 				if allow {
 					owned = true
 					return nil
@@ -137,7 +137,7 @@ func TestRetentionExpiryRunsOutsideCoordinatorLock(t *testing.T) {
 	if err := store.PutConsumerGroup(context.Background(), &metadatapb.ConsumerGroup{GroupId: "expired", State: "empty", EmptySince: old}); err != nil {
 		t.Fatal(err)
 	}
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{CleanupInterval: time.Hour, OffsetsRetention: time.Hour})
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{CleanupInterval: time.Hour, OffsetsRetention: time.Hour})
 	t.Cleanup(c.Stop)
 	done := make(chan struct{})
 	go func() {
@@ -171,7 +171,7 @@ func TestRetentionReleasesAcquiredLeaseWhenMembersRemain(t *testing.T) {
 	}
 	owned := false
 	released := 0
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{
 		CleanupInterval:  time.Hour,
 		OffsetsRetention: time.Hour,
 		OwnsGroup:        func(string) bool { return owned },
@@ -201,7 +201,7 @@ func TestRetentionSkipsSweepWithoutSweeperLease(t *testing.T) {
 	if err := store.PutConsumerGroup(context.Background(), &metadatapb.ConsumerGroup{GroupId: "expired", State: "empty", EmptySince: old}); err != nil {
 		t.Fatal(err)
 	}
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{
 		CleanupInterval:       time.Hour,
 		OffsetsRetention:      time.Hour,
 		AcquireRetentionSweep: func(context.Context) error { return metadata.ErrNotOwner },
@@ -230,7 +230,7 @@ func TestRetentionExpiresEmptyGroupOwnedByNonSweeper(t *testing.T) {
 				delete(owner, id)
 			}
 		}
-		c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+		c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{
 			CleanupInterval:  time.Hour,
 			OffsetsRetention: time.Hour,
 			OwnsGroup: func(id string) bool {
@@ -291,7 +291,7 @@ func TestGroupDeletedRunsOutsideCoordinatorLock(t *testing.T) {
 			}
 			reached := make(chan struct{})
 			unblock := make(chan struct{})
-			c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+			c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{
 				CleanupInterval:  time.Hour,
 				OffsetsRetention: time.Hour,
 				GroupDeleted: func(string) {
@@ -375,7 +375,7 @@ func (s *retentionListingStore) ListConsumerGroupsForRetention(ctx context.Conte
 func TestRetentionUsesIndexBetweenFullScans(t *testing.T) {
 	store := &retentionListingStore{InMemoryStore: metadata.NewInMemoryStore(metadata.ClusterMetadata{})}
 	leased := true
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{
 		CleanupInterval:           time.Hour,
 		OffsetsRetention:          time.Hour,
 		RetentionCheckInterval:    time.Minute,

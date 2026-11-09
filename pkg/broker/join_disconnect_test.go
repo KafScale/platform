@@ -270,7 +270,7 @@ func TestCanceledJoinAfterLeaseLossDoesNotMutateGroup(t *testing.T) {
 	store := metadata.NewInMemoryStore(disconnectGroupMetadata())
 	var owned atomic.Bool
 	owned.Store(true)
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorConfig{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { return owned.Load() }})
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{NodeID: 7}, &CoordinatorOptions{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { return owned.Load() }})
 	t.Cleanup(c.Stop)
 	leader := joinTestGroup(t, c, "")
 	syncTestGroup(t, c, leader.MemberID, leader.Generation, protocol.NONE)

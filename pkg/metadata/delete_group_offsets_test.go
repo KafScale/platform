@@ -53,10 +53,10 @@ func TestDeleteConsumerGroupAndOffsets(t *testing.T) {
 			if group, err := store.FetchConsumerGroup(ctx, "g"); err != nil || group != nil {
 				t.Fatal(group, err)
 			}
-			if offsets, err := store.ListGroupConsumerOffsets(ctx, "g"); err != nil || len(offsets) != 0 {
+			if offsets, err := ListGroupConsumerOffsets(ctx, store, "g"); err != nil || len(offsets) != 0 {
 				t.Fatal(offsets, err)
 			}
-			if offsets, err := store.ListGroupConsumerOffsets(ctx, "g-other"); err != nil || len(offsets) != 1 {
+			if offsets, err := ListGroupConsumerOffsets(ctx, store, "g-other"); err != nil || len(offsets) != 1 {
 				t.Fatal(offsets, err)
 			}
 			if err := DeleteConsumerGroupAndOffsets(ctx, store, "g"); err != nil {

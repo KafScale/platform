@@ -42,6 +42,8 @@ KafScale is open source under the Apache 2.0 license and implemented in Go.
 
 ---
 
+For upgrades, see the [upgrade and compatibility guide](docs/upgrade-compatibility.md).
+
 ## Why KafScale Exists
 
 Most Kafka deployments are not event-driven transaction engines.  

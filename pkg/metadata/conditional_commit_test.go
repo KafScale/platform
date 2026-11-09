@@ -40,7 +40,7 @@ func TestCommitConsumerOffsetIfGroupExists(t *testing.T) {
 		if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", 0, "", 0, "orders", 0, 1, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
 			t.Fatal(name, err)
 		}
-		if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+		if offsets, _ := ListGroupConsumerOffsets(ctx, store, "g"); len(offsets) != 0 {
 			t.Fatal(name, offsets)
 		}
 		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: "g"}); err != nil {
@@ -114,7 +114,7 @@ func TestCommitConsumerOffsetRejectsRecreatedGroup(t *testing.T) {
 	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", first, "", 0, "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupDeleted) {
 		t.Fatal(err)
 	}
-	if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+	if offsets, _ := ListGroupConsumerOffsets(ctx, store, "g"); len(offsets) != 0 {
 		t.Fatal(offsets)
 	}
 	if err := CommitMemberConsumerOffsetIfGroupExists(ctx, store, "g", second, "", 0, "orders", 0, 9, ""); err != nil {
@@ -259,7 +259,7 @@ func TestCommitConsumerOffsetFencesGroupChangeAfterSnapshot(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
-			if offsets, _ := store.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+			if offsets, _ := ListGroupConsumerOffsets(ctx, store, "g"); len(offsets) != 0 {
 				t.Fatalf("offset written: %v", offsets)
 			}
 		})

@@ -386,3 +386,17 @@ func TestCoordinatorDeleteGroups(t *testing.T) {
 		t.Fatalf("expected group deleted, found: %#v", remaining)
 	}
 }
+
+func TestLegacyCoordinatorConfigAdapter(t *testing.T) {
+	for _, cfg := range []*CoordinatorConfig{nil, {}, {CleanupInterval: -time.Second}, {CleanupInterval: time.Hour}} {
+		c := NewGroupCoordinator(metadata.NewInMemoryStore(metadata.ClusterMetadata{}), protocol.MetadataBroker{}, cfg)
+		want := defaultCoordinatorOptions.CleanupInterval
+		if cfg != nil && cfg.CleanupInterval > 0 {
+			want = cfg.CleanupInterval
+		}
+		if c.config.CleanupInterval != want || c.config.OffsetsRetention != defaultCoordinatorOptions.OffsetsRetention || c.config.RetentionCheckInterval != defaultCoordinatorOptions.RetentionCheckInterval || c.config.RetentionFullScanInterval != defaultCoordinatorOptions.RetentionFullScanInterval {
+			t.Fatalf("legacy configuration not adapted: %+v", c.config)
+		}
+		c.Stop()
+	}
+}

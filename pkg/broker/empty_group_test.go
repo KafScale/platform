@@ -85,7 +85,7 @@ func TestEmptyConsumerGroupLifecycle(t *testing.T) {
 					}
 					if exit == "legacy offsets" {
 						// Simulate old brokers losing metadata while retaining offsets.
-						offsets, err := store.ListGroupConsumerOffsets(ctx, "readers")
+						offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "readers")
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -153,7 +153,7 @@ func TestEmptyConsumerGroupLifecycle(t *testing.T) {
 					if err != nil || len(listed.Groups) != 0 {
 						t.Fatalf("deleted group reappeared: %+v, %v", listed, err)
 					}
-					offsets, err := store.ListGroupConsumerOffsets(ctx, "readers")
+					offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "readers")
 					if err != nil || len(offsets) != 0 {
 						t.Fatalf("deleted offsets: %+v, %v", offsets, err)
 					}
@@ -221,7 +221,7 @@ func TestDeleteGroupsRejectsActiveMembers(t *testing.T) {
 			if err != nil || len(resp.Groups) != 1 || resp.Groups[0].ErrorCode != protocol.NON_EMPTY_GROUP {
 				t.Fatalf("delete active: %+v, %v", resp, err)
 			}
-			offsets, err := store.ListGroupConsumerOffsets(ctx, "readers")
+			offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "readers")
 			if err != nil || len(offsets) != 1 || offsets[0].Offset != 42 || offsets[0].Metadata != "checkpoint" {
 				t.Fatal(offsets, err)
 			}
