@@ -47,7 +47,7 @@ export function isLfsEnvelope(data: unknown): data is LfsEnvelope {
 export function decodeLfsEnvelope(data: string | Uint8Array): LfsEnvelope {
   const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
   const parsed = JSON.parse(text);
-  if (!isLfsEnvelope(parsed)) {
+  if (!isLfsEnvelope(parsed) || parsed.sha256 === '') {
     throw new Error('Invalid LFS envelope: missing required fields');
   }
   return parsed;

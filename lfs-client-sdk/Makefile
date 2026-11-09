@@ -18,7 +18,10 @@
 
 KAFSCALE_KIND_CLUSTER ?= kafscale-demo
 KAFSCALE_DEMO_NAMESPACE ?= kafscale-demo
-KAFSCALE_KIND_KUBECONFIG ?= $(shell mktemp -t kafscale-kind-kubeconfig.XXXXXX 2>/dev/null || mktemp)
+ifndef KAFSCALE_KIND_KUBECONFIG
+KAFSCALE_KIND_KUBECONFIG := $(shell mktemp -t kafscale-kind-kubeconfig.XXXXXX 2>/dev/null || mktemp)
+endif
+export KAFSCALE_KIND_KUBECONFIG
 
 BROKER_LOCAL_PORT ?= 39092
 LFS_PROXY_HTTP_LOCAL_PORT ?= 8080
@@ -129,7 +132,7 @@ wait-http: kind-kubeconfig ## Ensure LFS proxy is ready, then verify HTTP port-f
 	  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/lfs-proxy --timeout=120s; \
 	  $(MAKE) pf-start; \
 	  for i in $$(seq 1 30); do \
-	    if nc -z 127.0.0.1 $(LFS_PROXY_HTTP_LOCAL_PORT) >/dev/null 2>&1; then \
+	    if (exec 3<>/dev/tcp/127.0.0.1/$(LFS_PROXY_HTTP_LOCAL_PORT)) >/dev/null 2>&1; then \
 	      exit 0; \
 	    fi; \
 	    sleep 1; \

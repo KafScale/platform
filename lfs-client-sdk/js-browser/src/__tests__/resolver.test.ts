@@ -109,6 +109,17 @@ describe('LfsResolver', () => {
     });
   });
 
+  it.each([
+    ['object', { ...sampleEnvelope, sha256: '' }],
+    ['string', JSON.stringify({ ...sampleEnvelope, sha256: '' })],
+    ['bytes', new TextEncoder().encode(JSON.stringify({ ...sampleEnvelope, sha256: '' }))],
+  ])('rejects %s envelopes with an empty sha256 before fetching', async (_kind, value) => {
+    const getBlobUrl = vi.fn();
+    const resolver = new LfsResolver({ getBlobUrl });
+    await expect(resolver.resolve(value)).rejects.toThrow('Invalid LFS envelope: missing required fields');
+    expect(getBlobUrl).not.toHaveBeenCalled();
+  });
+
   it('rejects unsupported checksum algorithms', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => helloBytes.slice().buffer }));
     const resolver = new LfsResolver({ getBlobUrl: async () => 'https://example.invalid/blob' });

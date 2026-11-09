@@ -39,7 +39,7 @@ public final class LfsCodec {
 
     public static LfsEnvelope decode(byte[] value) throws IOException {
         LfsEnvelope env = MAPPER.readValue(value, LfsEnvelope.class);
-        if (env.version == 0 || env.bucket == null || env.key == null || env.sha256 == null) {
+        if (env.version == 0 || env.bucket == null || env.key == null || env.sha256 == null || env.sha256.isEmpty()) {
             throw new IOException("invalid envelope: missing required fields");
         }
         return env;

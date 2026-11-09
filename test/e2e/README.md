@@ -114,7 +114,7 @@ make test-full                    # unit tests + local e2e suites
 ### Kind LFS SDK Helper Makefile
 
 The Kind-based SDK test uses `lfs-client-sdk/Makefile` to orchestrate:
-- `lfs-demo-up`: start the LFS demo stack on Kind (keeps it running)
+- `lfs-demo-up`: start the LFS demo stack on Kind with `make lfs-demo` (keeps it running)
 - `pf-start`: port-forward broker, LFS proxy HTTP, and MinIO
 - `test-lfs-sdk-kind`: run the Go SDK E2E test
 
@@ -127,6 +127,13 @@ Stop port-forwards:
 ```bash
 make -C lfs-client-sdk pf-stop
 ```
+
+`make lfs-demo` runs one broker, MinIO and an `lfs-proxy` deployment and service in the `kafscale-demo` namespace. The proxy serves the LFS HTTP API on port 8080, stores objects in the `kafscale` bucket and forwards produce requests to `kafscale-broker:9092`. The LFS tracker is off in this stack. On hosts where kind cannot use iptables, create the cluster with the nftables kube-proxy mode:
+```bash
+KAFSCALE_KIND_KUBE_PROXY_MODE=nftables make -C lfs-client-sdk run-all
+```
+
+Delete the cluster afterwards with `kind delete cluster --name kafscale-demo`.
 
 If you already ran `make lfs-demo`, ensure port-forwards are up before running the SDK test:
 ```bash

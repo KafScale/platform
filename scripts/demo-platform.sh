@@ -23,6 +23,8 @@ MINIO_REGION="${MINIO_REGION:-us-east-1}"
 MODE="${1:-}"
 KAFSCALE_DEMO_BROKER_REPLICAS="${KAFSCALE_DEMO_BROKER_REPLICAS:-2}"
 KAFSCALE_DEMO_PROXY="${KAFSCALE_DEMO_PROXY:-0}"
+PROXY_IMAGE="${PROXY_IMAGE:-ghcr.io/kafscale/kafscale-proxy:dev}"
+LFS_DEMO_BUCKET="${LFS_DEMO_BUCKET:-kafscale}"
 KAFSCALE_METALLB_RANGE="${KAFSCALE_METALLB_RANGE:-}"
 
 wait_for_dns() {
@@ -229,6 +231,106 @@ elif [[ "$MODE" == "wait" ]]; then
 		exit 1
 	fi
 	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready pod -l "${selector}" --timeout=180s
+elif [[ "$MODE" == "lfs" ]]; then
+	cat <<EOF | kubectl apply --validate=false -f -
+apiVersion: kafscale.io/v1alpha1
+kind: KafscaleTopic
+metadata:
+  name: lfs-demo-topic
+  namespace: ${KAFSCALE_DEMO_NAMESPACE}
+spec:
+  clusterRef: kafscale
+  partitions: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lfs-proxy
+  namespace: ${KAFSCALE_DEMO_NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lfs-proxy
+  template:
+    metadata:
+      labels:
+        app: lfs-proxy
+    spec:
+      containers:
+        - name: lfs-proxy
+          image: ${PROXY_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFSCALE_PROXY_ADDR
+              value: ":9092"
+            - name: KAFSCALE_PROXY_HEALTH_ADDR
+              value: ":9094"
+            - name: KAFSCALE_PROXY_ADVERTISED_HOST
+              value: lfs-proxy.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local
+            - name: KAFSCALE_PROXY_ETCD_ENDPOINTS
+              value: http://kafscale-etcd-client.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:2379
+            - name: KAFSCALE_PROXY_BACKENDS
+              value: kafscale-broker.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:9092
+            - name: KAFSCALE_PROXY_LFS_ENABLED
+              value: "true"
+            - name: KAFSCALE_LFS_PROXY_HTTP_ADDR
+              value: ":8080"
+            - name: KAFSCALE_LFS_PROXY_BACKENDS
+              value: kafscale-broker.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:9092
+            - name: KAFSCALE_LFS_TRACKER_ENABLED
+              value: "false"
+            - name: KAFSCALE_LFS_PROXY_S3_BUCKET
+              value: ${LFS_DEMO_BUCKET}
+            - name: KAFSCALE_LFS_PROXY_S3_REGION
+              value: ${MINIO_REGION}
+            - name: KAFSCALE_LFS_PROXY_S3_ENDPOINT
+              value: http://minio.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:9000
+            - name: KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE
+              value: "true"
+            - name: KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET
+              value: "true"
+            - name: KAFSCALE_LFS_PROXY_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kafscale-s3-credentials
+                  key: KAFSCALE_S3_ACCESS_KEY
+            - name: KAFSCALE_LFS_PROXY_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kafscale-s3-credentials
+                  key: KAFSCALE_S3_SECRET_KEY
+          ports:
+            - containerPort: 9092
+            - containerPort: 8080
+            - containerPort: 9094
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9094
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lfs-proxy
+  namespace: ${KAFSCALE_DEMO_NAMESPACE}
+spec:
+  selector:
+    app: lfs-proxy
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+    - name: http
+      port: 8080
+      targetPort: 8080
+EOF
+	if ! kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" rollout status deployment/lfs-proxy --timeout=180s; then
+		kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" describe pods -l app=lfs-proxy || true
+		kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" logs -l app=lfs-proxy --tail=100 || true
+		exit 1
+	fi
 elif [[ "$MODE" == "metallb" ]]; then
 	kubectl apply --validate=false -f deploy/kind/metallb-native.yaml
 	kubectl -n metallb-system rollout status deployment/controller --timeout=180s
@@ -273,6 +375,6 @@ spec:
     - kind-pool
 EOF
 else
-	echo "usage: $0 [minio|cluster|wait|metallb]" >&2
+	echo "usage: $0 [minio|cluster|wait|lfs|metallb]" >&2
 	exit 1
 fi

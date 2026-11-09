@@ -30,6 +30,12 @@ describe('decodeLfsEnvelope', () => {
     expect(decodeLfsEnvelope(new TextEncoder().encode(json))).toEqual(sampleEnvelope);
   });
 
+  it('throws when sha256 is empty', () => {
+    expect(() => decodeLfsEnvelope(JSON.stringify({ ...sampleEnvelope, sha256: '' }))).toThrow(
+      'Invalid LFS envelope: missing required fields'
+    );
+  });
+
   it('throws when required fields are missing', () => {
     expect(() => decodeLfsEnvelope('{"kfs_lfs":1}')).toThrow(
       'Invalid LFS envelope: missing required fields'

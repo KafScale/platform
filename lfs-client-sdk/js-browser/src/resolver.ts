@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { LfsEnvelope, isLfsEnvelope, decodeLfsEnvelope } from './envelope.js';
+import { LfsEnvelope, isLfsEnvelope } from './envelope.js';
 
 export interface ResolvedRecord {
   envelope?: LfsEnvelope;
@@ -59,20 +59,26 @@ export class LfsResolver {
    * If the value is not an envelope, returns it unchanged.
    */
   async resolve(value: string | Uint8Array | LfsEnvelope): Promise<ResolvedRecord> {
-    // Try to parse as envelope
     let envelope: LfsEnvelope;
 
     if (isLfsEnvelope(value)) {
       envelope = value;
     } else {
+      let parsed: unknown;
       try {
-        envelope = decodeLfsEnvelope(value as string | Uint8Array);
+        parsed = JSON.parse(typeof value === 'string' ? value : new TextDecoder().decode(value as Uint8Array));
       } catch {
-        // Not an envelope, return as-is
+        parsed = undefined;
+      }
+      if (!isLfsEnvelope(parsed)) {
         const payload =
           typeof value === 'string' ? new TextEncoder().encode(value) : value as Uint8Array;
         return { payload, isEnvelope: false };
       }
+      envelope = parsed;
+    }
+    if (envelope.sha256 === '') {
+      throw new Error('Invalid LFS envelope: missing required fields');
     }
 
     // Fetch blob from URL
