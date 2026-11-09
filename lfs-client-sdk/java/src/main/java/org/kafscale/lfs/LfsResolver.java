@@ -15,6 +15,8 @@
 
 package org.kafscale.lfs;
 
+import java.util.Locale;
+
 public class LfsResolver {
     private final S3Reader s3;
     private final boolean validateChecksum;
@@ -39,13 +41,28 @@ public class LfsResolver {
             throw new IllegalStateException("payload exceeds max size");
         }
         if (validateChecksum) {
-            String expected = env.checksum != null && !env.checksum.isEmpty() ? env.checksum : env.sha256;
+            String expected = expectedSha256(env);
             String actual = Checksum.sha256(payload);
             if (!actual.equals(expected)) {
                 throw new IllegalStateException("checksum mismatch");
             }
         }
         return new ResolvedRecord(env, payload, true);
+    }
+
+    private static String expectedSha256(LfsEnvelope env) {
+        String alg = env.checksumAlg == null ? "" : env.checksumAlg.trim().toLowerCase(Locale.ROOT);
+        switch (alg) {
+            case "":
+            case "sha256":
+                return env.checksum != null && !env.checksum.isEmpty() ? env.checksum : env.sha256;
+            case "md5":
+            case "crc32":
+            case "none":
+                return env.sha256;
+            default:
+                throw new IllegalStateException("unsupported checksum algorithm: " + alg);
+        }
     }
 
     public static final class ResolvedRecord {

@@ -84,4 +84,36 @@ describe('LfsResolver', () => {
       resolver.resolve({ ...sampleEnvelope, sha256: 'deadbeef' })
     ).rejects.toThrow('Checksum mismatch');
   });
+
+  describe.each([
+    ['sha256', helloSha256],
+    ['md5', '5d41402abc4b2a76b9719d911017c592'],
+    ['crc32', '3610a686'],
+    ['none', ''],
+  ])('checksum_alg %s', (alg, checksum) => {
+    const envelope = checksum ? { ...sampleEnvelope, checksum, checksum_alg: alg } : { ...sampleEnvelope, checksum_alg: alg };
+    const resolverFor = (payload: Uint8Array) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => payload.slice().buffer }));
+      return new LfsResolver({ getBlobUrl: async () => 'https://example.invalid/blob' });
+    };
+
+    it('resolves valid blobs', async () => {
+      const result = await resolverFor(helloBytes).resolve(envelope);
+      expect(result.payload).toEqual(helloBytes);
+    });
+
+    it('rejects corrupted blobs', async () => {
+      const corrupt = helloBytes.slice();
+      corrupt[0] ^= 1;
+      await expect(resolverFor(corrupt).resolve(envelope)).rejects.toThrow('Checksum mismatch');
+    });
+  });
+
+  it('rejects unsupported checksum algorithms', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => helloBytes.slice().buffer }));
+    const resolver = new LfsResolver({ getBlobUrl: async () => 'https://example.invalid/blob' });
+    await expect(
+      resolver.resolve({ ...sampleEnvelope, checksum: 'x', checksum_alg: 'sha1' })
+    ).rejects.toThrow('Unsupported checksum algorithm: sha1');
+  });
 });

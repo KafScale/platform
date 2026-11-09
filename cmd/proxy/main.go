@@ -225,12 +225,15 @@ func envOrDefault(key, fallback string) string {
 }
 
 func envPort(key string, fallback int) int32 {
+	if fallback < 1 || fallback > 65535 {
+		fallback = 9092
+	}
 	val := strings.TrimSpace(os.Getenv(key))
 	if val == "" {
 		return int32(fallback)
 	}
 	parsed, err := strconv.ParseInt(val, 10, 32)
-	if err != nil || parsed <= 0 {
+	if err != nil || parsed < 1 || parsed > 65535 {
 		return int32(fallback)
 	}
 	return int32(parsed)
@@ -271,11 +274,11 @@ func portFromAddr(addr string, fallback int) int {
 	if err != nil {
 		return fallback
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil || port == 0 {
 		return fallback
 	}
-	return port
+	return int(port)
 }
 
 func splitCSV(raw string) []string {

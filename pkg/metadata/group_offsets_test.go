@@ -41,18 +41,18 @@ func TestListGroupConsumerOffsets(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := store.ListGroupConsumerOffsets(ctx, "g")
+			got, err := ListGroupConsumerOffsets(ctx, store, "g")
 			sort.Slice(got, func(i, j int) bool { return got[i].Topic < got[j].Topic })
 			if err != nil || !reflect.DeepEqual(got, want) {
 				t.Fatal(got, err)
 			}
-			got, err = store.ListGroupConsumerOffsets(ctx, "missing")
+			got, err = ListGroupConsumerOffsets(ctx, store, "missing")
 			if err != nil || len(got) != 0 {
 				t.Fatal(got, err)
 			}
 			canceled, cancel := context.WithCancel(ctx)
 			cancel()
-			if _, err := store.ListGroupConsumerOffsets(canceled, "g"); !errors.Is(err, context.Canceled) {
+			if _, err := ListGroupConsumerOffsets(canceled, store, "g"); !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
 			if backend == "etcd" {
@@ -60,13 +60,13 @@ func TestListGroupConsumerOffsets(t *testing.T) {
 				if _, err := etcd.client.Put(ctx, ConsumerOffsetKey("g-other", "corrupt", 0), "not-json"); err != nil {
 					t.Fatal(err)
 				}
-				if got, err := store.ListGroupConsumerOffsets(ctx, "g"); err != nil || len(got) != 2 {
+				if got, err := ListGroupConsumerOffsets(ctx, store, "g"); err != nil || len(got) != 2 {
 					t.Fatal("read another group's offset prefix", got, err)
 				}
 				if _, err := etcd.client.Put(ctx, ConsumerOffsetKey("g", "corrupt", 0), "not-json"); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := store.ListGroupConsumerOffsets(ctx, "g"); err == nil {
+				if _, err := ListGroupConsumerOffsets(ctx, store, "g"); err == nil {
 					t.Fatal("corrupt offset silently ignored")
 				}
 			}
@@ -98,13 +98,13 @@ func TestDeleteConsumerGroupRemovesOnlyItsOffsets(t *testing.T) {
 			if group, err := store.FetchConsumerGroup(ctx, "g"); err != nil || group != nil {
 				t.Fatal(group, err)
 			}
-			if offsets, err := store.ListGroupConsumerOffsets(ctx, "g"); err != nil || len(offsets) != 0 {
+			if offsets, err := ListGroupConsumerOffsets(ctx, store, "g"); err != nil || len(offsets) != 0 {
 				t.Fatal(offsets, err)
 			}
 			if group, err := store.FetchConsumerGroup(ctx, "g-other"); err != nil || group == nil {
 				t.Fatal(group, err)
 			}
-			offsets, err := store.ListGroupConsumerOffsets(ctx, "g-other")
+			offsets, err := ListGroupConsumerOffsets(ctx, store, "g-other")
 			if err != nil || len(offsets) != 2 {
 				t.Fatal(offsets, err)
 			}
@@ -137,7 +137,7 @@ func TestConsumerGroupDelimiterIsolation(t *testing.T) {
 								t.Fatal(err)
 							}
 						}
-						offsets, err := store.ListGroupConsumerOffsets(ctx, id)
+						offsets, err := ListGroupConsumerOffsets(ctx, store, id)
 						if err != nil || len(offsets) != 105 {
 							t.Fatalf("scoped discovery %q: %d, %v", id, len(offsets), err)
 						}
@@ -150,11 +150,11 @@ func TestConsumerGroupDelimiterIsolation(t *testing.T) {
 					if err := store.DeleteConsumerGroup(ctx, pair[target]); err != nil {
 						t.Fatal(err)
 					}
-					if offsets, err := store.ListGroupConsumerOffsets(ctx, pair[target]); err != nil || len(offsets) != 0 {
+					if offsets, err := ListGroupConsumerOffsets(ctx, store, pair[target]); err != nil || len(offsets) != 0 {
 						t.Fatal(offsets, err)
 					}
 					survivor := pair[1-target]
-					offsets, err := store.ListGroupConsumerOffsets(ctx, survivor)
+					offsets, err := ListGroupConsumerOffsets(ctx, store, survivor)
 					if err != nil || len(offsets) != 105 {
 						t.Fatalf("survivor %q: %d, %v", survivor, len(offsets), err)
 					}

@@ -97,7 +97,7 @@ func TestDeleteGroupsExpiresStaleMembers(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						offsets, err := store.ListGroupConsumerOffsets(ctx, "stale")
+						offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "stale")
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -153,7 +153,7 @@ func TestDeleteStaleGroupPersistenceFailures(t *testing.T) {
 			if err != nil || resp.Groups[0].ErrorCode != want {
 				t.Fatal(resp, err)
 			}
-			offsets, err := store.ListGroupConsumerOffsets(ctx, "stale")
+			offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "stale")
 			if err != nil || len(offsets) != 1 || offsets[0].Offset != 42 {
 				t.Fatal(offsets, err)
 			}
@@ -176,7 +176,7 @@ func TestDeleteStaleGroupPersistenceFailures(t *testing.T) {
 			if group, err := store.FetchConsumerGroup(ctx, "stale"); err != nil || group != nil {
 				t.Fatal(group, err)
 			}
-			if offsets, err := store.ListGroupConsumerOffsets(ctx, "stale"); err != nil || len(offsets) != 0 {
+			if offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "stale"); err != nil || len(offsets) != 0 {
 				t.Fatal(offsets, err)
 			}
 		})
@@ -187,7 +187,7 @@ func TestGroupCleanupDropsLostOwnership(t *testing.T) {
 	ctx := context.Background()
 	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
 	seedCoordinatorGroup(t, store, groupStateStableStr)
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{}, &CoordinatorConfig{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { return false }})
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{}, &CoordinatorOptions{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { return false }})
 	t.Cleanup(c.Stop)
 	state, err := c.loadGroupIfMissing(ctx, "readers")
 	if err != nil {
@@ -266,7 +266,7 @@ func TestDeleteExpiryLosesLeaseBeforeWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	checks := 0
-	c := NewGroupCoordinator(store, protocol.MetadataBroker{}, &CoordinatorConfig{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { checks++; return checks < 3 }})
+	c := NewGroupCoordinatorWithOptions(store, protocol.MetadataBroker{}, &CoordinatorOptions{CleanupInterval: time.Hour, OwnsGroup: func(string) bool { checks++; return checks < 3 }})
 	t.Cleanup(c.Stop)
 	state, err := c.loadGroupIfMissing(ctx, "readers")
 	if err != nil {
@@ -285,7 +285,7 @@ func TestDeleteExpiryLosesLeaseBeforeWrite(t *testing.T) {
 	if err != nil || !proto.Equal(stored, group) {
 		t.Fatal("lost lease persisted expiry", stored, err)
 	}
-	offsets, err := store.ListGroupConsumerOffsets(ctx, "readers")
+	offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, "readers")
 	if err != nil || len(offsets) != 1 || offsets[0].Offset != 42 {
 		t.Fatal(offsets, err)
 	}

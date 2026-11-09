@@ -1844,3 +1844,38 @@ func TestProxyAdvertisesOlderGroupAdminVersions(t *testing.T) {
 		t.Fatalf("missing api versions %v", want)
 	}
 }
+
+// Both advertised-port paths must reject values outside the TCP port range
+// before converting to Kafka's int32 port field.
+func TestAdvertisedPortBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want int32
+	}{
+		{"1", 1}, {"65535", 65535}, {"0", 9092}, {"-1", 9092},
+		{"65536", 9092}, {"2147483647", 9092}, {"2147483648", 9092},
+		{"4294967297", 9092}, {"9223372036854775808", 9092}, {"bad", 9092},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv("KAFSCALE_TEST_PORT", tc.raw)
+			if got := envPort("KAFSCALE_TEST_PORT", 9092); got != tc.want {
+				t.Fatalf("envPort = %d, want %d", got, tc.want)
+			}
+			if got := portFromAddr("localhost:"+tc.raw, 9092); got != int(tc.want) {
+				t.Fatalf("portFromAddr = %d, want %d", got, tc.want)
+			}
+		})
+	}
+	for _, raw := range []string{"", "invalid"} {
+		t.Setenv("KAFSCALE_TEST_PORT", raw)
+		for _, fallback := range []int{-1, 0, 65536, 2147483647} {
+			if got := envPort("KAFSCALE_TEST_PORT", fallback); got != 9092 {
+				t.Fatalf("unbounded fallback: %d", got)
+			}
+		}
+	}
+	t.Setenv("KAFSCALE_TEST_PORT", "65535")
+	if got := envPort("KAFSCALE_TEST_PORT", -1); got != 65535 {
+		t.Fatal(got)
+	}
+}

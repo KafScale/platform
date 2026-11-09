@@ -64,7 +64,7 @@ const (
 type GroupCoordinator struct {
 	store              metadata.Store
 	broker             protocol.MetadataBroker
-	config             CoordinatorConfig
+	config             CoordinatorOptions
 	stopCh             chan struct{}
 	mu                 sync.Mutex
 	groups             map[string]*groupState
@@ -74,7 +74,17 @@ type GroupCoordinator struct {
 	releasing          map[string]struct{}
 }
 
+// CoordinatorConfig preserves the published v1.6.3 configuration, including
+// comparability and unkeyed literals.
+//
+// Deprecated: use CoordinatorOptions with NewGroupCoordinatorWithOptions.
+// Removal requires an announced future breaking release; none is scheduled.
 type CoordinatorConfig struct {
+	CleanupInterval time.Duration
+}
+
+// CoordinatorOptions configures retention and optional coordination hooks.
+type CoordinatorOptions struct {
 	CleanupInterval time.Duration
 	// Zero uses the seven-day default; a negative value disables retention.
 	OffsetsRetention          time.Duration
@@ -90,7 +100,7 @@ type CoordinatorConfig struct {
 	GroupDeleted func(string)
 }
 
-var defaultCoordinatorConfig = CoordinatorConfig{
+var defaultCoordinatorOptions = CoordinatorOptions{
 	CleanupInterval:           5 * time.Second,
 	OffsetsRetention:          7 * 24 * time.Hour,
 	RetentionCheckInterval:    time.Minute,
@@ -135,8 +145,20 @@ type assignmentTopic struct {
 	Partitions []int32
 }
 
+// NewGroupCoordinator constructs a coordinator using the published configuration.
+//
+// Deprecated: use NewGroupCoordinatorWithOptions for retention and lease hooks.
 func NewGroupCoordinator(store metadata.Store, broker protocol.MetadataBroker, cfg *CoordinatorConfig) *GroupCoordinator {
-	config := defaultCoordinatorConfig
+	var options *CoordinatorOptions
+	if cfg != nil {
+		options = &CoordinatorOptions{CleanupInterval: cfg.CleanupInterval}
+	}
+	return NewGroupCoordinatorWithOptions(store, broker, options)
+}
+
+// NewGroupCoordinatorWithOptions constructs a coordinator with optional retention and lease hooks.
+func NewGroupCoordinatorWithOptions(store metadata.Store, broker protocol.MetadataBroker, cfg *CoordinatorOptions) *GroupCoordinator {
+	config := defaultCoordinatorOptions
 	if cfg != nil {
 		if cfg.CleanupInterval > 0 {
 			config.CleanupInterval = cfg.CleanupInterval
@@ -625,7 +647,7 @@ func (c *GroupCoordinator) OffsetFetch(ctx context.Context, req *kmsg.OffsetFetc
 	resp := kmsg.NewPtrOffsetFetchResponse()
 	resp.ErrorCode = protocol.NONE
 	if req.Version >= 2 && req.Topics == nil {
-		offsets, err := c.store.ListGroupConsumerOffsets(ctx, req.Group)
+		offsets, err := metadata.ListGroupConsumerOffsets(ctx, c.store, req.Group)
 		if err != nil {
 			resp.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
 			return resp, nil
@@ -707,7 +729,7 @@ func (c *GroupCoordinator) fetchGroupForAdmin(ctx context.Context, groupID strin
 	if err != nil || group != nil {
 		return group, createRevision, err
 	}
-	offsets, err := c.store.ListGroupConsumerOffsets(ctx, groupID)
+	offsets, err := metadata.ListGroupConsumerOffsets(ctx, c.store, groupID)
 	if err != nil || len(offsets) == 0 {
 		return nil, 0, err
 	}

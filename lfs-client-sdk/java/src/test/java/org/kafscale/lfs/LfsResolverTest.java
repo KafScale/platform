@@ -16,11 +16,18 @@
 package org.kafscale.lfs;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.HexFormat;
+import java.util.zip.CRC32;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -58,6 +65,66 @@ class LfsResolverTest {
 
         assertThrows(IllegalStateException.class,
                 () -> resolver.resolve(envelope.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sha256", "md5", "crc32", "none"})
+    void resolvesValidEnvelopeForEveryChecksumAlgorithm(String alg) throws Exception {
+        byte[] payload = largePayload();
+        LfsResolver resolver = new LfsResolver(new StaticS3Reader(payload), true, 0);
+
+        LfsResolver.ResolvedRecord record = resolver.resolve(algorithmEnvelope(alg, payload));
+
+        assertTrue(record.isEnvelope);
+        assertArrayEquals(payload, record.payload);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sha256", "md5", "crc32", "none"})
+    void rejectsCorruptObjectForEveryChecksumAlgorithm(String alg) throws Exception {
+        byte[] payload = largePayload();
+        byte[] corrupt = payload.clone();
+        corrupt[0] ^= 1;
+        LfsResolver resolver = new LfsResolver(new StaticS3Reader(corrupt), true, 0);
+
+        IllegalStateException err = assertThrows(IllegalStateException.class,
+                () -> resolver.resolve(algorithmEnvelope(alg, payload)));
+        assertEquals("checksum mismatch", err.getMessage());
+    }
+
+    @Test
+    void rejectsUnsupportedChecksumAlgorithm() {
+        byte[] payload = largePayload();
+        String envelope = "{\"kfs_lfs\":1,\"bucket\":\"b\",\"key\":\"k\",\"sha256\":\"" + Checksum.sha256(payload)
+                + "\",\"checksum\":\"x\",\"checksum_alg\":\"sha1\"}";
+        LfsResolver resolver = new LfsResolver(new StaticS3Reader(payload), true, 0);
+
+        IllegalStateException err = assertThrows(IllegalStateException.class,
+                () -> resolver.resolve(envelope.getBytes(StandardCharsets.UTF_8)));
+        assertEquals("unsupported checksum algorithm: sha1", err.getMessage());
+    }
+
+    private static byte[] largePayload() {
+        byte[] payload = new byte[262144];
+        Arrays.fill(payload, (byte) 42);
+        return payload;
+    }
+
+    private static byte[] algorithmEnvelope(String alg, byte[] payload) throws Exception {
+        String checksum = switch (alg) {
+            case "sha256" -> Checksum.sha256(payload);
+            case "md5" -> HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest(payload));
+            case "crc32" -> {
+                CRC32 crc = new CRC32();
+                crc.update(payload);
+                yield String.format("%08x", crc.getValue());
+            }
+            default -> "";
+        };
+        String checksumField = checksum.isEmpty() ? "" : ",\"checksum\":\"" + checksum + "\"";
+        String envelope = "{\"kfs_lfs\":1,\"bucket\":\"b\",\"key\":\"k\",\"sha256\":\"" + Checksum.sha256(payload)
+                + "\"" + checksumField + ",\"checksum_alg\":\"" + alg + "\"}";
+        return envelope.getBytes(StandardCharsets.UTF_8);
     }
 
     private static final class StaticS3Reader implements S3Reader {

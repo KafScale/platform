@@ -56,7 +56,7 @@ func TestCommitSimpleConsumerOffset(t *testing.T) {
 		if err := CommitSimpleConsumerOffset(ctx, store, "active", "orders", 0, 5, ""); !errors.Is(err, ErrConsumerGroupNotEmpty) {
 			t.Fatal(name, err)
 		}
-		if offsets, _ := store.ListGroupConsumerOffsets(ctx, "active"); len(offsets) != 0 {
+		if offsets, _ := ListGroupConsumerOffsets(ctx, store, "active"); len(offsets) != 0 {
 			t.Fatal(name, offsets)
 		}
 	}
@@ -89,7 +89,7 @@ func TestCommitSimpleConsumerOffsetRacesJoin(t *testing.T) {
 	if err := store.CommitSimpleConsumerOffset(ctx, "g", "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupNotEmpty) {
 		t.Fatal(err)
 	}
-	if offsets, _ := base.ListGroupConsumerOffsets(ctx, "g"); len(offsets) != 0 {
+	if offsets, _ := ListGroupConsumerOffsets(ctx, base, "g"); len(offsets) != 0 {
 		t.Fatal(offsets)
 	}
 	if group, _ := base.FetchConsumerGroup(ctx, "g"); group == nil || len(group.Members) != 1 {

@@ -269,7 +269,7 @@ func TestConsumerGroupIndexMigratesLegacyLayout(t *testing.T) {
 	if group, err := store.FetchConsumerGroup(ctx, "offsets-only"); err != nil || group == nil || group.EmptySince == "" {
 		t.Fatalf("offsets-only group not initialized: %+v, %v", group, err)
 	}
-	if offsets, err := store.ListGroupConsumerOffsets(ctx, "expired"); err != nil || len(offsets) != 0 {
+	if offsets, err := ListGroupConsumerOffsets(ctx, store, "expired"); err != nil || len(offsets) != 0 {
 		t.Fatalf("expired offsets remain: %d, %v", len(offsets), err)
 	}
 }

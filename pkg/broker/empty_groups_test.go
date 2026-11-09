@@ -56,7 +56,7 @@ func TestDeleteGroupsWithLegacyStore(t *testing.T) {
 		if group, _ := base.FetchConsumerGroup(ctx, "readers"); group != nil {
 			t.Fatal("fallback deletion kept group")
 		}
-		if remaining, err := base.ListGroupConsumerOffsets(ctx, "readers"); err != nil || len(remaining) != 0 {
+		if remaining, err := metadata.ListGroupConsumerOffsets(ctx, base, "readers"); err != nil || len(remaining) != 0 {
 			t.Fatal("fallback deletion kept offsets", remaining, err)
 		}
 	}

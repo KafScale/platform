@@ -83,7 +83,7 @@ func TestOptionalConsumerGroupDeletion(t *testing.T) {
 		if g, _ := base.FetchConsumerGroup(ctx, group); g != nil {
 			t.Fatal("fallback deletion kept group", group)
 		}
-		if offsets, err := base.ListGroupConsumerOffsets(ctx, group); err != nil || len(offsets) != 0 {
+		if offsets, err := ListGroupConsumerOffsets(ctx, base, group); err != nil || len(offsets) != 0 {
 			t.Fatal("fallback deletion kept offsets", offsets, err)
 		}
 	}
@@ -286,7 +286,7 @@ func TestEtcdDeletionChunksInterleavedRanges(t *testing.T) {
 	if group, err := store.FetchConsumerGroup(ctx, "big2"); err != nil || group != nil {
 		t.Fatal(group, err)
 	}
-	if offsets, err := store.ListGroupConsumerOffsets(ctx, "big2"); err != nil || len(offsets) != 0 {
+	if offsets, err := ListGroupConsumerOffsets(ctx, store, "big2"); err != nil || len(offsets) != 0 {
 		t.Fatal(len(offsets), err)
 	}
 	for i := 0; i < 200; i++ {

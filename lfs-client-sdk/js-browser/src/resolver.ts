@@ -91,7 +91,7 @@ export class LfsResolver {
     }
 
     if (this.validateChecksum) {
-      const expected = envelope.checksum || envelope.sha256;
+      const expected = expectedSha256(envelope);
       const actual = await sha256Hex(payload);
       if (actual !== expected) {
         throw new Error(`Checksum mismatch: expected ${expected}, got ${actual}`);
@@ -99,6 +99,21 @@ export class LfsResolver {
     }
 
     return { envelope, payload, isEnvelope: true };
+  }
+}
+
+function expectedSha256(envelope: LfsEnvelope): string {
+  const alg = (envelope.checksum_alg ?? '').trim().toLowerCase();
+  switch (alg) {
+    case '':
+    case 'sha256':
+      return envelope.checksum || envelope.sha256;
+    case 'md5':
+    case 'crc32':
+    case 'none':
+      return envelope.sha256;
+    default:
+      throw new Error(`Unsupported checksum algorithm: ${alg}`);
   }
 }
 

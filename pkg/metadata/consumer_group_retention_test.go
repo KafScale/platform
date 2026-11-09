@@ -72,7 +72,7 @@ func TestConsumerGroupRetentionStores(t *testing.T) {
 			if group, err := store.FetchConsumerGroup(ctx, "expired"); err != nil || group != nil {
 				t.Fatalf("expired metadata remains: %+v, %v", group, err)
 			}
-			if offsets, err := store.ListGroupConsumerOffsets(ctx, "expired"); err != nil || len(offsets) != 0 {
+			if offsets, err := ListGroupConsumerOffsets(ctx, store, "expired"); err != nil || len(offsets) != 0 {
 				t.Fatalf("expired offsets remain: %+v, %v", offsets, err)
 			}
 			for _, id := range []string{"fresh", "active", "expired/offsets/child", "legacy", "missing"} {
@@ -87,7 +87,7 @@ func TestConsumerGroupRetentionStores(t *testing.T) {
 			if deleted, err := retainer.ExpireConsumerGroup(ctx, "legacy", now.Add(time.Hour), now.Add(2*time.Hour)); err != nil || !deleted {
 				t.Fatalf("legacy expiry after retention: %v, %v", deleted, err)
 			}
-			if offsets, err := store.ListGroupConsumerOffsets(ctx, "expired/offsets/child"); err != nil || len(offsets) != 1 {
+			if offsets, err := ListGroupConsumerOffsets(ctx, store, "expired/offsets/child"); err != nil || len(offsets) != 1 {
 				t.Fatalf("nested group's offsets removed: %+v, %v", offsets, err)
 			}
 			canceled, cancel := context.WithCancel(ctx)
@@ -278,7 +278,7 @@ func TestRetentionCommitFencesAndStoreErrors(t *testing.T) {
 			} else if err == nil {
 				t.Fatal("store error ignored")
 			}
-			if offsets, err := base.ListGroupConsumerOffsets(ctx, id); err != nil || len(offsets) != 0 {
+			if offsets, err := ListGroupConsumerOffsets(ctx, base, id); err != nil || len(offsets) != 0 {
 				t.Fatalf("failed commit changed offsets: %+v, %v", offsets, err)
 			}
 		})

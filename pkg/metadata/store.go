@@ -45,8 +45,6 @@ type Store interface {
 	FetchConsumerOffset(ctx context.Context, group, topic string, partition int32) (int64, string, error)
 	// ListConsumerOffsets returns all committed consumer offsets.
 	ListConsumerOffsets(ctx context.Context) ([]ConsumerOffset, error)
-	// ListGroupConsumerOffsets returns committed offsets and metadata for one group.
-	ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error)
 	// PutConsumerGroup persists consumer group metadata.
 	PutConsumerGroup(ctx context.Context, group *metadatapb.ConsumerGroup) error
 	// FetchConsumerGroup retrieves consumer group metadata.
@@ -512,7 +510,7 @@ func (s *InMemoryStore) ListConsumerOffsets(ctx context.Context) ([]ConsumerOffs
 	return s.listConsumerOffsets(ctx, "", false)
 }
 
-// ListGroupConsumerOffsets implements Store.ListGroupConsumerOffsets.
+// ListGroupConsumerOffsets implements GroupConsumerOffsetLister.
 func (s *InMemoryStore) ListGroupConsumerOffsets(ctx context.Context, group string) ([]ConsumerOffset, error) {
 	return s.listConsumerOffsets(ctx, group, true)
 }
