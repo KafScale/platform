@@ -622,7 +622,7 @@ Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets `
 
 The secret named by `spec.s3.credentialsSecretRef` can hold `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` (optionally `KAFSCALE_S3_SESSION_TOKEN`), the keys the brokers and snapshot jobs use, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. When a secret holds both pairs, the LFS proxy uses the `AWS_` pair. A missing key no longer stops the pod from starting; with neither pair, the proxy uses the default AWS credential chain.
 
-The LFS proxy finds brokers through etcd at their advertised address. When that address is not reachable from inside the cluster, for example when brokers advertise a host port forward, set `spec.lfsProxy.backends` to the broker service, such as `kafscale-broker.<namespace>.svc.cluster.local:9092`; otherwise the proxy stays NotReady.
+The LFS proxy finds brokers through etcd at their advertised address. When that address is not reachable from inside the cluster, for example when brokers advertise a host port forward, set `spec.lfsProxy.backends` to the broker service, such as `kafscale-broker.<namespace>.svc.cluster.local:9092`; otherwise the proxy stays NotReady. The LFS tracker uses `backends` only as seed brokers and then produces to the advertised address of the partition leader, so it needs brokers that advertise an address pods can reach. Without that, `__lfs_ops_state` gets no events and the proxy logs `lfs ops tracker: ensure topic failed`. To reach the cluster from a host, advertise the in-cluster broker address and port forward to the LFS proxy with `spec.lfsProxy.advertisedHost` and `advertisedPort` set to the forwarded address, as `make lfs-demo` does.
 
 ### Iceberg processor LFS overrides
 

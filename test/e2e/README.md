@@ -128,7 +128,7 @@ Stop port-forwards:
 make -C lfs-client-sdk pf-stop
 ```
 
-`make lfs-demo` runs one broker, MinIO and the operator managed LFS proxy (`spec.lfsProxy`, deployment and service `kafscale-lfs-proxy`) in the `kafscale-demo` namespace. The proxy serves the LFS HTTP API on port 8080, stores objects in the cluster bucket `kafscale-snapshots` and sends produce requests to `kafscale-broker:9092` through `spec.lfsProxy.backends`, because the demo brokers advertise the host port forward address `127.0.0.1:39092`. `lfs-demo-run` is an alias for `lfs-demo-up`. On hosts where kind cannot use iptables, create the cluster with the nftables kube-proxy mode:
+`make lfs-demo` runs one broker, MinIO and the operator managed LFS proxy (`spec.lfsProxy`, deployment and service `kafscale-lfs-proxy`) in the `kafscale-demo` namespace. The proxy serves the LFS HTTP API on port 8080, stores objects in the cluster bucket `kafscale-snapshots` and sends produce requests to `kafscale-broker:9092` through `spec.lfsProxy.backends`, which also feeds the LFS tracker topic `__lfs_ops_state`. The brokers advertise `kafscale-broker.kafscale-demo.svc.cluster.local:9092`, so pods reach them. The proxy advertises `127.0.0.1:39092`, and `pf-start` forwards that port to the proxy's Kafka port, so the host test consumes through the proxy. `lfs-demo-run` is an alias for `lfs-demo-up`. On hosts where kind cannot use iptables, create the cluster with the nftables kube-proxy mode:
 ```bash
 KAFSCALE_KIND_KUBE_PROXY_MODE=nftables make -C lfs-client-sdk run-all
 ```

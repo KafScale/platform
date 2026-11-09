@@ -83,7 +83,7 @@ pf-start: kind-kubeconfig ## Start port-forwards for broker, LFS proxy HTTP, and
 	    kubectl -n $(KAFSCALE_DEMO_NAMESPACE) port-forward "$$@" >>"$$log" 2>&1 & \
 	    echo $$! > "$$pidfile"; \
 	  }; \
-	  start_pf broker /tmp/kafscale-demo-broker.log svc/kafscale-broker $(BROKER_LOCAL_PORT):9092; \
+	  start_pf broker /tmp/kafscale-demo-broker.log svc/$(LFS_PROXY_NAME) $(BROKER_LOCAL_PORT):9092; \
 	  start_pf lfs_http /tmp/kafscale-demo-lfs-http.log svc/$(LFS_PROXY_NAME) $(LFS_PROXY_HTTP_LOCAL_PORT):$(LFS_PROXY_HTTP_PORT); \
 	  start_pf minio /tmp/kafscale-demo-minio.log svc/minio $(MINIO_LOCAL_PORT):9000; \
 	  echo "Port-forwards running (broker=$(BROKER_LOCAL_PORT), lfs_http=$(LFS_PROXY_HTTP_LOCAL_PORT), minio=$(MINIO_LOCAL_PORT))"; \
