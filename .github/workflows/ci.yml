@@ -53,8 +53,30 @@ jobs:
       - name: Check resolver integrity regressions
         run: |
           export PATH="$PWD/.tools/node/bin:$PATH"
-          npm --prefix lfs-client-sdk/js install --ignore-scripts
+          npm --prefix lfs-client-sdk/js ci --ignore-scripts
           npm --prefix lfs-client-sdk/js test
+      - name: Build pinned MinIO test fixture
+        run: docker build -t kafscale-minio:lfs-integrity -f test/e2e/minio.Dockerfile .
+      - name: Run real S3 corruption probe
+        env:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_REGION: us-east-1
+          LFS_S3_ENDPOINT: http://127.0.0.1:9000
+        run: |
+          export PATH="$PWD/.tools/node/bin:$PATH"
+          docker run -d --name lfs-integrity-minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            kafscale-minio:lfs-integrity
+          for _ in $(seq 1 60); do
+            curl -fsS "$LFS_S3_ENDPOINT/minio/health/ready" >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS "$LFS_S3_ENDPOINT/minio/health/ready"
+          npm --prefix lfs-client-sdk/js run test:s3
+      - name: Stop MinIO test fixture
+        if: always()
+        run: docker rm -f lfs-integrity-minio || true
 
   go-test:
     name: Go Test Suite
