@@ -36,7 +36,7 @@ Tests have different dependency requirements. Tests will **skip gracefully** if 
 | librdkafka/kcat tests | No | No | No | `KAFSCALE_E2E=1 go test -tags=e2e ./test/e2e -run TestLibrdkafkaCompatibilityE2E -v` |
 | Ops API tests | No | No | No | `make test-ops-api` |
 | MCP tests | No | No | No | `make test-mcp` |
-| LFS proxy tests | No (fake S3) | No | No | `make test-lfs-proxy-broker` |
+| LFS proxy tests | No (fake S3) | No | No | `go test ./cmd/proxy -run 'Lfs\|LFS'` |
 | Produce/consume tests | **Yes** | Yes | No | `make test-produce-consume` |
 | Multi-segment durability | **Yes** | No | No | `make test-multi-segment-durability` |
 | Kind cluster tests | No | Yes | Yes | Requires `KAFSCALE_E2E_KIND=1` |
@@ -105,10 +105,10 @@ For local developer workflows, prefer the Makefile targets:
 make test-consumer-group          # embedded etcd + in-memory S3
 make test-ops-api                 # embedded etcd + in-memory S3
 make test-mcp                     # MCP server tests
-make test-lfs-proxy-broker        # LFS proxy with fake S3
 make test-multi-segment-durability # embedded etcd + MinIO
 make test-produce-consume         # MinIO-backed produce/consume suite
 make test-full                    # unit tests + local e2e suites
+go test ./cmd/proxy -run 'Lfs|LFS' # LFS proxy with fake S3
 ```
 
 ### Kind LFS SDK Helper Makefile
@@ -128,7 +128,7 @@ Stop port-forwards:
 make -C lfs-client-sdk pf-stop
 ```
 
-`make lfs-demo` runs one broker, MinIO and an `lfs-proxy` deployment and service in the `kafscale-demo` namespace. The proxy serves the LFS HTTP API on port 8080, stores objects in the `kafscale` bucket and forwards produce requests to `kafscale-broker:9092`. The LFS tracker is off in this stack. On hosts where kind cannot use iptables, create the cluster with the nftables kube-proxy mode:
+`make lfs-demo` runs one broker, MinIO and the operator managed LFS proxy (`spec.lfsProxy`, deployment and service `kafscale-lfs-proxy`) in the `kafscale-demo` namespace. The proxy serves the LFS HTTP API on port 8080, stores objects in the cluster bucket `kafscale-snapshots` and sends produce requests to `kafscale-broker:9092` through `spec.lfsProxy.backends`, because the demo brokers advertise the host port forward address `127.0.0.1:39092`. `lfs-demo-run` is an alias for `lfs-demo-up`. On hosts where kind cannot use iptables, create the cluster with the nftables kube-proxy mode:
 ```bash
 KAFSCALE_KIND_KUBE_PROXY_MODE=nftables make -C lfs-client-sdk run-all
 ```

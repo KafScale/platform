@@ -28,8 +28,9 @@ LFS_PROXY_HTTP_LOCAL_PORT ?= 8080
 MINIO_LOCAL_PORT ?= 9000
 
 LFS_PROXY_HTTP_PORT ?= 8080
+LFS_PROXY_NAME ?= kafscale-lfs-proxy
 
-KAFSCALE_LFS_PROXY_S3_BUCKET ?= kafscale
+KAFSCALE_LFS_PROXY_S3_BUCKET ?= kafscale-snapshots
 KAFSCALE_LFS_PROXY_S3_REGION ?= us-east-1
 KAFSCALE_LFS_PROXY_S3_ENDPOINT ?= http://127.0.0.1:$(MINIO_LOCAL_PORT)
 KAFSCALE_LFS_PROXY_S3_ACCESS_KEY ?= minioadmin
@@ -50,7 +51,7 @@ help:
 	@echo "  build-all           Build Java, JS, Python (and browser) SDKs."
 	@echo "  test-all            Run Java, JS, Python (and browser) SDK tests."
 	@echo "  lfs-demo-up         Start/refresh the Kind LFS demo stack (keeps resources)."
-	@echo "  lfs-demo-run        Run the LFS demo job in-cluster."
+	@echo "  lfs-demo-run        Alias for lfs-demo-up."
 	@echo "  pf-start            Start port-forwards for broker, LFS proxy HTTP, and MinIO."
 	@echo "  pf-stop             Stop port-forwards started by pf-start."
 	@echo "  test-lfs-sdk-kind   Run Go SDK E2E test against Kind stack."
@@ -59,19 +60,14 @@ help:
 kind-kubeconfig:
 	@kind get kubeconfig --name $(KAFSCALE_KIND_CLUSTER) > $(KAFSCALE_KIND_KUBECONFIG)
 
-lfs-demo-up: kind-kubeconfig ## Start Kind LFS demo stack and keep it running.
+lfs-demo-up: ## Start Kind LFS demo stack and keep it running.
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
 	  LFS_DEMO_CLEANUP=0 \
 	  KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
 	  KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
 	  $(MAKE) -C .. lfs-demo
 
-lfs-demo-run: kind-kubeconfig ## Run the in-cluster LFS demo job.
-	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) \
-	  LFS_DEMO_CLEANUP=0 \
-	  KAFSCALE_DEMO_NAMESPACE=$(KAFSCALE_DEMO_NAMESPACE) \
-	  KAFSCALE_KIND_CLUSTER=$(KAFSCALE_KIND_CLUSTER) \
-	  $(MAKE) -C .. lfs-demo
+lfs-demo-run: lfs-demo-up ## Alias for lfs-demo-up.
 
 pf-start: kind-kubeconfig ## Start port-forwards for broker, LFS proxy HTTP, and MinIO.
 	@mkdir -p .pf
@@ -88,7 +84,7 @@ pf-start: kind-kubeconfig ## Start port-forwards for broker, LFS proxy HTTP, and
 	    echo $$! > "$$pidfile"; \
 	  }; \
 	  start_pf broker /tmp/kafscale-demo-broker.log svc/kafscale-broker $(BROKER_LOCAL_PORT):9092; \
-	  start_pf lfs_http /tmp/kafscale-demo-lfs-http.log svc/lfs-proxy $(LFS_PROXY_HTTP_LOCAL_PORT):$(LFS_PROXY_HTTP_PORT); \
+	  start_pf lfs_http /tmp/kafscale-demo-lfs-http.log svc/$(LFS_PROXY_NAME) $(LFS_PROXY_HTTP_LOCAL_PORT):$(LFS_PROXY_HTTP_PORT); \
 	  start_pf minio /tmp/kafscale-demo-minio.log svc/minio $(MINIO_LOCAL_PORT):9000; \
 	  echo "Port-forwards running (broker=$(BROKER_LOCAL_PORT), lfs_http=$(LFS_PROXY_HTTP_LOCAL_PORT), minio=$(MINIO_LOCAL_PORT))"; \
 	'
@@ -121,15 +117,15 @@ run-all: lfs-demo-up pf-start test-lfs-sdk-kind ## Start stack, port-forward, th
 
 wait-http: kind-kubeconfig ## Ensure LFS proxy is ready, then verify HTTP port-forward.
 	@KUBECONFIG=$(KAFSCALE_KIND_KUBECONFIG) bash -c 'set -euo pipefail; \
-	  if ! kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc lfs-proxy >/dev/null 2>&1; then \
+	  if ! kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get svc $(LFS_PROXY_NAME) >/dev/null 2>&1; then \
 	    echo "LFS proxy service not found in namespace $(KAFSCALE_DEMO_NAMESPACE). Run: make lfs-demo" >&2; \
 	    exit 1; \
 	  fi; \
-	  if ! kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployment lfs-proxy >/dev/null 2>&1; then \
+	  if ! kubectl -n $(KAFSCALE_DEMO_NAMESPACE) get deployment $(LFS_PROXY_NAME) >/dev/null 2>&1; then \
 	    echo "LFS proxy deployment not found in namespace $(KAFSCALE_DEMO_NAMESPACE). Run: make lfs-demo" >&2; \
 	    exit 1; \
 	  fi; \
-	  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/lfs-proxy --timeout=120s; \
+	  kubectl -n $(KAFSCALE_DEMO_NAMESPACE) rollout status deployment/$(LFS_PROXY_NAME) --timeout=120s; \
 	  $(MAKE) pf-start; \
 	  for i in $$(seq 1 30); do \
 	    if (exec 3<>/dev/tcp/127.0.0.1/$(LFS_PROXY_HTTP_LOCAL_PORT)) >/dev/null 2>&1; then \
