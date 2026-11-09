@@ -33,8 +33,17 @@ class LfsResolver:
         if self.max_size > 0 and len(payload) > self.max_size:
             raise ValueError("payload exceeds max size")
         if self.validate_checksum:
-            expected = env.checksum or env.sha256
+            expected = _expected_sha256(env)
             actual = hashlib.sha256(payload).hexdigest()
             if actual != expected:
                 raise ValueError("checksum mismatch")
         return ResolvedRecord(env, payload, True)
+
+
+def _expected_sha256(env: LfsEnvelope) -> str:
+    alg = (env.checksum_alg or "").strip().lower()
+    if alg in ("", "sha256"):
+        return env.checksum or env.sha256
+    if alg in ("md5", "crc32", "none"):
+        return env.sha256
+    raise ValueError(f"unsupported checksum algorithm: {alg}")

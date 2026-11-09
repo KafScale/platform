@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { crc32 } from 'node:zlib';
 import { S3Client } from '@aws-sdk/client-s3';
 import { LfsResolver } from '../resolver.js';
 
@@ -40,4 +41,25 @@ test('plain records bypass S3 and size guard still applies to envelopes', async 
   const resolver = new LfsResolver({ send: () => { throw new Error('unexpected S3 access'); } } as unknown as S3Client, 'test');
   assert.deepEqual(await resolver.resolve(original), { payload: original, isEnvelope: false });
   await assert.rejects(new LfsResolver(client(original), 'test', { maxSize: 1 }).resolve(envelope()), /max size/);
+});
+const algChecksums: Record<string, string> = {
+  sha256: hash(original),
+  md5: createHash('md5').update(original).digest('hex'),
+  crc32: crc32(original).toString(16).padStart(8, '0'),
+  none: '',
+};
+for (const [alg, checksum] of Object.entries(algChecksums)) {
+  const env = () => envelope(checksum ? { checksum, checksum_alg: alg } : { checksum_alg: alg });
+  test(`${alg} envelope resolves exact bytes`, async () => {
+    const result = await new LfsResolver(client(original), 'test').resolve(env());
+    assert.deepEqual(result.payload, original);
+  });
+  test(`${alg} envelope rejects same-length S3 corruption`, async () => {
+    const corrupt = original.slice();
+    corrupt[0] ^= 1;
+    await assert.rejects(new LfsResolver(client(corrupt), 'test').resolve(env()), /checksum mismatch/i);
+  });
+}
+test('unsupported checksum algorithm is rejected', async () => {
+  await assert.rejects(new LfsResolver(client(original), 'test').resolve(envelope({ checksum: 'x', checksum_alg: 'sha1' })), /unsupported checksum algorithm/i);
 });

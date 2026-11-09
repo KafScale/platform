@@ -38,12 +38,27 @@ export class LfsResolver {
       throw new Error('payload exceeds max size');
     }
     if (this.validateChecksum) {
-      const expected = env.checksum || env.sha256;
+      const expected = expectedSha256(env);
       const actual = createHash('sha256').update(payload).digest('hex');
       if (actual !== expected) {
         throw new Error(`checksum mismatch: expected ${expected}, got ${actual}`);
       }
     }
     return { envelope: env, payload, isEnvelope: true };
+  }
+}
+
+function expectedSha256(env: LfsEnvelope): string {
+  const alg = (env.checksum_alg ?? '').trim().toLowerCase();
+  switch (alg) {
+    case '':
+    case 'sha256':
+      return env.checksum || env.sha256;
+    case 'md5':
+    case 'crc32':
+    case 'none':
+      return env.sha256;
+    default:
+      throw new Error(`unsupported checksum algorithm: ${alg}`);
   }
 }

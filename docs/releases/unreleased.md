@@ -38,6 +38,7 @@ limitations under the License.
 ## Bug fixes
 
 - The Node JavaScript LFS resolver now validates SHA-256 instead of silently returning corrupted S3 objects. Default and explicit validation reject mismatches; valid objects and validation-disabled behavior are preserved (#297).
+- The Node, browser, Python and Java LFS resolvers honor `checksum_alg`. Valid md5 and crc32 objects resolve instead of failing with a checksum mismatch; they are validated against the envelope `sha256` field, so corrupt objects are still rejected. An unknown `checksum_alg` fails resolution when validation is enabled (#297).
 - Restore the exact published v1.6.3 `broker.CoordinatorConfig` shape and comparability. The legacy constructor remains supported and deprecated; use `CoordinatorOptions` and `NewGroupCoordinatorWithOptions` for retention and lease hooks. `metadata.Store` retains its original method set; group offset listing is an optional `GroupConsumerOffsetLister` capability with a filtering adapter (#298).
 - Bound proxy advertised ports and address-derived fallbacks to `1..65535` before narrowing to Kafka's `int32` port field. The two CodeQL conversion warnings exposed a configuration-validation defect, not a confirmed vulnerability (#298).
 
