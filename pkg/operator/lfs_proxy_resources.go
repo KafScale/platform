@@ -232,22 +232,7 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LFS_PROXY_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
 	}
 	if cluster.Spec.S3.CredentialsSecretRef != "" {
-		env = append(env,
-			corev1.EnvVar{
-				Name: "KAFSCALE_LFS_PROXY_S3_ACCESS_KEY",
-				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},
-					Key:                  "AWS_ACCESS_KEY_ID",
-				}},
-			},
-			corev1.EnvVar{
-				Name: "KAFSCALE_LFS_PROXY_S3_SECRET_KEY",
-				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},
-					Key:                  "AWS_SECRET_ACCESS_KEY",
-				}},
-			},
-		)
+		env = append(env, lfsProxyCredentialEnv(cluster.Spec.S3.CredentialsSecretRef)...)
 	}
 	if lfsProxyForcePathStyle(cluster) {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE", Value: "true"})
@@ -390,4 +375,26 @@ func lfsProxyEnsureBucket(cluster *kafscalev1alpha1.KafscaleCluster) bool {
 
 func servicePort(name string, port int32) corev1.ServicePort {
 	return corev1.ServicePort{Name: name, Port: port, Protocol: corev1.ProtocolTCP}
+}
+
+func lfsProxyCredentialEnv(secretName string) []corev1.EnvVar {
+	refs := []struct{ name, key string }{
+		{"KAFSCALE_LFS_PROXY_S3_ACCESS_KEY", awsAccessKeyEnv},
+		{"KAFSCALE_LFS_PROXY_S3_SECRET_KEY", awsSecretKeyEnv},
+		{awsAccessKeyEnv, s3AccessKeyEnv},
+		{awsSecretKeyEnv, s3SecretKeyEnv},
+		{awsSessionTokenEnv, s3SessionTokenEnv},
+	}
+	env := make([]corev1.EnvVar, 0, len(refs))
+	for _, ref := range refs {
+		env = append(env, corev1.EnvVar{
+			Name: ref.name,
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+				Key:                  ref.key,
+				Optional:             boolPtr(true),
+			}},
+		})
+	}
+	return env
 }

@@ -164,6 +164,19 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
 
 - Schema registry rollback: rolling back to a main build from between #277 and #282 registers duplicate versions for 5 of the 54 edge schemas in our upgrade test. These are the Avro schemas with the `5e-324` and `1e-323` double defaults, registered with and without `normalize=true`, and the schema with an empty nested namespace registered with `normalize=true`. Those builds do not match the hashes that #282 stores, so re-registering one of these schemas creates a new version and id. The #282 review build `035b209` passed that 54-schema regression; this does not establish general rollback safety.
 
+## LFS proxy S3 credential keys
+
+Before this release, an operator managed LFS proxy (`spec.lfsProxy`) read only
+the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys of the
+`spec.s3.credentialsSecretRef` secret. A secret with only the
+`KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` keys, the format the
+brokers and snapshot jobs use, kept the LFS proxy pods in
+`CreateContainerConfigError`. The proxy now accepts either pair. No migration is
+needed: secrets with the `AWS_` keys work as before and keep priority when both
+pairs are present. A secret that has neither pair, or does not exist, no longer
+blocks the pod; the proxy then uses the default AWS credential chain, so check
+the secret if LFS uploads fail with S3 access errors after the upgrade.
+
 ## Validation scope and rerun commands
 
 The QA reported on `bd1813ad2644c56736296f1e5dfff99901707ca8` in #298 passed

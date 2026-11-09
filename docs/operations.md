@@ -618,7 +618,11 @@ LFS tracker (writes LFS operation events to Kafka):
 
 - `KAFSCALE_LFS_TRACKER_ENABLED` (default `true`), `KAFSCALE_LFS_TRACKER_TOPIC` (default `__lfs_ops_state`), `KAFSCALE_LFS_TRACKER_BATCH_SIZE` (default `100`), `KAFSCALE_LFS_TRACKER_FLUSH_MS` (default `100`), `KAFSCALE_LFS_TRACKER_ENSURE_TOPIC` (default `true`), `KAFSCALE_LFS_TRACKER_PARTITIONS` (default `3`), `KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR` (default `1`).
 
-Operator note: for an LFS proxy deployment the operator also sets `KAFSCALE_LFS_PROXY_ADDR`, `KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_LFS_PROXY_ADVERTISED_HOST`, `KAFSCALE_LFS_PROXY_ADVERTISED_PORT`, `KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC` and `KAFSCALE_LFS_PROXY_HEALTH_ADDR` (pkg/operator/lfs_proxy_resources.go). The proxy binary does not read these; it reads `KAFSCALE_PROXY_ADDR`, `KAFSCALE_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_PROXY_ADVERTISED_HOST`, `KAFSCALE_PROXY_ADVERTISED_PORT`, `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` and `KAFSCALE_PROXY_HEALTH_ADDR` instead.
+Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets `KAFSCALE_LFS_PROXY_ADDR`, `KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_LFS_PROXY_ADVERTISED_HOST`, `KAFSCALE_LFS_PROXY_ADVERTISED_PORT`, `KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC`, `KAFSCALE_LFS_PROXY_BACKENDS` and `KAFSCALE_LFS_PROXY_HEALTH_ADDR`, and the same values under the `KAFSCALE_PROXY_` names that the proxy binary reads, plus `KAFSCALE_PROXY_LFS_ENABLED=true` (pkg/operator/lfs_proxy_resources.go).
+
+The secret named by `spec.s3.credentialsSecretRef` can hold `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` (optionally `KAFSCALE_S3_SESSION_TOKEN`), the keys the brokers and snapshot jobs use, or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. When a secret holds both pairs, the LFS proxy uses the `AWS_` pair. A missing key no longer stops the pod from starting; with neither pair, the proxy uses the default AWS credential chain.
+
+The LFS proxy finds brokers through etcd at their advertised address. When that address is not reachable from inside the cluster, for example when brokers advertise a host port forward, set `spec.lfsProxy.backends` to the broker service, such as `kafscale-broker.<namespace>.svc.cluster.local:9092`; otherwise the proxy stays NotReady.
 
 ### Iceberg processor LFS overrides
 
