@@ -17,16 +17,21 @@ package operator
 
 import (
 	"context"
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const s3CredentialsChecksumAnnotation = "kafscale.io/s3-credentials-checksum"
+const (
+	s3CredentialsChecksumAnnotation = "kafscale.io/s3-credentials-checksum"
+	s3CredentialsChecksumIterations = 100000
+)
 
 var s3CredentialKeys = []string{awsAccessKeyEnv, awsSecretKeyEnv, awsSessionTokenEnv, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv}
 
@@ -39,14 +44,18 @@ func (r *ClusterReconciler) s3CredentialsChecksum(ctx context.Context, cluster *
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, secret); err != nil {
 		return "", false
 	}
-	hash := sha256.New()
+	var material strings.Builder
 	for _, key := range s3CredentialKeys {
 		if val, ok := secret.Data[key]; ok {
-			fmt.Fprintf(hash, "%s=%d:", key, len(val))
-			hash.Write(val)
+			fmt.Fprintf(&material, "%s=%d:%s", key, len(val), val)
 		}
 	}
-	return hex.EncodeToString(hash.Sum(nil)), true
+	salt := []byte(s3CredentialsChecksumAnnotation + "/" + cluster.Namespace + "/" + cluster.Name)
+	derived, err := pbkdf2.Key(sha256.New, material.String(), salt, s3CredentialsChecksumIterations, sha256.Size)
+	if err != nil {
+		return "", false
+	}
+	return hex.EncodeToString(derived), true
 }
 
 func setS3CredentialsChecksum(template *corev1.PodTemplateSpec, checksum string, known bool) {
