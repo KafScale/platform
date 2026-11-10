@@ -130,7 +130,10 @@ func (r *ClusterReconciler) loadS3Credentials(ctx context.Context, cluster *kafs
 	}
 	cfg.AccessKeyID = firstSecretValue(secret, s3AccessKeyEnv, awsAccessKeyEnv)
 	cfg.SecretAccessKey = firstSecretValue(secret, s3SecretKeyEnv, awsSecretKeyEnv)
-	cfg.SessionToken = firstSecretValue(secret, s3SessionTokenEnv, awsSessionTokenEnv)
+	cfg.SessionToken = firstSecretValue(secret, awsSessionTokenEnv)
+	if val, ok := secret.Data[s3SessionTokenEnv]; ok {
+		cfg.SessionToken = strings.TrimSpace(string(val))
+	}
 	return nil
 }
 

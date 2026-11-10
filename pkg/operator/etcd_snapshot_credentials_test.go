@@ -24,6 +24,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/KafScale/platform/pkg/storage"
 )
 
 func TestSnapshotContainersAcceptEitherS3KeyPair(t *testing.T) {
@@ -35,6 +37,7 @@ func TestSnapshotContainersAcceptEitherS3KeyPair(t *testing.T) {
 		{name: "aws keys", data: map[string]string{"AWS_ACCESS_KEY_ID": "aws-ak", "AWS_SECRET_ACCESS_KEY": "aws-sk", "AWS_SESSION_TOKEN": "aws-tok"}},
 		{name: "kafscale keys", data: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ks-ak", "KAFSCALE_S3_SECRET_KEY": "ks-sk", "KAFSCALE_S3_SESSION_TOKEN": "ks-tok"}},
 		{name: "both pairs", data: map[string]string{"AWS_ACCESS_KEY_ID": "aws-ak", "AWS_SECRET_ACCESS_KEY": "aws-sk", "KAFSCALE_S3_ACCESS_KEY": "ks-ak", "KAFSCALE_S3_SECRET_KEY": "ks-sk"}},
+		{name: "empty kafscale session token", data: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ks-ak", "KAFSCALE_S3_SECRET_KEY": "ks-sk", "KAFSCALE_S3_SESSION_TOKEN": "", "AWS_SESSION_TOKEN": "aws-tok"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,7 +48,7 @@ func TestSnapshotContainersAcceptEitherS3KeyPair(t *testing.T) {
 				secret.Data[k] = []byte(v)
 			}
 			scheme := testScheme(t)
-			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, secret).Build()
 			if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
 				t.Fatalf("EnsureEtcd: %v", err)
 			}
@@ -63,10 +66,15 @@ func TestSnapshotContainersAcceptEitherS3KeyPair(t *testing.T) {
 			if len(containers) != 2 {
 				t.Fatalf("snapshot-download init container missing")
 			}
+			cfg := &storage.S3Config{}
+			r := &ClusterReconciler{Client: c, Scheme: scheme}
+			if err := r.loadS3Credentials(context.Background(), cluster, cfg); err != nil {
+				t.Fatalf("loadS3Credentials: %v", err)
+			}
 			want := []struct{ key, value string }{
-				{"AWS_ACCESS_KEY_ID", firstSecretValue(secret, s3AccessKeyEnv, awsAccessKeyEnv)},
-				{"AWS_SECRET_ACCESS_KEY", firstSecretValue(secret, s3SecretKeyEnv, awsSecretKeyEnv)},
-				{"AWS_SESSION_TOKEN", firstSecretValue(secret, s3SessionTokenEnv, awsSessionTokenEnv)},
+				{"AWS_ACCESS_KEY_ID", cfg.AccessKeyID},
+				{"AWS_SECRET_ACCESS_KEY", cfg.SecretAccessKey},
+				{"AWS_SESSION_TOKEN", cfg.SessionToken},
 			}
 			for _, name := range []string{"snapshot-download", "upload"} {
 				env := resolveContainerEnvWithSecret(t, containers[name], secret)
