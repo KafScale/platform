@@ -25,6 +25,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -51,6 +52,7 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 		name        string
 		secretRef   string
 		secret      map[string]string
+		secretName  string
 		readErr     bool
 		wantStatus  metav1.ConditionStatus
 		wantReason  string
@@ -63,6 +65,8 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 		{name: "secret without credential keys", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_SESSION_TOKEN": "tok", "AWS_ACCESS_KEY_ID": "  "}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true, wantMessage: "Secret s3-creds holds neither AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY nor KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY, so workloads get no static keys from it and " + chain},
 		{name: "secret with only an access key", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ak"}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true, wantMessage: "Secret s3-creds holds only part of a key pair (KAFSCALE_S3_ACCESS_KEY)" + partial},
 		{name: "secret without a key pair", secretRef: "s3-creds", secret: map[string]string{"AWS_ACCESS_KEY_ID": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, wantStatus: metav1.ConditionFalse, wantReason: "SecretKeysMissing", wantWarn: true, wantMessage: "Secret s3-creds holds only part of a key pair (AWS_ACCESS_KEY_ID, KAFSCALE_S3_SECRET_KEY)" + partial},
+		{name: "padded secret name", secretRef: " s3-creds ", secret: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, secretName: "s3-creds", wantStatus: metav1.ConditionFalse, wantReason: "SecretNotFound", wantWarn: true, wantMessage: "Secret  s3-creds  does not exist, so workloads get no static keys from it and " + chain},
+		{name: "whitespace secret name", secretRef: "   ", wantStatus: metav1.ConditionTrue, wantReason: "SecretNotReferenced", wantMessage: "No spec.s3.credentialsSecretRef is set; workloads use the default AWS credential chain."},
 		{name: "kafscale keys", secretRef: "s3-creds", secret: map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ak", "KAFSCALE_S3_SECRET_KEY": "sk"}, wantStatus: metav1.ConditionTrue, wantReason: "SecretKeysFound", wantMessage: "Secret s3-creds holds KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY."},
 		{name: "aws keys", secretRef: "s3-creds", secret: map[string]string{"AWS_ACCESS_KEY_ID": "ak", "AWS_SECRET_ACCESS_KEY": "sk"}, wantStatus: metav1.ConditionTrue, wantReason: "SecretKeysFound", wantMessage: "Secret s3-creds holds AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY."},
 	}
@@ -77,7 +81,11 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 			}
 			objects := []client.Object{cluster}
 			if tc.secret != nil {
-				secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: tc.secretRef, Namespace: "default"}, Data: map[string][]byte{}}
+				secretName := tc.secretRef
+				if tc.secretName != "" {
+					secretName = tc.secretName
+				}
+				secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: "default"}, Data: map[string][]byte{}}
 				for k, v := range tc.secret {
 					secret.Data[k] = []byte(v)
 				}
@@ -206,5 +214,64 @@ func TestClusterReconcilerPersistsS3CredentialsOnFailedReconcile(t *testing.T) {
 	reconcileFails("after fixing the secret")
 	if cond := persisted(); cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "SecretKeysFound" {
 		t.Fatalf("S3Credentials condition after fixing the secret = %+v, want True SecretKeysFound", cond)
+	}
+}
+
+func TestClusterReconcilerPersistsS3CredentialsWhenSetupFails(t *testing.T) {
+	setupErr := errors.New("setup failed")
+	cases := []struct {
+		name  string
+		funcs interceptor.Funcs
+	}{
+		{name: "network policy", funcs: interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*networkingv1.NetworkPolicy); ok {
+					return setupErr
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}},
+		{name: "managed etcd", funcs: interceptor.Funcs{
+			Create: func(context.Context, client.WithWatch, client.Object, ...client.CreateOption) error {
+				return setupErr
+			},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(operatorEtcdEndpointsEnv, "")
+			t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
+			cluster := &kafscalev1alpha1.KafscaleCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+				Spec: kafscalev1alpha1.KafscaleClusterSpec{
+					S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+				},
+			}
+			scheme := testScheme(t)
+			if err := autoscalingv2.AddToScheme(scheme); err != nil {
+				t.Fatalf("add autoscaling scheme: %v", err)
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(cluster).WithInterceptorFuncs(tc.funcs).Build()
+			r := &ClusterReconciler{Client: c, Scheme: scheme, Publisher: NewSnapshotPublisher(c)}
+
+			var logs bytes.Buffer
+			ctx := ctrl.LoggerInto(context.Background(), zap.New(zap.WriteTo(&logs)))
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"}}
+			for i := 0; i < 2; i++ {
+				if _, err := r.Reconcile(ctx, req); !errors.Is(err, setupErr) {
+					t.Fatalf("Reconcile %d: err = %v, want %v", i, err, setupErr)
+				}
+			}
+			var got kafscalev1alpha1.KafscaleCluster
+			if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
+				t.Fatalf("get cluster: %v", err)
+			}
+			if cond := meta.FindStatusCondition(got.Status.Conditions, "S3Credentials"); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "SecretNotFound" {
+				t.Fatalf("S3Credentials condition after failed setup = %+v, want False SecretNotFound", cond)
+			}
+			if warnings := strings.Count(logs.String(), "S3 credentials secret is not usable"); warnings != 1 {
+				t.Fatalf("expected one warning over two failed reconciles, got %d:\n%s", warnings, logs.String())
+			}
+		})
 	}
 }

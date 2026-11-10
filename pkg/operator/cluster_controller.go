@@ -72,14 +72,12 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.reconcileKafkaNetworkPolicy(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 	r.populateS3CredentialsStatus(ctx, &cluster)
+	etcdResolution, err := r.reconcileClusterSetup(ctx, &cluster)
+	if err != nil {
+		r.persistStatusAfterFailure(ctx, &cluster)
+		return ctrl.Result{}, err
+	}
 	if err := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); err != nil {
 		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", err.Error())
 		return ctrl.Result{}, err
@@ -115,6 +113,13 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *ClusterReconciler) reconcileClusterSetup(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (EtcdResolution, error) {
+	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err != nil {
+		return EtcdResolution{}, err
+	}
+	return EnsureEtcd(ctx, r.Client, r.Scheme, cluster)
 }
 
 func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {

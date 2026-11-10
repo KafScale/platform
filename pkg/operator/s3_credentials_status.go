@@ -53,8 +53,8 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 		Status:             metav1.ConditionTrue,
 		LastTransitionTime: metav1.NewTime(time.Now()),
 	}
-	name := strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef)
-	if name == "" {
+	name := cluster.Spec.S3.CredentialsSecretRef
+	if strings.TrimSpace(name) == "" {
 		condition.Reason = "SecretNotReferenced"
 		condition.Message = "No spec.s3.credentialsSecretRef is set; workloads use the default AWS credential chain."
 		return condition
