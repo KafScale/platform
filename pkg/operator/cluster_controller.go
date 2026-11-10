@@ -152,10 +152,7 @@ func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, clust
 	if equality.Semantic.DeepEqual(stored.Status, cluster.Status) {
 		return
 	}
-	updated := stored.DeepCopy()
-	updated.Status = *cluster.Status.DeepCopy()
-	patch := client.MergeFromWithOptions(stored, client.MergeFromWithOptimisticLock{})
-	if err := r.Client.Status().Patch(ctx, updated, patch); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+	if err := r.Client.Status().Update(ctx, cluster); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 		ctrl.LoggerFrom(ctx).Error(err, "persist cluster status after a failed reconcile")
 	}
 }

@@ -276,3 +276,48 @@ func TestClusterReconcilerPersistsS3CredentialsWhenSetupFails(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterReconcilerFailurePathKeepsConcurrentStatusWrite(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
+	cluster := &kafscalev1alpha1.KafscaleCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
+		Spec: kafscalev1alpha1.KafscaleClusterSpec{
+			S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+		},
+	}
+	scheme := testScheme(t)
+	if err := autoscalingv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("add autoscaling scheme: %v", err)
+	}
+	brokerErr := errors.New("broker statefulset create failed")
+	key := types.NamespacedName{Name: "demo", Namespace: "default"}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(cluster).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*appsv1.StatefulSet); !ok || obj.GetName() != "demo-broker" {
+				return cl.Create(ctx, obj, opts...)
+			}
+			var latest kafscalev1alpha1.KafscaleCluster
+			if err := cl.Get(ctx, key, &latest); err != nil {
+				return err
+			}
+			meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{Type: "ConcurrentWrite", Status: metav1.ConditionTrue, Reason: "WrittenElsewhere", Message: "written during the reconcile"})
+			if err := cl.Status().Update(ctx, &latest); err != nil {
+				return err
+			}
+			return brokerErr
+		},
+	}).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme, Publisher: NewSnapshotPublisher(c)}
+
+	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); !errors.Is(err, brokerErr) {
+		t.Fatalf("Reconcile: err = %v, want %v", err, brokerErr)
+	}
+	var got kafscalev1alpha1.KafscaleCluster
+	if err := c.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if cond := meta.FindStatusCondition(got.Status.Conditions, "ConcurrentWrite"); cond == nil || cond.Reason != "WrittenElsewhere" {
+		t.Fatalf("status written during the reconcile was overwritten: conditions = %+v", got.Status.Conditions)
+	}
+}
