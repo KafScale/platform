@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -72,10 +73,11 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	initialConditions := append([]metav1.Condition(nil), cluster.Status.Conditions...)
 	r.populateS3CredentialsStatus(ctx, &cluster)
 	etcdResolution, err := r.reconcileClusterSetup(ctx, &cluster)
 	if err != nil {
-		r.persistStatusAfterFailure(ctx, &cluster)
+		r.persistStatusAfterFailure(ctx, &cluster, initialConditions)
 		return ctrl.Result{}, err
 	}
 	if err := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); err != nil {
@@ -86,7 +88,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	r.pollManagedEtcdHealth(ctx, &cluster, etcdResolution)
 	r.populateEtcdMaintenanceStatus(ctx, &cluster, etcdResolution)
 	if err := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); err != nil {
-		r.persistStatusAfterFailure(ctx, &cluster)
+		r.persistStatusAfterFailure(ctx, &cluster, initialConditions)
 		return ctrl.Result{}, err
 	}
 	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
@@ -141,18 +143,33 @@ func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, clust
 	return r.reconcileBrokerHPA(ctx, cluster)
 }
 
-func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) {
-	stored := &kafscalev1alpha1.KafscaleCluster{}
-	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(cluster), stored); err != nil {
-		if !apierrors.IsNotFound(err) {
-			ctrl.LoggerFrom(ctx).Error(err, "read cluster before persisting status")
+func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, initial []metav1.Condition) {
+	var computed []metav1.Condition
+	for _, condition := range cluster.Status.Conditions {
+		if previous := meta.FindStatusCondition(initial, condition.Type); previous == nil || !equality.Semantic.DeepEqual(*previous, condition) {
+			computed = append(computed, condition)
 		}
+	}
+	if len(computed) == 0 {
 		return
 	}
-	if equality.Semantic.DeepEqual(stored.Status, cluster.Status) {
-		return
-	}
-	if err := r.Client.Status().Update(ctx, cluster); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		stored := &kafscalev1alpha1.KafscaleCluster{}
+		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(cluster), stored); err != nil {
+			return err
+		}
+		changed := false
+		for _, condition := range computed {
+			if meta.SetStatusCondition(&stored.Status.Conditions, condition) {
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		return r.Client.Status().Update(ctx, stored)
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
 		ctrl.LoggerFrom(ctx).Error(err, "persist cluster status after a failed reconcile")
 	}
 }
