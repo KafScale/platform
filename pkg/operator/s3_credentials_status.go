@@ -71,13 +71,18 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 		}
 		return condition
 	}
+	hasAWS := secretHasKeyPair(secret, awsAccessKeyEnv, awsSecretKeyEnv)
+	hasKafscale := secretHasKeyPair(secret, s3AccessKeyEnv, s3SecretKeyEnv)
 	switch {
-	case secretHasKeyPair(secret, awsAccessKeyEnv, awsSecretKeyEnv):
+	case hasAWS && hasKafscale:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s.", name, awsAccessKeyEnv, awsSecretKeyEnv)
-	case secretHasKeyPair(secret, s3AccessKeyEnv, s3SecretKeyEnv):
+		condition.Message = fmt.Sprintf("Secret %s holds both pairs. The LFS proxy uses %s and %s; the brokers and the etcd snapshot jobs use %s and %s.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+	case hasAWS:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s.", name, s3AccessKeyEnv, s3SecretKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s, which the brokers, the LFS proxy and the etcd snapshot jobs use.", name, awsAccessKeyEnv, awsSecretKeyEnv)
+	case hasKafscale:
+		condition.Reason = "SecretKeysFound"
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s, which the brokers, the LFS proxy and the etcd snapshot jobs use.", name, s3AccessKeyEnv, s3SecretKeyEnv)
 	default:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMissing"
