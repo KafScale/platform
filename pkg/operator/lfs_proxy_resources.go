@@ -63,6 +63,7 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 	if err != nil {
 		return err
 	}
+	s3Checksum, s3ChecksumKnown := r.s3CredentialsChecksum(ctx, cluster)
 
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Name:      lfsProxyName(cluster),
@@ -82,6 +83,7 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 		deploy.Spec.Replicas = &replicas
 		deploy.Spec.Template.Labels = labels
 		setACLChecksum(&deploy.Spec.Template, checksum)
+		setS3CredentialsChecksum(&deploy.Spec.Template, s3Checksum, s3ChecksumKnown)
 		deploy.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
 		deploy.Spec.Template.Spec.Volumes = []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}
 		deploy.Spec.Template.Spec.Containers = []corev1.Container{

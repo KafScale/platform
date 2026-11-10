@@ -194,6 +194,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 	if err != nil {
 		return err
 	}
+	s3Checksum, s3ChecksumKnown := r.s3CredentialsChecksum(ctx, cluster)
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-broker", cluster.Name),
@@ -214,6 +215,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Template.Labels = labels
 		setACLChecksum(&sts.Spec.Template, checksum)
+		setS3CredentialsChecksum(&sts.Spec.Template, s3Checksum, s3ChecksumKnown)
 		sts.Spec.Template.Spec.Affinity = workloadAffinity(cluster.Spec.Brokers.Affinity, labels)
 		sts.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(false)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{

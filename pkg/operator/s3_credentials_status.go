@@ -80,17 +80,17 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 		condition.Message = fmt.Sprintf("Secret %s holds %s, %s and %s but not %s. The brokers use %s and %s without a session token, but the etcd snapshot jobs and the operator snapshot check use them with %s, which belongs to the other pair. Add %s or remove %s.", name, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, awsSessionTokenEnv)
 	case hasAWS && hasKafscale:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds both pairs. The LFS proxy uses %s and %s; the brokers and the etcd snapshot jobs use %s and %s.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %s holds both pairs. The LFS proxy reads %s and %s; the brokers and the etcd snapshot jobs read %s and %s. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
 	case hasAWS && len(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv)) > 0:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMixed"
 		condition.Message = fmt.Sprintf("Secret %s holds %s and %s and also %s without both %s and %s. The brokers and the LFS proxy use the %s pair, but the etcd snapshot jobs take each KAFSCALE_S3_* key in the secret in place of its AWS_* key, even an empty one, so the etcd snapshot jobs get a mismatched pair. The operator snapshot check does the same, except that it skips an empty KAFSCALE_S3_ACCESS_KEY or KAFSCALE_S3_SECRET_KEY. Remove those keys or complete the %s pair.", name, awsAccessKeyEnv, awsSecretKeyEnv, strings.Join(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv), ", "), s3AccessKeyEnv, s3SecretKeyEnv, awsAccessKeyEnv, s3AccessKeyEnv)
 	case hasAWS:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s, which the brokers, the LFS proxy and the etcd snapshot jobs use.", name, awsAccessKeyEnv, awsSecretKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s for the brokers, the LFS proxy and the etcd snapshot jobs. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, awsAccessKeyEnv, awsSecretKeyEnv)
 	case hasKafscale:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s, which the brokers, the LFS proxy and the etcd snapshot jobs use.", name, s3AccessKeyEnv, s3SecretKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s for the brokers, the LFS proxy and the etcd snapshot jobs. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, s3AccessKeyEnv, s3SecretKeyEnv)
 	default:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMissing"

@@ -183,6 +183,11 @@ back. The proxy logs which credential source it uses at startup, so check both
 the condition and that log if LFS uploads fail with S3 access errors after the
 upgrade.
 
+When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll
+once after the upgrade, because their pod templates gain the
+`kafscale.io/s3-credentials-checksum` annotation, and roll again whenever a
+credential key in the secret changes.
+
 ## Validation scope and rerun commands
 
 The QA reported on `bd1813ad2644c56736296f1e5dfff99901707ca8` in #298 passed
