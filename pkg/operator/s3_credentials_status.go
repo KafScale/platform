@@ -74,13 +74,17 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 	hasAWS := secretHasKeyPair(secret, awsAccessKeyEnv, awsSecretKeyEnv)
 	hasKafscale := secretHasKeyPair(secret, s3AccessKeyEnv, s3SecretKeyEnv)
 	switch {
+	case hasKafscale && strings.TrimSpace(string(secret.Data[awsSessionTokenEnv])) != "" && len(secretKeysPresent(secret, s3SessionTokenEnv)) == 0:
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = "SecretKeysMixed"
+		condition.Message = fmt.Sprintf("Secret %s holds %s, %s and %s but not %s. The brokers use %s and %s without a session token, but the etcd snapshot jobs and the operator snapshot check use them with %s, which belongs to the other pair. Add %s or remove %s.", name, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, awsSessionTokenEnv)
 	case hasAWS && hasKafscale:
 		condition.Reason = "SecretKeysFound"
 		condition.Message = fmt.Sprintf("Secret %s holds both pairs. The LFS proxy uses %s and %s; the brokers and the etcd snapshot jobs use %s and %s.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
 	case hasAWS && len(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv)) > 0:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMixed"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s and also %s without both %s and %s. The brokers and the LFS proxy use the %s pair, but the etcd snapshot jobs and the operator snapshot check take each KAFSCALE_S3_* key that is present in place of its AWS_* key, so they get a mismatched pair. Remove those keys or complete the %s pair.", name, awsAccessKeyEnv, awsSecretKeyEnv, strings.Join(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv), ", "), s3AccessKeyEnv, s3SecretKeyEnv, awsAccessKeyEnv, s3AccessKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %s holds %s and %s and also %s without both %s and %s. The brokers and the LFS proxy use the %s pair, but the etcd snapshot jobs take each KAFSCALE_S3_* key in the secret in place of its AWS_* key, even an empty one, so the etcd snapshot jobs get a mismatched pair. The operator snapshot check skips empty keys, so it gets one too when one of those keys has a value. Remove those keys or complete the %s pair.", name, awsAccessKeyEnv, awsSecretKeyEnv, strings.Join(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv), ", "), s3AccessKeyEnv, s3SecretKeyEnv, awsAccessKeyEnv, s3AccessKeyEnv)
 	case hasAWS:
 		condition.Reason = "SecretKeysFound"
 		condition.Message = fmt.Sprintf("Secret %s holds %s and %s, which the brokers, the LFS proxy and the etcd snapshot jobs use.", name, awsAccessKeyEnv, awsSecretKeyEnv)
