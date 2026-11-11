@@ -383,6 +383,7 @@ func lfsProxyCredentialEnv(secretName string) []corev1.EnvVar {
 	refs := []struct{ name, key string }{
 		{"KAFSCALE_LFS_PROXY_S3_ACCESS_KEY", awsAccessKeyEnv},
 		{"KAFSCALE_LFS_PROXY_S3_SECRET_KEY", awsSecretKeyEnv},
+		{"KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN", awsSessionTokenEnv},
 		{awsAccessKeyEnv, s3AccessKeyEnv},
 		{awsSecretKeyEnv, s3SecretKeyEnv},
 		{awsSessionTokenEnv, s3SessionTokenEnv},

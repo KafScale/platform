@@ -68,9 +68,10 @@ func TestLfsProxyContainerResolvesS3CredentialSecretKeys(t *testing.T) {
 	container := r.lfsProxyContainer(cluster, []string{"http://etcd:2379"})
 
 	cases := []struct {
-		name               string
-		secret             map[string]string
-		wantKey, wantValue string
+		name                               string
+		secret                             map[string]string
+		wantKey, wantValue                 string
+		wantStaticToken, wantFallbackToken string
 	}{
 		{
 			name:      "kafscale keys",
@@ -93,10 +94,36 @@ func TestLfsProxyContainerResolvesS3CredentialSecretKeys(t *testing.T) {
 			wantKey:   "aws-ak",
 			wantValue: "aws-sk",
 		},
+		{
+			name:    "aws temporary credentials",
+			secret:  map[string]string{"AWS_ACCESS_KEY_ID": "aws-ak", "AWS_SECRET_ACCESS_KEY": "aws-sk", "AWS_SESSION_TOKEN": "aws-token"},
+			wantKey: "aws-ak", wantValue: "aws-sk", wantStaticToken: "aws-token",
+		},
+		{
+			name:    "kafscale temporary credentials",
+			secret:  map[string]string{"KAFSCALE_S3_ACCESS_KEY": "ks-ak", "KAFSCALE_S3_SECRET_KEY": "ks-sk", "KAFSCALE_S3_SESSION_TOKEN": "ks-token"},
+			wantKey: "ks-ak", wantValue: "ks-sk", wantFallbackToken: "ks-token",
+		},
+		{
+			name:    "both temporary pairs keep their own tokens",
+			secret:  map[string]string{"AWS_ACCESS_KEY_ID": "aws-ak", "AWS_SECRET_ACCESS_KEY": "aws-sk", "AWS_SESSION_TOKEN": "aws-token", "KAFSCALE_S3_ACCESS_KEY": "ks-ak", "KAFSCALE_S3_SECRET_KEY": "ks-sk", "KAFSCALE_S3_SESSION_TOKEN": "ks-token"},
+			wantKey: "aws-ak", wantValue: "aws-sk", wantStaticToken: "aws-token", wantFallbackToken: "ks-token",
+		},
+		{
+			name:    "permanent aws pair does not borrow kafscale token",
+			secret:  map[string]string{"AWS_ACCESS_KEY_ID": "aws-ak", "AWS_SECRET_ACCESS_KEY": "aws-sk", "KAFSCALE_S3_ACCESS_KEY": "ks-ak", "KAFSCALE_S3_SECRET_KEY": "ks-sk", "KAFSCALE_S3_SESSION_TOKEN": "ks-token"},
+			wantKey: "aws-ak", wantValue: "aws-sk", wantFallbackToken: "ks-token",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			env := resolveContainerEnv(t, container.Env, tc.secret)
+			if got := env["KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN"]; got != tc.wantStaticToken {
+				t.Errorf("static session token = %q, want %q", got, tc.wantStaticToken)
+			}
+			if got := env["AWS_SESSION_TOKEN"]; got != tc.wantFallbackToken {
+				t.Errorf("fallback session token = %q, want %q", got, tc.wantFallbackToken)
+			}
 			ak, sk := lfsProxyEffectiveS3Credentials(env)
 			if ak != tc.wantKey || sk != tc.wantValue {
 				t.Fatalf("effective S3 credentials = %q/%q, want %q/%q", ak, sk, tc.wantKey, tc.wantValue)

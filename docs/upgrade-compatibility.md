@@ -183,6 +183,10 @@ back. The proxy logs which credential source it uses at startup, so check both
 the condition and that log if LFS uploads fail with S3 access errors after the
 upgrade.
 
+The LFS proxy forwards `AWS_SESSION_TOKEN` alongside the AWS key pair. When both
+pairs are present, it uses the AWS pair and its token; the KafScale fallback
+retains its own token. A permanent AWS pair does not inherit a KafScale token.
+
 When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll
 once after the upgrade, because their pod templates gain the
 `kafscale.io/s3-credentials-checksum` annotation, and roll again whenever a
