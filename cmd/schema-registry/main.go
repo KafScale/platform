@@ -104,9 +104,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 			Region:          getenv("KAFSCALE_S3_REGION"),
 			Endpoint:        endpoint,
 			ForcePathStyle:  pathStyle,
-			AccessKeyID:     getenv("KAFSCALE_S3_ACCESS_KEY"),
-			SecretAccessKey: getenv("KAFSCALE_S3_SECRET_KEY"),
-			SessionToken:    getenv("KAFSCALE_S3_SESSION_TOKEN"),
+			AccessKeyID:     strings.TrimSpace(getenv("KAFSCALE_S3_ACCESS_KEY")),
+			SecretAccessKey: strings.TrimSpace(getenv("KAFSCALE_S3_SECRET_KEY")),
+			SessionToken:    strings.TrimSpace(getenv("KAFSCALE_S3_SESSION_TOKEN")),
 			KMSKeyARN:       getenv("KAFSCALE_S3_KMS_ARN"),
 		}
 	}
