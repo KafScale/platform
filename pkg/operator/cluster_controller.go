@@ -410,7 +410,7 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_TRACE_KAFKA", Value: val})
 	}
 	var envFrom []corev1.EnvFromSource
-	if cluster.Spec.S3.CredentialsSecretRef != "" {
+	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},

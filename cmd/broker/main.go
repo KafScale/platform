@@ -2461,6 +2461,20 @@ func buildS3Client(ctx context.Context, logger *slog.Logger) storage.S3Client {
 	return client
 }
 
+func normalizeAWSCredentialEnv() {
+	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+		val, ok := os.LookupEnv(key)
+		if !ok {
+			continue
+		}
+		if trimmed := strings.TrimSpace(val); trimmed == "" {
+			_ = os.Unsetenv(key)
+		} else if trimmed != val {
+			_ = os.Setenv(key, trimmed)
+		}
+	}
+}
+
 func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bool) {
 	if parseEnvBool("KAFSCALE_USE_MEMORY_S3", false) {
 		return storage.S3Config{}, storage.S3Config{}, true, false, false
@@ -2470,10 +2484,11 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 	writeEndpoint := os.Getenv("KAFSCALE_S3_ENDPOINT")
 	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", writeEndpoint != "")
 	kmsARN := os.Getenv("KAFSCALE_S3_KMS_ARN")
-	accessKey := os.Getenv("KAFSCALE_S3_ACCESS_KEY")
-	secretKey := os.Getenv("KAFSCALE_S3_SECRET_KEY")
-	sessionToken := os.Getenv("KAFSCALE_S3_SESSION_TOKEN")
+	accessKey := strings.TrimSpace(os.Getenv("KAFSCALE_S3_ACCESS_KEY"))
+	secretKey := strings.TrimSpace(os.Getenv("KAFSCALE_S3_SECRET_KEY"))
+	sessionToken := strings.TrimSpace(os.Getenv("KAFSCALE_S3_SESSION_TOKEN"))
 	credsProvided := accessKey != "" && secretKey != ""
+	normalizeAWSCredentialEnv()
 	s3Concurrency := parseEnvInt("KAFSCALE_S3_CONCURRENCY", defaultS3Concurrency)
 	writeCfg := storage.S3Config{
 		Bucket:          writeBucket,

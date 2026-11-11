@@ -64,10 +64,10 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 		condition.Status = metav1.ConditionFalse
 		if apierrors.IsNotFound(err) {
 			condition.Reason = "SecretNotFound"
-			condition.Message = fmt.Sprintf("Secret %s does not exist, so workloads get no static keys from it and use the default AWS credential chain if one is available.", name)
+			condition.Message = fmt.Sprintf("Secret %q does not exist, so workloads get no static keys from it and use the default AWS credential chain if one is available.", name)
 		} else {
 			condition.Reason = "SecretReadFailed"
-			condition.Message = fmt.Sprintf("The operator could not read or verify secret %s: %v. It cannot tell which keys the workloads receive.", name, err)
+			condition.Message = fmt.Sprintf("The operator could not read or verify secret %q: %v. It cannot tell which keys the workloads receive.", name, err)
 		}
 		return condition
 	}
@@ -77,27 +77,27 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 	case hasKafscale && strings.TrimSpace(string(secret.Data[awsSessionTokenEnv])) != "" && len(secretKeysPresent(secret, s3SessionTokenEnv)) == 0:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMixed"
-		condition.Message = fmt.Sprintf("Secret %s holds %s, %s and %s but not %s. The brokers use %s and %s without a session token, but the etcd snapshot jobs and the operator snapshot check use them with %s, which belongs to the other pair. Add %s or remove %s.", name, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, awsSessionTokenEnv)
+		condition.Message = fmt.Sprintf("Secret %q holds %q, %q and %q but not %q. The brokers use %q and %q without a session token, but the etcd snapshot jobs and the operator snapshot check use them with %q, which belongs to the other pair. Add %q or remove %q.", name, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, awsSessionTokenEnv)
 	case hasAWS && hasKafscale:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds both pairs. The LFS proxy reads %s and %s; the brokers and the etcd snapshot jobs read %s and %s. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
-	case hasAWS && len(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv)) > 0:
+		condition.Message = fmt.Sprintf("Secret %q holds both pairs. The LFS proxy reads %q and %q; the brokers and the etcd snapshot jobs read %q and %q. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+	case hasAWS && len(secretKeysWithValues(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv)) > 0:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMixed"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s and also %s without both %s and %s. The brokers and the LFS proxy use the %s pair, but the etcd snapshot jobs take each KAFSCALE_S3_* key in the secret in place of its AWS_* key, even an empty one, so the etcd snapshot jobs get a mismatched pair. The operator snapshot check does the same, except that it skips an empty KAFSCALE_S3_ACCESS_KEY or KAFSCALE_S3_SECRET_KEY. Remove those keys or complete the %s pair.", name, awsAccessKeyEnv, awsSecretKeyEnv, strings.Join(secretKeysPresent(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv), ", "), s3AccessKeyEnv, s3SecretKeyEnv, awsAccessKeyEnv, s3AccessKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %q holds %q and %q and also %s without both %q and %q. The brokers, the LFS proxy and the etcd snapshot jobs use the %q and %q pair and ignore those keys. Remove them or complete the %q and %q pair.", name, awsAccessKeyEnv, awsSecretKeyEnv, quotedKeys(secretKeysWithValues(secret, s3AccessKeyEnv, s3SecretKeyEnv, s3SessionTokenEnv)), s3AccessKeyEnv, s3SecretKeyEnv, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
 	case hasAWS:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s for the brokers, the LFS proxy and the etcd snapshot jobs. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, awsAccessKeyEnv, awsSecretKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %q holds %q and %q for the brokers, the LFS proxy and the etcd snapshot jobs. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, awsAccessKeyEnv, awsSecretKeyEnv)
 	case hasKafscale:
 		condition.Reason = "SecretKeysFound"
-		condition.Message = fmt.Sprintf("Secret %s holds %s and %s for the brokers, the LFS proxy and the etcd snapshot jobs. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, s3AccessKeyEnv, s3SecretKeyEnv)
+		condition.Message = fmt.Sprintf("Secret %q holds %q and %q for the brokers, the LFS proxy and the etcd snapshot jobs. Broker and LFS proxy pods restart to pick up changes to the credential keys.", name, s3AccessKeyEnv, s3SecretKeyEnv)
 	default:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMissing"
 		if found := secretCredentialKeys(secret); len(found) > 0 {
-			condition.Message = fmt.Sprintf("Secret %s holds only part of a key pair (%s) and needs %s and %s or %s and %s. The brokers and the LFS proxy get no complete key pair from it and use the default AWS credential chain if one is available. The etcd snapshot jobs can fail instead, because the AWS CLI rejects an access key without a secret key.", name, strings.Join(found, ", "), awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+			condition.Message = fmt.Sprintf("Secret %q holds only part of a key pair (%s) and needs %q and %q or %q and %q. The brokers and the LFS proxy get no complete key pair from it and use the default AWS credential chain if one is available. The etcd snapshot jobs can fail instead, because the AWS CLI rejects an access key without a secret key.", name, quotedKeys(found), awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
 		} else {
-			condition.Message = fmt.Sprintf("Secret %s holds neither %s and %s nor %s and %s, so workloads get no static keys from it and use the default AWS credential chain if one is available.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
+			condition.Message = fmt.Sprintf("Secret %q holds neither %q and %q nor %q and %q, so workloads get no static keys from it and use the default AWS credential chain if one is available.", name, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
 		}
 	}
 	return condition
@@ -108,13 +108,7 @@ func secretHasKeyPair(secret *corev1.Secret, accessKey, secretKey string) bool {
 }
 
 func secretCredentialKeys(secret *corev1.Secret) []string {
-	var found []string
-	for _, key := range []string{awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv} {
-		if strings.TrimSpace(string(secret.Data[key])) != "" {
-			found = append(found, key)
-		}
-	}
-	return found
+	return secretKeysWithValues(secret, awsAccessKeyEnv, awsSecretKeyEnv, s3AccessKeyEnv, s3SecretKeyEnv)
 }
 
 func secretKeysPresent(secret *corev1.Secret, keys ...string) []string {
@@ -125,4 +119,22 @@ func secretKeysPresent(secret *corev1.Secret, keys ...string) []string {
 		}
 	}
 	return present
+}
+
+func secretKeysWithValues(secret *corev1.Secret, keys ...string) []string {
+	var found []string
+	for _, key := range keys {
+		if strings.TrimSpace(string(secret.Data[key])) != "" {
+			found = append(found, key)
+		}
+	}
+	return found
+}
+
+func quotedKeys(keys []string) string {
+	quoted := make([]string, len(keys))
+	for i, key := range keys {
+		quoted[i] = fmt.Sprintf("%q", key)
+	}
+	return strings.Join(quoted, ", ")
 }

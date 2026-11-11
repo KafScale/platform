@@ -205,6 +205,22 @@ relied on a failed snapshot check to freeze broker updates, that no longer
 happens. Only a new cluster waits for that check before its brokers and LFS
 proxy are created.
 
+S3 key values in the secret that are empty or only whitespace now count as
+unset everywhere, and other values are trimmed before use. Before, the operator
+condition, the operator snapshot check and the LFS proxy static keys trimmed
+them, but the brokers, the LFS proxy fallback keys and the AWS CLI in the etcd
+snapshot containers used the raw values, so a blank `KAFSCALE_S3_*` key next to
+a valid `AWS_*` pair gave the snapshot containers an empty or blank key, and a
+padded value failed to sign. The snapshot containers now select the pair in
+their script instead of through `secretKeyRef` environment variables: the
+`KAFSCALE_S3_*` pair when both keys are set, otherwise the `AWS_*` pair with
+`AWS_SESSION_TOKEN`. Secrets with valid keys keep working with the same pair
+and token as before. A secret with the `AWS_*` pair and blank `KAFSCALE_S3_*`
+keys now reports `S3Credentials` as `True` with `SecretKeysFound`. This changes
+the managed etcd pod template, which the earlier change in this release already
+does, so an upgrade from the last release still restarts the managed etcd pods
+once.
+
 ## Validation scope and rerun commands
 
 The QA reported on `bd1813ad2644c56736296f1e5dfff99901707ca8` in #298 passed

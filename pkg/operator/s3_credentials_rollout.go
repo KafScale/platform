@@ -37,7 +37,7 @@ var s3CredentialKeys = []string{awsAccessKeyEnv, awsSecretKeyEnv, awsSessionToke
 
 func (r *ClusterReconciler) s3CredentialsChecksum(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (string, bool) {
 	name := cluster.Spec.S3.CredentialsSecretRef
-	if name == "" {
+	if strings.TrimSpace(name) == "" {
 		return "", true
 	}
 	secret := &corev1.Secret{}

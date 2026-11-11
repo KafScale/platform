@@ -128,13 +128,32 @@ func (r *ClusterReconciler) loadS3Credentials(ctx context.Context, cluster *kafs
 		}
 		return err
 	}
-	cfg.AccessKeyID = firstSecretValue(secret, s3AccessKeyEnv, awsAccessKeyEnv)
-	cfg.SecretAccessKey = firstSecretValue(secret, s3SecretKeyEnv, awsSecretKeyEnv)
-	cfg.SessionToken = firstSecretValue(secret, awsSessionTokenEnv)
-	if val, ok := secret.Data[s3SessionTokenEnv]; ok {
-		cfg.SessionToken = strings.TrimSpace(string(val))
-	}
+	cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken = selectSnapshotS3Credentials(func(key string) (string, bool) {
+		val, ok := secret.Data[key]
+		return string(val), ok
+	})
 	return nil
+}
+
+func selectSnapshotS3Credentials(lookup func(string) (string, bool)) (accessKey, secretKey, sessionToken string) {
+	value := func(key string) string {
+		val, _ := lookup(key)
+		return strings.TrimSpace(val)
+	}
+	kafscaleToken := func() string {
+		if _, ok := lookup(s3SessionTokenEnv); ok {
+			return value(s3SessionTokenEnv)
+		}
+		return value(awsSessionTokenEnv)
+	}
+	switch {
+	case value(s3AccessKeyEnv) != "" && value(s3SecretKeyEnv) != "":
+		return value(s3AccessKeyEnv), value(s3SecretKeyEnv), kafscaleToken()
+	case value(awsAccessKeyEnv) != "" && value(awsSecretKeyEnv) != "":
+		return value(awsAccessKeyEnv), value(awsSecretKeyEnv), value(awsSessionTokenEnv)
+	default:
+		return firstNonBlank(value(s3AccessKeyEnv), value(awsAccessKeyEnv)), firstNonBlank(value(s3SecretKeyEnv), value(awsSecretKeyEnv)), kafscaleToken()
+	}
 }
 
 func firstSecretValue(secret *corev1.Secret, keys ...string) string {
@@ -144,6 +163,15 @@ func firstSecretValue(secret *corev1.Secret, keys ...string) string {
 			if trimmed != "" {
 				return trimmed
 			}
+		}
+	}
+	return ""
+}
+
+func firstNonBlank(values ...string) string {
+	for _, val := range values {
+		if val != "" {
+			return val
 		}
 	}
 	return ""

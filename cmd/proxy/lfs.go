@@ -115,6 +115,20 @@ var blockedBucketNames = []string{
 	"kafscale-example",
 }
 
+func normalizeAWSCredentialEnv() {
+	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+		val, ok := os.LookupEnv(key)
+		if !ok {
+			continue
+		}
+		if trimmed := strings.TrimSpace(val); trimmed == "" {
+			_ = os.Unsetenv(key)
+		} else if trimmed != val {
+			_ = os.Setenv(key, trimmed)
+		}
+	}
+}
+
 func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error) {
 	s3Bucket := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_BUCKET"))
 	if s3Bucket == "" {
@@ -131,6 +145,7 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	}
 	s3Endpoint := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_ENDPOINT"))
 	s3PublicURL := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT"))
+	normalizeAWSCredentialEnv()
 	s3AccessKey := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_ACCESS_KEY"))
 	s3SecretKey := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_SECRET_KEY"))
 	s3SessionToken := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN"))

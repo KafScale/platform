@@ -233,7 +233,7 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 	if strings.TrimSpace(cluster.Spec.S3.Endpoint) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LFS_PROXY_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
 	}
-	if cluster.Spec.S3.CredentialsSecretRef != "" {
+	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
 		env = append(env, lfsProxyCredentialEnv(cluster.Spec.S3.CredentialsSecretRef)...)
 	}
 	if lfsProxyForcePathStyle(cluster) {
