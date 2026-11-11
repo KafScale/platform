@@ -196,8 +196,12 @@ once after the upgrade, because their pod templates gain the
 credential key in the secret changes. This also happens while the managed etcd
 snapshot check fails, for example with a 403 on the snapshot bucket: `Ready`
 then stays `False` with `SnapshotAccessFailed`, but the broker and LFS proxy
-workloads are still applied. Only a new cluster waits for that check before its
-brokers and LFS proxy are created.
+workloads are still applied, with every spec change (for example image,
+replicas and resources), not only credential changes. Earlier releases held
+back all broker and LFS proxy workload updates while the check failed. If you
+relied on a failed snapshot check to freeze broker updates, that no longer
+happens. Only a new cluster waits for that check before its brokers and LFS
+proxy are created.
 
 ## Validation scope and rerun commands
 
