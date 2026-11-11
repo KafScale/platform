@@ -174,8 +174,36 @@ brokers and snapshot jobs use, kept the LFS proxy pods in
 `CreateContainerConfigError`. The proxy now accepts either pair. No migration is
 needed: secrets with the `AWS_` keys work as before and keep priority when both
 pairs are present. A secret that has neither pair, or does not exist, no longer
-blocks the pod; the proxy then uses the default AWS credential chain, so check
-the secret if LFS uploads fail with S3 access errors after the upgrade.
+blocks the pod; the proxy then uses the default AWS credential chain if one is
+available. The operator flags such a secret, and one it cannot read, with the
+`S3Credentials` condition set to `False` and a warning in its log. When the
+secret holds only part of a pair, the condition message names the keys found,
+because the etcd snapshot jobs can fail on such a secret instead of falling
+back. The proxy logs which credential source it uses at startup, so check both
+the condition and that log if LFS uploads fail with S3 access errors after the
+upgrade.
+
+The LFS proxy forwards `AWS_SESSION_TOKEN` alongside the AWS key pair. When both
+pairs are present, it uses the AWS pair and its token; the KafScale fallback
+retains its own token. A permanent AWS pair does not inherit a KafScale token.
+The startup credential log includes `session_token=true/false` for static keys,
+without exposing the token. The flag is omitted for default-chain credentials,
+which may resolve later through a provider.
+
+When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll
+once after the upgrade, because their pod templates gain the
+`kafscale.io/s3-credentials-checksum` annotation, and roll again whenever a
+credential key in the secret changes. This also happens while the managed etcd
+snapshot check fails, for example with a 403 on the snapshot bucket: `Ready`
+then stays `False` with `SnapshotAccessFailed`, but the broker and LFS proxy
+workloads are still applied, with every spec change (for example image,
+replicas and resources), not only credential changes. The cluster metadata in
+etcd is still published to match, so a scale-down does not leave removed
+brokers as partition leaders. Earlier releases held
+back all broker and LFS proxy workload updates while the check failed. If you
+relied on a failed snapshot check to freeze broker updates, that no longer
+happens. Only a new cluster waits for that check before its brokers and LFS
+proxy are created.
 
 ## Validation scope and rerun commands
 

@@ -65,7 +65,7 @@ func (r *ClusterReconciler) clustersForACLSecret(ctx context.Context, secret cli
 	}
 	var requests []reconcile.Request
 	for _, cluster := range clusters.Items {
-		if cluster.Spec.Security.ACLSecretRef == secret.GetName() {
+		if cluster.Spec.Security.ACLSecretRef == secret.GetName() || cluster.Spec.S3.CredentialsSecretRef == secret.GetName() {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&cluster)})
 		}
 	}

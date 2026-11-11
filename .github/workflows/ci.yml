@@ -150,10 +150,24 @@ jobs:
       - name: librdkafka compatibility end-to-end tests
         env:
           KAFSCALE_E2E: "1"
+          KCAT_IMAGE: edenhill/kcat:1.7.1@sha256:8f16a5fed099931ce1122420b7473efe467ff9841d53680b99db25dd1723d711
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y kcat
-          kcat -V
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update || true
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install --no-install-recommends -y kcat || true
+          kcat_bin=kcat
+          if ! command -v kcat >/dev/null 2>&1; then
+            echo "apt could not install kcat, using the container image $KCAT_IMAGE"
+            docker pull "$KCAT_IMAGE"
+            mkdir -p "$RUNNER_TEMP/kcat-docker"
+            printf '#!/bin/sh\nexec docker run --rm -i --init --network host %s "$@"\n' "$KCAT_IMAGE" > "$RUNNER_TEMP/kcat-docker/kcat"
+            chmod +x "$RUNNER_TEMP/kcat-docker/kcat"
+            kcat_bin="$RUNNER_TEMP/kcat-docker/kcat"
+          else
+            echo "kcat installed from apt"
+          fi
+          echo "KAFSCALE_KCAT_BIN=$kcat_bin" >> "$GITHUB_ENV"
+          export KAFSCALE_KCAT_BIN="$kcat_bin"
+          "$KAFSCALE_KCAT_BIN" -V
           go test -race -tags=e2e ./test/e2e -run '^TestLibrdkafkaCompatibilityE2E$' -count=1 -v -timeout=3m
 
       - name: Schema registry end-to-end tests

@@ -190,6 +190,11 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	if err != nil {
 		return nil, fmt.Errorf("s3 client init: %w", err)
 	}
+	credentialLog := logger.With("source", lfsS3CredentialSource(s3AccessKey, s3SecretKey))
+	if s3AccessKey != "" && s3SecretKey != "" {
+		credentialLog = credentialLog.With("session_token", s3SessionToken != "")
+	}
+	credentialLog.Info("lfs s3 credentials")
 	if s3EnsureBucket {
 		if err := uploader.EnsureBucket(ctx); err != nil {
 			logger.Error("lfs s3 bucket ensure failed", "error", err)
@@ -547,6 +552,13 @@ func (m *lfsModule) trackOrphans(orphans []orphanInfo) {
 
 func newLFSUUID() string {
 	return uuid.NewString()
+}
+
+func lfsS3CredentialSource(accessKey, secretKey string) string {
+	if accessKey != "" && secretKey != "" {
+		return "static keys from KAFSCALE_LFS_PROXY_S3_ACCESS_KEY and KAFSCALE_LFS_PROXY_S3_SECRET_KEY"
+	}
+	return "default AWS credential chain"
 }
 
 func lfsEnvBoolDefault(key string, fallback bool) bool {

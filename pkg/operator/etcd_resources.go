@@ -110,7 +110,7 @@ func EnsureEtcd(ctx context.Context, c client.Client, scheme *runtime.Scheme, cl
 	if err := reconcileEtcdResources(ctx, c, scheme, cluster); err != nil {
 		return EtcdResolution{}, err
 	}
-	return EtcdResolution{Endpoints: managedEtcdEndpoints(cluster), Managed: true}, nil
+	return EtcdResolution{Endpoints: operatorManagedEtcdEndpoints(cluster), Managed: true}, nil
 }
 
 func parseEnvEndpoints(key string) []string {
@@ -137,6 +137,8 @@ func cleanEndpoints(list []string) []string {
 	}
 	return out
 }
+
+var operatorManagedEtcdEndpoints = managedEtcdEndpoints
 
 func managedEtcdEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 	host := fmt.Sprintf("%s-etcd-client.%s.svc.cluster.local:2379", cluster.Name, cluster.Namespace)
@@ -410,6 +412,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 					Image:           backupImage,
 					Command:         []string{"/bin/sh", "-c", downloadScript},
 					Env:             restoreEnv,
+					EnvFrom:         snapshotCredentialsEnvFrom(cluster),
 					WorkingDir:      "/tmp",
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "snapshot-tmp", MountPath: "/tmp"},
@@ -588,15 +591,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 			},
 		}
 
-		envFrom := []corev1.EnvFromSource{}
-		if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
-			envFrom = append(envFrom, corev1.EnvFromSource{
-				SecretRef: &corev1.SecretEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},
-					Optional:             boolPtr(true),
-				},
-			})
-		}
+		envFrom := append([]corev1.EnvFromSource{}, snapshotCredentialsEnvFrom(cluster)...)
 
 		cron.Spec.JobTemplate.Spec.Template.Spec.InitContainers = []corev1.Container{
 			{
@@ -713,6 +708,18 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		return controllerutil.SetControllerReference(cluster, cron, scheme)
 	})
 	return err
+}
+
+func snapshotCredentialsEnvFrom(cluster *kafscalev1alpha1.KafscaleCluster) []corev1.EnvFromSource {
+	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) == "" {
+		return nil
+	}
+	return []corev1.EnvFromSource{{
+		SecretRef: &corev1.SecretEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},
+			Optional:             boolPtr(true),
+		},
+	}}
 }
 
 func reconcileEtcdMaintenanceCronJobs(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {

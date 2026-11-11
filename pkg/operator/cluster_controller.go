@@ -17,6 +17,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -27,11 +28,13 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -71,36 +74,45 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.reconcileKafkaNetworkPolicy(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	etcdResolution, err := EnsureEtcd(ctx, r.Client, r.Scheme, &cluster)
+	initialConditions := append([]metav1.Condition(nil), cluster.Status.Conditions...)
+	r.populateS3CredentialsStatus(ctx, &cluster)
+	etcdResolution, err := r.reconcileClusterSetup(ctx, &cluster)
 	if err != nil {
+		r.persistStatusAfterFailure(ctx, &cluster, initialConditions)
 		return ctrl.Result{}, err
 	}
-	if err := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); err != nil {
-		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", err.Error())
+	if snapshotErr := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); snapshotErr != nil {
+		err := snapshotErr
+		if r.brokerStatefulSetExists(ctx, &cluster) {
+			if workloadErr := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); workloadErr != nil {
+				err = errors.Join(err, workloadErr)
+			} else if publishErr := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); publishErr != nil {
+				err = errors.Join(err, publishErr)
+				setClusterCondition(&cluster.Status.Conditions, metav1.Condition{
+					Type:               "EtcdAvailable",
+					Status:             metav1.ConditionFalse,
+					Reason:             "EtcdUnavailable",
+					Message:            publishErr.Error(),
+					LastTransitionTime: metav1.NewTime(time.Now()),
+				})
+			} else {
+				setClusterCondition(&cluster.Status.Conditions, metav1.Condition{
+					Type:               "EtcdAvailable",
+					Status:             metav1.ConditionTrue,
+					Reason:             "EtcdReady",
+					Message:            "Etcd metadata publish succeeded",
+					LastTransitionTime: metav1.NewTime(time.Now()),
+				})
+			}
+		}
+		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", snapshotErr.Error())
 		return ctrl.Result{}, err
 	}
 	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
 	r.pollManagedEtcdHealth(ctx, &cluster, etcdResolution)
 	r.populateEtcdMaintenanceStatus(ctx, &cluster, etcdResolution)
-	if err := r.deleteLegacyBrokerDeployment(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerDeployment(ctx, &cluster, etcdResolution.Endpoints); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerHeadlessService(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerService(ctx, &cluster); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileLfsProxyResources(ctx, &cluster, etcdResolution.Endpoints); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileBrokerHPA(ctx, &cluster); err != nil {
+	if err := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); err != nil {
+		r.persistStatusAfterFailure(ctx, &cluster, initialConditions)
 		return ctrl.Result{}, err
 	}
 	if err := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); err != nil {
@@ -129,6 +141,73 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
+func (r *ClusterReconciler) reconcileClusterSetup(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (EtcdResolution, error) {
+	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err != nil {
+		return EtcdResolution{}, err
+	}
+	return EnsureEtcd(ctx, r.Client, r.Scheme, cluster)
+}
+
+func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+	if err := r.deleteLegacyBrokerDeployment(ctx, cluster); err != nil {
+		return err
+	}
+	if err := r.reconcileBrokerDeployment(ctx, cluster, endpoints); err != nil {
+		return err
+	}
+	if err := r.reconcileBrokerHeadlessService(ctx, cluster); err != nil {
+		return err
+	}
+	if err := r.reconcileBrokerService(ctx, cluster); err != nil {
+		return err
+	}
+	if err := r.reconcileLfsProxyResources(ctx, cluster, endpoints); err != nil {
+		return err
+	}
+	return r.reconcileBrokerHPA(ctx, cluster)
+}
+
+func (r *ClusterReconciler) brokerStatefulSetExists(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) bool {
+	sts := &appsv1.StatefulSet{}
+	return r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, sts) == nil
+}
+
+func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, initial []metav1.Condition) {
+	var computed []metav1.Condition
+	for _, condition := range cluster.Status.Conditions {
+		if previous := meta.FindStatusCondition(initial, condition.Type); previous == nil || !equality.Semantic.DeepEqual(*previous, condition) {
+			computed = append(computed, condition)
+		}
+	}
+	if len(computed) == 0 {
+		return
+	}
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		stored := &kafscalev1alpha1.KafscaleCluster{}
+		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(cluster), stored); err != nil {
+			return err
+		}
+		// A retry can observe a recreated resource or a newer spec. Do not
+		// attach observations from the old reconcile to that object/version.
+		if stored.UID != cluster.UID || stored.Generation != cluster.Generation {
+			return nil
+		}
+		changed := false
+		for _, condition := range computed {
+			if meta.SetStatusCondition(&stored.Status.Conditions, condition) {
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		return r.Client.Status().Update(ctx, stored)
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		ctrl.LoggerFrom(ctx).Error(err, "persist cluster status after a failed reconcile")
+	}
+}
+
 func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&kafscalev1alpha1.KafscaleCluster{}).
@@ -149,6 +228,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 	if err != nil {
 		return err
 	}
+	s3Checksum, s3ChecksumKnown := r.s3CredentialsChecksum(ctx, cluster)
 
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-broker", cluster.Name),
@@ -169,6 +249,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		sts.Spec.Replicas = &replicas
 		sts.Spec.Template.Labels = labels
 		setACLChecksum(&sts.Spec.Template, checksum)
+		setS3CredentialsChecksum(&sts.Spec.Template, s3Checksum, s3ChecksumKnown)
 		sts.Spec.Template.Spec.Affinity = workloadAffinity(cluster.Spec.Brokers.Affinity, labels)
 		sts.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(false)
 		sts.Spec.Template.Spec.Containers = []corev1.Container{
