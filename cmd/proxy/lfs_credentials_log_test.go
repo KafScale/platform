@@ -18,6 +18,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -25,13 +26,18 @@ import (
 
 func TestInitLFSModuleLogsS3CredentialSource(t *testing.T) {
 	cases := []struct {
-		name       string
-		accessKey  string
-		secretKey  string
-		wantSource string
+		name             string
+		accessKey        string
+		secretKey        string
+		wantSource       string
+		sessionToken     string
+		wantTokenField   bool
+		wantSessionToken bool
 	}{
-		{name: "static keys", accessKey: "test-access", secretKey: "test-secret", wantSource: "static keys"},
-		{name: "access key only", accessKey: "test-access", wantSource: "default AWS credential chain"},
+		{name: "permanent static keys", accessKey: "test-access", secretKey: "test-secret", wantSource: "static keys", wantTokenField: true},
+		{name: "blank static token", accessKey: "test-access", secretKey: "test-secret", sessionToken: "  ", wantSource: "static keys", wantTokenField: true},
+		{name: "temporary static keys", accessKey: "test-access", secretKey: "test-secret", sessionToken: "test-session-token", wantSource: "static keys", wantTokenField: true, wantSessionToken: true},
+		{name: "access key only with unused token", accessKey: "test-access", sessionToken: "test-session-token", wantSource: "default AWS credential chain"},
 		{name: "no keys", wantSource: "default AWS credential chain"},
 	}
 	for _, tc := range cases {
@@ -41,25 +47,41 @@ func TestInitLFSModuleLogsS3CredentialSource(t *testing.T) {
 			t.Setenv("KAFSCALE_LFS_PROXY_S3_ENDPOINT", "http://127.0.0.1:1")
 			t.Setenv("KAFSCALE_LFS_PROXY_S3_ACCESS_KEY", tc.accessKey)
 			t.Setenv("KAFSCALE_LFS_PROXY_S3_SECRET_KEY", tc.secretKey)
+			t.Setenv("KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN", tc.sessionToken)
+			t.Setenv("AWS_SESSION_TOKEN", "test-chain-session-token")
 			t.Setenv("KAFSCALE_LFS_TRACKER_ENABLED", "false")
 			var logs bytes.Buffer
-			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if _, err := initLFSModule(ctx, logger); err != nil {
 				t.Fatalf("initLFSModule: %v", err)
 			}
-			var line string
-			for _, l := range strings.Split(logs.String(), "\n") {
-				if strings.Contains(l, "lfs s3 credentials") {
-					line = l
+			var record map[string]any
+			for _, line := range strings.Split(logs.String(), "\n") {
+				var candidate map[string]any
+				if json.Unmarshal([]byte(line), &candidate) == nil && candidate["msg"] == "lfs s3 credentials" {
+					record = candidate
 				}
 			}
-			if !strings.Contains(line, tc.wantSource) {
-				t.Fatalf("credential source log = %q, want %q in:\n%s", line, tc.wantSource, logs.String())
+			source, _ := record["source"].(string)
+			if !strings.Contains(source, tc.wantSource) {
+				t.Fatalf("credential source = %q, want %q", source, tc.wantSource)
 			}
-			if strings.Contains(logs.String(), "test-access") || strings.Contains(logs.String(), "test-secret") {
-				t.Fatalf("log contains credential values:\n%s", logs.String())
+			token, found := record["session_token"]
+			if found != tc.wantTokenField {
+				t.Fatalf("session_token presence = %v, want %v: %s", found, tc.wantTokenField, logs.String())
+			}
+			if found {
+				value, ok := token.(bool)
+				if !ok || value != tc.wantSessionToken {
+					t.Fatalf("session_token = %v, want boolean %v", token, tc.wantSessionToken)
+				}
+			}
+			for _, value := range []string{"test-access", "test-secret", "test-session-token", "test-chain-session-token"} {
+				if strings.Contains(logs.String(), value) {
+					t.Fatalf("log contains credential value: %s", logs.String())
+				}
 			}
 		})
 	}

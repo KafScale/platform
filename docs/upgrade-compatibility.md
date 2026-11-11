@@ -186,6 +186,9 @@ upgrade.
 The LFS proxy forwards `AWS_SESSION_TOKEN` alongside the AWS key pair. When both
 pairs are present, it uses the AWS pair and its token; the KafScale fallback
 retains its own token. A permanent AWS pair does not inherit a KafScale token.
+The startup credential log includes `session_token=true/false` for static keys,
+without exposing the token. The flag is omitted for default-chain credentials,
+which may resolve later through a provider.
 
 When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll
 once after the upgrade, because their pod templates gain the

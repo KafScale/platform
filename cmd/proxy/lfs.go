@@ -190,7 +190,11 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 	if err != nil {
 		return nil, fmt.Errorf("s3 client init: %w", err)
 	}
-	logger.Info("lfs s3 credentials", "source", lfsS3CredentialSource(s3AccessKey, s3SecretKey))
+	credentialLog := logger.With("source", lfsS3CredentialSource(s3AccessKey, s3SecretKey))
+	if s3AccessKey != "" && s3SecretKey != "" {
+		credentialLog = credentialLog.With("session_token", s3SessionToken != "")
+	}
+	credentialLog.Info("lfs s3 credentials")
 	if s3EnsureBucket {
 		if err := uploader.EnsureBucket(ctx); err != nil {
 			logger.Error("lfs s3 bucket ensure failed", "error", err)

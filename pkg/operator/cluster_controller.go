@@ -158,6 +158,11 @@ func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, clust
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(cluster), stored); err != nil {
 			return err
 		}
+		// A retry can observe a recreated resource or a newer spec. Do not
+		// attach observations from the old reconcile to that object/version.
+		if stored.UID != cluster.UID || stored.Generation != cluster.Generation {
+			return nil
+		}
 		changed := false
 		for _, condition := range computed {
 			if meta.SetStatusCondition(&stored.Status.Conditions, condition) {
