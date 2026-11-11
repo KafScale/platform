@@ -110,7 +110,7 @@ func EnsureEtcd(ctx context.Context, c client.Client, scheme *runtime.Scheme, cl
 	if err := reconcileEtcdResources(ctx, c, scheme, cluster); err != nil {
 		return EtcdResolution{}, err
 	}
-	return EtcdResolution{Endpoints: managedEtcdEndpoints(cluster), Managed: true}, nil
+	return EtcdResolution{Endpoints: operatorManagedEtcdEndpoints(cluster), Managed: true}, nil
 }
 
 func parseEnvEndpoints(key string) []string {
@@ -137,6 +137,8 @@ func cleanEndpoints(list []string) []string {
 	}
 	return out
 }
+
+var operatorManagedEtcdEndpoints = managedEtcdEndpoints
 
 func managedEtcdEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 	host := fmt.Sprintf("%s-etcd-client.%s.svc.cluster.local:2379", cluster.Name, cluster.Namespace)

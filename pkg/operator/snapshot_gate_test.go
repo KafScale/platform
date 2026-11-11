@@ -17,10 +17,14 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -34,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/testutil"
 )
 
 func snapshotDeniedReconciler(t *testing.T) (*ClusterReconciler, client.Client, *kafscalev1alpha1.KafscaleCluster, *corev1.Secret) {
@@ -142,5 +147,122 @@ func TestSnapshotAccessFailureDoesNotCreateBrokers(t *testing.T) {
 	}
 	if ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready"); ready == nil || ready.Reason != "SnapshotAccessFailed" {
 		t.Fatalf("Ready = %+v, want SnapshotAccessFailed", ready)
+	}
+}
+
+func useOperatorEtcdEndpoints(t *testing.T, endpoints []string) {
+	t.Helper()
+	previous := operatorManagedEtcdEndpoints
+	operatorManagedEtcdEndpoints = func(*kafscalev1alpha1.KafscaleCluster) []string { return endpoints }
+	t.Cleanup(func() { operatorManagedEtcdEndpoints = previous })
+}
+
+func scaleBrokers(t *testing.T, c client.Client, replicas int32) *kafscalev1alpha1.KafscaleCluster {
+	t.Helper()
+	cluster := &kafscalev1alpha1.KafscaleCluster{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "demo", Namespace: "default"}, cluster); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	cluster.Spec.Brokers.Replicas = &replicas
+	if err := c.Update(context.Background(), cluster); err != nil {
+		t.Fatalf("scale cluster: %v", err)
+	}
+	return cluster
+}
+
+func TestSnapshotAccessFailurePublishesScaledDownBrokers(t *testing.T) {
+	r, c, _, _ := snapshotDeniedReconciler(t)
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	useOperatorEtcdEndpoints(t, endpoints)
+	ctx := context.Background()
+	topic := &kafscalev1alpha1.KafscaleTopic{
+		ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default"},
+		Spec:       kafscalev1alpha1.KafscaleTopicSpec{ClusterRef: "demo", Partitions: 6},
+	}
+	if err := c.Create(ctx, topic); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+
+	cluster := scaleBrokers(t, c, 3)
+	if err := r.reconcileClusterWorkloads(ctx, cluster, endpoints); err != nil {
+		t.Fatalf("seed workloads: %v", err)
+	}
+	if err := r.Publisher.Publish(ctx, cluster, endpoints); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	scaleBrokers(t, c, 1)
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"}}
+	if _, err := r.Reconcile(ctx, req); err == nil {
+		t.Fatal("Reconcile with a denied snapshot bucket returned no error")
+	}
+
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, "default", "demo-broker")
+	if sts.Spec.Replicas == nil || *sts.Spec.Replicas != 1 {
+		t.Fatalf("broker StatefulSet replicas = %v, want 1", sts.Spec.Replicas)
+	}
+	snap, err := readSnapshotFromEtcd(ctx, endpoints)
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if len(snap.Brokers) != 1 || snap.Brokers[0].NodeID != 0 {
+		t.Fatalf("published brokers = %+v, want only broker 0", snap.Brokers)
+	}
+	if len(snap.Topics) != 1 {
+		t.Fatalf("published topics = %d, want 1", len(snap.Topics))
+	}
+	for _, partition := range snap.Topics[0].Partitions {
+		if partition.Leader != 0 {
+			t.Fatalf("partition %d is led by removed broker %d", partition.Partition, partition.Leader)
+		}
+	}
+
+	var stored kafscalev1alpha1.KafscaleCluster
+	if err := c.Get(ctx, req.NamespacedName, &stored); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready"); ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "SnapshotAccessFailed" {
+		t.Fatalf("Ready = %+v, want False SnapshotAccessFailed", ready)
+	}
+	if etcd := meta.FindStatusCondition(stored.Status.Conditions, "EtcdAvailable"); etcd == nil || etcd.Status != metav1.ConditionTrue || etcd.Reason != "EtcdReady" {
+		t.Fatalf("EtcdAvailable = %+v, want True EtcdReady", etcd)
+	}
+}
+
+func TestSnapshotAccessFailureReportsPublishFailure(t *testing.T) {
+	r, c, cluster, _ := snapshotDeniedReconciler(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	closed := "http://" + listener.Addr().String()
+	_ = listener.Close()
+	useOperatorEtcdEndpoints(t, []string{closed})
+	ctx := context.Background()
+	if err := r.reconcileClusterWorkloads(ctx, cluster, nil); err != nil {
+		t.Fatalf("seed workloads: %v", err)
+	}
+
+	reconcileCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"}}
+	_, err = r.Reconcile(reconcileCtx, req)
+	if err == nil {
+		t.Fatal("Reconcile returned no error")
+	}
+	if !strings.Contains(err.Error(), "403") || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Reconcile error does not join the snapshot and publish errors: %v", err)
+	}
+
+	var stored kafscalev1alpha1.KafscaleCluster
+	if err := c.Get(ctx, req.NamespacedName, &stored); err != nil {
+		t.Fatalf("get cluster: %v", err)
+	}
+	if ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready"); ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "SnapshotAccessFailed" {
+		t.Fatalf("Ready = %+v, want False SnapshotAccessFailed", ready)
+	}
+	if etcd := meta.FindStatusCondition(stored.Status.Conditions, "EtcdAvailable"); etcd == nil || etcd.Status != metav1.ConditionFalse || etcd.Reason != "EtcdUnavailable" {
+		t.Fatalf("EtcdAvailable = %+v, want False EtcdUnavailable", etcd)
 	}
 }

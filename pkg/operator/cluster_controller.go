@@ -86,6 +86,23 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if r.brokerStatefulSetExists(ctx, &cluster) {
 			if workloadErr := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); workloadErr != nil {
 				err = errors.Join(err, workloadErr)
+			} else if publishErr := r.Publisher.Publish(ctx, &cluster, etcdResolution.Endpoints); publishErr != nil {
+				err = errors.Join(err, publishErr)
+				setClusterCondition(&cluster.Status.Conditions, metav1.Condition{
+					Type:               "EtcdAvailable",
+					Status:             metav1.ConditionFalse,
+					Reason:             "EtcdUnavailable",
+					Message:            publishErr.Error(),
+					LastTransitionTime: metav1.NewTime(time.Now()),
+				})
+			} else {
+				setClusterCondition(&cluster.Status.Conditions, metav1.Condition{
+					Type:               "EtcdAvailable",
+					Status:             metav1.ConditionTrue,
+					Reason:             "EtcdReady",
+					Message:            "Etcd metadata publish succeeded",
+					LastTransitionTime: metav1.NewTime(time.Now()),
+				})
 			}
 		}
 		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", snapshotErr.Error())
