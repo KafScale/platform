@@ -17,6 +17,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -80,8 +81,14 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		r.persistStatusAfterFailure(ctx, &cluster, initialConditions)
 		return ctrl.Result{}, err
 	}
-	if err := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); err != nil {
-		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", err.Error())
+	if snapshotErr := r.verifySnapshotS3Access(ctx, &cluster, etcdResolution); snapshotErr != nil {
+		err := snapshotErr
+		if r.brokerStatefulSetExists(ctx, &cluster) {
+			if workloadErr := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); workloadErr != nil {
+				err = errors.Join(err, workloadErr)
+			}
+		}
+		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", snapshotErr.Error())
 		return ctrl.Result{}, err
 	}
 	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
@@ -141,6 +148,11 @@ func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, clust
 		return err
 	}
 	return r.reconcileBrokerHPA(ctx, cluster)
+}
+
+func (r *ClusterReconciler) brokerStatefulSetExists(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) bool {
+	sts := &appsv1.StatefulSet{}
+	return r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, sts) == nil
 }
 
 func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, initial []metav1.Condition) {

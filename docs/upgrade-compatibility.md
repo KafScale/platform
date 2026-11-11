@@ -193,7 +193,11 @@ which may resolve later through a provider.
 When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll
 once after the upgrade, because their pod templates gain the
 `kafscale.io/s3-credentials-checksum` annotation, and roll again whenever a
-credential key in the secret changes.
+credential key in the secret changes. This also happens while the managed etcd
+snapshot check fails, for example with a 403 on the snapshot bucket: `Ready`
+then stays `False` with `SnapshotAccessFailed`, but the broker and LFS proxy
+workloads are still applied. Only a new cluster waits for that check before its
+brokers and LFS proxy are created.
 
 ## Validation scope and rerun commands
 
