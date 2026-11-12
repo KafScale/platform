@@ -69,7 +69,7 @@ func produceHTTPStatus(err error) int {
 	return http.StatusBadGateway
 }
 
-// The caller holds session.mu. Preserve the session on abort failure so an
+// The caller holds the session lock. Preserve the session on abort failure so an
 // explicit abort or a later denied request can retry the cleanup.
 func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadSession) error {
 	timeout := m.dialTimeout
@@ -85,7 +85,9 @@ func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadS
 			return err
 		}
 	}
-	m.lfsDeleteUploadSession(session.ID)
+	if err := m.deleteUploadSession(cleanupCtx, session.ID); err != nil {
+		m.logger.Warn("multipart upload session delete failed", "uploadId", logSafe(session.ID), "error", err)
+	}
 	return nil
 }
 

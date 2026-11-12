@@ -150,6 +150,9 @@ type lfsHashWriter interface {
 }
 
 func (m *lfsModule) startHTTPServer(ctx context.Context, addr string) {
+	if m.sharedUploadSessions {
+		go m.runUploadSessionSweeper(ctx)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/lfs/produce", m.lfsCORSMiddleware(m.handleHTTPProduce))
 	mux.HandleFunc("/lfs/download", m.lfsCORSMiddleware(m.handleHTTPDownload))
@@ -855,7 +858,14 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	m.lfsStoreUploadSession(session)
+	if err := m.saveUploadSession(r.Context(), session); err != nil {
+		m.metrics.IncS3Errors()
+		if abortErr := m.abortMultipartIgnoringMissing(context.WithoutCancel(r.Context()), objectKey, uploadID); abortErr != nil {
+			m.logger.Warn("multipart abort after session save failure failed", "requestId", logSafe(requestID), "s3Key", logSafe(objectKey), "error", abortErr)
+		}
+		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
+		return
+	}
 	m.tracker.EmitUploadStarted(requestID, req.Topic, partition, objectKey, req.ContentType, lfsGetClientIP(r), "http-chunked", req.SizeBytes)
 
 	resp := lfsUploadInitResponse{
@@ -914,20 +924,21 @@ func (m *lfsModule) handleHTTPUploadSession(w http.ResponseWriter, r *http.Reque
 }
 
 func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request, requestID, sessionID string, partNumber int32) {
-	session, ok := m.lfsGetUploadSession(sessionID)
-	if !ok {
-		m.lfsWriteHTTPError(w, requestID, "", http.StatusNotFound, "upload_not_found", "upload session not found")
+	session, unlock, err := m.acquireUploadSession(r.Context(), sessionID)
+	if err != nil {
+		m.writeUploadSessionError(w, requestID, err)
 		return
 	}
+	defer unlock()
 
-	session.mu.Lock()
-	defer session.mu.Unlock()
 	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
 		return
 	}
 
 	if time.Now().UTC().After(session.ExpiresAt) {
-		m.lfsDeleteUploadSession(sessionID)
+		if err := m.discardMultipartUpload(r.Context(), session); err != nil {
+			m.logger.Warn("expired multipart upload cleanup failed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "error", err)
+		}
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusGone, "upload_expired", "upload session expired")
 		return
 	}
@@ -994,6 +1005,11 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 	session.PartSizes[partNumber] = int64(len(body))
 	session.TotalUploaded += int64(len(body))
 	session.NextPart++
+	if err := m.saveUploadSession(r.Context(), session); err != nil {
+		m.metrics.IncS3Errors()
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
+		return
+	}
 
 	resp := lfsUploadPartResponse{UploadID: sessionID, PartNumber: partNumber, ETag: etag}
 	w.Header().Set("Content-Type", "application/json")
@@ -1002,20 +1018,21 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 }
 
 func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Request, requestID, sessionID string) {
-	session, ok := m.lfsGetUploadSession(sessionID)
-	if !ok {
-		m.lfsWriteHTTPError(w, requestID, "", http.StatusNotFound, "upload_not_found", "upload session not found")
+	session, unlock, err := m.acquireUploadSession(r.Context(), sessionID)
+	if err != nil {
+		m.writeUploadSessionError(w, requestID, err)
 		return
 	}
+	defer unlock()
 
-	session.mu.Lock()
-	defer session.mu.Unlock()
 	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
 		return
 	}
 
 	if time.Now().UTC().After(session.ExpiresAt) {
-		m.lfsDeleteUploadSession(sessionID)
+		if err := m.discardMultipartUpload(r.Context(), session); err != nil {
+			m.logger.Warn("expired multipart upload cleanup failed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "error", err)
+		}
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusGone, "upload_expired", "upload session expired")
 		return
 	}
@@ -1066,13 +1083,14 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	if session.Checksum != "" && checksum != "" && !strings.EqualFold(session.Checksum, checksum) {
 		_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
+		m.dropUploadSession(r.Context(), requestID, sessionID)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "checksum_mismatch", "checksum mismatch")
 		return
 	}
 
 	if err := m.recheckStorageName(r.Context(), session.Topic, session.StorageName); err != nil {
 		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "generation_changed")
-		m.lfsDeleteUploadSession(sessionID)
+		m.dropUploadSession(r.Context(), requestID, sessionID)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "metadata_unavailable", err.Error(), "generation_check", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
@@ -1151,20 +1169,19 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	m.metrics.AddUploadBytes(session.TotalUploaded)
 	m.tracker.EmitUploadCompleted(requestID, session.Topic, session.Partition, offset, m.s3Bucket, session.S3Key, session.TotalUploaded, shaHex, checksum, string(session.ChecksumAlg), session.ContentType, 0)
 
-	m.lfsDeleteUploadSession(sessionID)
+	m.dropUploadSession(r.Context(), requestID, sessionID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(env)
 }
 
 func (m *lfsModule) handleHTTPUploadAbort(w http.ResponseWriter, r *http.Request, requestID, sessionID string) {
-	session, ok := m.lfsGetUploadSession(sessionID)
-	if !ok {
-		m.lfsWriteHTTPError(w, requestID, "", http.StatusNotFound, "upload_not_found", "upload session not found")
+	session, unlock, err := m.acquireUploadSession(r.Context(), sessionID)
+	if err != nil {
+		m.writeUploadSessionError(w, requestID, err)
 		return
 	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
+	defer unlock()
 	if err := m.discardMultipartUpload(r.Context(), session); err != nil {
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "abort_failed", "multipart abort failed; retry the request")
 		return

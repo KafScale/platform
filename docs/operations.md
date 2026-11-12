@@ -594,15 +594,27 @@ HTTP endpoints (served on `KAFSCALE_LFS_PROXY_HTTP_ADDR`):
 
 Multipart upload cleanup:
 
-Upload sessions live in proxy memory. Expiry removes a session without aborting
-its S3 multipart upload, and a proxy restart also loses the session. Retrying a
-failed abort is therefore possible only while the session remains available.
-Configure an S3 bucket lifecycle rule with `AbortIncompleteMultipartUpload` for
-the LFS object prefix, or the whole bucket if it is dedicated to LFS. For example,
-set `DaysAfterInitiation` to `7`, choosing an interval longer than the longest
-intended upload. S3 then makes incomplete uploads eligible for cleanup after that
-interval; session expiry itself does not perform storage cleanup. This action
-leaves completed objects intact. Merge the rule into the bucket's existing
+Upload sessions are kept in S3, next to the LFS objects, at
+`<namespace>/@lfs-uploads/<id>.json`, so the part and complete calls of one
+upload can go to any LFS proxy replica behind the Service, also after a proxy
+restart. The record holds the S3 multipart upload id, the parts received so far
+and the checksum state, and it is written again after every part. It is deleted
+when the upload completes or is aborted. Send the parts of one upload one after
+the other, as before; parts sent at the same time to different replicas are not
+supported. A part or complete call on an expired session aborts its S3 multipart
+upload and returns 410 `upload_expired`. Every replica with the HTTP API also
+runs a cleanup every `KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC` / 2 seconds,
+at least every 30 seconds and at most every 10 minutes. It aborts the S3 multipart
+upload of each expired session and deletes its record, and it aborts multipart
+uploads under `<namespace>/@lfs/` that were started more than the session TTL
+plus one hour ago, which covers sessions that were lost, for example by an older
+proxy version that kept them in memory. The proxy needs `s3:ListBucket` and
+`s3:ListBucketMultipartUploads` on the bucket for this cleanup; without them it
+logs a warning and uploads keep working. As a second safety net, configure an S3
+bucket lifecycle rule with `AbortIncompleteMultipartUpload` for the LFS object
+prefix, or the whole bucket if it is dedicated to LFS. For example, set
+`DaysAfterInitiation` to `7`, choosing an interval longer than the longest
+intended upload. This action leaves completed objects intact. Merge the rule into the bucket's existing
 lifecycle configuration. For S3-compatible storage, verify that the provider
 supports and applies this action. See the
 [Amazon S3 lifecycle configuration guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html).

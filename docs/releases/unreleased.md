@@ -116,6 +116,8 @@ limitations under the License.
 
 - When one LFS record in a produce request fails, the proxy deletes the objects it already uploaded for earlier records in that request (#263).
 
+- LFS proxy multipart uploads (`/lfs/uploads`) now work with more than one proxy replica. Upload sessions were kept in the memory of the pod that started them, so with the default 2 replicas the part and complete calls could reach the other pod and get 404 `upload_not_found`, and the started S3 multipart upload stayed in the bucket. The session is now stored in S3 at `<namespace>/@lfs-uploads/<id>.json`, with the parts and the checksum state, so any replica can continue it, also after a restart. Responses are unchanged, except that a failed read of the session from S3 returns 502 `s3_upload_failed`. An expired session now aborts its S3 multipart upload, and each replica regularly aborts the multipart uploads of expired sessions and LFS multipart uploads older than the session TTL plus one hour. That cleanup needs `s3:ListBucket` and `s3:ListBucketMultipartUploads` (#321).
+
 ## Upgrade notes
 
 See the canonical [upgrade and compatibility guide](../upgrade-compatibility.md)

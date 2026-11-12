@@ -28,6 +28,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -50,6 +51,8 @@ type fakeS3 struct {
 	deleteErr     error
 	puts          int
 	multipartInit int
+
+	multipartUploads []types.MultipartUpload
 }
 
 func newFakeS3() *fakeS3 {
@@ -58,16 +61,32 @@ func newFakeS3() *fakeS3 {
 
 func (f *fakeS3) CreateMultipartUpload(ctx context.Context, params *s3.CreateMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
 	f.multipartInit++
+	now := time.Now().UTC()
+	f.multipartUploads = append(f.multipartUploads, types.MultipartUpload{Key: params.Key, UploadId: aws.String("test-upload-id"), Initiated: &now})
 	return &s3.CreateMultipartUploadOutput{UploadId: aws.String("test-upload-id")}, nil
+}
+
+func (f *fakeS3) endMultipartUpload(key, uploadID string) {
+	kept := f.multipartUploads[:0]
+	for _, upload := range f.multipartUploads {
+		if aws.ToString(upload.Key) != key || aws.ToString(upload.UploadId) != uploadID {
+			kept = append(kept, upload)
+		}
+	}
+	f.multipartUploads = kept
 }
 func (f *fakeS3) UploadPart(ctx context.Context, params *s3.UploadPartInput, optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
 	return &s3.UploadPartOutput{ETag: aws.String("test-etag")}, nil
 }
 func (f *fakeS3) CompleteMultipartUpload(ctx context.Context, params *s3.CompleteMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {
+	f.endMultipartUpload(aws.ToString(params.Key), aws.ToString(params.UploadId))
 	return &s3.CompleteMultipartUploadOutput{}, nil
 }
 func (f *fakeS3) AbortMultipartUpload(ctx context.Context, params *s3.AbortMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error) {
 	f.aborted = append(f.aborted, *params.UploadId)
+	if f.abortErr == nil {
+		f.endMultipartUpload(aws.ToString(params.Key), aws.ToString(params.UploadId))
+	}
 	f.abortCanceled = ctx.Err() != nil
 	_, f.abortDeadline = ctx.Deadline()
 	return &s3.AbortMultipartUploadOutput{}, f.abortErr
@@ -83,7 +102,7 @@ func (f *fakeS3) PutObject(ctx context.Context, params *s3.PutObjectInput, optFn
 func (f *fakeS3) GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	data, ok := f.objects[*params.Key]
 	if !ok {
-		return nil, errors.New("NoSuchKey: object not found")
+		return nil, &types.NoSuchKey{Message: aws.String("object not found")}
 	}
 	length := int64(len(data))
 	return &s3.GetObjectOutput{
@@ -101,6 +120,24 @@ func (f *fakeS3) DeleteObject(ctx context.Context, params *s3.DeleteObjectInput,
 }
 func (f *fakeS3) HeadBucket(ctx context.Context, params *s3.HeadBucketInput, optFns ...func(*s3.Options)) (*s3.HeadBucketOutput, error) {
 	return &s3.HeadBucketOutput{}, nil
+}
+func (f *fakeS3) ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	out := &s3.ListObjectsV2Output{}
+	for key := range f.objects {
+		if strings.HasPrefix(key, aws.ToString(params.Prefix)) {
+			out.Contents = append(out.Contents, types.Object{Key: aws.String(key)})
+		}
+	}
+	return out, nil
+}
+func (f *fakeS3) ListMultipartUploads(ctx context.Context, params *s3.ListMultipartUploadsInput, optFns ...func(*s3.Options)) (*s3.ListMultipartUploadsOutput, error) {
+	out := &s3.ListMultipartUploadsOutput{}
+	for _, upload := range f.multipartUploads {
+		if strings.HasPrefix(aws.ToString(upload.Key), aws.ToString(params.Prefix)) {
+			out.Uploads = append(out.Uploads, upload)
+		}
+	}
+	return out, nil
 }
 func (f *fakeS3) CreateBucket(ctx context.Context, params *s3.CreateBucketInput, optFns ...func(*s3.Options)) (*s3.CreateBucketOutput, error) {
 	return &s3.CreateBucketOutput{}, nil
