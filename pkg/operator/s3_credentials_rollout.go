@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/s3env"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -37,7 +38,7 @@ var s3CredentialKeys = []string{awsAccessKeyEnv, awsSecretKeyEnv, awsSessionToke
 
 func (r *ClusterReconciler) s3CredentialsChecksum(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (string, bool) {
 	name := cluster.Spec.S3.CredentialsSecretRef
-	if name == "" {
+	if s3env.Trim(name) == "" {
 		return "", true
 	}
 	secret := &corev1.Secret{}

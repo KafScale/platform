@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/s3env"
 )
 
 const (
@@ -230,10 +231,10 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 	if lfsProxyMetricsEnabled(cluster.Spec.LfsProxy) {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LFS_PROXY_METRICS_ADDR", Value: fmt.Sprintf(":%d", portMetrics)})
 	}
-	if strings.TrimSpace(cluster.Spec.S3.Endpoint) != "" {
+	if s3env.Trim(cluster.Spec.S3.Endpoint) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_LFS_PROXY_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
 	}
-	if cluster.Spec.S3.CredentialsSecretRef != "" {
+	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) != "" {
 		env = append(env, lfsProxyCredentialEnv(cluster.Spec.S3.CredentialsSecretRef)...)
 	}
 	if lfsProxyForcePathStyle(cluster) {
@@ -365,7 +366,7 @@ func lfsProxyForcePathStyle(cluster *kafscalev1alpha1.KafscaleCluster) bool {
 	if cluster.Spec.LfsProxy.S3.ForcePathStyle != nil {
 		return *cluster.Spec.LfsProxy.S3.ForcePathStyle
 	}
-	return strings.TrimSpace(cluster.Spec.S3.Endpoint) != ""
+	return s3env.Trim(cluster.Spec.S3.Endpoint) != ""
 }
 
 func lfsProxyEnsureBucket(cluster *kafscalev1alpha1.KafscaleCluster) bool {

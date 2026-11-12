@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/s3env"
 )
 
 const (
@@ -267,9 +268,9 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 		if bucket != "" {
 			sts.Spec.Template.Spec.Volumes = append(sts.Spec.Template.Spec.Volumes, snapshotTempVolume())
 			prefix := snapshotPrefix(cluster)
-			endpoint := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotEndpointEnv))
+			endpoint := s3env.Trim(os.Getenv(operatorEtcdSnapshotEndpointEnv))
 			if endpoint == "" {
-				endpoint = strings.TrimSpace(cluster.Spec.S3.Endpoint)
+				endpoint = s3env.Trim(cluster.Spec.S3.Endpoint)
 			}
 			etcdctlImage := getEnv(operatorEtcdSnapshotEtcdctlEnv, defaultEtcdctlImage)
 			backupImage := getEnv(operatorEtcdSnapshotImageEnv, defaultSnapshotImage)
@@ -284,41 +285,6 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				{Name: "SNAPSHOT_PREFIX", Value: prefix},
 			}
 			restoreEnv = append(restoreEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
-			if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
-				secretRef := corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef}
-				restoreEnv = append(restoreEnv,
-					corev1.EnvVar{
-						Name: "AWS_ACCESS_KEY_ID",
-						ValueFrom: &corev1.EnvVarSource{
-							SecretKeyRef: &corev1.SecretKeySelector{
-								LocalObjectReference: secretRef,
-								Key:                  "KAFSCALE_S3_ACCESS_KEY",
-								Optional:             boolPtr(true),
-							},
-						},
-					},
-					corev1.EnvVar{
-						Name: "AWS_SECRET_ACCESS_KEY",
-						ValueFrom: &corev1.EnvVarSource{
-							SecretKeyRef: &corev1.SecretKeySelector{
-								LocalObjectReference: secretRef,
-								Key:                  "KAFSCALE_S3_SECRET_KEY",
-								Optional:             boolPtr(true),
-							},
-						},
-					},
-					corev1.EnvVar{
-						Name: "AWS_SESSION_TOKEN",
-						ValueFrom: &corev1.EnvVarSource{
-							SecretKeyRef: &corev1.SecretKeySelector{
-								LocalObjectReference: secretRef,
-								Key:                  "KAFSCALE_S3_SESSION_TOKEN",
-								Optional:             boolPtr(true),
-							},
-						},
-					},
-				)
-			}
 			peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
 			initialCluster := buildEtcdInitialCluster(cluster, int(etcdReplicas()))
 			restoreScript := "set -euo pipefail\n" +
@@ -347,6 +313,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 				"--mark-compacted\n"
 
 			downloadScript := "set -euo pipefail\n" +
+				snapshotCredentialsScript(cluster) +
 				"DATA_DIR=/var/lib/etcd\n" +
 				"ENDPOINT_OPT=\"\"\n" +
 				"if [ -n \"${AWS_ENDPOINT_URL:-}\" ]; then ENDPOINT_OPT=\"--endpoint-url $AWS_ENDPOINT_URL\"; fi\n" +
@@ -557,9 +524,9 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 	}
 	prefix := snapshotPrefix(cluster)
 	schedule := getEnv(operatorEtcdSnapshotScheduleEnv, defaultSnapshotSchedule)
-	endpoint := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotEndpointEnv))
+	endpoint := s3env.Trim(os.Getenv(operatorEtcdSnapshotEndpointEnv))
 	if endpoint == "" {
-		endpoint = strings.TrimSpace(cluster.Spec.S3.Endpoint)
+		endpoint = s3env.Trim(cluster.Spec.S3.Endpoint)
 	}
 	etcdctlImage := getEnv(operatorEtcdSnapshotEtcdctlEnv, defaultEtcdctlImage)
 	backupImage := getEnv(operatorEtcdSnapshotImageEnv, defaultSnapshotImage)
@@ -626,42 +593,6 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 			{Name: "PROTECT_BUCKET", Value: boolToString(protectBucket)},
 		}
 		uploadEnv = append(uploadEnv, corev1.EnvVar{Name: "AWS_ENDPOINT_URL", Value: endpoint})
-		if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
-			secretRef := corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef}
-			uploadEnv = append(uploadEnv,
-				corev1.EnvVar{
-					Name: "AWS_ACCESS_KEY_ID",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: secretRef,
-							Key:                  "KAFSCALE_S3_ACCESS_KEY",
-							Optional:             boolPtr(true),
-						},
-					},
-				},
-				corev1.EnvVar{
-					Name: "AWS_SECRET_ACCESS_KEY",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: secretRef,
-							Key:                  "KAFSCALE_S3_SECRET_KEY",
-							Optional:             boolPtr(true),
-						},
-					},
-				},
-				corev1.EnvVar{
-					Name: "AWS_SESSION_TOKEN",
-					ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: secretRef,
-							Key:                  "KAFSCALE_S3_SESSION_TOKEN",
-							Optional:             boolPtr(true),
-						},
-					},
-				},
-			)
-		}
-
 		cron.Spec.JobTemplate.Spec.Template.Spec.Containers = []corev1.Container{
 			{
 				Name:            "upload",
@@ -671,6 +602,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 					"/bin/sh",
 					"-c",
 					"set -euo pipefail\n" +
+						snapshotCredentialsScript(cluster) +
 						"TS=$(date -u +%Y%m%d%H%M%S)\n" +
 						"SNAPSHOT=/snapshots/etcd-snapshot.db\n" +
 						"CHECKSUM=/snapshots/etcd-snapshot.db.sha256\n" +
@@ -710,8 +642,39 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 	return err
 }
 
+const snapshotCredentialsSelectScript = "kafscale_trim() {\n" +
+	"  LC_ALL=C\n" +
+	"  set -- \"${1#\"${1%%[![:space:]]*}\"}\"\n" +
+	"  printf '%s' \"${1%\"${1##*[![:space:]]}\"}\"\n" +
+	"}\n" +
+	"KS_ACCESS=$(kafscale_trim \"${KAFSCALE_S3_ACCESS_KEY:-}\")\n" +
+	"KS_SECRET=$(kafscale_trim \"${KAFSCALE_S3_SECRET_KEY:-}\")\n" +
+	"KS_TOKEN=$(kafscale_trim \"${KAFSCALE_S3_SESSION_TOKEN:-}\")\n" +
+	"PAIR_ACCESS=$(kafscale_trim \"${AWS_ACCESS_KEY_ID:-}\")\n" +
+	"PAIR_SECRET=$(kafscale_trim \"${AWS_SECRET_ACCESS_KEY:-}\")\n" +
+	"PAIR_TOKEN=$(kafscale_trim \"${AWS_SESSION_TOKEN:-}\")\n" +
+	"if [ -n \"${KAFSCALE_S3_SESSION_TOKEN+set}\" ]; then KS_PAIR_TOKEN=\"$KS_TOKEN\"; else KS_PAIR_TOKEN=\"$PAIR_TOKEN\"; fi\n" +
+	"if [ -n \"$KS_ACCESS\" ] && [ -n \"$KS_SECRET\" ]; then\n" +
+	"  AWS_ACCESS_KEY_ID=\"$KS_ACCESS\"; AWS_SECRET_ACCESS_KEY=\"$KS_SECRET\"; AWS_SESSION_TOKEN=\"$KS_PAIR_TOKEN\"\n" +
+	"elif [ -n \"$PAIR_ACCESS\" ] && [ -n \"$PAIR_SECRET\" ]; then\n" +
+	"  AWS_ACCESS_KEY_ID=\"$PAIR_ACCESS\"; AWS_SECRET_ACCESS_KEY=\"$PAIR_SECRET\"; AWS_SESSION_TOKEN=\"$PAIR_TOKEN\"\n" +
+	"else\n" +
+	"  AWS_ACCESS_KEY_ID=\"${KS_ACCESS:-$PAIR_ACCESS}\"; AWS_SECRET_ACCESS_KEY=\"${KS_SECRET:-$PAIR_SECRET}\"; AWS_SESSION_TOKEN=\"$KS_PAIR_TOKEN\"\n" +
+	"fi\n" +
+	"if [ -n \"$AWS_ACCESS_KEY_ID\" ]; then export AWS_ACCESS_KEY_ID; else unset AWS_ACCESS_KEY_ID; fi\n" +
+	"if [ -n \"$AWS_SECRET_ACCESS_KEY\" ]; then export AWS_SECRET_ACCESS_KEY; else unset AWS_SECRET_ACCESS_KEY; fi\n" +
+	"if [ -n \"$AWS_SESSION_TOKEN\" ]; then export AWS_SESSION_TOKEN; else unset AWS_SESSION_TOKEN; fi\n" +
+	"unset KS_ACCESS KS_SECRET KS_TOKEN KS_PAIR_TOKEN PAIR_ACCESS PAIR_SECRET PAIR_TOKEN\n"
+
+func snapshotCredentialsScript(cluster *kafscalev1alpha1.KafscaleCluster) string {
+	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
+		return ""
+	}
+	return snapshotCredentialsSelectScript
+}
+
 func snapshotCredentialsEnvFrom(cluster *kafscalev1alpha1.KafscaleCluster) []corev1.EnvFromSource {
-	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) == "" {
+	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
 		return nil
 	}
 	return []corev1.EnvFromSource{{

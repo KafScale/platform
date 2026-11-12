@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/KafScale/platform/internal/s3env"
 	"github.com/KafScale/platform/pkg/metadata"
 	"log/slog"
 	"net"
@@ -115,6 +116,20 @@ var blockedBucketNames = []string{
 	"kafscale-example",
 }
 
+func normalizeAWSCredentialEnv() {
+	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"} {
+		val, ok := os.LookupEnv(key)
+		if !ok {
+			continue
+		}
+		if trimmed := s3env.Trim(val); trimmed == "" {
+			_ = os.Unsetenv(key)
+		} else if trimmed != val {
+			_ = os.Setenv(key, trimmed)
+		}
+	}
+}
+
 func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error) {
 	s3Bucket := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_BUCKET"))
 	if s3Bucket == "" {
@@ -125,15 +140,16 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 			return nil, fmt.Errorf("KAFSCALE_LFS_PROXY_S3_BUCKET=%q is a known unsafe example name and must not be used — configure your own bucket", blocked)
 		}
 	}
-	s3Region := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_REGION"))
+	s3Region := s3env.Trim(os.Getenv("KAFSCALE_LFS_PROXY_S3_REGION"))
 	if s3Region == "" {
 		return nil, fmt.Errorf("KAFSCALE_LFS_PROXY_S3_REGION is required when LFS is enabled")
 	}
-	s3Endpoint := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_ENDPOINT"))
-	s3PublicURL := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT"))
-	s3AccessKey := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_ACCESS_KEY"))
-	s3SecretKey := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_SECRET_KEY"))
-	s3SessionToken := strings.TrimSpace(os.Getenv("KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN"))
+	s3Endpoint := s3env.Trim(os.Getenv("KAFSCALE_LFS_PROXY_S3_ENDPOINT"))
+	s3PublicURL := s3env.Trim(os.Getenv("KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT"))
+	normalizeAWSCredentialEnv()
+	s3AccessKey := s3env.Trim(os.Getenv("KAFSCALE_LFS_PROXY_S3_ACCESS_KEY"))
+	s3SecretKey := s3env.Trim(os.Getenv("KAFSCALE_LFS_PROXY_S3_SECRET_KEY"))
+	s3SessionToken := s3env.Trim(os.Getenv("KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN"))
 	forcePathStyle := lfsEnvBoolDefault("KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE", s3Endpoint != "")
 	s3EnsureBucket := lfsEnvBoolDefault("KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET", false)
 	maxBlob := lfsEnvInt64("KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE", defaultLFSMaxBlob)

@@ -38,6 +38,8 @@ func TestInitLFSModuleSignsWithMatchingSessionToken(t *testing.T) {
 		{name: "both temporary pairs prefer AWS", staticKey: "aws-key", staticToken: "aws-token", fallbackKey: "ks-key", fallbackToken: "ks-token", wantKey: "aws-key", wantToken: "aws-token"},
 		{name: "permanent AWS pair ignores KafScale token", staticKey: "aws-key", fallbackKey: "ks-key", fallbackToken: "ks-token", wantKey: "aws-key"},
 		{name: "KafScale pair ignores unmatched AWS token", staticToken: "unmatched-aws-token", fallbackKey: "ks-key", fallbackToken: "ks-token", wantKey: "ks-key", wantToken: "ks-token"},
+		{name: "whitespace AWS pair uses padded KafScale pair", staticKey: "  ", staticToken: " ", fallbackKey: " ks-key\n", fallbackToken: "\tks-token ", wantKey: "ks-key", wantToken: "ks-token"},
+		{name: "whitespace KafScale session token is no token", fallbackKey: "ks-key", fallbackToken: "  ", wantKey: "ks-key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := make(chan http.Header, 1)

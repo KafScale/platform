@@ -205,6 +205,31 @@ relied on a failed snapshot check to freeze broker updates, that no longer
 happens. Only a new cluster waits for that check before its brokers and LFS
 proxy are created.
 
+S3 key values in the secret that are empty or only whitespace now count as
+unset everywhere, and other values are trimmed before use. Before, the operator
+condition, the operator snapshot check and the LFS proxy static keys trimmed
+them, but the brokers, the LFS proxy fallback keys and the AWS CLI in the etcd
+snapshot containers used the raw values, so a blank `KAFSCALE_S3_*` key next to
+a valid `AWS_*` pair gave the snapshot containers an empty or blank key, and a
+padded value failed to sign. The snapshot containers now select the pair in
+their script instead of through `secretKeyRef` environment variables: the
+`KAFSCALE_S3_*` pair when both keys are set, otherwise the `AWS_*` pair with
+`AWS_SESSION_TOKEN`. Secrets with valid keys keep working with the same pair
+and token as before. A secret with the `AWS_*` pair and blank `KAFSCALE_S3_*`
+keys now reports `S3Credentials` as `True` with `SecretKeysFound`. This changes
+the managed etcd pod template, which the earlier change in this release already
+does, so an upgrade from the last release still restarts the managed etcd pods
+once.
+
+Whitespace here means space, tab, newline, carriage return, vertical tab and
+form feed, in the Go code and in the snapshot container scripts alike. Unicode
+spaces such as U+00A0 are kept as part of the value. In the last release the
+operator snapshot check, the operator checks of the `spec.s3` endpoint fields
+and `spec.s3.credentialsSecretRef`, and the LFS proxy S3 key, region and
+endpoint settings also trimmed Unicode spaces. They now keep them, so a value
+padded with U+00A0 is used as written, as the etcd snapshot containers already
+did. Remove such characters from the secret or the settings before upgrading.
+
 ## Validation scope and rerun commands
 
 The QA reported on `bd1813ad2644c56736296f1e5dfff99901707ca8` in #298 passed

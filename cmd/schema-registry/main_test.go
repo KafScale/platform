@@ -75,6 +75,37 @@ func TestLoadSettingsOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsTrimsS3Keys(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		access, secret, token string
+		want                  [3]string
+	}{
+		{name: "valid keys", access: "ak", secret: "sk", token: "st", want: [3]string{"ak", "sk", "st"}},
+		{name: "padded keys", access: " ak\n", secret: "\tsk ", token: " st\n", want: [3]string{"ak", "sk", "st"}},
+		{name: "whitespace keys count as unset", access: "  ", secret: "\t", token: " ", want: [3]string{"", "", ""}},
+		{name: "whitespace session token is no token", access: "ak", secret: "sk", token: "  ", want: [3]string{"ak", "sk", ""}},
+		{name: "ascii vertical tab and form feed are trimmed", access: "\vak\f", secret: "\fsk\v", token: "\v\f", want: [3]string{"ak", "sk", ""}},
+		{name: "unicode spaces are kept", access: "\u00a0ak\u00a0", secret: "sk\u2003", token: "\u00a0", want: [3]string{"\u00a0ak\u00a0", "sk\u2003", "\u00a0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := loadSettings(env(map[string]string{
+				"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e:2379",
+				"KAFSCALE_S3_BUCKET":                      "bucket",
+				"KAFSCALE_S3_ACCESS_KEY":                  tc.access,
+				"KAFSCALE_S3_SECRET_KEY":                  tc.secret,
+				"KAFSCALE_S3_SESSION_TOKEN":               tc.token,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := [3]string{s.s3.AccessKeyID, s.s3.SecretAccessKey, s.s3.SessionToken}; got != tc.want {
+				t.Fatalf("s3 keys = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadSettingsErrors(t *testing.T) {
 	for name, values := range map[string]map[string]string{
 		"no endpoints": {},
