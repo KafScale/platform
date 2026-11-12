@@ -85,9 +85,7 @@ func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadS
 			return err
 		}
 	}
-	if err := m.deleteUploadSession(cleanupCtx, session.ID); err != nil {
-		m.logger.Warn("multipart upload session delete failed", "uploadId", logSafe(session.ID), "error", err)
-	}
+	m.dropUploadSession(cleanupCtx, "", session.ID)
 	return nil
 }
 

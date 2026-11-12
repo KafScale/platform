@@ -1083,14 +1083,14 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	if session.Checksum != "" && checksum != "" && !strings.EqualFold(session.Checksum, checksum) {
 		_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
-		m.dropUploadSession(r.Context(), requestID, sessionID)
+		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, sessionID)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "checksum_mismatch", "checksum mismatch")
 		return
 	}
 
 	if err := m.recheckStorageName(r.Context(), session.Topic, session.StorageName); err != nil {
 		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "generation_changed")
-		m.dropUploadSession(r.Context(), requestID, sessionID)
+		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, sessionID)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "metadata_unavailable", err.Error(), "generation_check", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
@@ -1169,7 +1169,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	m.metrics.AddUploadBytes(session.TotalUploaded)
 	m.tracker.EmitUploadCompleted(requestID, session.Topic, session.Partition, offset, m.s3Bucket, session.S3Key, session.TotalUploaded, shaHex, checksum, string(session.ChecksumAlg), session.ContentType, 0)
 
-	m.dropUploadSession(r.Context(), requestID, sessionID)
+	m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, sessionID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(env)

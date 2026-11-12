@@ -469,7 +469,7 @@ func (m *lfsModule) sweepLostMultipartUploads(ctx context.Context, now time.Time
 }
 
 func (m *lfsModule) dropUploadSession(ctx context.Context, requestID, id string) {
-	if err := m.deleteUploadSession(context.WithoutCancel(ctx), id); err != nil {
+	if err := m.deleteUploadSession(ctx, id); err != nil {
 		m.logger.Warn("multipart upload session delete failed", "requestId", logSafe(requestID), "uploadId", logSafe(id), "error", err)
 	}
 }
