@@ -1684,7 +1684,9 @@ func (p *proxy) currentBackends(ctx context.Context) ([]string, error) {
 	if len(p.backends) > 0 {
 		return p.backends, nil
 	}
-	p.syncStoreSnapshot(ctx)
+	if err := p.syncStoreSnapshot(ctx); err != nil {
+		return nil, err
+	}
 	meta, err := p.store.Metadata(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -1715,12 +1717,14 @@ func (p *proxy) updateBrokerAddrs(brokers []protocol.MetadataBroker) {
 }
 
 // syncStoreSnapshot reloads the etcd metadata snapshot when the store supports it.
-func (p *proxy) syncStoreSnapshot(ctx context.Context) {
+func (p *proxy) syncStoreSnapshot(ctx context.Context) error {
 	if etcdStore, ok := p.store.(*metadata.EtcdStore); ok {
 		if err := etcdStore.RefreshSnapshot(ctx); err != nil {
 			p.logger.Warn("metadata snapshot sync failed", "error", err)
+			return fmt.Errorf("metadata snapshot sync: %w", err)
 		}
 	}
+	return nil
 }
 
 // refreshMetadataCache updates broker address and topic name caches from
@@ -1733,7 +1737,9 @@ func (p *proxy) refreshMetadataCache(ctx context.Context) {
 	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_, err, _ := p.metaFlight.Do("refresh", func() (interface{}, error) {
-		p.syncStoreSnapshot(fetchCtx)
+		if err := p.syncStoreSnapshot(fetchCtx); err != nil {
+			return nil, err
+		}
 		meta, err := p.store.Metadata(fetchCtx, nil)
 		if err != nil {
 			return nil, err
