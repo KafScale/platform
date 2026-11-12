@@ -176,15 +176,10 @@ func main() {
 		if etcdStore, ok := store.(*metadata.EtcdStore); ok {
 			lfsmod.topicGeneration = etcdStore.TopicGeneration
 		}
-		lfsmod.identityDial = p.dialBackend
 		if security != nil {
 			lfsmod.authorizer = security.lfsACL
 		}
-		// Give the LFS HTTP API access to the proxy's backends for its own connections
-		if len(backends) > 0 {
-			lfsmod.backends = backends
-			lfsmod.setCachedBackends(backends)
-		}
+		p.attachLFSModule(lfsmod)
 		logger.Info("LFS module enabled")
 
 		// Start LFS HTTP API if configured
@@ -214,6 +209,17 @@ func main() {
 	}
 	if p.lfs != nil {
 		p.lfs.Shutdown()
+	}
+}
+
+func (p *proxy) attachLFSModule(m *lfsModule) {
+	m.identityDial = p.dialBackend
+	if len(p.backends) > 0 {
+		m.backends = p.backends
+		m.setCachedBackends(p.backends)
+	}
+	if p.store != nil {
+		m.discoverBackends = p.currentBackends
 	}
 }
 

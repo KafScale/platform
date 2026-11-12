@@ -101,12 +101,13 @@ type lfsModule struct {
 
 	// backends and connectivity for the HTTP API path (which needs its own
 	// backend connections, independent of the proxy's connection pool)
-	backendRetries int
-	backendBackoff time.Duration
-	backends       []string
-	cacheMu        sync.RWMutex
-	cachedBackends []string
-	rr             uint32
+	backendRetries   int
+	backendBackoff   time.Duration
+	backends         []string
+	discoverBackends func(context.Context) ([]string, error)
+	cacheMu          sync.RWMutex
+	cachedBackends   []string
+	rr               uint32
 }
 
 var blockedBucketNames = []string{
@@ -480,18 +481,60 @@ func (m *lfsModule) cachedBackendsSnapshot() []string {
 	return copied
 }
 
+var errLFSNoBackends = errors.New("no backends available")
+
+func (m *lfsModule) resolveBackends(ctx context.Context) ([]string, error) {
+	if len(m.backends) > 0 {
+		return m.backends, nil
+	}
+	var discoverErr error
+	if m.discoverBackends != nil {
+		discovered, err := m.discoverBackends(ctx)
+		if err == nil && len(discovered) > 0 {
+			m.setCachedBackends(discovered)
+			return discovered, nil
+		}
+		discoverErr = err
+	}
+	if cached := m.cachedBackendsSnapshot(); len(cached) > 0 {
+		return cached, nil
+	}
+	if discoverErr != nil {
+		return nil, fmt.Errorf("%w: %v", errLFSNoBackends, discoverErr)
+	}
+	return nil, errLFSNoBackends
+}
+
+func (m *lfsModule) waitForBackends(ctx context.Context) error {
+	attempts := m.backendRetries
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(m.backendBackoff):
+			}
+		}
+		if _, err := m.resolveBackends(ctx); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return lastErr
+}
+
 // connectBackend dials a backend broker for the HTTP API path.
 func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error) {
 	var lastErr error
 	for attempt := 0; attempt < m.backendRetries; attempt++ {
-		backends := m.backends
-		if len(backends) == 0 {
-			if cached := m.cachedBackendsSnapshot(); len(cached) > 0 {
-				backends = cached
-			}
-		}
-		if len(backends) == 0 {
-			lastErr = fmt.Errorf("no backends available")
+		backends, err := m.resolveBackends(ctx)
+		if err != nil {
+			lastErr = err
 			time.Sleep(m.backendBackoff)
 			continue
 		}
@@ -525,7 +568,7 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 		time.Sleep(m.backendBackoff)
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no backends available")
+		lastErr = errLFSNoBackends
 	}
 	return nil, "", lastErr
 }

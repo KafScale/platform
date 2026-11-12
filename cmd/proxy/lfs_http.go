@@ -298,6 +298,11 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
+	if err := m.waitForBackends(r.Context()); err != nil {
+		m.metrics.IncRequests(topic, "error", "lfs")
+		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
+		return
+	}
 	objectKey := m.objectKeyFor(storageName)
 	clientIP := lfsGetClientIP(r)
 	contentType := r.Header.Get("Content-Type")
@@ -387,7 +392,7 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 	backendConn, _, err := m.connectBackend(r.Context())
 	if err != nil {
 		m.metrics.IncRequests(topic, "error", "lfs")
-		m.trackOrphans([]orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID, Reason: "kafka_produce_failed"}})
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}}, "backend_unavailable")
 		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "backend_unavailable", err.Error(), "kafka_produce", size, time.Since(start))
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
@@ -781,6 +786,10 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
+	if err := m.waitForBackends(r.Context()); err != nil {
+		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
+		return
+	}
 	objectKey := m.objectKeyFor(storageName)
 	uploadID, err := m.s3Uploader.StartMultipartUpload(r.Context(), objectKey, req.ContentType)
 	if err != nil {
@@ -1093,7 +1102,8 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 
 	backendConn, _, err := m.connectBackend(r.Context())
 	if err != nil {
-		m.trackOrphans([]orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID, Reason: "kafka_produce_failed"}})
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "backend_unavailable")
+		m.lfsDeleteUploadSession(sessionID)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "backend_unavailable", err.Error(), "kafka_produce", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
