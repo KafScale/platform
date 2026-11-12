@@ -298,11 +298,17 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
 	}
-	if err := m.waitForBackends(r.Context()); err != nil {
+	backendConn, backendAddr, err := m.connectBackend(r.Context())
+	if err != nil {
 		m.metrics.IncRequests(topic, "error", "lfs")
 		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
+	defer func() {
+		if backendConn != nil {
+			_ = backendConn.Close()
+		}
+	}()
 	objectKey := m.objectKeyFor(storageName)
 	clientIP := lfsGetClientIP(r)
 	contentType := r.Header.Get("Content-Type")
@@ -389,15 +395,17 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	backendConn, _, err := m.connectBackend(r.Context())
-	if err != nil {
-		m.metrics.IncRequests(topic, "error", "lfs")
-		m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}}, "backend_unavailable")
-		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "backend_unavailable", err.Error(), "kafka_produce", size, time.Since(start))
-		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
-		return
+	if !backendConnAlive(backendConn) {
+		_ = backendConn.Close()
+		backendConn, backendAddr, err = m.connectBackend(r.Context())
+		if err != nil {
+			m.metrics.IncRequests(topic, "error", "lfs")
+			m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}}, "backend_unavailable")
+			m.tracker.EmitUploadFailed(requestID, topic, objectKey, "backend_unavailable", err.Error(), "kafka_produce", size, time.Since(start))
+			m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
+			return
+		}
 	}
-	defer func() { _ = backendConn.Close() }()
 
 	offset, err := m.produceHTTPRecord(r.Context(), backendConn, payload, topic, partition, correlationID)
 	if err != nil {
@@ -408,6 +416,8 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	m.releaseBackend(backendConn, backendAddr)
+	backendConn = nil
 	m.metrics.IncRequests(topic, "ok", "lfs")
 	m.metrics.AddUploadBytes(size)
 	m.metrics.ObserveUploadDuration(time.Since(start).Seconds())
@@ -1100,7 +1110,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	backendConn, _, err := m.connectBackend(r.Context())
+	backendConn, backendAddr, err := m.connectBackend(r.Context())
 	if err != nil {
 		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "backend_unavailable")
 		m.lfsDeleteUploadSession(sessionID)
@@ -1108,16 +1118,16 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
 	}
-	defer func() { _ = backendConn.Close() }()
-
 	offset, err := m.produceHTTPRecord(r.Context(), backendConn, payload, session.Topic, session.Partition, correlationID)
 	if err != nil {
+		_ = backendConn.Close()
 		m.trackOrphans([]orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID, Reason: "kafka_produce_failed"}})
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "backend_error", err.Error(), "kafka_produce", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, produceHTTPStatus(err), "backend_error", err.Error())
 		return
 	}
 
+	m.releaseBackend(backendConn, backendAddr)
 	m.metrics.IncRequests(session.Topic, "ok", "lfs")
 	m.metrics.AddUploadBytes(session.TotalUploaded)
 	m.tracker.EmitUploadCompleted(requestID, session.Topic, session.Partition, offset, m.s3Bucket, session.S3Key, session.TotalUploaded, shaHex, checksum, string(session.ChecksumAlg), session.ContentType, 0)

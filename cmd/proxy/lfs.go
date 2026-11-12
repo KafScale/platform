@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +99,8 @@ type lfsModule struct {
 	uploadSessionTTL     time.Duration
 	uploadMu             sync.Mutex
 	uploadSessions       map[string]*uploadSession
+	idleMu               sync.Mutex
+	idleBackends         []lfsIdleBackend
 
 	// backends and connectivity for the HTTP API path (which needs its own
 	// backend connections, independent of the proxy's connection pool)
@@ -510,11 +513,68 @@ func (m *lfsModule) resolveBackends(ctx context.Context) ([]string, error) {
 }
 
 func (m *lfsModule) waitForBackends(ctx context.Context) error {
-	conn, _, err := m.connectBackend(ctx)
+	conn, addr, err := m.connectBackend(ctx)
 	if err != nil {
 		return err
 	}
-	return conn.Close()
+	m.releaseBackend(conn, addr)
+	return nil
+}
+
+type lfsIdleBackend struct {
+	conn  net.Conn
+	addr  string
+	since time.Time
+}
+
+const (
+	lfsIdleBackendSlots  = 4
+	lfsIdleBackendMaxAge = time.Minute
+)
+
+func backendConnAlive(conn net.Conn) bool {
+	if err := conn.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+		return false
+	}
+	var one [1]byte
+	n, err := conn.Read(one[:])
+	_ = conn.SetReadDeadline(time.Time{})
+	if n > 0 || err == nil {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func (m *lfsModule) releaseBackend(conn net.Conn, addr string) {
+	if conn == nil {
+		return
+	}
+	m.idleMu.Lock()
+	if len(m.idleBackends) < lfsIdleBackendSlots {
+		m.idleBackends = append(m.idleBackends, lfsIdleBackend{conn: conn, addr: addr, since: time.Now()})
+		m.idleMu.Unlock()
+		return
+	}
+	m.idleMu.Unlock()
+	_ = conn.Close()
+}
+
+func (m *lfsModule) takeIdleBackend(backends []string) (net.Conn, string) {
+	for {
+		m.idleMu.Lock()
+		if len(m.idleBackends) == 0 {
+			m.idleMu.Unlock()
+			return nil, ""
+		}
+		idle := m.idleBackends[len(m.idleBackends)-1]
+		m.idleBackends = m.idleBackends[:len(m.idleBackends)-1]
+		m.idleMu.Unlock()
+		if time.Since(idle.since) <= lfsIdleBackendMaxAge && slices.Contains(backends, idle.addr) && backendConnAlive(idle.conn) {
+			return idle.conn, idle.addr
+		}
+		_ = idle.conn.Close()
+	}
 }
 
 // connectBackend dials a backend broker for the HTTP API path.
@@ -525,11 +585,18 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 	}
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			if err := waitBackendRetry(ctx, m.backendBackoff); err != nil {
+				return nil, "", err
+			}
+		}
 		backends, err := m.resolveBackends(ctx)
 		if err != nil {
 			lastErr = err
-			time.Sleep(m.backendBackoff)
 			continue
+		}
+		if conn, addr := m.takeIdleBackend(backends); conn != nil {
+			return conn, addr, nil
 		}
 		index := atomic.AddUint32(&m.rr, 1)
 		addr := backends[int(index)%len(backends)]
@@ -541,24 +608,25 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 		} else {
 			conn, dialErr = dialer.DialContext(ctx, "tcp", addr)
 		}
-		if dialErr == nil {
-			wrapped, err := m.wrapBackendTLS(ctx, conn, addr)
-			if err != nil {
-				_ = conn.Close()
-				lastErr = err
-				time.Sleep(m.backendBackoff)
-				continue
-			}
-			if err := m.performBackendSASL(ctx, wrapped); err != nil {
-				_ = wrapped.Close()
-				lastErr = err
-				time.Sleep(m.backendBackoff)
-				continue
-			}
-			return wrapped, addr, nil
+		if dialErr != nil {
+			lastErr = dialErr
+			continue
 		}
-		lastErr = dialErr
-		time.Sleep(m.backendBackoff)
+		wrapped, err := m.wrapBackendTLS(ctx, conn, addr)
+		if err != nil {
+			_ = conn.Close()
+			lastErr = err
+			continue
+		}
+		if err := m.performBackendSASL(ctx, wrapped); err != nil {
+			_ = wrapped.Close()
+			lastErr = err
+			continue
+		}
+		return wrapped, addr, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 	if lastErr == nil {
 		lastErr = errLFSNoBackends
