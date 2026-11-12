@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/s3env"
 )
 
 const (
@@ -346,17 +347,17 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 	if brokerHost != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_BROKER_HOST", Value: brokerHost})
 	}
-	if strings.TrimSpace(cluster.Spec.S3.Endpoint) != "" {
+	if s3env.Trim(cluster.Spec.S3.Endpoint) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_ENDPOINT", Value: cluster.Spec.S3.Endpoint})
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_PATH_STYLE", Value: "true"})
 	}
 	if strings.TrimSpace(cluster.Spec.S3.ReadBucket) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_READ_BUCKET", Value: cluster.Spec.S3.ReadBucket})
 	}
-	if strings.TrimSpace(cluster.Spec.S3.ReadRegion) != "" {
+	if s3env.Trim(cluster.Spec.S3.ReadRegion) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_READ_REGION", Value: cluster.Spec.S3.ReadRegion})
 	}
-	if strings.TrimSpace(cluster.Spec.S3.ReadEndpoint) != "" {
+	if s3env.Trim(cluster.Spec.S3.ReadEndpoint) != "" {
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_S3_READ_ENDPOINT", Value: cluster.Spec.S3.ReadEndpoint})
 	}
 	if cluster.Spec.Config.SegmentBytes > 0 {
@@ -410,7 +411,7 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 		env = append(env, corev1.EnvVar{Name: "KAFSCALE_TRACE_KAFKA", Value: val})
 	}
 	var envFrom []corev1.EnvFromSource
-	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) != "" {
+	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) != "" {
 		envFrom = append(envFrom, corev1.EnvFromSource{
 			SecretRef: &corev1.SecretEnvSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: cluster.Spec.S3.CredentialsSecretRef},

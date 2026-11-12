@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/s3env"
 )
 
 const (
@@ -267,9 +268,9 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 		if bucket != "" {
 			sts.Spec.Template.Spec.Volumes = append(sts.Spec.Template.Spec.Volumes, snapshotTempVolume())
 			prefix := snapshotPrefix(cluster)
-			endpoint := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotEndpointEnv))
+			endpoint := s3env.Trim(os.Getenv(operatorEtcdSnapshotEndpointEnv))
 			if endpoint == "" {
-				endpoint = strings.TrimSpace(cluster.Spec.S3.Endpoint)
+				endpoint = s3env.Trim(cluster.Spec.S3.Endpoint)
 			}
 			etcdctlImage := getEnv(operatorEtcdSnapshotEtcdctlEnv, defaultEtcdctlImage)
 			backupImage := getEnv(operatorEtcdSnapshotImageEnv, defaultSnapshotImage)
@@ -523,9 +524,9 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 	}
 	prefix := snapshotPrefix(cluster)
 	schedule := getEnv(operatorEtcdSnapshotScheduleEnv, defaultSnapshotSchedule)
-	endpoint := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotEndpointEnv))
+	endpoint := s3env.Trim(os.Getenv(operatorEtcdSnapshotEndpointEnv))
 	if endpoint == "" {
-		endpoint = strings.TrimSpace(cluster.Spec.S3.Endpoint)
+		endpoint = s3env.Trim(cluster.Spec.S3.Endpoint)
 	}
 	etcdctlImage := getEnv(operatorEtcdSnapshotEtcdctlEnv, defaultEtcdctlImage)
 	backupImage := getEnv(operatorEtcdSnapshotImageEnv, defaultSnapshotImage)
@@ -642,6 +643,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 }
 
 const snapshotCredentialsSelectScript = "kafscale_trim() {\n" +
+	"  LC_ALL=C\n" +
 	"  set -- \"${1#\"${1%%[![:space:]]*}\"}\"\n" +
 	"  printf '%s' \"${1%\"${1##*[![:space:]]}\"}\"\n" +
 	"}\n" +
@@ -665,14 +667,14 @@ const snapshotCredentialsSelectScript = "kafscale_trim() {\n" +
 	"unset KS_ACCESS KS_SECRET KS_TOKEN KS_PAIR_TOKEN PAIR_ACCESS PAIR_SECRET PAIR_TOKEN\n"
 
 func snapshotCredentialsScript(cluster *kafscalev1alpha1.KafscaleCluster) string {
-	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) == "" {
+	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
 		return ""
 	}
 	return snapshotCredentialsSelectScript
 }
 
 func snapshotCredentialsEnvFrom(cluster *kafscalev1alpha1.KafscaleCluster) []corev1.EnvFromSource {
-	if strings.TrimSpace(cluster.Spec.S3.CredentialsSecretRef) == "" {
+	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
 		return nil
 	}
 	return []corev1.EnvFromSource{{

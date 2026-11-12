@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/internal/s3env"
 )
 
 const s3CredentialsConditionType = "S3Credentials"
@@ -54,7 +55,7 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 		LastTransitionTime: metav1.NewTime(time.Now()),
 	}
 	name := cluster.Spec.S3.CredentialsSecretRef
-	if strings.TrimSpace(name) == "" {
+	if s3env.Trim(name) == "" {
 		condition.Reason = "SecretNotReferenced"
 		condition.Message = "No spec.s3.credentialsSecretRef is set; workloads use the default AWS credential chain."
 		return condition
@@ -74,7 +75,7 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 	hasAWS := secretHasKeyPair(secret, awsAccessKeyEnv, awsSecretKeyEnv)
 	hasKafscale := secretHasKeyPair(secret, s3AccessKeyEnv, s3SecretKeyEnv)
 	switch {
-	case hasKafscale && strings.TrimSpace(string(secret.Data[awsSessionTokenEnv])) != "" && len(secretKeysPresent(secret, s3SessionTokenEnv)) == 0:
+	case hasKafscale && s3env.Trim(string(secret.Data[awsSessionTokenEnv])) != "" && len(secretKeysPresent(secret, s3SessionTokenEnv)) == 0:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "SecretKeysMixed"
 		condition.Message = fmt.Sprintf("Secret %q holds %q, %q and %q but not %q. The brokers use %q and %q without a session token, but the etcd snapshot jobs and the operator snapshot check use them with %q, which belongs to the other pair. Add %q or remove %q.", name, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, s3AccessKeyEnv, s3SecretKeyEnv, awsSessionTokenEnv, s3SessionTokenEnv, awsSessionTokenEnv)
@@ -104,7 +105,7 @@ func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster 
 }
 
 func secretHasKeyPair(secret *corev1.Secret, accessKey, secretKey string) bool {
-	return strings.TrimSpace(string(secret.Data[accessKey])) != "" && strings.TrimSpace(string(secret.Data[secretKey])) != ""
+	return s3env.Trim(string(secret.Data[accessKey])) != "" && s3env.Trim(string(secret.Data[secretKey])) != ""
 }
 
 func secretCredentialKeys(secret *corev1.Secret) []string {
@@ -124,7 +125,7 @@ func secretKeysPresent(secret *corev1.Secret, keys ...string) []string {
 func secretKeysWithValues(secret *corev1.Secret, keys ...string) []string {
 	var found []string
 	for _, key := range keys {
-		if strings.TrimSpace(string(secret.Data[key])) != "" {
+		if s3env.Trim(string(secret.Data[key])) != "" {
 			found = append(found, key)
 		}
 	}

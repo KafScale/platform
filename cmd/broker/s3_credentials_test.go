@@ -52,6 +52,32 @@ func TestBuildS3ConfigsFromEnvTrimsCredentials(t *testing.T) {
 	}
 }
 
+func TestBuildS3ConfigsFromEnvKeepsUnicodeSpaces(t *testing.T) {
+	t.Setenv("KAFSCALE_USE_MEMORY_S3", "")
+	t.Setenv("KAFSCALE_S3_ACCESS_KEY", "\u00a0access\u00a0")
+	t.Setenv("KAFSCALE_S3_SECRET_KEY", "\v secret\f")
+	t.Setenv("KAFSCALE_S3_SESSION_TOKEN", "\u00a0")
+	t.Setenv("AWS_ACCESS_KEY_ID", "\u00a0aws-key ")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "\f\v")
+	t.Setenv("AWS_SESSION_TOKEN", "\u2003")
+	writeCfg, _, _, credsProvided, _ := buildS3ConfigsFromEnv()
+	if !credsProvided {
+		t.Fatalf("expected credsProvided true")
+	}
+	if writeCfg.AccessKeyID != "\u00a0access\u00a0" || writeCfg.SecretAccessKey != "secret" || writeCfg.SessionToken != "\u00a0" {
+		t.Fatalf("credentials = %q/%q/%q, want only ASCII whitespace trimmed", writeCfg.AccessKeyID, writeCfg.SecretAccessKey, writeCfg.SessionToken)
+	}
+	if got := os.Getenv("AWS_ACCESS_KEY_ID"); got != "\u00a0aws-key" {
+		t.Fatalf("AWS_ACCESS_KEY_ID = %q, want only ASCII whitespace trimmed", got)
+	}
+	if _, ok := os.LookupEnv("AWS_SECRET_ACCESS_KEY"); ok {
+		t.Fatalf("ASCII whitespace AWS_SECRET_ACCESS_KEY should be unset")
+	}
+	if got := os.Getenv("AWS_SESSION_TOKEN"); got != "\u2003" {
+		t.Fatalf("AWS_SESSION_TOKEN = %q, want it kept", got)
+	}
+}
+
 func TestBrokerS3ClientIgnoresWhitespaceKafscaleKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name                         string

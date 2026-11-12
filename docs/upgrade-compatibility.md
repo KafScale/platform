@@ -221,6 +221,15 @@ the managed etcd pod template, which the earlier change in this release already
 does, so an upgrade from the last release still restarts the managed etcd pods
 once.
 
+Whitespace here means space, tab, newline, carriage return, vertical tab and
+form feed, in the Go code and in the snapshot container scripts alike. Unicode
+spaces such as U+00A0 are kept as part of the value. In the last release the
+operator snapshot check, the operator checks of the `spec.s3` endpoint fields
+and `spec.s3.credentialsSecretRef`, and the LFS proxy S3 key, region and
+endpoint settings also trimmed Unicode spaces. They now keep them, so a value
+padded with U+00A0 is used as written, as the etcd snapshot containers already
+did. Remove such characters from the secret or the settings before upgrading.
+
 ## Validation scope and rerun commands
 
 The QA reported on `bd1813ad2644c56736296f1e5dfff99901707ca8` in #298 passed

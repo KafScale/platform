@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/KafScale/platform/internal/s3env"
 	"github.com/KafScale/platform/pkg/schemaregistry"
 	"github.com/KafScale/platform/pkg/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -104,9 +105,9 @@ func loadSettings(getenv func(string) string) (settings, error) {
 			Region:          getenv("KAFSCALE_S3_REGION"),
 			Endpoint:        endpoint,
 			ForcePathStyle:  pathStyle,
-			AccessKeyID:     strings.TrimSpace(getenv("KAFSCALE_S3_ACCESS_KEY")),
-			SecretAccessKey: strings.TrimSpace(getenv("KAFSCALE_S3_SECRET_KEY")),
-			SessionToken:    strings.TrimSpace(getenv("KAFSCALE_S3_SESSION_TOKEN")),
+			AccessKeyID:     s3env.Trim(getenv("KAFSCALE_S3_ACCESS_KEY")),
+			SecretAccessKey: s3env.Trim(getenv("KAFSCALE_S3_SECRET_KEY")),
+			SessionToken:    s3env.Trim(getenv("KAFSCALE_S3_SESSION_TOKEN")),
 			KMSKeyARN:       getenv("KAFSCALE_S3_KMS_ARN"),
 		}
 	}

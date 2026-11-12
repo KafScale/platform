@@ -35,6 +35,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 
+	"github.com/KafScale/platform/internal/s3env"
 	"github.com/KafScale/platform/pkg/acl"
 	"github.com/KafScale/platform/pkg/broker"
 	"github.com/KafScale/platform/pkg/cache"
@@ -2467,7 +2468,7 @@ func normalizeAWSCredentialEnv() {
 		if !ok {
 			continue
 		}
-		if trimmed := strings.TrimSpace(val); trimmed == "" {
+		if trimmed := s3env.Trim(val); trimmed == "" {
 			_ = os.Unsetenv(key)
 		} else if trimmed != val {
 			_ = os.Setenv(key, trimmed)
@@ -2484,9 +2485,9 @@ func buildS3ConfigsFromEnv() (storage.S3Config, storage.S3Config, bool, bool, bo
 	writeEndpoint := os.Getenv("KAFSCALE_S3_ENDPOINT")
 	forcePathStyle := parseEnvBool("KAFSCALE_S3_PATH_STYLE", writeEndpoint != "")
 	kmsARN := os.Getenv("KAFSCALE_S3_KMS_ARN")
-	accessKey := strings.TrimSpace(os.Getenv("KAFSCALE_S3_ACCESS_KEY"))
-	secretKey := strings.TrimSpace(os.Getenv("KAFSCALE_S3_SECRET_KEY"))
-	sessionToken := strings.TrimSpace(os.Getenv("KAFSCALE_S3_SESSION_TOKEN"))
+	accessKey := s3env.Trim(os.Getenv("KAFSCALE_S3_ACCESS_KEY"))
+	secretKey := s3env.Trim(os.Getenv("KAFSCALE_S3_SECRET_KEY"))
+	sessionToken := s3env.Trim(os.Getenv("KAFSCALE_S3_SESSION_TOKEN"))
 	credsProvided := accessKey != "" && secretKey != ""
 	normalizeAWSCredentialEnv()
 	s3Concurrency := parseEnvInt("KAFSCALE_S3_CONCURRENCY", defaultS3Concurrency)

@@ -85,6 +85,8 @@ func TestLoadSettingsTrimsS3Keys(t *testing.T) {
 		{name: "padded keys", access: " ak\n", secret: "\tsk ", token: " st\n", want: [3]string{"ak", "sk", "st"}},
 		{name: "whitespace keys count as unset", access: "  ", secret: "\t", token: " ", want: [3]string{"", "", ""}},
 		{name: "whitespace session token is no token", access: "ak", secret: "sk", token: "  ", want: [3]string{"ak", "sk", ""}},
+		{name: "ascii vertical tab and form feed are trimmed", access: "\vak\f", secret: "\fsk\v", token: "\v\f", want: [3]string{"ak", "sk", ""}},
+		{name: "unicode spaces are kept", access: "\u00a0ak\u00a0", secret: "sk\u2003", token: "\u00a0", want: [3]string{"\u00a0ak\u00a0", "sk\u2003", "\u00a0"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := loadSettings(env(map[string]string{
