@@ -395,6 +395,13 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := m.checkBackendsFresh(r.Context()); err != nil {
+		m.metrics.IncRequests(topic, "error", "lfs")
+		m.discardUploads(r.Context(), []orphanInfo{{Topic: topic, Key: objectKey, RequestID: requestID}}, "backend_unavailable")
+		m.tracker.EmitUploadFailed(requestID, topic, objectKey, "backend_unavailable", err.Error(), "kafka_produce", size, time.Since(start))
+		m.lfsWriteHTTPError(w, requestID, topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
+		return
+	}
 	if !backendConnAlive(backendConn) {
 		_ = backendConn.Close()
 		backendConn, backendAddr, err = m.connectBackend(r.Context())

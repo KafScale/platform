@@ -112,6 +112,9 @@ type lfsModule struct {
 	cacheMu          sync.RWMutex
 	cachedBackends   []string
 	rr               uint32
+	// backendsUsable reports whether brokers discovered from etcd are still
+	// within the backend cache TTL. Nil means there is no such limit.
+	backendsUsable func(context.Context) bool
 }
 
 var blockedBucketNames = []string{
@@ -510,6 +513,16 @@ func (m *lfsModule) resolveBackends(ctx context.Context) ([]string, error) {
 		}
 	}
 	return nil, fmt.Errorf("%w: %v", errLFSNoBackends, err)
+}
+
+// checkBackendsFresh checks the backend cache TTL again right before a record
+// is sent, because an upload can take longer than the rest of the TTL.
+// Static backends are not limited.
+func (m *lfsModule) checkBackendsFresh(ctx context.Context) error {
+	if len(m.backends) > 0 || m.backendsUsable == nil || m.backendsUsable(ctx) {
+		return nil
+	}
+	return fmt.Errorf("%w: etcd metadata is older than the backend cache TTL", errLFSNoBackends)
 }
 
 func (m *lfsModule) waitForBackends(ctx context.Context) error {

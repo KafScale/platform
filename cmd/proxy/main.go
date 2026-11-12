@@ -221,6 +221,7 @@ func (p *proxy) attachLFSModule(m *lfsModule) {
 	if p.store != nil {
 		m.discoverBackends = p.currentBackends
 		m.fallbackBackends = p.freshCachedBackends
+		m.backendsUsable = p.listenerRoutable
 	}
 }
 
