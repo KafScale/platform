@@ -115,6 +115,12 @@ type lfsModule struct {
 	// backendsUsable reports whether brokers discovered from etcd are still
 	// within the backend cache TTL. Nil means there is no such limit.
 	backendsUsable func(context.Context) bool
+	// partitionOwner returns the address of the broker that owns a partition
+	// according to the etcd partition routes, or "" when it is not known.
+	partitionOwner func(ctx context.Context, topic string, partition int32) string
+	// forgetPartitionOwner drops a cached partition route that a broker
+	// rejected.
+	forgetPartitionOwner func(topic string, partition int32)
 }
 
 var blockedBucketNames = []string{
@@ -525,8 +531,8 @@ func (m *lfsModule) checkBackendsFresh(ctx context.Context) error {
 	return fmt.Errorf("%w: etcd metadata is older than the backend cache TTL", errLFSNoBackends)
 }
 
-func (m *lfsModule) waitForBackends(ctx context.Context) error {
-	conn, addr, err := m.connectBackend(ctx)
+func (m *lfsModule) waitForBackends(ctx context.Context, topic string, partition int32) error {
+	conn, addr, err := m.connectPartitionBackend(ctx, topic, partition, nil)
 	if err != nil {
 		return err
 	}
@@ -564,6 +570,13 @@ func (m *lfsModule) releaseBackend(conn net.Conn, addr string) {
 		return
 	}
 	m.idleMu.Lock()
+	m.idleBackends = slices.DeleteFunc(m.idleBackends, func(idle lfsIdleBackend) bool {
+		if time.Since(idle.since) <= lfsIdleBackendMaxAge {
+			return false
+		}
+		_ = idle.conn.Close()
+		return true
+	})
 	if len(m.idleBackends) < lfsIdleBackendSlots {
 		m.idleBackends = append(m.idleBackends, lfsIdleBackend{conn: conn, addr: addr, since: time.Now()})
 		m.idleMu.Unlock()
@@ -573,25 +586,41 @@ func (m *lfsModule) releaseBackend(conn net.Conn, addr string) {
 	_ = conn.Close()
 }
 
-func (m *lfsModule) takeIdleBackend(backends []string) (net.Conn, string) {
+// takeIdleBackend reuses an idle connection only when it goes to one of addrs.
+// Idle connections to other brokers stay in the idle set.
+func (m *lfsModule) takeIdleBackend(addrs []string) (net.Conn, string) {
 	for {
 		m.idleMu.Lock()
-		if len(m.idleBackends) == 0 {
+		index := -1
+		for i := len(m.idleBackends) - 1; i >= 0; i-- {
+			if slices.Contains(addrs, m.idleBackends[i].addr) {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
 			m.idleMu.Unlock()
 			return nil, ""
 		}
-		idle := m.idleBackends[len(m.idleBackends)-1]
-		m.idleBackends = m.idleBackends[:len(m.idleBackends)-1]
+		idle := m.idleBackends[index]
+		m.idleBackends = slices.Delete(m.idleBackends, index, index+1)
 		m.idleMu.Unlock()
-		if time.Since(idle.since) <= lfsIdleBackendMaxAge && slices.Contains(backends, idle.addr) && backendConnAlive(idle.conn) {
+		if time.Since(idle.since) <= lfsIdleBackendMaxAge && backendConnAlive(idle.conn) {
 			return idle.conn, idle.addr
 		}
 		_ = idle.conn.Close()
 	}
 }
 
-// connectBackend dials a backend broker for the HTTP API path.
+// connectBackend dials any backend broker for the HTTP API path.
 func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error) {
+	return m.connectPartitionBackend(ctx, "", 0, nil)
+}
+
+// connectPartitionBackend connects to the broker that owns topic/partition
+// when brokers come from etcd and the owner is known, and otherwise to one of
+// the listed brokers. Brokers in tried are skipped.
+func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, partition int32, tried map[string]bool) (net.Conn, string, error) {
 	attempts := m.backendRetries
 	if attempts < 1 {
 		attempts = 1
@@ -608,11 +637,16 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 			lastErr = err
 			continue
 		}
-		if conn, addr := m.takeIdleBackend(backends); conn != nil {
+		candidates := m.partitionCandidates(ctx, backends, topic, partition, tried)
+		if len(candidates) == 0 {
+			lastErr = errLFSNoBackends
+			continue
+		}
+		if conn, addr := m.takeIdleBackend(candidates); conn != nil {
 			return conn, addr, nil
 		}
 		index := atomic.AddUint32(&m.rr, 1)
-		addr := backends[int(index)%len(backends)]
+		addr := candidates[int(index)%len(candidates)]
 		dialer := net.Dialer{Timeout: m.dialTimeout}
 		var conn net.Conn
 		var dialErr error

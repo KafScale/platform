@@ -222,6 +222,8 @@ func (p *proxy) attachLFSModule(m *lfsModule) {
 		m.discoverBackends = p.currentBackends
 		m.fallbackBackends = p.freshCachedBackends
 		m.backendsUsable = p.listenerRoutable
+		m.partitionOwner = p.partitionOwnerAddr
+		m.forgetPartitionOwner = p.forgetPartitionRoute
 	}
 }
 
@@ -406,6 +408,26 @@ func (p *proxy) cacheFresh() bool {
 		return false
 	}
 	return time.Since(time.Unix(0, last)) <= p.cacheTTL
+}
+
+// partitionOwnerAddr returns the address of the broker that owns
+// topic/partition according to the partition routes, or "" when it is not
+// known.
+func (p *proxy) partitionOwnerAddr(ctx context.Context, topic string, partition int32) string {
+	if p.router == nil {
+		return ""
+	}
+	ownerID := p.router.LookupOwner(topic, partition)
+	if ownerID == "" {
+		return ""
+	}
+	return p.brokerIDToAddr(ctx, ownerID)
+}
+
+func (p *proxy) forgetPartitionRoute(topic string, partition int32) {
+	if p.router != nil {
+		p.router.Invalidate(topic, partition)
+	}
 }
 
 // listenerRoutable reports whether the Kafka listener may answer Metadata or
