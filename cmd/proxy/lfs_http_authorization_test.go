@@ -42,15 +42,11 @@ func TestLFSHTTPProduceReplies(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				c, err := listener.Accept()
+				c, frame, err := acceptFrame(listener)
 				if err != nil {
 					return
 				}
 				defer c.Close()
-				frame, err := protocol.ReadFrame(c)
-				if err != nil {
-					return
-				}
 				header, _, _ := protocol.ParseRequestHeader(frame.Payload)
 				response := kmsg.NewPtrProduceResponse()
 				response.Version = 9
@@ -154,15 +150,11 @@ func TestLFSHTTPMultipartBrokerRejection(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		c, err := listener.Accept()
+		c, frame, err := acceptFrame(listener)
 		if err != nil {
 			return
 		}
 		defer c.Close()
-		frame, err := protocol.ReadFrame(c)
-		if err != nil {
-			return
-		}
 		header, _, _ := protocol.ParseRequestHeader(frame.Payload)
 		r := kmsg.NewPtrProduceResponse()
 		r.Version = 9

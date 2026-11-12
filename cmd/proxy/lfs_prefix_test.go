@@ -299,8 +299,12 @@ func countingBackend(t *testing.T, m *lfsModule) *atomic.Int32 {
 			if err != nil {
 				return
 			}
-			accepted.Add(1)
-			_ = c.Close()
+			go func(c net.Conn) {
+				defer c.Close()
+				if _, err := protocol.ReadFrame(c); err == nil {
+					accepted.Add(1)
+				}
+			}(c)
 		}
 	}()
 	m.backends = []string{listener.Addr().String()}

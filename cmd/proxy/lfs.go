@@ -510,32 +510,21 @@ func (m *lfsModule) resolveBackends(ctx context.Context) ([]string, error) {
 }
 
 func (m *lfsModule) waitForBackends(ctx context.Context) error {
+	conn, _, err := m.connectBackend(ctx)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+// connectBackend dials a backend broker for the HTTP API path.
+func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error) {
 	attempts := m.backendRetries
 	if attempts < 1 {
 		attempts = 1
 	}
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(m.backendBackoff):
-			}
-		}
-		if _, err := m.resolveBackends(ctx); err != nil {
-			lastErr = err
-			continue
-		}
-		return nil
-	}
-	return lastErr
-}
-
-// connectBackend dials a backend broker for the HTTP API path.
-func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error) {
-	var lastErr error
-	for attempt := 0; attempt < m.backendRetries; attempt++ {
 		backends, err := m.resolveBackends(ctx)
 		if err != nil {
 			lastErr = err

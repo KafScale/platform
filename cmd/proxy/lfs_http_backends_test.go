@@ -46,6 +46,37 @@ func closedBackendAddr(t *testing.T) string {
 	return addr
 }
 
+func probeOnlyBackend(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		c, err := listener.Accept()
+		_ = listener.Close()
+		if err == nil {
+			_ = c.Close()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+func acceptFrame(listener net.Listener) (net.Conn, *protocol.Frame, error) {
+	for {
+		c, err := listener.Accept()
+		if err != nil {
+			return nil, nil, err
+		}
+		frame, err := protocol.ReadFrame(c)
+		if err == nil {
+			return c, frame, nil
+		}
+		_ = c.Close()
+	}
+}
+
 func ackingBackend(t *testing.T, topic string) (string, <-chan struct{}) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -56,15 +87,11 @@ func ackingBackend(t *testing.T, topic string) (string, <-chan struct{}) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		c, err := listener.Accept()
+		c, frame, err := acceptFrame(listener)
 		if err != nil {
 			return
 		}
 		defer c.Close()
-		frame, err := protocol.ReadFrame(c)
-		if err != nil {
-			return
-		}
 		header, _, _ := protocol.ParseRequestHeader(frame.Payload)
 		response := kmsg.NewPtrProduceResponse()
 		response.Version = 9
@@ -103,7 +130,7 @@ func TestLFSHTTPProduceDeletesUploadWhenBackendDialFails(t *testing.T) {
 	m.backendRetries = 1
 	m.backendBackoff = time.Millisecond
 	m.dialTimeout = time.Second
-	m.backends = []string{closedBackendAddr(t)}
+	m.backends = []string{probeOnlyBackend(t)}
 	fs3 := m.s3Uploader.api.(*fakeS3)
 	rr := httptest.NewRecorder()
 	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
@@ -136,7 +163,7 @@ func TestLFSHTTPMultipartDeletesUploadWhenBackendDialFails(t *testing.T) {
 	m.backendRetries = 1
 	m.backendBackoff = time.Millisecond
 	m.dialTimeout = time.Second
-	m.backends = []string{closedBackendAddr(t)}
+	m.backends = []string{probeOnlyBackend(t)}
 	fs3 := m.s3Uploader.api.(*fakeS3)
 	rr := httptest.NewRecorder()
 	m.handleHTTPUploadInit(rr, httptest.NewRequest(http.MethodPost, "/lfs/uploads", bytes.NewBufferString(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)))
@@ -330,5 +357,27 @@ func TestLFSHTTPDiscoveryErrorWithFreshCacheStillWorks(t *testing.T) {
 	waitDone(t, done)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("produce with a fresh cache: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestLFSHTTPSkipsUploadWhenListedBrokerIsUnreachable(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{Brokers: []protocol.MetadataBroker{brokerAt(t, 1, closedBackendAddr(t))}})
+	p := lfsTestProxy(store, time.Minute)
+	m, fs3 := lfsTestModuleFor(t, p)
+	rr := httptest.NewRecorder()
+	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "backend_unavailable") {
+		t.Fatalf("produce: %d %s", rr.Code, rr.Body.String())
+	}
+	if fs3.puts != 0 || len(fs3.deleted) != 0 {
+		t.Fatalf("produce uploaded with an unreachable broker: puts=%d deleted=%v", fs3.puts, fs3.deleted)
+	}
+	rr = httptest.NewRecorder()
+	m.handleHTTPUploadInit(rr, lfsUploadInitHTTPRequest("orders"))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "backend_unavailable") {
+		t.Fatalf("upload init: %d %s", rr.Code, rr.Body.String())
+	}
+	if fs3.multipartInit != 0 || len(m.uploadSessions) != 0 {
+		t.Fatalf("multipart upload started with an unreachable broker: %d", fs3.multipartInit)
 	}
 }
