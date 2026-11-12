@@ -407,6 +407,26 @@ func (p *proxy) cacheFresh() bool {
 	return time.Since(time.Unix(0, last)) <= p.cacheTTL
 }
 
+// listenerRoutable reports whether the Kafka listener may answer Metadata or
+// route a request. With brokers discovered from etcd, routes, broker addresses
+// and the metadata snapshot are only trusted while the last good etcd read is
+// within the backend cache TTL. A stale cache gets one refresh attempt first so
+// the listener opens again as soon as etcd is readable. Static backends and
+// stores without etcd are not affected.
+func (p *proxy) listenerRoutable(ctx context.Context) bool {
+	if len(p.backends) > 0 {
+		return true
+	}
+	if _, ok := p.store.(*metadata.EtcdStore); !ok {
+		return true
+	}
+	if p.cacheFresh() {
+		return true
+	}
+	p.refreshMetadataCache(ctx)
+	return p.cacheFresh()
+}
+
 // checkReady uses cached state when fresh, falling back to a live metadata
 // fetch only when the cache TTL has expired (e.g. no traffic for >60s).
 // The fallback uses a short timeout to prevent health probes from blocking.
@@ -672,7 +692,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		if !p.isReady() {
+		if !p.isReady() || !p.listenerRoutable(ctx) {
 			resp, ok, err := p.buildNotReadyResponse(header, body)
 			if err != nil {
 				p.logger.Warn("not-ready response build failed")
@@ -1129,9 +1149,16 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 	return append(connectErrors, results...)
 }
 
+// errStaleRoutes means etcd has not been read successfully within the backend
+// cache TTL, so cached routes and broker addresses are not used.
+var errStaleRoutes = errors.New("etcd metadata is older than the backend cache TTL")
+
 // connectForAddr borrows or dials a connection for the given addr. If addr is
 // empty, a round-robin backend is selected (excluding triedBackends).
 func (p *proxy) connectForAddr(ctx context.Context, addr string, exclude map[string]bool, pool *connPool) (net.Conn, string, error) {
+	if !p.listenerRoutable(ctx) {
+		return nil, "", errStaleRoutes
+	}
 	if addr != "" && !exclude[addr] {
 		conn, err := pool.Borrow(ctx, addr)
 		if err == nil {
@@ -1267,6 +1294,9 @@ func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHead
 	metaReq, ok := req.(*kmsg.MetadataRequest)
 	if !ok {
 		return nil, errMetadataRequest
+	}
+	if !p.listenerRoutable(ctx) {
+		return nil, errors.Join(errMetadataBackend, errStaleRoutes)
 	}
 
 	meta, err := p.loadMetadata(ctx, metaReq)
