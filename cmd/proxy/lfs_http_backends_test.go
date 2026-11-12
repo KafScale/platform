@@ -17,6 +17,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -24,6 +26,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,5 +227,108 @@ func TestLFSHTTPProduceExplicitBackendsWinOverDiscovery(t *testing.T) {
 	<-done
 	if rr.Code != http.StatusOK {
 		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func waitDone(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("backend got no produce request")
+	}
+}
+
+func lfsTestProxy(store metadata.Store, ttl time.Duration) *proxy {
+	return &proxy{store: store, backendRetries: 1, dialTimeout: time.Second, cacheTTL: ttl, brokerAddrs: make(map[string]string), topicNames: make(map[[16]byte]string), logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+func lfsTestModuleFor(t *testing.T, p *proxy) (*lfsModule, *fakeS3) {
+	t.Helper()
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	m.backendRetries = 1
+	m.backendBackoff = time.Millisecond
+	m.dialTimeout = time.Second
+	p.attachLFSModule(m)
+	return m, m.s3Uploader.api.(*fakeS3)
+}
+
+func lfsUploadInitHTTPRequest(topic string) *http.Request {
+	return httptest.NewRequest(http.MethodPost, "/lfs/uploads", bytes.NewBufferString(`{"topic":"`+topic+`","content_type":"application/octet-stream","size_bytes":7}`))
+}
+
+func TestLFSHTTPSkipsUploadAfterDiscoveredBrokersAreGone(t *testing.T) {
+	addr, done := ackingBackend(t, "orders")
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{Brokers: []protocol.MetadataBroker{brokerAt(t, 1, addr)}})
+	p := lfsTestProxy(store, time.Minute)
+	m, fs3 := lfsTestModuleFor(t, p)
+	rr := httptest.NewRecorder()
+	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
+	waitDone(t, done)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("produce with a broker: %d %s", rr.Code, rr.Body.String())
+	}
+	puts := fs3.puts
+	store.Update(metadata.ClusterMetadata{})
+	rr = httptest.NewRecorder()
+	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "backend_unavailable") {
+		t.Fatalf("produce without brokers: %d %s", rr.Code, rr.Body.String())
+	}
+	if fs3.puts != puts || len(fs3.deleted) != 0 {
+		t.Fatalf("produce without brokers touched S3: puts %d -> %d, deleted %v", puts, fs3.puts, fs3.deleted)
+	}
+	rr = httptest.NewRecorder()
+	m.handleHTTPUploadInit(rr, lfsUploadInitHTTPRequest("orders"))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "backend_unavailable") {
+		t.Fatalf("upload init without brokers: %d %s", rr.Code, rr.Body.String())
+	}
+	if fs3.multipartInit != 0 || len(m.uploadSessions) != 0 {
+		t.Fatalf("upload init without brokers started a multipart upload: %d sessions %d", fs3.multipartInit, len(m.uploadSessions))
+	}
+}
+
+func TestLFSHTTPDiscoveryErrorWithStaleCacheIsNoBackend(t *testing.T) {
+	addr, done := ackingBackend(t, "orders")
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{Brokers: []protocol.MetadataBroker{brokerAt(t, 1, addr)}})
+	p := lfsTestProxy(store, time.Minute)
+	m, fs3 := lfsTestModuleFor(t, p)
+	rr := httptest.NewRecorder()
+	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
+	waitDone(t, done)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("produce with a broker: %d %s", rr.Code, rr.Body.String())
+	}
+	puts := fs3.puts
+	m.discoverBackends = func(context.Context) ([]string, error) { return nil, errors.New("etcd unavailable") }
+	atomic.StoreInt64(&p.lastHealthy, time.Now().Add(-2*time.Minute).UnixNano())
+	rr = httptest.NewRecorder()
+	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "backend_unavailable") {
+		t.Fatalf("produce: %d %s", rr.Code, rr.Body.String())
+	}
+	if fs3.puts != puts || len(fs3.deleted) != 0 {
+		t.Fatalf("stale cache led to an upload: puts %d -> %d, deleted %v", puts, fs3.puts, fs3.deleted)
+	}
+	rr = httptest.NewRecorder()
+	m.handleHTTPUploadInit(rr, lfsUploadInitHTTPRequest("orders"))
+	if rr.Code != http.StatusServiceUnavailable || fs3.multipartInit != 0 {
+		t.Fatalf("upload init: %d %s, multipart starts %d", rr.Code, rr.Body.String(), fs3.multipartInit)
+	}
+}
+
+func TestLFSHTTPDiscoveryErrorWithFreshCacheStillWorks(t *testing.T) {
+	addr, done := ackingBackend(t, "orders")
+	p := lfsTestProxy(metadata.NewInMemoryStore(metadata.ClusterMetadata{}), time.Minute)
+	p.setCachedBackends([]string{addr})
+	p.touchHealthy()
+	m, _ := lfsTestModuleFor(t, p)
+	m.discoverBackends = func(context.Context) ([]string, error) { return nil, errors.New("etcd unavailable") }
+	rr := httptest.NewRecorder()
+	m.handleHTTPProduce(rr, lfsProduceHTTPRequest("orders"))
+	waitDone(t, done)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("produce with a fresh cache: %d %s", rr.Code, rr.Body.String())
 	}
 }

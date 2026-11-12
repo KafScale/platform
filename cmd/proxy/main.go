@@ -220,6 +220,7 @@ func (p *proxy) attachLFSModule(m *lfsModule) {
 	}
 	if p.store != nil {
 		m.discoverBackends = p.currentBackends
+		m.fallbackBackends = p.freshCachedBackends
 	}
 }
 
@@ -385,6 +386,13 @@ func (p *proxy) cachedBackendsSnapshot() []string {
 	copy(copied, p.cachedBackends)
 	p.cacheMu.RUnlock()
 	return copied
+}
+
+func (p *proxy) freshCachedBackends() []string {
+	if !p.cacheFresh() {
+		return nil
+	}
+	return p.cachedBackendsSnapshot()
 }
 
 func (p *proxy) touchHealthy() {

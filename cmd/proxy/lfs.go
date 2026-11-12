@@ -105,6 +105,7 @@ type lfsModule struct {
 	backendBackoff   time.Duration
 	backends         []string
 	discoverBackends func(context.Context) ([]string, error)
+	fallbackBackends func() []string
 	cacheMu          sync.RWMutex
 	cachedBackends   []string
 	rr               uint32
@@ -487,22 +488,25 @@ func (m *lfsModule) resolveBackends(ctx context.Context) ([]string, error) {
 	if len(m.backends) > 0 {
 		return m.backends, nil
 	}
-	var discoverErr error
-	if m.discoverBackends != nil {
-		discovered, err := m.discoverBackends(ctx)
-		if err == nil && len(discovered) > 0 {
-			m.setCachedBackends(discovered)
+	if m.discoverBackends == nil {
+		if cached := m.cachedBackendsSnapshot(); len(cached) > 0 {
+			return cached, nil
+		}
+		return nil, errLFSNoBackends
+	}
+	discovered, err := m.discoverBackends(ctx)
+	if err == nil {
+		if len(discovered) > 0 {
 			return discovered, nil
 		}
-		discoverErr = err
+		return nil, errLFSNoBackends
 	}
-	if cached := m.cachedBackendsSnapshot(); len(cached) > 0 {
-		return cached, nil
+	if m.fallbackBackends != nil {
+		if cached := m.fallbackBackends(); len(cached) > 0 {
+			return cached, nil
+		}
 	}
-	if discoverErr != nil {
-		return nil, fmt.Errorf("%w: %v", errLFSNoBackends, discoverErr)
-	}
-	return nil, errLFSNoBackends
+	return nil, fmt.Errorf("%w: %v", errLFSNoBackends, err)
 }
 
 func (m *lfsModule) waitForBackends(ctx context.Context) error {
