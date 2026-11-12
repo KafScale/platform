@@ -503,7 +503,7 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
 - `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
 - `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
-- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`). While etcd cannot be read, the proxy keeps using the brokers it last found until this time has passed since the last successful read, and then reports NotReady and opens no new broker connections until etcd answers again.
+- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`). While etcd cannot be read, the proxy keeps using the brokers it last found until this time has passed since the last successful read, and then reports NotReady and opens no new broker connections until etcd answers again. This is on purpose: when etcd is down, the cluster has to stop to avoid data loss, so past the TTL the proxy stops instead of letting clients write through stale routing.
 - `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
 - `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
 - `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).

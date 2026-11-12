@@ -164,6 +164,8 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
 
 - Schema registry rollback: rolling back to a main build from between #277 and #282 registers duplicate versions for 5 of the 54 edge schemas in our upgrade test. These are the Avro schemas with the `5e-324` and `1e-323` double defaults, registered with and without `normalize=true`, and the schema with an empty nested namespace registered with `normalize=true`. Those builds do not match the hashes that #282 stores, so re-registering one of these schemas creates a new version and id. The #282 review build `035b209` passed that 54-schema regression; this does not establish general rollback safety.
 
+- The proxy no longer keeps serving through an etcd outage without a time limit. When etcd cannot be read, the proxy, including its Kafka listener, readiness check and LFS HTTP API, uses the brokers it last found for `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default 60 seconds) after the last successful read. After that it reports NotReady and opens no new broker connections until etcd answers again. Earlier builds kept using the last broker list with no limit. This is on purpose: when etcd is down, the cluster has to stop to avoid data loss, so past the TTL the proxy stops instead of letting clients write through stale routing. Size the TTL for the etcd interruptions you want clients to ride through (#318).
+
 ## LFS proxy S3 credential keys
 
 Before this release, an operator managed LFS proxy (`spec.lfsProxy`) read only
