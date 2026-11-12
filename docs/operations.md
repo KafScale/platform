@@ -603,8 +603,9 @@ when the upload completes or is aborted. Send the parts of one upload one after
 the other, as before; parts sent at the same time to different replicas are not
 supported. A part or complete call on an expired session aborts its S3 multipart
 upload and returns 410 `upload_expired`. Every replica with the HTTP API also
-runs a cleanup every `KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC` / 2 seconds,
-at least every 30 seconds and at most every 10 minutes. It aborts the S3 multipart
+runs a cleanup every half session TTL
+(`KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`), but not more often than every
+30 seconds and at least every 10 minutes. It aborts the S3 multipart
 upload of each expired session and deletes its record, and it aborts multipart
 uploads under `<namespace>/@lfs/` that were started more than the session TTL
 plus one hour ago, which covers sessions that were lost, for example by an older
