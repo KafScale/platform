@@ -101,7 +101,13 @@ func startRecordingBroker(t *testing.T) *recordingBroker {
 // group routes for broker 0 already cached, the way main wires it.
 func listenerTTLProxy(t *testing.T) (*proxy, *recordingBroker, *metadata.EtcdStore) {
 	t.Helper()
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	// Router constructors use this context for both their initial etcd read
+	// and their watches. Bound setup without leaving a deadline on watches
+	// that must keep running after this helper returns.
+	setupTimer := time.AfterFunc(15*time.Second, cancel)
+	defer setupTimer.Stop()
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	broker := startRecordingBroker(t)
 	putProxyTestSnapshot(t, endpoints, metadata.ClusterMetadata{
@@ -127,14 +133,17 @@ func listenerTTLProxy(t *testing.T) (*proxy, *recordingBroker, *metadata.EtcdSto
 	p := lfsTestProxy(store, time.Minute)
 	p.advertisedHost, p.advertisedPort = "entry", 29092
 	if p.router, err = metadata.NewPartitionRouter(ctx, store.EtcdClient(), p.logger); err != nil {
-		t.Fatal(err)
+		t.Fatalf("initialize partition router: %v", err)
 	}
 	t.Cleanup(p.router.Stop)
 	if p.groupRouter, err = metadata.NewGroupRouter(ctx, store.EtcdClient(), p.logger); err != nil {
-		t.Fatal(err)
+		t.Fatalf("initialize group router: %v", err)
 	}
 	t.Cleanup(p.groupRouter.Stop)
 	p.refreshMetadataCache(ctx)
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("proxy fixture setup exceeded 15s: %v", err)
+	}
 	if !p.isReady() || !p.cacheFresh() || p.router.LookupOwner("orders", 0) != "0" || p.groupRouter.LookupOwner("g1") != "0" {
 		t.Fatal("proxy did not load routes with etcd up")
 	}
