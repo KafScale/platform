@@ -482,16 +482,12 @@ func TestPartitionLogRestoreFromS3SkipsOrphanedSegment(t *testing.T) {
 	if len(recovered.segments) != 0 {
 		t.Fatalf("expected no segments, got %d", len(recovered.segments))
 	}
-	// nextOffset is not advanced past the orphan because the metadata store
-	// controls the starting offset. New writes at offset 0 will overwrite
-	// the orphaned .kfs with a valid segment+index pair (self-healing).
-	res, err := recovered.AppendBatch(context.Background(), batch)
-	if err != nil {
-		t.Fatalf("AppendBatch after restore: %v", err)
+	// A missing index may belong to a writer whose segment PUT just completed.
+	// Preserve the segment and fail closed; overwriting it can destroy acked data.
+	if _, err := recovered.AppendBatch(context.Background(), batch); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("append over orphan: %v", err)
 	}
-	if res.BaseOffset != 0 {
-		t.Fatalf("expected base offset 0 (metadata store controls offset), got %d", res.BaseOffset)
-	}
+
 }
 
 func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
@@ -886,4 +882,11 @@ func makeBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32,
 	binary.BigEndian.PutUint32(data[57:61], uint32(messageCount))
 	data[12] = marker
 	return data
+}
+
+func TestPublishedPartitionLogConfig(t *testing.T) {
+	cfg := PartitionLogConfig{WriteBufferConfig{}, SegmentWriterConfig{}, 2, true, nil}
+	if cfg != (PartitionLogConfig{ReadAheadSegments: 2, CacheEnabled: true}) {
+		t.Fatal("published config equality changed")
+	}
 }

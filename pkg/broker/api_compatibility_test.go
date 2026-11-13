@@ -24,6 +24,7 @@ import (
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/pkg/storage"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -78,6 +79,9 @@ func (s legacyStore) DeleteTopic(ctx context.Context, name string) error {
 
 var _ metadata.Store = legacyStore{}
 var _ = map[broker.CoordinatorConfig]bool{}
+var _ = map[metadata.LeaseManagerConfig]bool{}
+var _ = map[metadata.PartitionLeaseConfig]bool{}
+var _ = map[storage.PartitionLogConfig]bool{}
 
 func TestPublishedCoordinatorConfig(t *testing.T) {
 	// The original unkeyed literal must also compile unchanged.

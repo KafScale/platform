@@ -1047,7 +1047,18 @@ func (w *recordWriter) record(ctx context.Context) (string, error) {
 		rec.S3Key = w.r.namespace + "/@schemas/sha256/" + hex.EncodeToString(sum[:])
 		if w.uploaded != rec.S3Key {
 			if err := w.r.s3.UploadSegment(ctx, rec.S3Key, []byte(p.canonical)); err != nil {
-				return "", fmt.Errorf("write schema text to S3: %w", err)
+				// Content-addressed schema text may already exist after an earlier attempt.
+				// Reuse it only after verifying the immutable object's exact contents.
+				if !errors.Is(err, storage.ErrPreconditionFailed) {
+					return "", fmt.Errorf("write schema text to S3: %w", err)
+				}
+				existing, readErr := w.r.s3.DownloadSegment(ctx, rec.S3Key, nil)
+				if readErr != nil {
+					return "", fmt.Errorf("read existing schema text: %w", readErr)
+				}
+				if string(existing) != p.canonical {
+					return "", fmt.Errorf("schema text at %s differs from its content hash", rec.S3Key)
+				}
 			}
 			w.uploaded = rec.S3Key
 			w.writes++

@@ -20,7 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -50,6 +53,13 @@ type PartitionLeaseConfig struct {
 	Logger *slog.Logger
 }
 
+// PartitionLeaseOptions adds callbacks without changing the published config.
+type PartitionLeaseOptions struct {
+	PartitionLeaseConfig
+	// OnLost invalidates state for an expired or released acquisition. It must not call this manager.
+	OnLost func(topic string, partition int32, token uint64)
+}
+
 // PartitionLeaseManager uses etcd leases to ensure exclusive partition ownership.
 // It delegates to the generic LeaseManager, translating topic+partition pairs
 // into string resource IDs.
@@ -59,13 +69,33 @@ type PartitionLeaseManager struct {
 
 // NewPartitionLeaseManager creates a lease manager backed by the given etcd client.
 func NewPartitionLeaseManager(client *clientv3.Client, cfg PartitionLeaseConfig) *PartitionLeaseManager {
+	return NewPartitionLeaseManagerWithOptions(client, PartitionLeaseOptions{PartitionLeaseConfig: cfg})
+}
+
+// NewPartitionLeaseManagerWithOptions constructs a manager with ownership callbacks.
+func NewPartitionLeaseManagerWithOptions(client *clientv3.Client, cfg PartitionLeaseOptions) *PartitionLeaseManager {
 	return &PartitionLeaseManager{
-		lm: NewLeaseManager(client, LeaseManagerConfig{
-			BrokerID:        cfg.BrokerID,
-			Prefix:          partitionLeasePrefix,
-			LeaseTTLSeconds: cfg.LeaseTTLSeconds,
-			Logger:          cfg.Logger,
-			ResourceKind:    "partition",
+		lm: NewLeaseManagerWithOptions(client, LeaseManagerOptions{
+			LeaseManagerConfig: LeaseManagerConfig{
+				BrokerID:        cfg.BrokerID,
+				Prefix:          partitionLeasePrefix,
+				LeaseTTLSeconds: cfg.LeaseTTLSeconds,
+				Logger:          cfg.Logger,
+				ResourceKind:    "partition",
+			},
+			OnLost: func(id string, token uint64) {
+				if cfg.OnLost == nil {
+					return
+				}
+				i := strings.LastIndexByte(id, '/')
+				if i < 0 {
+					return
+				}
+				p, err := strconv.ParseInt(id[i+1:], 10, 32)
+				if err == nil {
+					cfg.OnLost(id[:i], int32(p), token)
+				}
+			},
 		}),
 	}
 }
@@ -158,4 +188,34 @@ func (m *PartitionLeaseManager) CurrentOwner(ctx context.Context, topic string, 
 // EtcdClient returns the underlying etcd client.
 func (m *PartitionLeaseManager) EtcdClient() *clientv3.Client {
 	return m.lm.EtcdClient()
+}
+
+// OwnershipToken identifies the current uninterrupted partition acquisition.
+func (m *PartitionLeaseManager) OwnershipToken(topic string, partition int32) uint64 {
+	return m.lm.OwnershipToken(partitionResourceID(topic, partition))
+}
+
+// CurrentOwners reads one authoritative snapshot for a broker Metadata response.
+func (m *PartitionLeaseManager) CurrentOwners(ctx context.Context) (map[PartitionID]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	prefix := PartitionLeasePrefix() + "/"
+	resp, err := m.EtcdClient().Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, err
+	}
+	owners := make(map[PartitionID]string, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		id := strings.TrimPrefix(string(kv.Key), prefix)
+		i := strings.LastIndexByte(id, '/')
+		if i < 0 {
+			continue
+		}
+		partition, err := strconv.ParseInt(id[i+1:], 10, 32)
+		if err != nil {
+			continue
+		}
+		owners[PartitionID{Topic: id[:i], Partition: int32(partition)}] = string(kv.Value)
+	}
+	return owners, nil
 }

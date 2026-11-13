@@ -182,7 +182,16 @@ func (s *EtcdStore) UpdateOffsetsForStorage(ctx context.Context, topic string, p
 	return s.updateOffsets(ctx, topic, partition, lastOffset, storageTopic)
 }
 
-func (s *EtcdStore) updateOffsets(ctx context.Context, topic string, partition int32, lastOffset int64, storageTopic string) error {
+// UpdateOffsetsForLease rejects callbacks from an earlier partition acquisition.
+func (s *EtcdStore) UpdateOffsetsForLease(ctx context.Context, topic string, partition int32, lastOffset int64, storageTopic string, revision uint64) error {
+	if revision == 0 {
+		return ErrNotOwner
+	}
+	return s.updateOffsets(ctx, topic, partition, lastOffset, storageTopic,
+		clientv3.Compare(clientv3.ModRevision(partitionLeaseKey(topic, partition)), "=", int64(revision)))
+}
+
+func (s *EtcdStore) updateOffsets(ctx context.Context, topic string, partition int32, lastOffset int64, storageTopic string, leaseGuards ...clientv3.Cmp) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	read, err := s.client.Txn(ctx).Then(clientv3.OpGet(snapshotKey()), clientv3.OpGet(TopicGenerationKey(topic))).Commit()
@@ -213,9 +222,20 @@ func (s *EtcdStore) updateOffsets(ctx context.Context, topic string, partition i
 	if storageTopic != "" && TopicStorageName(topic, generation) != storageTopic {
 		return ErrTopicGenerationChanged
 	}
-	return s.commitGuarded(ctx, generationIs(TopicGenerationKey(topic), generation), []clientv3.Op{
-		clientv3.OpPut(offsetKey(topic, partition), strconv.FormatInt(lastOffset+1, 10)),
-	})
+	ops := []clientv3.Op{clientv3.OpPut(offsetKey(topic, partition), strconv.FormatInt(lastOffset+1, 10))}
+	guard := generationIs(TopicGenerationKey(topic), generation)
+	if len(leaseGuards) == 0 {
+		return s.commitGuarded(ctx, guard, ops)
+	}
+	resp, err := s.client.Txn(ctx).If(append([]clientv3.Cmp{guard}, leaseGuards...)...).Then(ops...).Commit()
+	s.recordEtcdResult(err)
+	if err != nil {
+		return err
+	}
+	if !resp.Succeeded {
+		return ErrNotOwner
+	}
+	return nil
 }
 
 func offsetKey(topic string, partition int32) string {

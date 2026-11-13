@@ -58,6 +58,9 @@ func (m *MemoryS3Client) EnsureBucket(ctx context.Context) error {
 func (m *MemoryS3Client) UploadSegment(ctx context.Context, key string, body []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, exists := m.data[key]; exists {
+		return fmt.Errorf("segment %s: %w", key, ErrPreconditionFailed)
+	}
 	m.data[key] = append([]byte(nil), body...)
 	return nil
 }

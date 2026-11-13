@@ -39,6 +39,13 @@ type LeaseManagerConfig struct {
 	ResourceKind    string // used in log messages, e.g. "partition" or "group"
 }
 
+// LeaseManagerOptions adds ownership callbacks without changing the published config.
+type LeaseManagerOptions struct {
+	LeaseManagerConfig
+	// OnLost runs under the ownership lock; it must not call back into this manager.
+	OnLost func(resourceID string, token uint64)
+}
+
 // LeaseManager uses etcd leases to ensure exclusive ownership of named resources.
 //
 // All lease keys are attached to a single shared etcd session/lease, so the
@@ -58,14 +65,20 @@ type LeaseManager struct {
 	closed       atomic.Bool
 
 	mu      sync.RWMutex
-	owned   map[string]struct{} // key: resource identifier
+	owned   map[string]uint64 // key: resource identifier
 	session *concurrency.Session
+	onLost  func(string, uint64)
 
 	acquireFlight singleflight.Group
 }
 
 // NewLeaseManager creates a lease manager backed by the given etcd client.
 func NewLeaseManager(client *clientv3.Client, cfg LeaseManagerConfig) *LeaseManager {
+	return NewLeaseManagerWithOptions(client, LeaseManagerOptions{LeaseManagerConfig: cfg})
+}
+
+// NewLeaseManagerWithOptions constructs a manager with ownership callbacks.
+func NewLeaseManagerWithOptions(client *clientv3.Client, cfg LeaseManagerOptions) *LeaseManager {
 	ttl := cfg.LeaseTTLSeconds
 	if ttl <= 0 {
 		ttl = defaultLeaseManagerTTLSeconds
@@ -85,7 +98,8 @@ func NewLeaseManager(client *clientv3.Client, cfg LeaseManagerConfig) *LeaseMana
 		ttl:          ttl,
 		logger:       logger,
 		resourceKind: kind,
-		owned:        make(map[string]struct{}),
+		owned:        make(map[string]uint64),
+		onLost:       cfg.OnLost,
 	}
 }
 
@@ -107,12 +121,9 @@ func (m *LeaseManager) Acquire(ctx context.Context, resourceID string) error {
 		return ErrShuttingDown
 	}
 
-	m.mu.RLock()
-	if _, ok := m.owned[resourceID]; ok {
-		m.mu.RUnlock()
+	if m.Owns(resourceID) {
 		return nil
 	}
-	m.mu.RUnlock()
 
 	_, err, _ := m.acquireFlight.Do(resourceID, func() (interface{}, error) {
 		return nil, m.doAcquire(ctx, resourceID)
@@ -122,12 +133,9 @@ func (m *LeaseManager) Acquire(ctx context.Context, resourceID string) error {
 
 func (m *LeaseManager) doAcquire(ctx context.Context, resourceID string) error {
 	// Re-check under read lock.
-	m.mu.RLock()
-	if _, ok := m.owned[resourceID]; ok {
-		m.mu.RUnlock()
+	if m.Owns(resourceID) {
 		return nil
 	}
-	m.mu.RUnlock()
 
 	session, err := m.getOrCreateSession(ctx)
 	if err != nil {
@@ -167,7 +175,13 @@ func (m *LeaseManager) doAcquire(ctx context.Context, resourceID string) error {
 		m.mu.Unlock()
 		return fmt.Errorf("session changed during acquire")
 	}
-	m.owned[resourceID] = struct{}{}
+	select {
+	case <-session.Done():
+		m.mu.Unlock()
+		return ErrNotOwner
+	default:
+	}
+	m.owned[resourceID] = uint64(txnResp.Header.Revision)
 	m.mu.Unlock()
 
 	m.logger.Info(fmt.Sprintf("acquired %s lease", m.resourceKind),
@@ -195,7 +209,13 @@ func (m *LeaseManager) reacquire(ctx context.Context, resourceID, leaseKey strin
 		m.mu.Unlock()
 		return fmt.Errorf("session changed during reacquire")
 	}
-	m.owned[resourceID] = struct{}{}
+	select {
+	case <-session.Done():
+		m.mu.Unlock()
+		return ErrNotOwner
+	default:
+	}
+	m.owned[resourceID] = uint64(txnResp.Header.Revision)
 	m.mu.Unlock()
 
 	m.logger.Info(fmt.Sprintf("reacquired %s lease", m.resourceKind),
@@ -209,7 +229,7 @@ func (m *LeaseManager) getOrCreateSession(ctx context.Context) (*concurrency.Ses
 		select {
 		case <-m.session.Done():
 			m.session = nil
-			m.owned = make(map[string]struct{})
+			m.clearOwnershipLocked()
 		default:
 			s := m.session
 			m.mu.Unlock()
@@ -232,6 +252,7 @@ func (m *LeaseManager) getOrCreateSession(ctx context.Context) (*concurrency.Ses
 	if m.session != nil {
 		select {
 		case <-m.session.Done():
+			m.clearOwnershipLocked()
 		default:
 			s := m.session
 			m.mu.Unlock()
@@ -252,7 +273,7 @@ func (m *LeaseManager) monitorSession(session *concurrency.Session) {
 	if m.session == session {
 		m.session = nil
 		count := len(m.owned)
-		m.owned = make(map[string]struct{})
+		m.clearOwnershipLocked()
 		m.mu.Unlock()
 		m.logger.Warn(fmt.Sprintf("%s lease session expired, cleared all ownership", m.resourceKind),
 			"broker", m.brokerID, "count", count)
@@ -261,12 +282,35 @@ func (m *LeaseManager) monitorSession(session *concurrency.Session) {
 	}
 }
 
-// Owns returns true if this broker currently holds the lease for the resource.
-func (m *LeaseManager) Owns(resourceID string) bool {
+// clearOwnershipLocked invalidates dependent state before ownership can be reacquired.
+func (m *LeaseManager) clearOwnershipLocked() {
+	for id, token := range m.owned {
+		if m.onLost != nil {
+			m.onLost(id, token)
+		}
+	}
+	m.owned = make(map[string]uint64)
+}
+
+// OwnershipToken identifies one uninterrupted acquisition, or zero if not owned.
+// Check session.Done directly so callers never depend on monitor scheduling.
+func (m *LeaseManager) OwnershipToken(resourceID string) uint64 {
 	m.mu.RLock()
-	_, ok := m.owned[resourceID]
-	m.mu.RUnlock()
-	return ok
+	defer m.mu.RUnlock()
+	if m.session == nil {
+		return 0
+	}
+	select {
+	case <-m.session.Done():
+		return 0
+	default:
+		return m.owned[resourceID]
+	}
+}
+
+// Owns returns true if this broker currently holds a live lease.
+func (m *LeaseManager) Owns(resourceID string) bool {
+	return m.OwnershipToken(resourceID) != 0
 }
 
 // Release explicitly gives up ownership of a single resource.
@@ -275,6 +319,9 @@ func (m *LeaseManager) Release(resourceID string) {
 	_, ok := m.owned[resourceID]
 	session := m.session
 	if ok {
+		if m.onLost != nil {
+			m.onLost(resourceID, m.owned[resourceID])
+		}
 		delete(m.owned, resourceID)
 	}
 	m.mu.Unlock()
@@ -301,7 +348,7 @@ func (m *LeaseManager) ReleaseAll() {
 	m.closed.Store(true)
 	m.mu.Lock()
 	count := len(m.owned)
-	m.owned = make(map[string]struct{})
+	m.clearOwnershipLocked()
 	session := m.session
 	m.session = nil
 	m.mu.Unlock()
