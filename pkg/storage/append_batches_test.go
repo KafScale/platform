@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -507,5 +508,40 @@ func TestCleanupLostDeletePreservesNewWriter(t *testing.T) {
 	afterIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
 	if !bytes.Equal(original, after) || !bytes.Equal(originalIndex, afterIndex) {
 		t.Fatal("cleanup retry replaced acknowledged data")
+	}
+}
+
+func TestReadersWaitForOffsetPublication(t *testing.T) {
+	ctx := context.Background()
+	committed := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	log := NewPartitionLogWithOptions("default", "orders", 0, 0, NewMemoryS3Client(), nil, PartitionLogOptions{
+		CommitOffsets: func(context.Context, *SegmentArtifact) error { close(committed); <-release; return nil },
+	}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	appendDone := make(chan error, 1)
+	go func() { _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); appendDone <- err }()
+	<-committed // A Fetch can now observe the advanced durable high watermark.
+	readDone := make(chan error, 1)
+	go func() {
+		data, err := log.Read(ctx, 0, 1<<20)
+		if err == nil && !bytes.Equal(data, batch.Bytes) {
+			err = errors.New("unexpected records")
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		t.Fatalf("reader ran before local publication: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	once.Do(func() { close(release) })
+	if err := <-appendDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
 	}
 }

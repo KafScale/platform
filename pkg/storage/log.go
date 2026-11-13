@@ -48,7 +48,7 @@ type PartitionLogOptions struct {
 	PartitionLogConfig
 	// CheckOwnership fences handles retained across a lease handoff.
 	CheckOwnership func() error
-	// CommitOffsets publishes durable offsets before an append can be acknowledged.
+	// CommitOffsets publishes durable offsets while readers wait. It must not call this log.
 	CommitOffsets func(context.Context, *SegmentArtifact) error
 }
 
@@ -393,20 +393,23 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 	if err := l.CheckOwnership(); err != nil {
 		return nil, err
 	}
+	// A Fetch that sees committed offsets must also see the matching local
+	// segment ranges. Hold the read-state lock through offset publication.
+	l.mu.Lock()
 	if l.cfg.CommitOffsets != nil {
 		if err := l.cfg.CommitOffsets(ctx, artifact); err != nil {
+			l.mu.Unlock()
 			return nil, err
 		}
 	}
-	if l.cache != nil && l.cfg.CacheEnabled {
-		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
-	}
-	l.mu.Lock()
 	l.buffer, l.nextOffset = staged, nextOffset
 	l.segments = append(l.segments, segmentRange{baseOffset: artifact.BaseOffset, lastOffset: artifact.LastOffset, size: int64(len(artifact.SegmentBytes))})
 	l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
 	lastSegIdx := len(l.segments) - 1
 	l.mu.Unlock()
+	if l.cache != nil && l.cfg.CacheEnabled {
+		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)
+	}
 	if l.onFlush != nil {
 		l.onFlush(ctx, artifact)
 	}
