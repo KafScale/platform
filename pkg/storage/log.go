@@ -41,8 +41,15 @@ type PartitionLogConfig struct {
 	ReadAheadSegments int
 	CacheEnabled      bool
 	Logger            *slog.Logger
+}
+
+// PartitionLogOptions adds lease fencing without changing the published config.
+type PartitionLogOptions struct {
+	PartitionLogConfig
 	// CheckOwnership fences handles retained across a lease handoff.
 	CheckOwnership func() error
+	// CommitOffsets publishes durable offsets before an append can be acknowledged.
+	CommitOffsets func(context.Context, *SegmentArtifact) error
 }
 
 // PartitionLog coordinates buffering, segment serialization, S3 uploads, and caching.
@@ -52,7 +59,7 @@ type PartitionLog struct {
 	partition    int32
 	s3           S3Client
 	cache        *cache.SegmentCache
-	cfg          PartitionLogConfig
+	cfg          PartitionLogOptions
 	buffer       *WriteBuffer
 	nextOffset   int64
 	onFlush      func(context.Context, *SegmentArtifact)
@@ -81,6 +88,11 @@ var ErrObjectStorage = errors.New("object storage request failed")
 
 // NewPartitionLog constructs a log for a topic partition.
 func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
+	return NewPartitionLogWithOptions(namespace, topic, partition, startOffset, s3Client, cache, PartitionLogOptions{PartitionLogConfig: cfg}, onFlush, onS3Op, sem)
+}
+
+// NewPartitionLogWithOptions constructs a log with lease fencing and offset commits.
+func NewPartitionLogWithOptions(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogOptions, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
 	if namespace == "" {
 		namespace = "default"
 	}
@@ -369,10 +381,22 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		// Produce deadline expired. The successful path incurs no DELETEs.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
-		return nil, fmt.Errorf("%w: %w", ErrObjectStorage, errors.Join(err, l.discardFailedUpload(cleanupCtx)))
+		cleanupErr := l.discardFailedUpload(cleanupCtx)
+		failure := fmt.Errorf("%w: %w", ErrObjectStorage, errors.Join(err, cleanupErr))
+		if cleanupErr != nil {
+			// A DELETE may have succeeded despite returning an error. Its old key
+			// can now belong to a new writer, so this handle must never retry cleanup.
+			l.uploadConflict = failure
+		}
+		return nil, failure
 	}
 	if err := l.CheckOwnership(); err != nil {
 		return nil, err
+	}
+	if l.cfg.CommitOffsets != nil {
+		if err := l.cfg.CommitOffsets(ctx, artifact); err != nil {
+			return nil, err
+		}
 	}
 	if l.cache != nil && l.cfg.CacheEnabled {
 		l.cache.SetSegment(l.cacheTopicKey(), l.partition, artifact.BaseOffset, artifact.SegmentBytes)

@@ -37,6 +37,11 @@ type LeaseManagerConfig struct {
 	LeaseTTLSeconds int
 	Logger          *slog.Logger
 	ResourceKind    string // used in log messages, e.g. "partition" or "group"
+}
+
+// LeaseManagerOptions adds ownership callbacks without changing the published config.
+type LeaseManagerOptions struct {
+	LeaseManagerConfig
 	// OnLost runs under the ownership lock; it must not call back into this manager.
 	OnLost func(resourceID string, token uint64)
 }
@@ -69,6 +74,11 @@ type LeaseManager struct {
 
 // NewLeaseManager creates a lease manager backed by the given etcd client.
 func NewLeaseManager(client *clientv3.Client, cfg LeaseManagerConfig) *LeaseManager {
+	return NewLeaseManagerWithOptions(client, LeaseManagerOptions{LeaseManagerConfig: cfg})
+}
+
+// NewLeaseManagerWithOptions constructs a manager with ownership callbacks.
+func NewLeaseManagerWithOptions(client *clientv3.Client, cfg LeaseManagerOptions) *LeaseManager {
 	ttl := cfg.LeaseTTLSeconds
 	if ttl <= 0 {
 		ttl = defaultLeaseManagerTTLSeconds

@@ -18,6 +18,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -88,6 +89,11 @@ func TestPartitionLogLeaseHandoff(t *testing.T) {
 	original, err := s3.DownloadSegment(ctx, "default/orders/0/segment-00000000000000000001.kfs", nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Earliest-offset discovery must redirect too; UNKNOWN_SERVER_ERROR is not
+	// a leader retry and can terminate a consumer during the same handoff.
+	if p := requestListOffset(t, a, 4, "orders", 0, -2); p.ErrorCode != protocol.NOT_LEADER_OR_FOLLOWER {
+		t.Errorf("non-owner earliest offset: %+v", p)
 	}
 	// A non-owner must redirect fetches rather than return a stale empty tail.
 	raw, err := a.handleFetch(ctx, &protocol.RequestHeader{APIVersion: 11}, &kmsg.FetchRequest{Topics: []kmsg.FetchRequestTopic{{Topic: "orders", Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 1, PartitionMaxBytes: 1 << 20}}}}})
@@ -203,4 +209,83 @@ func (s *blockedLeaseRestoreS3) ListSegments(ctx context.Context, prefix string)
 		}
 	}
 	return s.MemoryS3Client.ListSegments(ctx, prefix)
+}
+
+// Losing the authoritative lease just before offset publication must reject Produce,
+// even when the keepalive/session monitor has not noticed the change yet.
+type replaceLeaseOnIndexS3 struct {
+	*storage.MemoryS3Client
+	client  *clientv3.Client
+	replace atomic.Bool
+}
+
+func (s *replaceLeaseOnIndexS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	if err := s.MemoryS3Client.UploadIndex(ctx, key, body); err != nil {
+		return err
+	}
+	if s.replace.CompareAndSwap(false, true) {
+		_, err := s.client.Put(ctx, metadata.PartitionLeasePrefix()+"/orders/0", "replacement")
+		return err
+	}
+	return nil
+}
+
+func TestProduceRejectsLostLeaseAtOffsetCommit(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := metadata.NewEtcdStore(ctx, defaultMetadata(), metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s3 := &replaceLeaseOnIndexS3{MemoryS3Client: storage.NewMemoryS3Client(), client: store.EtcdClient()}
+	h := newHandler(store, s3, protocol.MetadataBroker{NodeID: 0}, testLogger())
+	defer h.coordinator.Stop()
+	defer h.leaseManager.ReleaseAll()
+	raw, err := h.handleProduce(ctx, &protocol.RequestHeader{APIVersion: 3}, &kmsg.ProduceRequest{Acks: -1, TimeoutMillis: 1000, Topics: []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: testBatchBytes(0, 0, 1)}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+	if response.ErrorCode != protocol.NOT_LEADER_OR_FOLLOWER {
+		t.Fatalf("rejected lease commit was acknowledged: %+v", response)
+	}
+	if next, err := store.NextOffset(ctx, "orders", 0); err != nil || next != 0 {
+		t.Fatalf("offset=%d err=%v", next, err)
+	}
+	h.logMu.RLock()
+	cached := h.logs["orders"][0]
+	h.logMu.RUnlock()
+	if cached != nil {
+		t.Fatal("log retained after failed offset commit")
+	}
+}
+
+type lostProbeResponseS3 struct {
+	*storage.MemoryS3Client
+	attempts atomic.Int32
+}
+
+func (s *lostProbeResponseS3) UploadSegment(ctx context.Context, key string, body []byte) error {
+	if err := s.MemoryS3Client.UploadSegment(ctx, key, body); err != nil {
+		return err
+	}
+	if s.attempts.Add(1) == 1 {
+		return errors.New("probe response lost")
+	}
+	return nil
+}
+func TestStartupProbeRecoversFromLostUploadResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	s3 := &lostProbeResponseS3{MemoryS3Client: storage.NewMemoryS3Client()}
+	h := newHandler(metadata.NewInMemoryStore(defaultMetadata()), s3, protocol.MetadataBroker{}, testLogger())
+	defer h.coordinator.Stop()
+	if err := h.verifyS3(ctx); err != nil {
+		t.Fatalf("immutable probe collision prevented startup: %v", err)
+	}
+	if got := s3.attempts.Load(); got != 2 {
+		t.Fatalf("successful probe PUTs=%d", got)
+	}
 }

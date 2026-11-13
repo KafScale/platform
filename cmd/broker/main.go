@@ -208,6 +208,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		resp.Topics = h.authorizedMetadata(principal, meta.Topics, metaReq.Topics == nil || (header.APIVersion == 0 && len(metaReq.Topics) == 0), byID)
 		if h.leaseManager != nil {
+			owners, ownerErr := h.leaseManager.CurrentOwners(ctx)
 			for ti := range resp.Topics {
 				topic := &resp.Topics[ti]
 				if topic.Topic == nil || topic.ErrorCode != 0 {
@@ -218,8 +219,8 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 					if part.ErrorCode != 0 {
 						continue
 					}
-					owner, err := h.leaseManager.CurrentOwner(ctx, *topic.Topic, part.Partition)
-					if err != nil {
+					owner := owners[metadata.PartitionID{Topic: *topic.Topic, Partition: part.Partition}]
+					if ownerErr != nil {
 						part.Leader = -1
 						part.ErrorCode = protocol.REQUEST_TIMED_OUT
 						continue
@@ -1875,6 +1876,8 @@ func (h *handler) handleListOffsets(ctx context.Context, header *protocol.Reques
 			}()
 			if err != nil {
 				switch {
+				case errors.Is(err, metadata.ErrNotOwner), errors.Is(err, metadata.ErrShuttingDown):
+					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
 				case errors.Is(err, metadata.ErrUnknownTopic):
 					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
 				case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
@@ -2215,7 +2218,7 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			if err != nil {
 				return nil, err
 			}
-			cfg := h.logConfig
+			cfg := storage.PartitionLogOptions{PartitionLogConfig: h.logConfig}
 			if h.leaseManager != nil {
 				cfg.CheckOwnership = func() error {
 					if h.leaseManager.OwnershipToken(topic, partition) != token {
@@ -2224,11 +2227,15 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 					return nil
 				}
 			}
-			plog := storage.NewPartitionLog(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, cfg, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
-				if err := h.updateLeasedLogOffsets(cbCtx, topic, storageName, partition, artifact.LastOffset, token); err != nil {
+			cfg.CommitOffsets = func(cbCtx context.Context, artifact *storage.SegmentArtifact) error {
+				err := h.updateLeasedLogOffsets(cbCtx, topic, storageName, partition, artifact.LastOffset, token)
+				if err != nil {
+					h.dropPartitionLog(topic, partition, token)
 					h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
 				}
-			}, h.recordS3Op, h.s3sem)
+				return err
+			}
+			plog := storage.NewPartitionLogWithOptions(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, cfg, nil, h.recordS3Op, h.s3sem)
 			lastOffset, err := plog.RestoreFromS3(ctx)
 			if err != nil {
 				h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
@@ -2240,6 +2247,7 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			if lastOffset >= nextOffset {
 				if err := h.updateLeasedLogOffsets(ctx, topic, storageName, partition, lastOffset, token); err != nil {
 					h.logger.Error("sync offsets from S3 failed", "error", err, "topic", topic, "partition", partition)
+					return nil, err
 				}
 			}
 
@@ -2328,10 +2336,9 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	var retentionSweepLease *metadata.LeaseManager
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
 		brokerIDStr := fmt.Sprintf("%d", brokerInfo.NodeID)
-		leaseManager = metadata.NewPartitionLeaseManager(etcdStore.EtcdClient(), metadata.PartitionLeaseConfig{
-			BrokerID: brokerIDStr,
-			Logger:   logger,
-			OnLost:   func(topic string, partition int32, token uint64) { h.dropPartitionLog(topic, partition, token) },
+		leaseManager = metadata.NewPartitionLeaseManagerWithOptions(etcdStore.EtcdClient(), metadata.PartitionLeaseOptions{
+			PartitionLeaseConfig: metadata.PartitionLeaseConfig{BrokerID: brokerIDStr, Logger: logger},
+			OnLost:               func(topic string, partition int32, token uint64) { h.dropPartitionLog(topic, partition, token) },
 		})
 		groupLeaseManager = metadata.NewGroupLeaseManager(etcdStore.EtcdClient(), metadata.GroupLeaseConfig{
 			BrokerID: brokerIDStr,
@@ -2431,10 +2438,11 @@ func (h *handler) verifyMetadata(ctx context.Context) error {
 
 func (h *handler) verifyS3(ctx context.Context) error {
 	payload := []byte("kafscale-startup-probe")
-	probeKey := fmt.Sprintf("__health/startup_probe_%d", time.Now().UnixNano())
 	backoff := 500 * time.Millisecond
 
 	for {
+		// A lost response may leave the previous immutable probe object behind.
+		probeKey := fmt.Sprintf("__health/startup_probe_%d", time.Now().UnixNano())
 		start := time.Now()
 		err := h.s3.UploadSegment(ctx, probeKey, payload)
 		h.recordS3Op("startup_probe", time.Since(start), err)

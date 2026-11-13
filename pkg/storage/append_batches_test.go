@@ -319,19 +319,17 @@ func TestAppendBatchesFailedCleanupFencesRetry(t *testing.T) {
 	if s3.puts.Load() != 2 || log.BufferedHighWatermark() != 0 {
 		t.Fatal("dirty offset was reused before cleanup")
 	}
-	// An opposite upload failure must not pair the stale index with a new segment.
+	// Even after connectivity recovers, an ambiguous DELETE cannot be retried:
+	// the key may now belong to a different writer.
 	s3.failDelete = false
-	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
-		t.Fatal("expected index failure")
-	}
-	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
-	if last, err := recovered.RestoreFromS3(ctx); err != nil || last != -1 {
-		t.Fatalf("recovered a rejected upload: %d, %v", last, err)
-	}
 	s3.fail = ""
-	if result, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err != nil || result.BaseOffset != 0 {
-		t.Fatalf("retry: %+v, %v", result, err)
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("retried an ambiguous cleanup after recovery")
 	}
+	if s3.puts.Load() != 2 {
+		t.Fatal("fenced handle uploaded again")
+	}
+
 }
 
 func TestAppendBatchFailureDoesNotReserveOffsets(t *testing.T) {
@@ -460,5 +458,54 @@ func TestConcurrentWritersClaimOneSegment(t *testing.T) {
 	}
 	if got, err := restored.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(got, winner.Bytes) {
 		t.Fatalf("winner changed: %v", err)
+	}
+}
+
+// A lost DELETE response must not let a later cleanup delete a new writer's data.
+type lostSegmentDeleteS3 struct {
+	*MemoryS3Client
+	failIndex  bool
+	loseDelete bool
+}
+
+func (s *lostSegmentDeleteS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	if s.failIndex {
+		return errors.New("index unavailable")
+	}
+	return s.MemoryS3Client.UploadIndex(ctx, key, body)
+}
+func (s *lostSegmentDeleteS3) DeleteSegment(ctx context.Context, key string) error {
+	if err := s.MemoryS3Client.DeleteSegment(ctx, key); err != nil {
+		return err
+	}
+	if s.loseDelete {
+		s.loseDelete = false
+		return errors.New("delete response lost")
+	}
+	return nil
+}
+func TestCleanupLostDeletePreservesNewWriter(t *testing.T) {
+	ctx := context.Background()
+	s3 := &lostSegmentDeleteS3{MemoryS3Client: NewMemoryS3Client(), failIndex: true, loseDelete: true}
+	stale := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := stale.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("expected cleanup failure")
+	}
+	s3.failIndex = false
+	winner := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	other, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 99))
+	if _, err := winner.AppendBatches(ctx, []RecordBatch{other}, true); err != nil {
+		t.Fatal(err)
+	}
+	original, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
+	originalIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
+	if _, err := stale.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Error("cleanup retry reused an ambiguous delete")
+	}
+	after, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
+	afterIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
+	if !bytes.Equal(original, after) || !bytes.Equal(originalIndex, afterIndex) {
+		t.Fatal("cleanup retry replaced acknowledged data")
 	}
 }

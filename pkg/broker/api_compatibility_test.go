@@ -24,6 +24,7 @@ import (
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/pkg/storage"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -78,6 +79,20 @@ func (s legacyStore) DeleteTopic(ctx context.Context, name string) error {
 
 var _ metadata.Store = legacyStore{}
 var _ = map[broker.CoordinatorConfig]bool{}
+var _ = map[metadata.LeaseManagerConfig]bool{}
+var _ = map[metadata.PartitionLeaseConfig]bool{}
+var _ = map[storage.PartitionLogConfig]bool{}
+
+func TestPublishedLeaseAndLogConfigs(t *testing.T) {
+	lease := metadata.LeaseManagerConfig{"broker", "/leases", 10, nil, "partition"}
+	partition := metadata.PartitionLeaseConfig{"broker", 10, nil}
+	log := storage.PartitionLogConfig{storage.WriteBufferConfig{}, storage.SegmentWriterConfig{}, 2, true, nil}
+	if lease != (metadata.LeaseManagerConfig{BrokerID: "broker", Prefix: "/leases", LeaseTTLSeconds: 10, ResourceKind: "partition"}) ||
+		partition != (metadata.PartitionLeaseConfig{BrokerID: "broker", LeaseTTLSeconds: 10}) ||
+		log != (storage.PartitionLogConfig{ReadAheadSegments: 2, CacheEnabled: true}) {
+		t.Fatal("published config equality changed")
+	}
+}
 
 func TestPublishedCoordinatorConfig(t *testing.T) {
 	// The original unkeyed literal must also compile unchanged.
