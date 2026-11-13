@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,15 +99,28 @@ type lfsModule struct {
 	uploadSessionTTL     time.Duration
 	uploadMu             sync.Mutex
 	uploadSessions       map[string]*uploadSession
+	idleMu               sync.Mutex
+	idleBackends         []lfsIdleBackend
 
 	// backends and connectivity for the HTTP API path (which needs its own
 	// backend connections, independent of the proxy's connection pool)
-	backendRetries int
-	backendBackoff time.Duration
-	backends       []string
-	cacheMu        sync.RWMutex
-	cachedBackends []string
-	rr             uint32
+	backendRetries   int
+	backendBackoff   time.Duration
+	backends         []string
+	discoverBackends func(context.Context) ([]string, error)
+	fallbackBackends func() []string
+	cacheMu          sync.RWMutex
+	cachedBackends   []string
+	rr               uint32
+	// backendsUsable reports whether brokers discovered from etcd are still
+	// within the backend cache TTL. Nil means there is no such limit.
+	backendsUsable func(context.Context) bool
+	// partitionOwner returns the address of the broker that owns a partition
+	// according to the etcd partition routes, or "" when it is not known.
+	partitionOwner func(ctx context.Context, topic string, partition int32) string
+	// forgetPartitionOwner drops a cached partition route that a broker
+	// rejected.
+	forgetPartitionOwner func(topic string, partition int32)
 }
 
 var blockedBucketNames = []string{
@@ -480,23 +494,159 @@ func (m *lfsModule) cachedBackendsSnapshot() []string {
 	return copied
 }
 
-// connectBackend dials a backend broker for the HTTP API path.
-func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error) {
-	var lastErr error
-	for attempt := 0; attempt < m.backendRetries; attempt++ {
-		backends := m.backends
-		if len(backends) == 0 {
-			if cached := m.cachedBackendsSnapshot(); len(cached) > 0 {
-				backends = cached
+var errLFSNoBackends = errors.New("no backends available")
+
+func (m *lfsModule) resolveBackends(ctx context.Context) ([]string, error) {
+	if len(m.backends) > 0 {
+		return m.backends, nil
+	}
+	if m.discoverBackends == nil {
+		if cached := m.cachedBackendsSnapshot(); len(cached) > 0 {
+			return cached, nil
+		}
+		return nil, errLFSNoBackends
+	}
+	discovered, err := m.discoverBackends(ctx)
+	if err == nil {
+		if len(discovered) > 0 {
+			return discovered, nil
+		}
+		return nil, errLFSNoBackends
+	}
+	if m.fallbackBackends != nil {
+		if cached := m.fallbackBackends(); len(cached) > 0 {
+			return cached, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %v", errLFSNoBackends, err)
+}
+
+// checkBackendsFresh checks the backend cache TTL again right before a record
+// is sent, because an upload can take longer than the rest of the TTL.
+// Static backends are not limited.
+func (m *lfsModule) checkBackendsFresh(ctx context.Context) error {
+	if len(m.backends) > 0 || m.backendsUsable == nil || m.backendsUsable(ctx) {
+		return nil
+	}
+	return fmt.Errorf("%w: etcd metadata is older than the backend cache TTL", errLFSNoBackends)
+}
+
+func (m *lfsModule) waitForBackends(ctx context.Context, topic string, partition int32) error {
+	conn, addr, err := m.connectPartitionBackend(ctx, topic, partition, nil)
+	if err != nil {
+		return err
+	}
+	m.releaseBackend(conn, addr)
+	return nil
+}
+
+type lfsIdleBackend struct {
+	conn  net.Conn
+	addr  string
+	since time.Time
+}
+
+const (
+	lfsIdleBackendSlots  = 4
+	lfsIdleBackendMaxAge = time.Minute
+)
+
+func backendConnAlive(conn net.Conn) bool {
+	if err := conn.SetReadDeadline(time.Now().Add(time.Millisecond)); err != nil {
+		return false
+	}
+	var one [1]byte
+	n, err := conn.Read(one[:])
+	_ = conn.SetReadDeadline(time.Time{})
+	if n > 0 || err == nil {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func (m *lfsModule) releaseBackend(conn net.Conn, addr string) {
+	if conn == nil {
+		return
+	}
+	m.idleMu.Lock()
+	m.idleBackends = slices.DeleteFunc(m.idleBackends, func(idle lfsIdleBackend) bool {
+		if time.Since(idle.since) <= lfsIdleBackendMaxAge {
+			return false
+		}
+		_ = idle.conn.Close()
+		return true
+	})
+	if len(m.idleBackends) < lfsIdleBackendSlots {
+		m.idleBackends = append(m.idleBackends, lfsIdleBackend{conn: conn, addr: addr, since: time.Now()})
+		m.idleMu.Unlock()
+		return
+	}
+	m.idleMu.Unlock()
+	_ = conn.Close()
+}
+
+// takeIdleBackend reuses an idle connection only when it goes to one of addrs.
+// Idle connections to other brokers stay in the idle set.
+func (m *lfsModule) takeIdleBackend(addrs []string) (net.Conn, string) {
+	for {
+		m.idleMu.Lock()
+		index := -1
+		for i := len(m.idleBackends) - 1; i >= 0; i-- {
+			if slices.Contains(addrs, m.idleBackends[i].addr) {
+				index = i
+				break
 			}
 		}
-		if len(backends) == 0 {
-			lastErr = fmt.Errorf("no backends available")
-			time.Sleep(m.backendBackoff)
+		if index < 0 {
+			m.idleMu.Unlock()
+			return nil, ""
+		}
+		idle := m.idleBackends[index]
+		m.idleBackends = slices.Delete(m.idleBackends, index, index+1)
+		m.idleMu.Unlock()
+		if time.Since(idle.since) <= lfsIdleBackendMaxAge && backendConnAlive(idle.conn) {
+			return idle.conn, idle.addr
+		}
+		_ = idle.conn.Close()
+	}
+}
+
+// connectBackend dials any backend broker for the HTTP API path.
+func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error) {
+	return m.connectPartitionBackend(ctx, "", 0, nil)
+}
+
+// connectPartitionBackend connects to the broker that owns topic/partition
+// when brokers come from etcd and the owner is known, and otherwise to one of
+// the listed brokers. Brokers in tried are skipped.
+func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, partition int32, tried map[string]bool) (net.Conn, string, error) {
+	attempts := m.backendRetries
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			if err := waitBackendRetry(ctx, m.backendBackoff); err != nil {
+				return nil, "", err
+			}
+		}
+		backends, err := m.resolveBackends(ctx)
+		if err != nil {
+			lastErr = err
 			continue
 		}
+		candidates := m.partitionCandidates(ctx, backends, topic, partition, tried)
+		if len(candidates) == 0 {
+			lastErr = errLFSNoBackends
+			continue
+		}
+		if conn, addr := m.takeIdleBackend(candidates); conn != nil {
+			return conn, addr, nil
+		}
 		index := atomic.AddUint32(&m.rr, 1)
-		addr := backends[int(index)%len(backends)]
+		addr := candidates[int(index)%len(candidates)]
 		dialer := net.Dialer{Timeout: m.dialTimeout}
 		var conn net.Conn
 		var dialErr error
@@ -505,27 +655,28 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 		} else {
 			conn, dialErr = dialer.DialContext(ctx, "tcp", addr)
 		}
-		if dialErr == nil {
-			wrapped, err := m.wrapBackendTLS(ctx, conn, addr)
-			if err != nil {
-				_ = conn.Close()
-				lastErr = err
-				time.Sleep(m.backendBackoff)
-				continue
-			}
-			if err := m.performBackendSASL(ctx, wrapped); err != nil {
-				_ = wrapped.Close()
-				lastErr = err
-				time.Sleep(m.backendBackoff)
-				continue
-			}
-			return wrapped, addr, nil
+		if dialErr != nil {
+			lastErr = dialErr
+			continue
 		}
-		lastErr = dialErr
-		time.Sleep(m.backendBackoff)
+		wrapped, err := m.wrapBackendTLS(ctx, conn, addr)
+		if err != nil {
+			_ = conn.Close()
+			lastErr = err
+			continue
+		}
+		if err := m.performBackendSASL(ctx, wrapped); err != nil {
+			_ = wrapped.Close()
+			lastErr = err
+			continue
+		}
+		return wrapped, addr, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("no backends available")
+		lastErr = errLFSNoBackends
 	}
 	return nil, "", lastErr
 }

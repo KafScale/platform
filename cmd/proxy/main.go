@@ -176,15 +176,10 @@ func main() {
 		if etcdStore, ok := store.(*metadata.EtcdStore); ok {
 			lfsmod.topicGeneration = etcdStore.TopicGeneration
 		}
-		lfsmod.identityDial = p.dialBackend
 		if security != nil {
 			lfsmod.authorizer = security.lfsACL
 		}
-		// Give the LFS HTTP API access to the proxy's backends for its own connections
-		if len(backends) > 0 {
-			lfsmod.backends = backends
-			lfsmod.setCachedBackends(backends)
-		}
+		p.attachLFSModule(lfsmod)
 		logger.Info("LFS module enabled")
 
 		// Start LFS HTTP API if configured
@@ -214,6 +209,21 @@ func main() {
 	}
 	if p.lfs != nil {
 		p.lfs.Shutdown()
+	}
+}
+
+func (p *proxy) attachLFSModule(m *lfsModule) {
+	m.identityDial = p.dialBackend
+	if len(p.backends) > 0 {
+		m.backends = p.backends
+		m.setCachedBackends(p.backends)
+	}
+	if p.store != nil {
+		m.discoverBackends = p.currentBackends
+		m.fallbackBackends = p.freshCachedBackends
+		m.backendsUsable = p.listenerRoutable
+		m.partitionOwner = p.partitionOwnerAddr
+		m.forgetPartitionOwner = p.forgetPartitionRoute
 	}
 }
 
@@ -381,6 +391,13 @@ func (p *proxy) cachedBackendsSnapshot() []string {
 	return copied
 }
 
+func (p *proxy) freshCachedBackends() []string {
+	if !p.cacheFresh() {
+		return nil
+	}
+	return p.cachedBackendsSnapshot()
+}
+
 func (p *proxy) touchHealthy() {
 	atomic.StoreInt64(&p.lastHealthy, time.Now().UnixNano())
 }
@@ -391,6 +408,46 @@ func (p *proxy) cacheFresh() bool {
 		return false
 	}
 	return time.Since(time.Unix(0, last)) <= p.cacheTTL
+}
+
+// partitionOwnerAddr returns the address of the broker that owns
+// topic/partition according to the partition routes, or "" when it is not
+// known.
+func (p *proxy) partitionOwnerAddr(ctx context.Context, topic string, partition int32) string {
+	if p.router == nil {
+		return ""
+	}
+	ownerID := p.router.LookupOwner(topic, partition)
+	if ownerID == "" {
+		return ""
+	}
+	return p.brokerIDToAddr(ctx, ownerID)
+}
+
+func (p *proxy) forgetPartitionRoute(topic string, partition int32) {
+	if p.router != nil {
+		p.router.Invalidate(topic, partition)
+	}
+}
+
+// listenerRoutable reports whether the Kafka listener may answer Metadata or
+// route a request. With brokers discovered from etcd, routes, broker addresses
+// and the metadata snapshot are only trusted while the last good etcd read is
+// within the backend cache TTL. A stale cache gets one refresh attempt first so
+// the listener opens again as soon as etcd is readable. Static backends and
+// stores without etcd are not affected.
+func (p *proxy) listenerRoutable(ctx context.Context) bool {
+	if len(p.backends) > 0 {
+		return true
+	}
+	if _, ok := p.store.(*metadata.EtcdStore); !ok {
+		return true
+	}
+	if p.cacheFresh() {
+		return true
+	}
+	p.refreshMetadataCache(ctx)
+	return p.cacheFresh()
 }
 
 // checkReady uses cached state when fresh, falling back to a live metadata
@@ -658,7 +715,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
-		if !p.isReady() {
+		if !p.isReady() || !p.listenerRoutable(ctx) {
 			resp, ok, err := p.buildNotReadyResponse(header, body)
 			if err != nil {
 				p.logger.Warn("not-ready response build failed")
@@ -1115,9 +1172,16 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 	return append(connectErrors, results...)
 }
 
+// errStaleRoutes means etcd has not been read successfully within the backend
+// cache TTL, so cached routes and broker addresses are not used.
+var errStaleRoutes = errors.New("etcd metadata is older than the backend cache TTL")
+
 // connectForAddr borrows or dials a connection for the given addr. If addr is
 // empty, a round-robin backend is selected (excluding triedBackends).
 func (p *proxy) connectForAddr(ctx context.Context, addr string, exclude map[string]bool, pool *connPool) (net.Conn, string, error) {
+	if !p.listenerRoutable(ctx) {
+		return nil, "", errStaleRoutes
+	}
 	if addr != "" && !exclude[addr] {
 		conn, err := pool.Borrow(ctx, addr)
 		if err == nil {
@@ -1253,6 +1317,9 @@ func (p *proxy) handleMetadata(ctx context.Context, header *protocol.RequestHead
 	metaReq, ok := req.(*kmsg.MetadataRequest)
 	if !ok {
 		return nil, errMetadataRequest
+	}
+	if !p.listenerRoutable(ctx) {
+		return nil, errors.Join(errMetadataBackend, errStaleRoutes)
 	}
 
 	meta, err := p.loadMetadata(ctx, metaReq)
@@ -1670,7 +1737,9 @@ func (p *proxy) currentBackends(ctx context.Context) ([]string, error) {
 	if len(p.backends) > 0 {
 		return p.backends, nil
 	}
-	p.syncStoreSnapshot(ctx)
+	if err := p.syncStoreSnapshot(ctx); err != nil {
+		return nil, err
+	}
 	meta, err := p.store.Metadata(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -1701,12 +1770,14 @@ func (p *proxy) updateBrokerAddrs(brokers []protocol.MetadataBroker) {
 }
 
 // syncStoreSnapshot reloads the etcd metadata snapshot when the store supports it.
-func (p *proxy) syncStoreSnapshot(ctx context.Context) {
+func (p *proxy) syncStoreSnapshot(ctx context.Context) error {
 	if etcdStore, ok := p.store.(*metadata.EtcdStore); ok {
 		if err := etcdStore.RefreshSnapshot(ctx); err != nil {
 			p.logger.Warn("metadata snapshot sync failed", "error", err)
+			return fmt.Errorf("metadata snapshot sync: %w", err)
 		}
 	}
+	return nil
 }
 
 // refreshMetadataCache updates broker address and topic name caches from
@@ -1719,7 +1790,9 @@ func (p *proxy) refreshMetadataCache(ctx context.Context) {
 	fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	_, err, _ := p.metaFlight.Do("refresh", func() (interface{}, error) {
-		p.syncStoreSnapshot(fetchCtx)
+		if err := p.syncStoreSnapshot(fetchCtx); err != nil {
+			return nil, err
+		}
 		meta, err := p.store.Metadata(fetchCtx, nil)
 		if err != nil {
 			return nil, err

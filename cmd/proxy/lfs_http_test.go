@@ -1120,6 +1120,7 @@ func TestHandleHTTPUploadInit_PayloadTooLarge(t *testing.T) {
 func TestHandleHTTPUploadInit_Success(t *testing.T) {
 	m := testHTTPModule(t)
 	m.httpAPIKey = ""
+	m.backends = []string{probeOnlyBackend(t)}
 
 	body, _ := json.Marshal(lfsUploadInitRequest{
 		Topic:       "my-topic",

@@ -48,6 +48,8 @@ type fakeS3 struct {
 	abortCanceled bool
 	abortDeadline bool
 	deleteErr     error
+	puts          int
+	multipartInit int
 }
 
 func newFakeS3() *fakeS3 {
@@ -55,6 +57,7 @@ func newFakeS3() *fakeS3 {
 }
 
 func (f *fakeS3) CreateMultipartUpload(ctx context.Context, params *s3.CreateMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error) {
+	f.multipartInit++
 	return &s3.CreateMultipartUploadOutput{UploadId: aws.String("test-upload-id")}, nil
 }
 func (f *fakeS3) UploadPart(ctx context.Context, params *s3.UploadPartInput, optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error) {
@@ -70,6 +73,7 @@ func (f *fakeS3) AbortMultipartUpload(ctx context.Context, params *s3.AbortMulti
 	return &s3.AbortMultipartUploadOutput{}, f.abortErr
 }
 func (f *fakeS3) PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	f.puts++
 	if params.Body != nil {
 		data, _ := io.ReadAll(params.Body)
 		f.objects[*params.Key] = data
