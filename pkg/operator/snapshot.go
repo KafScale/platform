@@ -209,6 +209,10 @@ func buildReplicaIDs(replicaCount int32) []int32 {
 
 // PublishMetadataSnapshot writes the provided metadata snapshot into etcd so brokers can consume it.
 func PublishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot metadata.ClusterMetadata) error {
+	return publishMetadataSnapshot(ctx, endpoints, snapshot, clientv3.New)
+}
+
+func publishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot metadata.ClusterMetadata, openClient func(clientv3.Config) (*clientv3.Client, error)) error {
 	if len(endpoints) == 0 {
 		return fmt.Errorf("etcd endpoints required")
 	}
@@ -223,7 +227,7 @@ func PublishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 	conflictErr := errors.New("snapshot update conflict")
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
-		cli, err := clientv3.New(cfg)
+		cli, err := openClient(cfg)
 		if err != nil {
 			lastErr = err
 		} else {
@@ -242,12 +246,15 @@ func PublishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 				continue
 			}
 			existing := metadata.ClusterMetadata{}
+			candidate := snapshot
 			if len(resp.Kvs) > 0 {
-				if err := json.Unmarshal(resp.Kvs[0].Value, &existing); err == nil {
-					snapshot = mergeSnapshots(snapshot, existing)
+				if err := json.Unmarshal(resp.Kvs[0].Value, &existing); err != nil {
+					_ = cli.Close()
+					return err
 				}
+				candidate = mergeSnapshots(snapshot, existing)
 			}
-			payload, err := json.Marshal(snapshot)
+			payload, err := json.Marshal(candidate)
 			if err != nil {
 				_ = cli.Close()
 				return err
