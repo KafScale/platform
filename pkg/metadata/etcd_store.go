@@ -52,7 +52,7 @@ type EtcdStore struct {
 	cancel       context.CancelFunc
 	available    int32
 	lastError    atomic.Value // stores etcdError
-	persistMu    sync.Mutex   // serializes snapshot read/write to avoid out-of-order etcd puts
+	persistMu    sync.Mutex   // serializes local cache installs and snapshot mutations
 	groupWriteMu sync.Mutex
 	groupWrites  map[string]*consumerGroupWrite
 
@@ -438,77 +438,79 @@ func (s *EtcdStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.Topic
 	return err
 }
 
-// CreatePartitions expands a topic and writes new partition state entries.
+// CreatePartitions expands a topic using the authoritative snapshot. Each batch
+// publishes its partition states atomically with the matching snapshot revision.
 func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitionCount int32) error {
-	meta, err := s.metadata.Metadata(ctx, []string{topic})
-	if err != nil {
-		return err
-	}
-	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != 0 {
-		return ErrUnknownTopic
-	}
-	current := int32(len(meta.Topics[0].Partitions))
-	if partitionCount <= current {
-		return ErrInvalidTopic
-	}
-	if err := s.metadata.CreatePartitions(ctx, topic, partitionCount); err != nil {
-		return err
-	}
-	// Read new partition metadata before persisting. The snapshot watcher can
-	// refresh in-memory state from etcd while persistSnapshot runs, so a later
-	// Metadata call may see a stale partition count and panic on index access.
-	updated, err := s.metadata.Metadata(ctx, []string{topic})
-	if err != nil {
-		return err
-	}
-	if len(updated.Topics) == 0 || updated.Topics[0].ErrorCode != 0 {
-		return ErrUnknownTopic
-	}
-	newPartitions := updated.Topics[0].Partitions[current:partitionCount]
-	if int32(len(newPartitions)) != partitionCount-current {
-		return fmt.Errorf("metadata: expected %d new partitions, got %d", partitionCount-current, len(newPartitions))
-	}
-	if err := s.persistSnapshot(ctx); err != nil {
-		return err
-	}
-	for _, part := range newPartitions {
-		state := &metadatapb.PartitionState{
-			Topic:          topic,
-			Partition:      part.Partition,
-			LeaderBroker:   fmt.Sprintf("%d", part.Leader),
-			LeaderEpoch:    part.LeaderEpoch,
-			LogStartOffset: 0,
-			LogEndOffset:   0,
-			HighWatermark:  0,
-			ActiveSegment:  "",
-		}
-		payload, err := EncodePartitionState(state)
-		if err != nil {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var observedGeneration *int64
+	for {
+		complete := false
+		_, err := s.mutateSnapshot(ctx, func(candidate *InMemoryStore, revision int64) ([]clientv3.Cmp, []clientv3.Op, error) {
+			meta, err := candidate.Metadata(ctx, []string{topic})
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != 0 {
+				return nil, nil, ErrUnknownTopic
+			}
+			generation, err := s.topicGenerationAt(ctx, topic, revision)
+			if err != nil {
+				return nil, nil, err
+			}
+			if observedGeneration != nil && *observedGeneration != generation {
+				return nil, nil, ErrTopicGenerationChanged
+			}
+			observedGeneration = &generation
+			current := int32(len(meta.Topics[0].Partitions))
+			// Each conditional initialization uses a nested txn plus its put.
+			next := min(partitionCount, current+(maxTxnOps-1)/2)
+			if err := candidate.CreatePartitions(ctx, topic, next); err != nil {
+				return nil, nil, err
+			}
+			updated, err := candidate.Metadata(ctx, []string{topic})
+			if err != nil {
+				return nil, nil, err
+			}
+			ops := make([]clientv3.Op, 0, next-current)
+			for _, part := range updated.Topics[0].Partitions[current:next] {
+				payload, err := EncodePartitionState(&metadatapb.PartitionState{
+					Topic: topic, Partition: part.Partition,
+					LeaderBroker: fmt.Sprintf("%d", part.Leader), LeaderEpoch: part.LeaderEpoch,
+				})
+				if err != nil {
+					return nil, nil, err
+				}
+				key := PartitionStateKey(topic, part.Partition)
+				ops = append(ops, clientv3.OpTxn(
+					[]clientv3.Cmp{clientv3.Compare(clientv3.CreateRevision(key), "=", 0)},
+					[]clientv3.Op{clientv3.OpPut(key, string(payload))}, nil,
+				))
+			}
+			complete = next == partitionCount
+			return nil, ops, nil
+		})
+		if err != nil || complete {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_, err = s.client.Put(ctx, PartitionStateKey(topic, part.Partition), string(payload))
-		cancel()
-		if err != nil {
-			s.recordEtcdResult(err)
-			return err
-		}
-		s.recordEtcdResult(nil)
 	}
-	return nil
 }
 
-// CreateTopic currently updates only the in-memory snapshot; the operator is still responsible
-// for reconciling durable topic configuration into etcd/S3.
+// CreateTopic applies only the requested creation to the latest etcd snapshot.
 func (s *EtcdStore) CreateTopic(ctx context.Context, spec TopicSpec) (*protocol.MetadataTopic, error) {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-
-	topic, err := s.metadata.CreateTopic(ctx, spec)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var topic *protocol.MetadataTopic
+	_, err := s.mutateSnapshot(ctx, func(candidate *InMemoryStore, _ int64) ([]clientv3.Cmp, []clientv3.Op, error) {
+		var err error
+		topic, err = candidate.CreateTopic(ctx, spec)
+		return nil, nil, err
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := s.persistSnapshotLocked(ctx); err != nil {
 		return nil, err
 	}
 	return topic, nil
@@ -547,30 +549,39 @@ func (s *EtcdStore) startWatchers() {
 }
 
 func (s *EtcdStore) watchSnapshot(ctx context.Context) {
-	for {
-		watchChan := s.client.Watch(ctx, snapshotKey(), clientv3.WithPrefix())
-		for resp := range watchChan {
-			if resp.Err() != nil {
-				continue
+	for ctx.Err() == nil {
+		// Watch from the full read's revision so updates between Get and Watch
+		// are replayed. A failed initial read is retried even with no new events.
+		revision, err := s.refreshSnapshotRevision(ctx)
+		if err == nil {
+			watchCtx, cancel := context.WithCancel(ctx)
+			watchChan := s.client.Watch(watchCtx, snapshotKey(), clientv3.WithRev(revision+1))
+			for resp := range watchChan {
+				if resp.Err() != nil {
+					break
+				}
+				if err := s.refreshSnapshot(ctx); err != nil {
+					break
+				}
 			}
-			if err := s.refreshSnapshot(ctx); err != nil {
-				continue
-			}
+			cancel()
 		}
-
-		// Watch channel closed. If the context is done, exit for good.
-		if ctx.Err() != nil {
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
+		case <-timer.C:
 		}
-
-		// Transient failure (etcd leader election, compaction, network blip).
-		// Reseed from a full read and re-establish the watch.
-		time.Sleep(time.Second)
-		_ = s.refreshSnapshot(ctx)
 	}
 }
 
 func (s *EtcdStore) refreshSnapshot(ctx context.Context) error {
+	_, err := s.refreshSnapshotRevision(ctx)
+	return err
+}
+
+func (s *EtcdStore) refreshSnapshotRevision(ctx context.Context) (int64, error) {
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 
@@ -579,42 +590,20 @@ func (s *EtcdStore) refreshSnapshot(ctx context.Context) error {
 	resp, err := s.client.Get(ctx, snapshotKey())
 	if err != nil {
 		s.recordEtcdResult(err)
-		return err
+		return 0, err
 	}
 	s.recordEtcdResult(nil)
 	if len(resp.Kvs) == 0 {
-		return nil
+		return resp.Header.Revision, nil
 	}
 	var snapshot ClusterMetadata
 	if err := json.Unmarshal(resp.Kvs[0].Value, &snapshot); err != nil {
-		return err
+		return 0, err
 	}
 	s.metadata.Update(snapshot)
-	return nil
+	return resp.Header.Revision, nil
 }
 
 func snapshotKey() string {
 	return "/kafscale/metadata/snapshot"
-}
-
-func (s *EtcdStore) persistSnapshot(ctx context.Context) error {
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
-	return s.persistSnapshotLocked(ctx)
-}
-
-func (s *EtcdStore) persistSnapshotLocked(ctx context.Context) error {
-	state, err := s.metadata.Metadata(context.Background(), nil)
-	if err != nil {
-		return err
-	}
-	payload, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	putCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err = s.client.Put(putCtx, snapshotKey(), string(payload))
-	s.recordEtcdResult(err)
-	return err
 }

@@ -31,13 +31,18 @@ import (
 
 func newRetireStore(t *testing.T, ctx context.Context) *EtcdStore {
 	t.Helper()
-	store, err := NewEtcdStore(ctx, ClusterMetadata{
+	initial := ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{{NodeID: 1, Host: "localhost", Port: 9092}},
 		Topics: []protocol.MetadataTopic{
 			{Topic: kmsg.StringPtr("orders"), TopicID: TopicIDForName("orders"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1}}},
 			{Topic: kmsg.StringPtr("payments"), Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1}}},
 		},
-	}, EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t), StorageNamespace: "prod"})
+	}
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	cli := newEtcdClient(t, endpoints)
+	writeSnapshotFixture(t, cli, initial)
+	_ = cli.Close()
+	store, err := NewEtcdStore(ctx, initial, EtcdStoreConfig{Endpoints: endpoints, StorageNamespace: "prod"})
 	if err != nil {
 		t.Fatal(err)
 	}
