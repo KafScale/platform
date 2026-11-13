@@ -468,8 +468,18 @@ func (m *lfsModule) sweepLostMultipartUploads(ctx context.Context, now time.Time
 	}
 }
 
+func (m *lfsModule) uploadSessionCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := m.dialTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
 func (m *lfsModule) dropUploadSession(ctx context.Context, requestID, id string) {
-	if err := m.deleteUploadSession(ctx, id); err != nil {
+	cleanupCtx, cancel := m.uploadSessionCleanupContext(ctx)
+	defer cancel()
+	if err := m.deleteUploadSession(cleanupCtx, id); err != nil {
 		m.logger.Warn("multipart upload session delete failed", "requestId", logSafe(requestID), "uploadId", logSafe(id), "error", err)
 	}
 }

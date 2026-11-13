@@ -33,6 +33,7 @@ import (
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -248,5 +249,55 @@ func TestLFSUploadSessionSweepRemovesExpiredAndLostUploads(t *testing.T) {
 	}
 	if len(fs3.multipartUploads) != 2 {
 		t.Fatalf("multipart uploads after sweep: %v", fs3.multipartUploads)
+	}
+}
+
+func TestLFSMultipartAcrossProxiesCRC32(t *testing.T) {
+	runCrossPodUpload(t, "crc32", func(data []byte) string {
+		sum, err := lfs.ComputeChecksum(lfs.ChecksumCRC32, data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sum
+	})
+}
+
+func TestLFSSharedSessionRemovedWhenBackendUnavailableAtComplete(t *testing.T) {
+	a, b, fs3 := sharedSessionModules(t)
+	session := sessionInit(t, a, `{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)
+	code, etag := sessionPart(t, b, session.UploadID, 1, []byte("payload"))
+	if code != http.StatusOK {
+		t.Fatalf("part: %d %s", code, etag)
+	}
+	b.backends = nil
+	b.backendsUsable = func(context.Context) bool { return false }
+	rr := sessionComplete(b, session.UploadID, []string{etag})
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("complete: %d %s", rr.Code, rr.Body.String())
+	}
+	if len(sessionRecords(fs3)) != 0 {
+		t.Fatal("shared session remains after completed object was discarded")
+	}
+}
+
+type failSessionSaveS3 struct{ s3API }
+
+func (s *failSessionSaveS3) PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	return nil, fmt.Errorf("session storage unavailable")
+}
+
+func TestLFSFailedSharedSessionSaveAbortsMultipart(t *testing.T) {
+	a, _, fs3 := sharedSessionModules(t)
+	a.s3Uploader.api = &failSessionSaveS3{s3API: a.s3Uploader.api}
+	rr := httptest.NewRecorder()
+	a.handleHTTPUploadInit(rr, httptest.NewRequest(http.MethodPost, "/lfs/uploads", strings.NewReader(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)))
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("init: %d %s", rr.Code, rr.Body.String())
+	}
+	if len(fs3.multipartUploads) != 0 || len(fs3.aborted) != 1 {
+		t.Fatalf("session save failure leaked multipart upload: %+v", fs3.multipartUploads)
+	}
+	if !fs3.abortDeadline {
+		t.Fatal("cleanup has no deadline")
 	}
 }

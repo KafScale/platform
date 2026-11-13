@@ -860,7 +860,9 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 
 	if err := m.saveUploadSession(r.Context(), session); err != nil {
 		m.metrics.IncS3Errors()
-		if abortErr := m.abortMultipartIgnoringMissing(context.WithoutCancel(r.Context()), objectKey, uploadID); abortErr != nil {
+		cleanupCtx, cancel := m.uploadSessionCleanupContext(r.Context())
+		defer cancel()
+		if abortErr := m.abortMultipartIgnoringMissing(cleanupCtx, objectKey, uploadID); abortErr != nil {
 			m.logger.Warn("multipart abort after session save failure failed", "requestId", logSafe(requestID), "s3Key", logSafe(objectKey), "error", abortErr)
 		}
 		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
@@ -1151,7 +1153,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	if errors.Is(err, errLFSProduceNotWritten) {
 		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "backend_unavailable")
-		m.lfsDeleteUploadSession(sessionID)
+		m.dropUploadSession(r.Context(), requestID, sessionID)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "backend_unavailable", err.Error(), "kafka_produce", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
