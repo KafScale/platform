@@ -198,6 +198,29 @@ func TestLFSLostSweepPreservesUnexpiredSessionWithLongerTTL(t *testing.T) {
 	}
 }
 
+func TestLFSStaleDiscardCannotDeleteActiveUpload(t *testing.T) {
+	a, b, fs3 := sharedSessionModules(t)
+	init := sessionInit(t, a, `{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)
+	stale, unlock, err := a.acquireUploadSession(context.Background(), init.UploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	code, etag := sessionPart(t, b, init.UploadID, 1, []byte("payload"))
+	if code != http.StatusOK {
+		t.Fatal(code, etag)
+	}
+	if err := a.discardMultipartUpload(context.Background(), stale); !errors.Is(err, errUploadSessionConflict) {
+		t.Fatalf("stale discard must fail before S3 cleanup: %v", err)
+	}
+	if len(fs3.aborted) != 0 || len(fs3.deleted) != 0 {
+		t.Fatal("stale discard issued S3 cleanup")
+	}
+	if rr := sessionComplete(b, init.UploadID, []string{etag}); rr.Code != http.StatusOK {
+		t.Fatalf("active upload cannot complete after stale discard: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestLFSOldLockCannotSaveOrDeleteSession(t *testing.T) {
 	a, b, _ := sharedSessionModules(t)
 	init := sessionInit(t, a, `{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)
