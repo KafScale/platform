@@ -38,10 +38,12 @@ import (
 // server may still evaluate that transaction after another replica advances it.
 type deferredSessionKV struct {
 	clientv3.KV
-	prefix    string
-	deferNext bool
-	checks    []clientv3.Cmp
-	writes    []clientv3.Op
+	prefix            string
+	deferNext         bool
+	deferDelete       bool
+	skipSessionWrites int
+	checks            []clientv3.Cmp
+	writes            []clientv3.Op
 }
 type deferredSessionTxn struct {
 	clientv3.Txn
@@ -67,7 +69,11 @@ func (t *deferredSessionTxn) Else(o ...clientv3.Op) clientv3.Txn { t.Txn = t.Txn
 func (t *deferredSessionTxn) Commit() (*clientv3.TxnResponse, error) {
 	if t.parent.deferNext {
 		for _, op := range t.writes {
-			if op.IsPut() && strings.HasPrefix(string(op.KeyBytes()), t.parent.prefix) {
+			if ((op.IsPut() && !t.parent.deferDelete) || (op.IsDelete() && t.parent.deferDelete)) && strings.HasPrefix(string(op.KeyBytes()), t.parent.prefix) {
+				if t.parent.skipSessionWrites > 0 {
+					t.parent.skipSessionWrites--
+					return t.Txn.Commit()
+				}
 				t.parent.deferNext = false
 				t.parent.checks = t.checks
 				t.parent.writes = t.writes
@@ -83,7 +89,7 @@ func TestLFSDeferredSessionWriteCannotLoseAcknowledgedPart(t *testing.T) {
 	first := bytes.Repeat([]byte("a"), 5<<20)
 	tail := []byte("tail")
 	init := sessionInit(t, a, fmt.Sprintf(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":%d}`, len(first)+len(tail)))
-	kv := &deferredSessionKV{KV: a.uploadSessionClient.KV, prefix: a.uploadSessionPrefix(), deferNext: true}
+	kv := &deferredSessionKV{KV: a.uploadSessionClient.KV, prefix: a.uploadSessionPrefix(), deferNext: true, skipSessionWrites: 1}
 	a.uploadSessionClient.KV = kv
 	code, _ := sessionPart(t, a, init.UploadID, 1, first)
 	if code != http.StatusServiceUnavailable {

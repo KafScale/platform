@@ -271,6 +271,7 @@ paths:
       description: |
         Uploads a single part for an existing upload session. Parts are identified
         by `part_number` (1..10000) and must be at least 5MB except the final part.
+        Retry the same part number with exactly the same bytes, even after a timeout.
       operationId: lfsUploadPart
       security:
         - ApiKeyAuth: []
@@ -327,7 +328,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Upload state changed or part arrived out of order; retry sequentially
+          description: Upload state changed, retry bytes conflict (part_conflict), or part arrived out of order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "410":
+          description: Upload expired, aborted, or must restart after a session format upgrade
           content:
             application/json:
               schema:
@@ -384,7 +391,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Upload state changed or part arrived out of order; retry sequentially
+          description: Upload state changed, retry bytes conflict (part_conflict), or part arrived out of order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "410":
+          description: Upload expired, aborted, or must restart after a session format upgrade
           content:
             application/json:
               schema:
@@ -423,7 +436,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Upload state changed or part arrived out of order; retry sequentially
+          description: Upload state changed, retry bytes conflict (part_conflict), or part arrived out of order
           content:
             application/json:
               schema:

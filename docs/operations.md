@@ -606,13 +606,34 @@ Authoritative sessions and checksum state live in etcd under
 `/kafscale/lfs-upload-sessions/<bucket>/<namespace>/<id>` (bucket and namespace
 components are URL-escaped). S3 remains untrusted blob storage. The proxy does
 not load the unsigned session JSON used by the earlier pre-release branch;
-restart uploads begun by that version after upgrading.
+restart uploads begun by that version after upgrading. Sessions from the earlier
+development format without durable part hashes also require a restart; they
+return 410 `upload_restart_required` and are aborted rather than resumed.
 
 Part, completion, and abort calls can reach any replica after a restart. An
 etcd mutex serializes requests for each upload, and every session update or
 delete checks both the record revision and lock ownership. A timed-out old
 request cannot overwrite newer acknowledged progress. Lost lock leases cancel
-the active request. Send parts sequentially as before; an out-of-order part
+the active request. Lock acquisition uses cancellable attempts, and lock-key
+and lease cleanup share a bounded timeout, including after cancellation.
+Before issuing an S3 part upload, the proxy persists that part's SHA-256 identity
+in etcd. All retries for the same part number must contain exactly the same
+bytes, including retries after a timeout or a successful acknowledgement.
+Conflicting retry bytes return 409 `part_conflict` without reaching S3. This
+prevents an old in-flight request from replacing different, acknowledged bytes.
+Failed S3 attempts do not advance the aggregate checksum. Completion requires
+every uploaded part exactly once in order. The expected checksum is verified
+before S3 finalization, and a mismatch aborts the multipart upload. If S3 already
+completed the upload but its response was lost, a retry checks the unique object
+key and declared size with `s3:GetObject` and resumes publishing the envelope.
+The expected checksum still comes from etcd. Durable publication and discard
+markers fence cleanup across ownership changes. Cleanup does not delete a
+completed blob once a Kafka request may have referenced it, including after an
+ambiguous acknowledgement; explicit abort can still remove the session record.
+As with ordinary produces, retrying
+after an ambiguous Kafka acknowledgement can produce duplicate envelopes.
+
+Send parts sequentially as before; an out-of-order part
 returns 409. State-store failures return 503 `session_store_unavailable` and a
 rejected stale update returns 409 `upload_conflict`; retry using the same upload
 ID and part number. Session records are removed on completion or abort.

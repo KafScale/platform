@@ -139,6 +139,10 @@ type uploadSession struct {
 	PartSize         int64
 	NextPart         int32
 	TotalUploaded    int64
+	PartHashes       map[int32]string
+	storeVersion     int
+	Publishing       bool
+	Discarding       bool
 	Parts            map[int32]string
 	PartSizes        map[int32]int64
 	storeRevision    int64
@@ -947,6 +951,12 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	if !m.checkUploadSessionActive(r.Context(), w, requestID, session) {
+		return
+	}
+	if !m.checkUploadSessionVersion(r.Context(), w, requestID, session) {
+		return
+	}
 	if time.Now().UTC().After(session.ExpiresAt) {
 		if err := m.discardMultipartUpload(r.Context(), session); err != nil {
 			m.logger.Warn("expired multipart upload cleanup failed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "error", err)
@@ -955,17 +965,8 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	if etag, exists := session.Parts[partNumber]; exists {
-		_, _ = io.Copy(io.Discard, r.Body)
-		m.logger.Info("http chunked upload part already received", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "part", partNumber, "etag", logSafe(etag))
-		resp := lfsUploadPartResponse{UploadID: sessionID, PartNumber: partNumber, ETag: etag}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	if partNumber != session.NextPart {
+	etag, received := session.Parts[partNumber]
+	if !received && partNumber != session.NextPart {
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusConflict, "out_of_order", "part out of order")
 		return
 	}
@@ -984,15 +985,49 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "invalid_part", "part too large")
 		return
 	}
-	if session.TotalUploaded+int64(len(body)) > session.SizeBytes {
+	if !received && session.TotalUploaded+int64(len(body)) > session.SizeBytes {
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "invalid_part", "part exceeds declared size")
 		return
 	}
-	if session.TotalUploaded+int64(len(body)) < session.SizeBytes && int64(len(body)) < minMultipartChunkSize {
+	if !received && session.TotalUploaded+int64(len(body)) < session.SizeBytes && int64(len(body)) < minMultipartChunkSize {
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "invalid_part", "part too small")
 		return
 	}
 
+	digest := sha256.Sum256(body)
+	bodySHA := hex.EncodeToString(digest[:])
+	if session.PartHashes == nil {
+		session.PartHashes = make(map[int32]string)
+	}
+	expected := session.PartHashes[partNumber]
+	if expected != "" && expected != bodySHA {
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusConflict, "part_conflict", "retry a part with exactly the same bytes")
+		return
+	}
+	if received {
+		resp := lfsUploadPartResponse{UploadID: sessionID, PartNumber: partNumber, ETag: etag}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+	if expected == "" {
+		// Commit the immutable body identity before an S3 request can escape. A
+		// timed-out request and all retries can now write only the same bytes.
+		session.PartHashes[partNumber] = bodySHA
+		if err := m.saveUploadSession(r.Context(), session); err != nil {
+			m.writeUploadSessionError(w, requestID, err)
+			return
+		}
+	}
+
+	etag, err = m.s3Uploader.UploadPart(r.Context(), session.S3Key, session.UploadID, partNumber, body)
+	if err != nil {
+		m.metrics.IncS3Errors()
+		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "s3_upload_failed", err.Error(), "upload_part", session.TotalUploaded, 0)
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
+		return
+	}
 	if _, err := session.sha256Hasher.Write(body); err != nil {
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "hash_error", err.Error())
 		return
@@ -1004,13 +1039,6 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	etag, err := m.s3Uploader.UploadPart(r.Context(), session.S3Key, session.UploadID, partNumber, body)
-	if err != nil {
-		m.metrics.IncS3Errors()
-		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "s3_upload_failed", err.Error(), "upload_part", session.TotalUploaded, 0)
-		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
-		return
-	}
 	m.logger.Info("http chunked upload part stored", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "part", partNumber, "etag", logSafe(etag), "bytes", len(body))
 
 	session.Parts[partNumber] = etag
@@ -1043,6 +1071,12 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if !m.checkUploadSessionActive(r.Context(), w, requestID, session) {
+		return
+	}
+	if !m.checkUploadSessionVersion(r.Context(), w, requestID, session) {
+		return
+	}
 	if time.Now().UTC().After(session.ExpiresAt) {
 		if err := m.discardMultipartUpload(r.Context(), session); err != nil {
 			m.logger.Warn("expired multipart upload cleanup failed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "error", err)
@@ -1065,8 +1099,16 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if len(req.Parts) != len(session.Parts) {
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "invalid_part", "include every uploaded part exactly once in order")
+		return
+	}
 	completed := make([]types.CompletedPart, 0, len(req.Parts))
-	for _, part := range req.Parts {
+	for i, part := range req.Parts {
+		if part.PartNumber != int32(i+1) {
+			m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "invalid_part", "include every uploaded part exactly once in order")
+			return
+		}
 		etag, ok := session.Parts[part.PartNumber]
 		if !ok || etag == "" || part.ETag == "" || etag != part.ETag {
 			m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "invalid_part", "part etag mismatch")
@@ -1078,14 +1120,6 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		})
 	}
 
-	if err := m.s3Uploader.CompleteMultipartUpload(r.Context(), session.S3Key, session.UploadID, completed); err != nil {
-		m.metrics.IncS3Errors()
-		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "s3_upload_failed", err.Error(), "upload_complete", session.TotalUploaded, 0)
-		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
-		return
-	}
-	m.logger.Info("http chunked upload completed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "parts", len(completed), "bytes", session.TotalUploaded)
-
 	shaHex := hex.EncodeToString(session.sha256Hasher.Sum(nil))
 	checksum := ""
 	if session.ChecksumAlg != lfs.ChecksumNone {
@@ -1096,15 +1130,29 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	if session.Checksum != "" && checksum != "" && !strings.EqualFold(session.Checksum, checksum) {
-		_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
-		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, session)
+		if err := m.discardMultipartUpload(r.Context(), session); err != nil {
+			m.logger.Warn("checksum mismatch cleanup failed", "requestId", logSafe(requestID), "error", err)
+		}
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "checksum_mismatch", "checksum mismatch")
 		return
 	}
 
+	completeErr := m.s3Uploader.CompleteMultipartUpload(r.Context(), session.S3Key, session.UploadID, completed)
+	if isMissingMultipartUpload(completeErr) {
+		completeErr = m.recoverCompletedMultipart(r.Context(), session)
+	}
+	if err := completeErr; err != nil {
+		m.metrics.IncS3Errors()
+		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "s3_upload_failed", err.Error(), "upload_complete", session.TotalUploaded, 0)
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
+		return
+	}
+	m.logger.Info("http chunked upload completed", "requestId", logSafe(requestID), "uploadId", logSafe(sessionID), "parts", len(completed), "bytes", session.TotalUploaded)
+
 	if err := m.recheckStorageName(r.Context(), session.Topic, session.StorageName); err != nil {
-		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "generation_changed")
-		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, session)
+		if cleanupErr := m.discardMultipartUpload(r.Context(), session); cleanupErr != nil {
+			m.logger.Warn("generation change cleanup failed", "error", cleanupErr)
+		}
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "metadata_unavailable", err.Error(), "generation_check", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
@@ -1156,16 +1204,31 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	wasPublishing := session.Publishing
 	backendConn, backendAddr, err := m.connectPartitionBackend(r.Context(), session.Topic, session.Partition, nil)
 	var offset int64
 	if err == nil {
+		// Reserve the possibility of publication before any Kafka bytes escape.
+		// Subsequent owners must preserve this blob after an ambiguous result.
+		session.Publishing = true
+		if saveErr := m.saveUploadSession(r.Context(), session); saveErr != nil {
+			_ = backendConn.Close()
+			m.writeUploadSessionError(w, requestID, saveErr)
+			return
+		}
 		offset, backendConn, backendAddr, err = m.produceToPartitionOwner(r.Context(), backendConn, backendAddr, payload, session.Topic, session.Partition, correlationID)
 	} else {
 		err = errors.Join(errLFSProduceNotWritten, err)
 	}
 	if errors.Is(err, errLFSProduceNotWritten) {
-		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "backend_unavailable")
-		m.dropUploadSession(r.Context(), requestID, session)
+		// Clearing a new reservation is safe only when this attempt certainly
+		// wrote nothing and no earlier request may have published.
+		if !wasPublishing {
+			session.Publishing = false
+		}
+		if cleanupErr := m.discardMultipartUpload(r.Context(), session); cleanupErr != nil {
+			m.logger.Warn("backend failure cleanup failed", "error", cleanupErr)
+		}
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "backend_unavailable", err.Error(), "kafka_produce", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return

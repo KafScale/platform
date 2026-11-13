@@ -31,25 +31,33 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
 const (
-	lfsLostMultipartUploadGrace  = time.Hour
-	lfsUploadSessionSweepMax     = 10 * time.Minute
-	lfsUploadSessionSweepMin     = 30 * time.Second
-	lfsUploadSessionMaxRecordLen = 1 << 20
+	lfsUploadSessionVersion     = 1
+	lfsUploadLockRetryInterval  = 50 * time.Millisecond
+	lfsLostMultipartUploadGrace = time.Hour
+	lfsUploadSessionSweepMax    = 10 * time.Minute
+	lfsUploadSessionSweepMin    = 30 * time.Second
+	// Leave 64 KiB for keys and transaction framing under etcd's default limit.
+	lfsUploadSessionMaxRecordLen = (3 << 19) - (64 << 10)
 )
 
 var (
 	errUploadSessionStoreUnavailable = errors.New("multipart uploads require an available etcd session store")
+	errUploadSessionVersion          = errors.New("unsupported upload session version")
 	errUploadSessionConflict         = errors.New("upload session changed or request lost its lock")
 	errUploadSessionNotFound         = errors.New("upload session not found")
 	errUploadHashState               = errors.New("upload hash state cannot be saved")
 )
 
 type uploadSessionRecord struct {
+	Version       int              `json:"version"`
+	Publishing    bool             `json:"publishing,omitempty"`
+	Discarding    bool             `json:"discarding,omitempty"`
 	ID            string           `json:"id"`
 	Topic         string           `json:"topic"`
 	S3Key         string           `json:"s3_key"`
@@ -67,6 +75,7 @@ type uploadSessionRecord struct {
 	NextPart      int32            `json:"next_part"`
 	TotalUploaded int64            `json:"total_uploaded"`
 	Parts         map[int32]string `json:"parts"`
+	PartHashes    map[int32]string `json:"part_sha256"`
 	PartSizes     map[int32]int64  `json:"part_sizes"`
 	SHA256State   []byte           `json:"sha256_state"`
 	ChecksumState []byte           `json:"checksum_state,omitempty"`
@@ -136,8 +145,8 @@ func (m *lfsModule) acquireUploadSession(ctx context.Context, id string) (*uploa
 		return nil, nil, fmt.Errorf("open upload session lock: %w", err)
 	}
 	mutex := concurrency.NewMutex(lease, "/kafscale/lfs-upload-locks/"+m.uploadSessionScope()+id)
-	if err := mutex.Lock(ctx); err != nil {
-		_ = lease.Close()
+	if err := m.lockUploadSession(ctx, mutex); err != nil {
+		m.releaseUploadSessionLock(ctx, mutex, lease, id)
 		return nil, nil, err
 	}
 	opCtx, cancel := context.WithCancel(ctx)
@@ -150,12 +159,7 @@ func (m *lfsModule) acquireUploadSession(ctx context.Context, id string) (*uploa
 	}()
 	unlock := func() {
 		cancel()
-		cleanupCtx, done := m.uploadSessionCleanupContext(ctx)
-		defer done()
-		if err := mutex.Unlock(cleanupCtx); err != nil {
-			m.logger.Warn("upload session unlock failed", "uploadId", logSafe(id), "error", err)
-		}
-		_ = lease.Close()
+		m.releaseUploadSessionLock(ctx, mutex, lease, id)
 	}
 	session, err := m.loadUploadSession(opCtx, id)
 	if err != nil {
@@ -168,6 +172,39 @@ func (m *lfsModule) acquireUploadSession(ctx context.Context, id string) (*uploa
 	return session, unlock, nil
 }
 
+// TryLock never switches cleanup to the long-lived client context. Contended
+// attempts and failed acquisition cleanup remain bounded by explicit contexts.
+func (m *lfsModule) lockUploadSession(ctx context.Context, mutex *concurrency.Mutex) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := mutex.TryLock(ctx)
+		if !errors.Is(err, concurrency.ErrLocked) {
+			return err
+		}
+		timer := time.NewTimer(lfsUploadLockRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (m *lfsModule) releaseUploadSessionLock(ctx context.Context, mutex *concurrency.Mutex, lease *concurrency.Session, id string) {
+	lease.Orphan()
+	cleanupCtx, cancel := m.uploadSessionCleanupContext(ctx)
+	defer cancel()
+	if err := mutex.Unlock(cleanupCtx); err != nil && !errors.Is(err, concurrency.ErrLockReleased) {
+		m.logger.Warn("upload session unlock failed", "uploadId", logSafe(id), "error", err)
+	}
+	if _, err := m.uploadSessionClient.Revoke(cleanupCtx, lease.Lease()); err != nil && !errors.Is(err, rpctypes.ErrLeaseNotFound) {
+		m.logger.Warn("upload session lease cleanup failed", "uploadId", logSafe(id), "error", err)
+	}
+}
+
 func (m *lfsModule) saveUploadSession(ctx context.Context, session *uploadSession) error {
 	if !m.sharedUploadSessions {
 		m.lfsStoreUploadSession(session)
@@ -175,6 +212,12 @@ func (m *lfsModule) saveUploadSession(ctx context.Context, session *uploadSessio
 	}
 	if m.uploadSessionClient == nil {
 		return errUploadSessionStoreUnavailable
+	}
+	if session.storeRevision == 0 {
+		session.storeVersion = lfsUploadSessionVersion
+	}
+	if session.PartHashes == nil {
+		session.PartHashes = make(map[int32]string)
 	}
 	record, err := uploadSessionToRecord(session)
 	if err != nil {
@@ -257,6 +300,9 @@ func (m *lfsModule) loadUploadSession(ctx context.Context, id string) (*uploadSe
 	if record.ID != id {
 		return nil, errUploadSessionNotFound
 	}
+	if record.Version < 0 || record.Version > lfsUploadSessionVersion {
+		return nil, fmt.Errorf("%w: %d", errUploadSessionVersion, record.Version)
+	}
 	session, err := uploadSessionFromRecord(&record)
 	if err != nil {
 		return nil, err
@@ -303,6 +349,10 @@ func uploadSessionToRecord(session *uploadSession) (*uploadSessionRecord, error)
 		return nil, err
 	}
 	record := &uploadSessionRecord{
+		Version:       session.storeVersion,
+		Publishing:    session.Publishing,
+		Discarding:    session.Discarding,
+		PartHashes:    session.PartHashes,
 		ID:            session.ID,
 		Topic:         session.Topic,
 		S3Key:         session.S3Key,
@@ -340,6 +390,10 @@ func uploadSessionFromRecord(record *uploadSessionRecord) (*uploadSession, error
 		return nil, err
 	}
 	session := &uploadSession{
+		storeVersion:  record.Version,
+		Publishing:    record.Publishing,
+		Discarding:    record.Discarding,
+		PartHashes:    record.PartHashes,
 		ID:            record.ID,
 		Topic:         record.Topic,
 		S3Key:         record.S3Key,
@@ -359,6 +413,9 @@ func uploadSessionFromRecord(record *uploadSessionRecord) (*uploadSession, error
 		Parts:         record.Parts,
 		PartSizes:     record.PartSizes,
 		sha256Hasher:  shaHasher,
+	}
+	if session.PartHashes == nil {
+		session.PartHashes = make(map[int32]string)
 	}
 	if session.Parts == nil {
 		session.Parts = make(map[int32]string)
@@ -410,13 +467,31 @@ func (m *lfsModule) sweepUploadSessions(ctx context.Context) {
 	m.sweepLostMultipartUploads(ctx, now)
 }
 
+// S3 can complete an upload even when its response is lost. A later retry
+// gets NoSuchUpload. The per-upload object key is unique: recognize the existing
+// object by key and size, keeping the checksum from trusted etcd for consumers.
+func (m *lfsModule) recoverCompletedMultipart(ctx context.Context, session *uploadSession) error {
+	out, err := m.s3Uploader.api.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(m.s3Bucket), Key: aws.String(session.S3Key)})
+	if err != nil {
+		return fmt.Errorf("read previously completed multipart object: %w", err)
+	}
+	if out.Body != nil {
+		defer func() { _ = out.Body.Close() }()
+	}
+	if out.ContentLength == nil || *out.ContentLength != session.SizeBytes {
+		return errors.New("previously completed multipart object has unexpected size")
+	}
+	return nil
+}
+
+func isMissingMultipartUpload(err error) bool {
+	var apiError smithy.APIError
+	return errors.As(err, &apiError) && apiError.ErrorCode() == "NoSuchUpload"
+}
+
 func (m *lfsModule) abortMultipartIgnoringMissing(ctx context.Context, key, uploadID string) error {
 	err := m.s3Uploader.AbortMultipartUpload(ctx, key, uploadID)
-	if err == nil {
-		return nil
-	}
-	var apiError smithy.APIError
-	if errors.As(err, &apiError) && apiError.ErrorCode() == "NoSuchUpload" {
+	if isMissingMultipartUpload(err) {
 		return nil
 	}
 	return err
@@ -455,12 +530,8 @@ func (m *lfsModule) sweepUploadSession(ctx context.Context, now time.Time, id st
 	if now.Before(session.ExpiresAt) {
 		return
 	}
-	if err := m.abortMultipartIgnoringMissing(cleanupCtx, session.S3Key, session.UploadID); err != nil {
-		m.logger.Warn("lfs upload session sweep: abort failed", "uploadId", logSafe(id), "error", err)
-		return
-	}
-	if err := m.deleteUploadSession(cleanupCtx, session); err != nil {
-		m.logger.Warn("lfs upload session sweep: delete failed", "uploadId", logSafe(id), "error", err)
+	if err := m.discardMultipartUpload(cleanupCtx, session); err != nil {
+		m.logger.Warn("lfs upload session sweep: cleanup failed", "uploadId", logSafe(id), "error", err)
 		return
 	}
 	m.logger.Info("lfs upload session expired and removed", "uploadId", logSafe(id))
@@ -512,6 +583,33 @@ func (m *lfsModule) sweepLostMultipartUploads(ctx context.Context, now time.Time
 	}
 }
 
+func (m *lfsModule) checkUploadSessionActive(ctx context.Context, w http.ResponseWriter, requestID string, session *uploadSession) bool {
+	if !session.Discarding {
+		return true
+	}
+	if err := m.discardMultipartUpload(ctx, session); err != nil {
+		m.logger.Warn("upload discard retry failed", "uploadId", logSafe(session.ID), "error", err)
+	}
+	m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusGone, "upload_aborted", "upload cleanup has begun; start a new upload")
+	return false
+}
+
+func (m *lfsModule) checkUploadSessionVersion(ctx context.Context, w http.ResponseWriter, requestID string, session *uploadSession) bool {
+	if !m.sharedUploadSessions || session.storeVersion == lfsUploadSessionVersion {
+		return true
+	}
+	if session.storeVersion != 0 {
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "upload_version_unsupported", "upload session version is not supported by this proxy")
+		return false
+	}
+	if err := m.discardMultipartUpload(ctx, session); err != nil {
+		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "abort_failed", "legacy upload cleanup failed; retry the request")
+		return false
+	}
+	m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusGone, "upload_restart_required", "restart uploads created before durable part identities were introduced")
+	return false
+}
+
 func (m *lfsModule) uploadSessionCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	timeout := m.dialTimeout
 	if timeout <= 0 {
@@ -529,6 +627,10 @@ func (m *lfsModule) dropUploadSession(ctx context.Context, requestID string, ses
 }
 
 func (m *lfsModule) writeUploadSessionError(w http.ResponseWriter, requestID string, err error) {
+	if errors.Is(err, errUploadSessionVersion) {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusServiceUnavailable, "upload_version_unsupported", "upload session version is not supported by this proxy")
+		return
+	}
 	if errors.Is(err, errUploadSessionNotFound) {
 		m.lfsWriteHTTPError(w, requestID, "", http.StatusNotFound, "upload_not_found", "upload session not found")
 		return
