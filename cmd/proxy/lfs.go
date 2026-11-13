@@ -37,6 +37,7 @@ import (
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/google/uuid"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
@@ -101,6 +102,8 @@ type lfsModule struct {
 	uploadSessions       map[string]*uploadSession
 	idleMu               sync.Mutex
 	idleBackends         []lfsIdleBackend
+	sharedUploadSessions bool
+	uploadSessionClient  *clientv3.Client
 
 	// backends and connectivity for the HTTP API path (which needs its own
 	// backend connections, independent of the proxy's connection pool)
@@ -296,6 +299,8 @@ func initLFSModule(ctx context.Context, logger *slog.Logger) (*lfsModule, error)
 		uploadSessions:       make(map[string]*uploadSession),
 		backends:             backends,
 	}
+
+	m.useSharedUploadSessions()
 
 	// Mark S3 healthy initially and start health check loop
 	m.markS3Healthy(true)

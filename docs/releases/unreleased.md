@@ -116,6 +116,10 @@ limitations under the License.
 
 - When one LFS record in a produce request fails, the proxy deletes the objects it already uploaded for earlier records in that request (#263).
 
+- LFS proxy multipart uploads (`/lfs/uploads`) work across replicas and pod restarts. Sessions, progress, and authoritative checksum state live in etcd; S3 remains untrusted blob storage. Multipart uploads require `KAFSCALE_PROXY_ETCD_ENDPOINTS`, even with static brokers; operator and Docker Compose deployments already configure it. State-store failures return 503 `session_store_unavailable`, and stale writes return 409 `upload_conflict`. Restart uploads from unsigned S3 sessions or the earlier development etcd format without durable part hashes (410 `upload_restart_required`). Expiry cleanup uses persisted session deadlines, preserves live uploads through TTL changes, and performs no orphan abort when etcd cannot confirm ownership. Cleanup needs `s3:ListBucketMultipartUploads` and `s3:AbortMultipartUpload` (#321).
+- Multipart retries bind each part's SHA-256 identity before sending it to S3. Retries, including those after timeouts or acknowledgements, must use identical bytes; conflicting bytes return 409 `part_conflict`. Failed S3 attempts do not advance the aggregate checksum. Lock waits and lease cleanup remain bounded after cancellation (#321).
+- Multipart completion validates every uploaded part exactly once in order and checks the expected checksum before S3 finalization. A lost successful S3 completion response can be recovered by checking the existing object at its unique key (requires `s3:GetObject`). Durable publication/discard markers prevent stale cleanup from deleting a possibly Kafka-referenced blob. Envelope publication retains ordinary at-least-once retry semantics; ambiguous Kafka acknowledgements may produce duplicate envelopes (#321).
+
 ## Upgrade notes
 
 See the canonical [upgrade and compatibility guide](../upgrade-compatibility.md)

@@ -594,15 +594,69 @@ HTTP endpoints (served on `KAFSCALE_LFS_PROXY_HTTP_ADDR`):
 
 Multipart upload cleanup:
 
-Upload sessions live in proxy memory. Expiry removes a session without aborting
-its S3 multipart upload, and a proxy restart also loses the session. Retrying a
-failed abort is therefore possible only while the session remains available.
-Configure an S3 bucket lifecycle rule with `AbortIncompleteMultipartUpload` for
-the LFS object prefix, or the whole bucket if it is dedicated to LFS. For example,
-set `DaysAfterInitiation` to `7`, choosing an interval longer than the longest
-intended upload. S3 then makes incomplete uploads eligible for cleanup after that
-interval; session expiry itself does not perform storage cleanup. This action
-leaves completed objects intact. Merge the rule into the bucket's existing
+Multipart uploads require `KAFSCALE_PROXY_ETCD_ENDPOINTS`, including when
+`KAFSCALE_PROXY_BACKENDS` lists static brokers. The operator and Docker Compose
+already provide this connection. The proxy uses its existing etcd credentials;
+they must allow reads and writes under `/kafscale/lfs-upload-sessions/`,
+`/kafscale/lfs-upload-index/`, and `/kafscale/lfs-upload-locks/`, plus lease
+operations. Without a session store, multipart initialization returns 503
+`session_store_unavailable` before starting an S3 multipart upload.
+
+Authoritative sessions and checksum state live in etcd under
+`/kafscale/lfs-upload-sessions/<bucket>/<namespace>/<id>` (bucket and namespace
+components are URL-escaped). S3 remains untrusted blob storage. The proxy does
+not load the unsigned session JSON used by the earlier pre-release branch;
+restart uploads begun by that version after upgrading. Sessions from the earlier
+development format without durable part hashes also require a restart; they
+return 410 `upload_restart_required` and are aborted rather than resumed.
+
+Part, completion, and abort calls can reach any replica after a restart. An
+etcd mutex serializes requests for each upload, and every session update or
+delete checks both the record revision and lock ownership. A timed-out old
+request cannot overwrite newer acknowledged progress. Lost lock leases cancel
+the active request. Lock acquisition uses cancellable attempts, and lock-key
+and lease cleanup share a bounded timeout, including after cancellation.
+Before issuing an S3 part upload, the proxy persists that part's SHA-256 identity
+in etcd. All retries for the same part number must contain exactly the same
+bytes, including retries after a timeout or a successful acknowledgement.
+Conflicting retry bytes return 409 `part_conflict` without reaching S3. This
+prevents an old in-flight request from replacing different, acknowledged bytes.
+Failed S3 attempts do not advance the aggregate checksum. Completion requires
+every uploaded part exactly once in order. The expected checksum is verified
+before S3 finalization, and a mismatch aborts the multipart upload. If S3 already
+completed the upload but its response was lost, a retry checks the unique object
+key and declared size with `s3:GetObject` and resumes publishing the envelope.
+The expected checksum still comes from etcd. Durable publication and discard
+markers fence cleanup across ownership changes. Cleanup does not delete a
+completed blob once a Kafka request may have referenced it, including after an
+ambiguous acknowledgement; explicit abort can still remove the session record.
+As with ordinary produces, retrying
+after an ambiguous Kafka acknowledgement can produce duplicate envelopes.
+
+Send parts sequentially as before; an out-of-order part
+returns 409. State-store failures return 503 `session_store_unavailable` and a
+rejected stale update returns 409 `upload_conflict`; retry using the same upload
+ID and part number. Session records are removed on completion or abort.
+
+A part or complete call on an expired session aborts the multipart upload and
+returns 410 `upload_expired`. Every replica with the HTTP API sweeps every half
+session TTL (`KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`), bounded to between
+30 seconds and 10 minutes. Expiry uses each session's persisted `ExpiresAt`,
+so a replica with a shorter configured TTL cannot abort an unexpired session
+during a rollout. Session records and an index by S3 key/upload ID are written
+and deleted atomically. The orphan sweep checks this trusted index before
+aborting uploads under `<namespace>/@lfs/` older than the configured TTL plus
+one hour. It skips tracked sessions, and performs no orphan abort if etcd
+cannot confirm ownership. This also reclaims uploads left by older versions
+that stored sessions only in pod memory.
+
+The orphan sweep needs `s3:ListBucketMultipartUploads` and
+`s3:AbortMultipartUpload`. If listing is denied, the proxy logs a warning and
+uploads keep working. As a second safety net, configure an S3
+bucket lifecycle rule with `AbortIncompleteMultipartUpload` for the LFS object
+prefix, or the whole bucket if it is dedicated to LFS. For example, set
+`DaysAfterInitiation` to `7`, choosing an interval longer than the longest
+intended upload. This action leaves completed objects intact. Merge the rule into the bucket's existing
 lifecycle configuration. For S3-compatible storage, verify that the provider
 supports and applies this action. See the
 [Amazon S3 lifecycle configuration guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html).

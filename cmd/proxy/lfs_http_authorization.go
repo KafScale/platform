@@ -26,7 +26,6 @@ import (
 
 	"github.com/KafScale/platform/pkg/acl"
 	"github.com/KafScale/platform/pkg/authn"
-	"github.com/aws/smithy-go"
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
@@ -69,7 +68,7 @@ func produceHTTPStatus(err error) int {
 	return http.StatusBadGateway
 }
 
-// The caller holds session.mu. Preserve the session on abort failure so an
+// The caller holds the session lock. Preserve the session on abort failure so an
 // explicit abort or a later denied request can retry the cleanup.
 func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadSession) error {
 	timeout := m.dialTimeout
@@ -78,15 +77,23 @@ func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadS
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	err := m.s3Uploader.AbortMultipartUpload(cleanupCtx, session.S3Key, session.UploadID)
-	if err != nil {
-		var apiError smithy.APIError
-		if !errors.As(err, &apiError) || apiError.ErrorCode() != "NoSuchUpload" {
+	// A durable terminal intent prevents another owner from recovering and
+	// publishing while an old S3 cleanup request is still in flight.
+	session.Discarding = true
+	if err := m.saveUploadSession(cleanupCtx, session); err != nil {
+		return err
+	}
+	if err := m.abortMultipartIgnoringMissing(cleanupCtx, session.S3Key, session.UploadID); err != nil {
+		return err
+	}
+	// Legacy sessions have no publication marker. Preserve their completed
+	// objects, which an earlier proxy might already have referenced in Kafka.
+	if !session.Publishing && (!m.sharedUploadSessions || session.storeVersion == lfsUploadSessionVersion) {
+		if err := m.s3Uploader.DeleteObject(cleanupCtx, session.S3Key); err != nil {
 			return err
 		}
 	}
-	m.lfsDeleteUploadSession(session.ID)
-	return nil
+	return m.deleteUploadSession(cleanupCtx, session)
 }
 
 func (m *lfsModule) authorizeMultipartUpload(ctx context.Context, w http.ResponseWriter, requestID string, session *uploadSession) bool {
