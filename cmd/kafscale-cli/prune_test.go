@@ -51,6 +51,13 @@ func newPruneFixture(t *testing.T, topics ...string) *pruneFixture {
 		initial.Topics = append(initial.Topics, protocol.MetadataTopic{Topic: kmsg.StringPtr(name)})
 	}
 	store := newTestEtcdStore(t, ctx, initial, endpoints)
+	payload, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EtcdClient().Put(ctx, "/kafscale/metadata/snapshot", string(payload)); err != nil {
+		t.Fatal(err)
+	}
 	return &pruneFixture{ctx: ctx, store: store, s3: storage.NewMemoryS3Client()}
 }
 

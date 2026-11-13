@@ -36,6 +36,15 @@ func newEtcdTopicStore(t *testing.T, ctx context.Context) *metadata.EtcdStore {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
+	// Model the operator's durable snapshot rather than relying on startup
+	// metadata being written as a side effect of a broker mutation.
+	payload, err := json.Marshal(defaultMetadata())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EtcdClient().Put(ctx, "/kafscale/metadata/snapshot", string(payload)); err != nil {
+		t.Fatal(err)
+	}
 	return store
 }
 
