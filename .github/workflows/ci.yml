@@ -152,24 +152,26 @@ jobs:
           KAFSCALE_E2E: "1"
           KCAT_IMAGE: ueisele/kcat:1.7.1-librdkafka2.11.1-alma10.1-20251124-202511291703@sha256:d8a5fe246bfeedf57fb3ed7a1155b1c75576014a87f26cb750d4e382847d2926
         run: |
-          timeout 120 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update || true
-          timeout 120 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install --no-install-recommends -y kcat || true
+          apt_start=$SECONDS
+          sudo timeout -k 5 90 sh -c 'apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update || true; apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install --no-install-recommends -y kcat' || true
+          echo "apt finished after $((SECONDS - apt_start))s"
           kcat_bin=kcat
           kcat_source=apt
-          if ! command -v kcat >/dev/null 2>&1; then
-            echo "apt could not install kcat, using the container image $KCAT_IMAGE"
+          if kcat_version=$(kcat -V 2>&1); then
+            echo "kcat installed from apt"
+          else
+            printf '%s\n' "$kcat_version"
+            echo "kcat from apt is missing or kcat -V failed, using the container image $KCAT_IMAGE"
             docker pull "$KCAT_IMAGE"
             mkdir -p "$RUNNER_TEMP/kcat-docker"
             printf '#!/bin/sh\nexec docker run --rm -i --init --network host %s "$@"\n' "$KCAT_IMAGE" > "$RUNNER_TEMP/kcat-docker/kcat"
             chmod +x "$RUNNER_TEMP/kcat-docker/kcat"
             kcat_bin="$RUNNER_TEMP/kcat-docker/kcat"
             kcat_source="container image $KCAT_IMAGE"
-          else
-            echo "kcat installed from apt"
+            kcat_version=$("$kcat_bin" -V)
           fi
           echo "KAFSCALE_KCAT_BIN=$kcat_bin" >> "$GITHUB_ENV"
           export KAFSCALE_KCAT_BIN="$kcat_bin"
-          kcat_version=$("$KAFSCALE_KCAT_BIN" -V)
           printf '%s\n' "$kcat_version"
           echo "::notice title=kcat client::$(printf '%s\n' "$kcat_version" | sed -n 's/^Version \([^ ]*\) .*librdkafka \([^ ]*\) .*/kcat \1 with librdkafka \2/p') from $kcat_source"
           go test -race -tags=e2e ./test/e2e -run '^TestLibrdkafkaCompatibilityE2E$' -count=1 -v -timeout=3m
