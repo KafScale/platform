@@ -306,3 +306,12 @@ func TestConcurrentAcquireRace(t *testing.T) {
 		t.Fatalf("expected %d losers, got %d", brokerCount-1, losers)
 	}
 }
+
+func TestPublishedLeaseConfigs(t *testing.T) {
+	lease := LeaseManagerConfig{"broker", "/leases", 10, nil, "partition"}
+	partition := PartitionLeaseConfig{"broker", 10, nil}
+	if lease != (LeaseManagerConfig{BrokerID: "broker", Prefix: "/leases", LeaseTTLSeconds: 10, ResourceKind: "partition"}) ||
+		partition != (PartitionLeaseConfig{BrokerID: "broker", LeaseTTLSeconds: 10}) {
+		t.Fatal("published config equality changed")
+	}
+}

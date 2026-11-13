@@ -883,3 +883,10 @@ func makeBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32,
 	data[12] = marker
 	return data
 }
+
+func TestPublishedPartitionLogConfig(t *testing.T) {
+	cfg := PartitionLogConfig{WriteBufferConfig{}, SegmentWriterConfig{}, 2, true, nil}
+	if cfg != (PartitionLogConfig{ReadAheadSegments: 2, CacheEnabled: true}) {
+		t.Fatal("published config equality changed")
+	}
+}
