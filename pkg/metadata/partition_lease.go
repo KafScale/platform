@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -48,6 +50,8 @@ type PartitionLeaseConfig struct {
 	LeaseTTLSeconds int
 	// Logger for operational messages.
 	Logger *slog.Logger
+	// OnLost invalidates state for an expired or released acquisition. It must not call this manager.
+	OnLost func(topic string, partition int32, token uint64)
 }
 
 // PartitionLeaseManager uses etcd leases to ensure exclusive partition ownership.
@@ -66,6 +70,19 @@ func NewPartitionLeaseManager(client *clientv3.Client, cfg PartitionLeaseConfig)
 			LeaseTTLSeconds: cfg.LeaseTTLSeconds,
 			Logger:          cfg.Logger,
 			ResourceKind:    "partition",
+			OnLost: func(id string, token uint64) {
+				if cfg.OnLost == nil {
+					return
+				}
+				i := strings.LastIndexByte(id, '/')
+				if i < 0 {
+					return
+				}
+				p, err := strconv.ParseInt(id[i+1:], 10, 32)
+				if err == nil {
+					cfg.OnLost(id[:i], int32(p), token)
+				}
+			},
 		}),
 	}
 }
@@ -158,4 +175,9 @@ func (m *PartitionLeaseManager) CurrentOwner(ctx context.Context, topic string, 
 // EtcdClient returns the underlying etcd client.
 func (m *PartitionLeaseManager) EtcdClient() *clientv3.Client {
 	return m.lm.EtcdClient()
+}
+
+// OwnershipToken identifies the current uninterrupted partition acquisition.
+func (m *PartitionLeaseManager) OwnershipToken(topic string, partition int32) uint64 {
+	return m.lm.OwnershipToken(partitionResourceID(topic, partition))
 }

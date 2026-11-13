@@ -643,6 +643,16 @@ func TestLargeSchemaGoesToS3(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	s3 := storage.NewMemoryS3Client()
 	h := newHarness(t, endpoints, Config{S3: s3, Namespace: "prod", InlineLimit: 64})
+	// Model a prior attempt that wrote S3 text before publishing its etcd record.
+	req := RegisterRequest{Schema: userV2}
+	prepared, err := h.reg.prepare(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordWriter{r: h.reg, req: req, p: prepared}
+	if _, err := writer.record(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	id := h.register("big", schema(userV2))
 	resp, err := h.cli.Get(context.Background(), idKey(id))
 	if err != nil {

@@ -94,6 +94,9 @@ func TestAWSS3Client_Upload(t *testing.T) {
 		t.Fatalf("expected 1 put input got %d", len(api.putInputs))
 	}
 	input := api.putInputs[0]
+	if aws.ToString(input.IfNoneMatch) != "*" {
+		t.Fatal("segment upload must be conditional")
+	}
 	if *input.Bucket != "test-bucket" || *input.Key != "topic/0/segment-0" {
 		t.Fatalf("bucket/key mismatch: %#v", input)
 	}

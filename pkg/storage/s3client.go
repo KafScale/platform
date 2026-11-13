@@ -59,6 +59,7 @@ func (br *ByteRange) headerValue() *string {
 
 // S3Client is the abstraction used by storage to read/write segments.
 type S3Client interface {
+	// UploadSegment creates an immutable object; an existing key must return ErrPreconditionFailed.
 	UploadSegment(ctx context.Context, key string, body []byte) error
 	UploadIndex(ctx context.Context, key string, body []byte) error
 	DeleteSegment(ctx context.Context, key string) error

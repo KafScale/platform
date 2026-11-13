@@ -67,6 +67,7 @@ type handler struct {
 	s3                   storage.S3Client
 	cache                *cache.SegmentCache
 	logs                 map[string]map[int32]*storage.PartitionLog
+	logTokens            map[metadata.PartitionID]uint64
 	logMu                sync.RWMutex
 	logInit              singleflight.Group
 	logConfig            storage.PartitionLogConfig
@@ -206,6 +207,37 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			}
 		}
 		resp.Topics = h.authorizedMetadata(principal, meta.Topics, metaReq.Topics == nil || (header.APIVersion == 0 && len(metaReq.Topics) == 0), byID)
+		if h.leaseManager != nil {
+			for ti := range resp.Topics {
+				topic := &resp.Topics[ti]
+				if topic.Topic == nil || topic.ErrorCode != 0 {
+					continue
+				}
+				for pi := range topic.Partitions {
+					part := &topic.Partitions[pi]
+					if part.ErrorCode != 0 {
+						continue
+					}
+					owner, err := h.leaseManager.CurrentOwner(ctx, *topic.Topic, part.Partition)
+					if err != nil {
+						part.Leader = -1
+						part.ErrorCode = protocol.REQUEST_TIMED_OUT
+						continue
+					}
+					if owner == "" {
+						// Keep the preferred leader to bootstrap the first acquisition.
+						continue
+					}
+					id, err := strconv.ParseInt(owner, 10, 32)
+					if err != nil {
+						part.Leader = -1
+						part.ErrorCode = protocol.LEADER_NOT_AVAILABLE
+						continue
+					}
+					part.Leader = int32(id)
+				}
+			}
+		}
 		if h.traceKafka {
 			topicSummaries := make([]string, 0, len(meta.Topics))
 			for _, topic := range meta.Topics {
@@ -1145,7 +1177,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-				if errors.Is(err, metadata.ErrInvalidTopic) {
+				if errors.Is(err, metadata.ErrNotOwner) || errors.Is(err, metadata.ErrShuttingDown) {
+					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				} else if errors.Is(err, metadata.ErrInvalidTopic) {
 					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
 				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 					p.ErrorCode = protocol.REQUEST_TIMED_OUT
@@ -1161,7 +1195,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-				if errors.Is(err, storage.ErrObjectStorage) {
+				if errors.Is(err, metadata.ErrNotOwner) {
+					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				} else if errors.Is(err, storage.ErrObjectStorage) {
 					code, message := h.backpressureError()
 					p.ErrorCode, p.ErrorMessage = code, kmsg.StringPtr(message)
 				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -1998,7 +2034,9 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			if err != nil {
 				h.logger.Error("fetch partition log failed", "topic", topicName, "partition", part.Partition, "error", err, "etcd_available", h.etcdAvailable(), "s3_state", h.s3Health.State())
 				errorCode := int16(protocol.UNKNOWN_SERVER_ERROR)
-				if !h.etcdAvailable() {
+				if errors.Is(err, metadata.ErrNotOwner) || errors.Is(err, metadata.ErrShuttingDown) {
+					errorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				} else if !h.etcdAvailable() {
 					errorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, metadata.ErrInvalidTopic) {
 					errorCode = protocol.INVALID_TOPIC_EXCEPTION
@@ -2056,7 +2094,9 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			default:
 				recordSet, err = plog.Read(ctx, part.FetchOffset, part.PartitionMaxBytes)
 				if err != nil {
-					if errors.Is(err, storage.ErrOffsetOutOfRange) {
+					if errors.Is(err, metadata.ErrNotOwner) {
+						errorCode = protocol.NOT_LEADER_OR_FOLLOWER
+					} else if errors.Is(err, storage.ErrOffsetOutOfRange) {
 						errorCode = protocol.OFFSET_OUT_OF_RANGE
 					} else {
 						errorCode = h.backpressureErrorCode()
@@ -2067,6 +2107,10 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				}
 			}
 
+			if err := plog.CheckOwnership(); err != nil {
+				errorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				recordSet = nil
+			}
 			highWatermark := nextOffset
 			if errorCode == 0 {
 				if h.traceKafka {
@@ -2139,29 +2183,28 @@ func (h *handler) getPartitionLog(ctx context.Context, topic string, partition i
 }
 
 func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition int32, autoCreate bool) (*storage.PartitionLog, error) {
-	h.logMu.RLock()
-	if partitions, ok := h.logs[topic]; ok {
-		if plog, ok := partitions[partition]; ok {
-			h.logMu.RUnlock()
-			return plog, nil
+	token := uint64(0)
+	if h.leaseManager != nil {
+		if err := h.leaseManager.Acquire(ctx, topic, partition); err != nil {
+			return nil, err
+		}
+		token = h.leaseManager.OwnershipToken(topic, partition)
+		if token == 0 {
+			return nil, metadata.ErrNotOwner
 		}
 	}
-	h.logMu.RUnlock()
+	if plog := h.cachedPartitionLog(topic, partition, token); plog != nil {
+		return plog, nil
+	}
 
 	// Requests for other partitions proceed in parallel; only one goroutine
 	// per partition does the actual initialization.
 	for {
-		key := fmt.Sprintf("%s/%d", topic, partition)
+		key := fmt.Sprintf("%s/%d/%d", topic, partition, token)
 		result, err, _ := h.logInit.Do(key, func() (interface{}, error) {
-			// Double-check under read lock in case another goroutine just finished.
-			h.logMu.RLock()
-			if partitions, ok := h.logs[topic]; ok {
-				if plog, ok := partitions[partition]; ok {
-					h.logMu.RUnlock()
-					return plog, nil
-				}
+			if plog := h.cachedPartitionLog(topic, partition, token); plog != nil {
+				return plog, nil
 			}
-			h.logMu.RUnlock()
 
 			// All I/O happens outside the lock.
 			nextOffset, err := h.store.NextOffset(ctx, topic, partition)
@@ -2172,8 +2215,17 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			if err != nil {
 				return nil, err
 			}
-			plog := storage.NewPartitionLog(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, h.logConfig, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
-				if err := h.updateLogOffsets(cbCtx, topic, storageName, partition, artifact.LastOffset); err != nil {
+			cfg := h.logConfig
+			if h.leaseManager != nil {
+				cfg.CheckOwnership = func() error {
+					if h.leaseManager.OwnershipToken(topic, partition) != token {
+						return metadata.ErrNotOwner
+					}
+					return nil
+				}
+			}
+			plog := storage.NewPartitionLog(h.s3Namespace, storageName, partition, nextOffset, h.s3, h.cache, cfg, func(cbCtx context.Context, artifact *storage.SegmentArtifact) {
+				if err := h.updateLeasedLogOffsets(cbCtx, topic, storageName, partition, artifact.LastOffset, token); err != nil {
 					h.logger.Error("update offsets failed", "error", err, "topic", topic, "partition", partition)
 				}
 			}, h.recordS3Op, h.s3sem)
@@ -2182,8 +2234,11 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 				h.logger.Error("restore partition log from S3 failed", "topic", topic, "partition", partition, "error", err)
 				return nil, fmt.Errorf("%w: %w", storage.ErrObjectStorage, err)
 			}
+			if err := plog.CheckOwnership(); err != nil {
+				return nil, err
+			}
 			if lastOffset >= nextOffset {
-				if err := h.updateLogOffsets(ctx, topic, storageName, partition, lastOffset); err != nil {
+				if err := h.updateLeasedLogOffsets(ctx, topic, storageName, partition, lastOffset, token); err != nil {
 					h.logger.Error("sync offsets from S3 failed", "error", err, "topic", topic, "partition", partition)
 				}
 			}
@@ -2192,7 +2247,16 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 			if h.logs[topic] == nil {
 				h.logs[topic] = make(map[int32]*storage.PartitionLog)
 			}
+			id := metadata.PartitionID{Topic: topic, Partition: partition}
+			if h.logTokens[id] > token {
+				h.logMu.Unlock()
+				return nil, metadata.ErrNotOwner
+			}
 			h.logs[topic][partition] = plog
+			if h.logTokens == nil {
+				h.logTokens = make(map[metadata.PartitionID]uint64)
+			}
+			h.logTokens[metadata.PartitionID{Topic: topic, Partition: partition}] = token
 			h.logMu.Unlock()
 
 			return plog, nil
@@ -2205,6 +2269,10 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 				continue
 			}
 			return nil, err
+		}
+		if h.leaseManager != nil && h.leaseManager.OwnershipToken(topic, partition) != token {
+			h.dropPartitionLog(topic, partition, token)
+			return nil, metadata.ErrNotOwner
 		}
 		return result.(*storage.PartitionLog), nil
 	}
@@ -2254,6 +2322,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 	}
 	health := broker.NewS3HealthMonitor(s3HealthConfigFromEnv())
 	authorizer := buildAuthorizerFromEnv(logger)
+	var h *handler
 	var leaseManager *metadata.PartitionLeaseManager
 	var groupLeaseManager *metadata.GroupLeaseManager
 	var retentionSweepLease *metadata.LeaseManager
@@ -2262,6 +2331,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		leaseManager = metadata.NewPartitionLeaseManager(etcdStore.EtcdClient(), metadata.PartitionLeaseConfig{
 			BrokerID: brokerIDStr,
 			Logger:   logger,
+			OnLost:   func(topic string, partition int32, token uint64) { h.dropPartitionLog(topic, partition, token) },
 		})
 		groupLeaseManager = metadata.NewGroupLeaseManager(etcdStore.EtcdClient(), metadata.GroupLeaseConfig{
 			BrokerID: brokerIDStr,
@@ -2286,7 +2356,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 			return retentionSweepLease.Acquire(ctx, "sweeper")
 		}
 	}
-	return &handler{
+	h = &handler{
 		apiVersions: generateApiVersions(),
 		store:       store,
 		s3:          s3Client,
@@ -2333,6 +2403,7 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		authLogLast:          make(map[string]time.Time),
 		s3sem:                s3sem,
 	}
+	return h
 }
 
 func (h *handler) runStartupChecks(parent context.Context) error {
@@ -3075,4 +3146,34 @@ func parseBrokerAddr(addr string) (string, int) {
 		port = parsedPort
 	}
 	return host, port
+}
+
+// cachedPartitionLog only returns state from the same uninterrupted lease.
+func (h *handler) cachedPartitionLog(topic string, partition int32, token uint64) *storage.PartitionLog {
+	h.logMu.Lock()
+	defer h.logMu.Unlock()
+	id := metadata.PartitionID{Topic: topic, Partition: partition}
+	if h.logTokens[id] != token {
+		return nil
+	}
+	return h.logs[topic][partition]
+}
+
+func (h *handler) dropPartitionLog(topic string, partition int32, token uint64) {
+	h.logMu.Lock()
+	defer h.logMu.Unlock()
+	id := metadata.PartitionID{Topic: topic, Partition: partition}
+	if h.logTokens[id] == token {
+		delete(h.logs[topic], partition)
+		delete(h.logTokens, id)
+	}
+}
+
+func (h *handler) updateLeasedLogOffsets(ctx context.Context, topic, storageTopic string, partition int32, lastOffset int64, token uint64) error {
+	if h.leaseManager != nil {
+		if store, ok := h.store.(*metadata.EtcdStore); ok {
+			return store.UpdateOffsetsForLease(ctx, topic, partition, lastOffset, storageTopic, token)
+		}
+	}
+	return h.updateLogOffsets(ctx, topic, storageTopic, partition, lastOffset)
 }

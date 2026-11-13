@@ -157,7 +157,7 @@ func (c *awsS3Client) bucketLocationConfig() *types.CreateBucketConfiguration {
 }
 
 func (c *awsS3Client) UploadSegment(ctx context.Context, key string, body []byte) error {
-	return c.putObject(ctx, key, body)
+	return c.put(ctx, key, body, true, "")
 }
 
 func (c *awsS3Client) UploadIndex(ctx context.Context, key string, body []byte) error {
@@ -240,6 +240,9 @@ func (c *awsS3Client) put(ctx context.Context, key string, body []byte, ifAbsent
 					err = retryErr
 				}
 			}
+		}
+		if cond := conditionalErr(err); conditional && cond != nil {
+			return fmt.Errorf("put object %s: %w: %w", key, cond, err)
 		}
 		return fmt.Errorf("put object %s: %w", key, err)
 	}

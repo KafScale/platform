@@ -87,7 +87,7 @@ func (s *atomicAppendS3) DeleteSegment(ctx context.Context, key string) error {
 func TestAppendBatchesFailureAndRetry(t *testing.T) {
 	ctx := context.Background()
 	for _, force := range []bool{false, true} {
-		for _, fail := range []string{"index", "segment", "index-after-write", "segment-after-write"} {
+		for _, fail := range []string{"index", "segment", "index-after-write"} {
 			t.Run(fmt.Sprintf("force=%t/%s", force, fail), func(t *testing.T) {
 				s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client()}
 				var committed int64 = -1
@@ -270,7 +270,7 @@ func (s *overlappingUploadS3) UploadIndex(ctx context.Context, key string, body 
 	return s.MemoryS3Client.UploadIndex(ctx, key, body)
 }
 
-func TestAppendBatchesUploadsOverlap(t *testing.T) {
+func TestAppendBatchesClaimsSegmentBeforeIndex(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	s3 := &overlappingUploadS3{MemoryS3Client: NewMemoryS3Client(), entered: make(chan string, 2), release: make(chan struct{})}
@@ -279,17 +279,21 @@ func TestAppendBatchesUploadsOverlap(t *testing.T) {
 	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
 	done := make(chan error, 1)
 	go func() { _, err := log.AppendBatches(ctx, []RecordBatch{batch, batch}, true); done <- err }()
-	entered := map[string]bool{}
-	for range 2 {
-		select {
-		case op := <-s3.entered:
-			entered[op] = true
-		case <-ctx.Done():
-			t.Fatal("segment and index uploads did not overlap")
+	select {
+	case op := <-s3.entered:
+		if op != "segment" {
+			t.Fatalf("first upload = %s, want segment claim", op)
 		}
+	case <-ctx.Done():
+		t.Fatal("segment upload did not start")
 	}
-	if len(entered) != 2 || commits.Load() != 0 || log.BufferedHighWatermark() != 0 {
-		t.Fatal("state published before both uploads completed")
+	select {
+	case op := <-s3.entered:
+		t.Fatalf("%s started before segment claim completed", op)
+	default:
+	}
+	if commits.Load() != 0 || log.BufferedHighWatermark() != 0 {
+		t.Fatal("published before uploads completed")
 	}
 	close(s3.release)
 	if err := <-done; err != nil {
@@ -302,7 +306,7 @@ func TestAppendBatchesUploadsOverlap(t *testing.T) {
 
 func TestAppendBatchesFailedCleanupFencesRetry(t *testing.T) {
 	ctx := context.Background()
-	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "segment", failDelete: true}
+	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "index", failDelete: true}
 	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
 	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
@@ -368,5 +372,93 @@ func TestAppendBatchesCanceledUploadCleanup(t *testing.T) {
 	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 	if last, err := recovered.RestoreFromS3(context.Background()); err != nil || last != -1 {
 		t.Fatalf("canceled upload survived cleanup: %d, %v", last, err)
+	}
+}
+
+func TestStaleWriterPreservesAcknowledgedSegment(t *testing.T) {
+	ctx := context.Background()
+	s3 := NewMemoryS3Client()
+	winner := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	stale := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := winner.AppendBatches(ctx, []RecordBatch{batch}, true); err != nil {
+		t.Fatal(err)
+	}
+	segment, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
+	index, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
+	other, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 99))
+	for range 2 {
+		if _, err := stale.AppendBatches(ctx, []RecordBatch{other}, true); !errors.Is(err, ErrPreconditionFailed) {
+			t.Fatalf("stale append: %v", err)
+		}
+		got, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
+		gotIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
+		if !bytes.Equal(got, segment) || !bytes.Equal(gotIndex, index) {
+			t.Fatal("stale append overwrote or deleted acknowledged data")
+		}
+	}
+}
+
+func TestUncertainSegmentUploadNeverDeletesAnotherWriter(t *testing.T) {
+	ctx := context.Background()
+	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "segment-after-write"}
+	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
+		t.Fatal("expected lost response")
+	}
+	before, err := s3.DownloadSegment(ctx, log.segmentKey(0), nil)
+	if err != nil {
+		t.Fatalf("uncertain segment was deleted: %v", err)
+	}
+	s3.fail = ""
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); !errors.Is(err, ErrPreconditionFailed) {
+		t.Fatalf("retry: %v", err)
+	}
+	after, _ := s3.DownloadSegment(ctx, log.segmentKey(0), nil)
+	if !bytes.Equal(before, after) {
+		t.Fatal("retry changed uncertain segment")
+	}
+}
+
+func TestConcurrentWritersClaimOneSegment(t *testing.T) {
+	ctx := context.Background()
+	s3 := NewMemoryS3Client()
+	type outcome struct {
+		err   error
+		batch RecordBatch
+	}
+	results := make(chan outcome, 2)
+	start := make(chan struct{})
+	for i := byte(1); i <= 2; i++ {
+		batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, i))
+		log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+		go func() {
+			<-start
+			_, err := log.AppendBatches(ctx, []RecordBatch{batch}, true)
+			results <- outcome{err, batch}
+		}()
+	}
+	close(start)
+	var winner RecordBatch
+	wins := 0
+	for range 2 {
+		r := <-results
+		if r.err == nil {
+			wins++
+			winner = r.batch
+		} else if !errors.Is(r.err, ErrPreconditionFailed) {
+			t.Fatal(r.err)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("successful writers=%d", wins)
+	}
+	restored := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := restored.RestoreFromS3(ctx); err != nil || last != 0 {
+		t.Fatalf("restore: %d %v", last, err)
+	}
+	if got, err := restored.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(got, winner.Bytes) {
+		t.Fatalf("winner changed: %v", err)
 	}
 }

@@ -126,6 +126,7 @@ func TestLegacyTopicLoadsFromNamePrefix(t *testing.T) {
 	store := newEtcdTopicStore(t, ctx)
 	writer := newTestHandler(store)
 	produceOrders(t, ctx, writer, 3)
+	writer.leaseManager.ReleaseAll()
 	if _, err := store.EtcdClient().Delete(ctx, "/kafscale/topics/orders/partitions/0/next_offset"); err != nil {
 		t.Fatal(err)
 	}
