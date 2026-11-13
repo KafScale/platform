@@ -85,7 +85,7 @@ func (m *lfsModule) discardMultipartUpload(ctx context.Context, session *uploadS
 			return err
 		}
 	}
-	m.dropUploadSession(cleanupCtx, "", session.ID)
+	m.dropUploadSession(cleanupCtx, "", session)
 	return nil
 }
 

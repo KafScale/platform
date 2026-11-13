@@ -37,6 +37,7 @@ import (
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/google/uuid"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
@@ -102,7 +103,7 @@ type lfsModule struct {
 	idleMu               sync.Mutex
 	idleBackends         []lfsIdleBackend
 	sharedUploadSessions bool
-	uploadLocks          [lfsUploadSessionLockStripes]sync.Mutex
+	uploadSessionClient  *clientv3.Client
 
 	// backends and connectivity for the HTTP API path (which needs its own
 	// backend connections, independent of the proxy's connection pool)

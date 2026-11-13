@@ -175,6 +175,7 @@ func main() {
 		p.lfs = lfsmod
 		if etcdStore, ok := store.(*metadata.EtcdStore); ok {
 			lfsmod.topicGeneration = etcdStore.TopicGeneration
+			lfsmod.useSharedUploadSessions(etcdStore.EtcdClient())
 		}
 		if security != nil {
 			lfsmod.authorizer = security.lfsACL

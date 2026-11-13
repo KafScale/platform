@@ -39,6 +39,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 const (
@@ -121,27 +122,30 @@ type lfsUploadCompleteRequest struct {
 }
 
 type uploadSession struct {
-	mu             sync.Mutex
-	ID             string
-	Topic          string
-	S3Key          string
-	StorageName    string
-	UploadID       string
-	ContentType    string
-	SizeBytes      int64
-	KeyBytes       []byte
-	Partition      int32
-	Checksum       string
-	ChecksumAlg    lfs.ChecksumAlg
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
-	PartSize       int64
-	NextPart       int32
-	TotalUploaded  int64
-	Parts          map[int32]string
-	PartSizes      map[int32]int64
-	sha256Hasher   lfsHashWriter
-	checksumHasher lfsHashWriter
+	mu               sync.Mutex
+	ID               string
+	Topic            string
+	S3Key            string
+	StorageName      string
+	UploadID         string
+	ContentType      string
+	SizeBytes        int64
+	KeyBytes         []byte
+	Partition        int32
+	Checksum         string
+	ChecksumAlg      lfs.ChecksumAlg
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
+	PartSize         int64
+	NextPart         int32
+	TotalUploaded    int64
+	Parts            map[int32]string
+	PartSizes        map[int32]int64
+	storeRevision    int64
+	storeGuard       *clientv3.Cmp
+	operationContext context.Context
+	sha256Hasher     lfsHashWriter
+	checksumHasher   lfsHashWriter
 }
 
 type lfsHashWriter interface {
@@ -779,6 +783,10 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if m.sharedUploadSessions && m.uploadSessionClient == nil {
+		m.writeUploadSessionError(w, requestID, errUploadSessionStoreUnavailable)
+		return
+	}
 	keyBytes := []byte(nil)
 	if req.Key != "" {
 		decoded, err := base64.StdEncoding.DecodeString(req.Key)
@@ -859,13 +867,12 @@ func (m *lfsModule) handleHTTPUploadInit(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := m.saveUploadSession(r.Context(), session); err != nil {
-		m.metrics.IncS3Errors()
 		cleanupCtx, cancel := m.uploadSessionCleanupContext(r.Context())
 		defer cancel()
 		if abortErr := m.abortMultipartIgnoringMissing(cleanupCtx, objectKey, uploadID); abortErr != nil {
 			m.logger.Warn("multipart abort after session save failure failed", "requestId", logSafe(requestID), "s3Key", logSafe(objectKey), "error", abortErr)
 		}
-		m.lfsWriteHTTPError(w, requestID, req.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
+		m.writeUploadSessionError(w, requestID, err)
 		return
 	}
 	m.tracker.EmitUploadStarted(requestID, req.Topic, partition, objectKey, req.ContentType, lfsGetClientIP(r), "http-chunked", req.SizeBytes)
@@ -932,6 +939,9 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer unlock()
+	if session.operationContext != nil {
+		r = r.WithContext(session.operationContext)
+	}
 
 	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
 		return
@@ -1008,8 +1018,7 @@ func (m *lfsModule) handleHTTPUploadPart(w http.ResponseWriter, r *http.Request,
 	session.TotalUploaded += int64(len(body))
 	session.NextPart++
 	if err := m.saveUploadSession(r.Context(), session); err != nil {
-		m.metrics.IncS3Errors()
-		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "s3_upload_failed", err.Error())
+		m.writeUploadSessionError(w, requestID, err)
 		return
 	}
 
@@ -1026,6 +1035,9 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer unlock()
+	if session.operationContext != nil {
+		r = r.WithContext(session.operationContext)
+	}
 
 	if !m.authorizeMultipartUpload(r.Context(), w, requestID, session) {
 		return
@@ -1085,14 +1097,14 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	if session.Checksum != "" && checksum != "" && !strings.EqualFold(session.Checksum, checksum) {
 		_ = m.s3Uploader.AbortMultipartUpload(r.Context(), session.S3Key, session.UploadID)
-		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, sessionID)
+		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, session)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadRequest, "checksum_mismatch", "checksum mismatch")
 		return
 	}
 
 	if err := m.recheckStorageName(r.Context(), session.Topic, session.StorageName); err != nil {
 		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "generation_changed")
-		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, sessionID)
+		m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, session)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "metadata_unavailable", err.Error(), "generation_check", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "metadata_unavailable", err.Error())
 		return
@@ -1153,7 +1165,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	}
 	if errors.Is(err, errLFSProduceNotWritten) {
 		m.discardUploads(r.Context(), []orphanInfo{{Topic: session.Topic, Key: session.S3Key, RequestID: requestID}}, "backend_unavailable")
-		m.dropUploadSession(r.Context(), requestID, sessionID)
+		m.dropUploadSession(r.Context(), requestID, session)
 		m.tracker.EmitUploadFailed(requestID, session.Topic, session.S3Key, "backend_unavailable", err.Error(), "kafka_produce", session.TotalUploaded, 0)
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusServiceUnavailable, "backend_unavailable", err.Error())
 		return
@@ -1171,7 +1183,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 	m.metrics.AddUploadBytes(session.TotalUploaded)
 	m.tracker.EmitUploadCompleted(requestID, session.Topic, session.Partition, offset, m.s3Bucket, session.S3Key, session.TotalUploaded, shaHex, checksum, string(session.ChecksumAlg), session.ContentType, 0)
 
-	m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, sessionID)
+	m.dropUploadSession(context.WithoutCancel(r.Context()), requestID, session)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(env)
@@ -1184,6 +1196,9 @@ func (m *lfsModule) handleHTTPUploadAbort(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer unlock()
+	if session.operationContext != nil {
+		r = r.WithContext(session.operationContext)
+	}
 	if err := m.discardMultipartUpload(r.Context(), session); err != nil {
 		m.lfsWriteHTTPError(w, requestID, session.Topic, http.StatusBadGateway, "abort_failed", "multipart abort failed; retry the request")
 		return

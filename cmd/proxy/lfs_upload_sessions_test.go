@@ -30,12 +30,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func sessionAckBackend(t *testing.T, topic string) string {
@@ -74,6 +75,7 @@ func sessionAckBackend(t *testing.T, topic string) string {
 
 func sharedSessionModules(t *testing.T) (*lfsModule, *lfsModule, *fakeS3) {
 	t.Helper()
+	endpoints := testutil.StartEmbeddedEtcd(t)
 	backend := sessionAckBackend(t, "orders")
 	a := testHTTPModule(t)
 	b := testHTTPModule(t)
@@ -84,7 +86,12 @@ func sharedSessionModules(t *testing.T) (*lfsModule, *lfsModule, *fakeS3) {
 		m.dialTimeout = time.Second
 		m.backendRetries = 1
 		m.backendBackoff = time.Millisecond
-		m.useSharedUploadSessions()
+		cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cli.Close() })
+		m.useSharedUploadSessions(cli)
 	}
 	return a, b, a.s3Uploader.api.(*fakeS3)
 }
@@ -127,12 +134,17 @@ func sessionComplete(m *lfsModule, id string, etags []string) *httptest.Response
 	return rr
 }
 
-func sessionRecords(fs3 *fakeS3) []string {
-	var keys []string
-	for key := range fs3.objects {
-		if strings.HasPrefix(key, "test-ns/"+lfsUploadSessionPrefix+"/") {
-			keys = append(keys, key)
-		}
+func sessionRecords(t *testing.T, m *lfsModule) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := m.uploadSessionClient.Get(ctx, m.uploadSessionPrefix(), clientv3.WithPrefix(), clientv3.WithKeysOnly())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		keys = append(keys, string(kv.Key))
 	}
 	return keys
 }
@@ -166,7 +178,7 @@ func runCrossPodUpload(t *testing.T, alg string, checksum func([]byte) string) {
 	if env.Checksum != checksum(payload) || env.ChecksumAlg != alg {
 		t.Fatalf("checksum %s/%s, want %s/%s", env.ChecksumAlg, env.Checksum, alg, checksum(payload))
 	}
-	if keys := sessionRecords(fs3); len(keys) != 0 {
+	if keys := sessionRecords(t, a); len(keys) != 0 {
 		t.Fatalf("session records left: %v", keys)
 	}
 	if len(fs3.multipartUploads) != 0 {
@@ -202,7 +214,7 @@ func TestLFSMultipartExpiredOnOtherProxyAbortsUpload(t *testing.T) {
 	if len(fs3.aborted) != 1 || len(fs3.multipartUploads) != 0 {
 		t.Fatalf("expired multipart upload not aborted: aborted=%v in flight=%v", fs3.aborted, fs3.multipartUploads)
 	}
-	if keys := sessionRecords(fs3); len(keys) != 0 {
+	if keys := sessionRecords(t, a); len(keys) != 0 {
 		t.Fatalf("expired session record left: %v", keys)
 	}
 }
@@ -215,8 +227,8 @@ func TestLFSMultipartAbortOnOtherProxy(t *testing.T) {
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("abort on the other proxy: %d %s", rr.Code, rr.Body.String())
 	}
-	if len(fs3.multipartUploads) != 0 || len(sessionRecords(fs3)) != 0 {
-		t.Fatalf("abort left state: in flight=%v records=%v", fs3.multipartUploads, sessionRecords(fs3))
+	if len(fs3.multipartUploads) != 0 || len(sessionRecords(t, a)) != 0 {
+		t.Fatalf("abort left state: in flight=%v records=%v", fs3.multipartUploads, sessionRecords(t, a))
 	}
 }
 
@@ -243,7 +255,7 @@ func TestLFSUploadSessionSweepRemovesExpiredAndLostUploads(t *testing.T) {
 	if got := strings.Join(fs3.aborted, ","); got != "expired-upload,lost-upload" {
 		t.Fatalf("aborted %q", got)
 	}
-	records := sessionRecords(fs3)
+	records := sessionRecords(t, m)
 	if len(records) != 1 || !strings.Contains(records[0], "000000000002") {
 		t.Fatalf("session records after sweep: %v", records)
 	}
@@ -263,7 +275,7 @@ func TestLFSMultipartAcrossProxiesCRC32(t *testing.T) {
 }
 
 func TestLFSSharedSessionRemovedWhenBackendUnavailableAtComplete(t *testing.T) {
-	a, b, fs3 := sharedSessionModules(t)
+	a, b, _ := sharedSessionModules(t)
 	session := sessionInit(t, a, `{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)
 	code, etag := sessionPart(t, b, session.UploadID, 1, []byte("payload"))
 	if code != http.StatusOK {
@@ -275,29 +287,23 @@ func TestLFSSharedSessionRemovedWhenBackendUnavailableAtComplete(t *testing.T) {
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("complete: %d %s", rr.Code, rr.Body.String())
 	}
-	if len(sessionRecords(fs3)) != 0 {
+	if len(sessionRecords(t, a)) != 0 {
 		t.Fatal("shared session remains after completed object was discarded")
 	}
 }
 
-type failSessionSaveS3 struct{ s3API }
-
-func (s *failSessionSaveS3) PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	return nil, fmt.Errorf("session storage unavailable")
-}
-
-func TestLFSFailedSharedSessionSaveAbortsMultipart(t *testing.T) {
-	a, _, fs3 := sharedSessionModules(t)
-	a.s3Uploader.api = &failSessionSaveS3{s3API: a.s3Uploader.api}
+func TestLFSSharedSessionUnavailableBeforeMultipartStarts(t *testing.T) {
+	m := testHTTPModule(t)
+	m.httpAPIKey = ""
+	fs3 := m.s3Uploader.api.(*fakeS3)
+	m.useSharedUploadSessions()
+	m.topicMaxLength = 249
 	rr := httptest.NewRecorder()
-	a.handleHTTPUploadInit(rr, httptest.NewRequest(http.MethodPost, "/lfs/uploads", strings.NewReader(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)))
-	if rr.Code != http.StatusBadGateway {
+	m.handleHTTPUploadInit(rr, httptest.NewRequest(http.MethodPost, "/lfs/uploads", strings.NewReader(`{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "session_store_unavailable") {
 		t.Fatalf("init: %d %s", rr.Code, rr.Body.String())
 	}
-	if len(fs3.multipartUploads) != 0 || len(fs3.aborted) != 1 {
-		t.Fatalf("session save failure leaked multipart upload: %+v", fs3.multipartUploads)
-	}
-	if !fs3.abortDeadline {
-		t.Fatal("cleanup has no deadline")
+	if fs3.multipartInit != 0 {
+		t.Fatal("unavailable session store started an orphan multipart upload")
 	}
 }

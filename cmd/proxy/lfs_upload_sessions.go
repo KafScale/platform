@@ -16,29 +16,26 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
-	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/KafScale/platform/pkg/lfs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
 const (
-	lfsUploadSessionPrefix       = "@lfs-uploads"
-	lfsUploadSessionLockStripes  = 64
 	lfsLostMultipartUploadGrace  = time.Hour
 	lfsUploadSessionSweepMax     = 10 * time.Minute
 	lfsUploadSessionSweepMin     = 30 * time.Second
@@ -46,8 +43,10 @@ const (
 )
 
 var (
-	errUploadSessionNotFound = errors.New("upload session not found")
-	errUploadHashState       = errors.New("upload hash state cannot be saved")
+	errUploadSessionStoreUnavailable = errors.New("multipart uploads require an available etcd session store")
+	errUploadSessionConflict         = errors.New("upload session changed or request lost its lock")
+	errUploadSessionNotFound         = errors.New("upload session not found")
+	errUploadHashState               = errors.New("upload hash state cannot be saved")
 )
 
 type uploadSessionRecord struct {
@@ -73,8 +72,11 @@ type uploadSessionRecord struct {
 	ChecksumState []byte           `json:"checksum_state,omitempty"`
 }
 
-func (m *lfsModule) useSharedUploadSessions() {
+func (m *lfsModule) useSharedUploadSessions(clients ...*clientv3.Client) {
 	m.sharedUploadSessions = true
+	if len(clients) > 0 {
+		m.uploadSessionClient = clients[0]
+	}
 }
 
 func (m *lfsModule) lfsNamespace() string {
@@ -85,12 +87,19 @@ func (m *lfsModule) lfsNamespace() string {
 	return ns
 }
 
-func (m *lfsModule) uploadSessionPrefix() string {
-	return m.lfsNamespace() + "/" + lfsUploadSessionPrefix + "/"
+func (m *lfsModule) uploadSessionScope() string {
+	return url.PathEscape(m.s3Bucket) + "/" + url.PathEscape(m.lfsNamespace()) + "/"
 }
 
-func (m *lfsModule) uploadSessionKey(id string) string {
-	return m.uploadSessionPrefix() + id + ".json"
+func (m *lfsModule) uploadSessionPrefix() string {
+	return "/kafscale/lfs-upload-sessions/" + m.uploadSessionScope()
+}
+
+func (m *lfsModule) uploadSessionKey(id string) string { return m.uploadSessionPrefix() + id }
+
+func (m *lfsModule) uploadSessionIndexKey(key, uploadID string) string {
+	sum := sha256.Sum256([]byte(key + "\x00" + uploadID))
+	return fmt.Sprintf("/kafscale/lfs-upload-index/%s%x", m.uploadSessionScope(), sum)
 }
 
 func validUploadSessionID(id string) bool {
@@ -105,14 +114,8 @@ func validUploadSessionID(id string) bool {
 	return true
 }
 
-func (m *lfsModule) uploadSessionLock(id string) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(id))
-	mu := &m.uploadLocks[h.Sum32()%lfsUploadSessionLockStripes]
-	mu.Lock()
-	return mu.Unlock
-}
-
+// Each request gets a unique leased mutex key. Delayed saves and deletes are
+// fenced by both the record revision and the continued ownership of that key.
 func (m *lfsModule) acquireUploadSession(ctx context.Context, id string) (*uploadSession, func(), error) {
 	if !m.sharedUploadSessions {
 		session, ok := m.lfsGetUploadSession(id)
@@ -125,12 +128,43 @@ func (m *lfsModule) acquireUploadSession(ctx context.Context, id string) (*uploa
 	if !validUploadSessionID(id) {
 		return nil, nil, errUploadSessionNotFound
 	}
-	unlock := m.uploadSessionLock(id)
-	session, err := m.loadUploadSession(ctx, id)
+	if m.uploadSessionClient == nil {
+		return nil, nil, errUploadSessionStoreUnavailable
+	}
+	lease, err := concurrency.NewSession(m.uploadSessionClient, concurrency.WithTTL(30), concurrency.WithContext(ctx))
+	if err != nil {
+		return nil, nil, fmt.Errorf("open upload session lock: %w", err)
+	}
+	mutex := concurrency.NewMutex(lease, "/kafscale/lfs-upload-locks/"+m.uploadSessionScope()+id)
+	if err := mutex.Lock(ctx); err != nil {
+		_ = lease.Close()
+		return nil, nil, err
+	}
+	opCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-lease.Done():
+			cancel()
+		case <-opCtx.Done():
+		}
+	}()
+	unlock := func() {
+		cancel()
+		cleanupCtx, done := m.uploadSessionCleanupContext(ctx)
+		defer done()
+		if err := mutex.Unlock(cleanupCtx); err != nil {
+			m.logger.Warn("upload session unlock failed", "uploadId", logSafe(id), "error", err)
+		}
+		_ = lease.Close()
+	}
+	session, err := m.loadUploadSession(opCtx, id)
 	if err != nil {
 		unlock()
 		return nil, nil, err
 	}
+	guard := mutex.IsOwner()
+	session.storeGuard = &guard
+	session.operationContext = opCtx
 	return session, unlock, nil
 }
 
@@ -138,6 +172,9 @@ func (m *lfsModule) saveUploadSession(ctx context.Context, session *uploadSessio
 	if !m.sharedUploadSessions {
 		m.lfsStoreUploadSession(session)
 		return nil
+	}
+	if m.uploadSessionClient == nil {
+		return errUploadSessionStoreUnavailable
 	}
 	record, err := uploadSessionToRecord(session)
 	if err != nil {
@@ -147,85 +184,85 @@ func (m *lfsModule) saveUploadSession(ctx context.Context, session *uploadSessio
 	if err != nil {
 		return err
 	}
-	_, err = m.s3Uploader.api.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:        aws.String(m.s3Uploader.bucket),
-		Key:           aws.String(m.uploadSessionKey(session.ID)),
-		Body:          bytes.NewReader(data),
-		ContentLength: aws.Int64(int64(len(data))),
-		ContentType:   aws.String("application/json"),
-	})
+	if len(data) > lfsUploadSessionMaxRecordLen {
+		return errors.New("upload session record exceeds maximum size")
+	}
+	key := m.uploadSessionKey(session.ID)
+	checks := []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(key), "=", session.storeRevision)}
+	if session.storeRevision > 0 {
+		if session.storeGuard == nil {
+			return errUploadSessionConflict
+		}
+		checks = append(checks, *session.storeGuard)
+	}
+	resp, err := m.uploadSessionClient.Txn(ctx).If(checks...).Then(
+		clientv3.OpPut(key, string(data)),
+		clientv3.OpPut(m.uploadSessionIndexKey(session.S3Key, session.UploadID), session.ID),
+	).Commit()
 	if err != nil {
 		return fmt.Errorf("save upload session: %w", err)
 	}
+	if !resp.Succeeded {
+		return errUploadSessionConflict
+	}
+	session.storeRevision = resp.Header.Revision
 	return nil
 }
 
-func (m *lfsModule) deleteUploadSession(ctx context.Context, id string) error {
-	m.lfsDeleteUploadSession(id)
+func (m *lfsModule) deleteUploadSession(ctx context.Context, session *uploadSession) error {
 	if !m.sharedUploadSessions {
+		m.lfsDeleteUploadSession(session.ID)
 		return nil
 	}
-	_, err := m.s3Uploader.api.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(m.s3Uploader.bucket),
-		Key:    aws.String(m.uploadSessionKey(id)),
-	})
-	if err != nil && !isS3NotFound(err) {
+	if m.uploadSessionClient == nil {
+		return errUploadSessionStoreUnavailable
+	}
+	if session.storeGuard == nil {
+		return errUploadSessionConflict
+	}
+	resp, err := m.uploadSessionClient.Txn(ctx).If(
+		clientv3.Compare(clientv3.ModRevision(m.uploadSessionKey(session.ID)), "=", session.storeRevision),
+		*session.storeGuard,
+	).Then(
+		clientv3.OpDelete(m.uploadSessionKey(session.ID)),
+		clientv3.OpDelete(m.uploadSessionIndexKey(session.S3Key, session.UploadID)),
+	).Commit()
+	if err != nil {
 		return fmt.Errorf("delete upload session: %w", err)
+	}
+	if !resp.Succeeded {
+		return errUploadSessionConflict
 	}
 	return nil
 }
 
 func (m *lfsModule) loadUploadSession(ctx context.Context, id string) (*uploadSession, error) {
-	record, err := m.readUploadSessionRecord(ctx, m.uploadSessionKey(id))
+	if m.uploadSessionClient == nil {
+		return nil, errUploadSessionStoreUnavailable
+	}
+	resp, err := m.uploadSessionClient.Get(ctx, m.uploadSessionKey(id))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read upload session: %w", err)
+	}
+	if len(resp.Kvs) == 0 {
+		return nil, errUploadSessionNotFound
+	}
+	if len(resp.Kvs[0].Value) > lfsUploadSessionMaxRecordLen {
+		return nil, errors.New("upload session record exceeds maximum size")
+	}
+	var record uploadSessionRecord
+	if err := json.Unmarshal(resp.Kvs[0].Value, &record); err != nil {
+		return nil, fmt.Errorf("decode upload session: %w", err)
 	}
 	if record.ID != id {
 		return nil, errUploadSessionNotFound
 	}
-	return uploadSessionFromRecord(record)
-}
-
-func (m *lfsModule) readUploadSessionRecord(ctx context.Context, key string) (*uploadSessionRecord, error) {
-	out, err := m.s3Uploader.api.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(m.s3Uploader.bucket),
-		Key:    aws.String(key),
-	})
+	session, err := uploadSessionFromRecord(&record)
 	if err != nil {
-		if isS3NotFound(err) {
-			return nil, errUploadSessionNotFound
-		}
-		return nil, fmt.Errorf("read upload session: %w", err)
+		return nil, err
 	}
-	defer func() { _ = out.Body.Close() }()
-	data, err := io.ReadAll(io.LimitReader(out.Body, lfsUploadSessionMaxRecordLen))
-	if err != nil {
-		return nil, fmt.Errorf("read upload session: %w", err)
-	}
-	var record uploadSessionRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("decode upload session: %w", err)
-	}
-	return &record, nil
-}
-
-func isS3NotFound(err error) bool {
-	var noSuchKey *types.NoSuchKey
-	if errors.As(err, &noSuchKey) {
-		return true
-	}
-	var notFound *types.NotFound
-	if errors.As(err, &notFound) {
-		return true
-	}
-	var apiError smithy.APIError
-	if errors.As(err, &apiError) {
-		switch apiError.ErrorCode() {
-		case "NoSuchKey", "NotFound":
-			return true
-		}
-	}
-	return false
+	session.storeRevision = resp.Kvs[0].ModRevision
+	return session, nil
 }
 
 func marshalHashState(h lfsHashWriter) ([]byte, error) {
@@ -386,49 +423,43 @@ func (m *lfsModule) abortMultipartIgnoringMissing(ctx context.Context, key, uplo
 }
 
 func (m *lfsModule) sweepExpiredUploadSessions(ctx context.Context, now time.Time) {
-	paginator := s3.NewListObjectsV2Paginator(m.s3Uploader.api, &s3.ListObjectsV2Input{
-		Bucket: aws.String(m.s3Uploader.bucket),
-		Prefix: aws.String(m.uploadSessionPrefix()),
-	})
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			m.logger.Warn("lfs upload session sweep: list failed", "error", err)
-			return
+	if m.uploadSessionClient == nil {
+		return
+	}
+	resp, err := m.uploadSessionClient.Get(ctx, m.uploadSessionPrefix(), clientv3.WithPrefix(), clientv3.WithKeysOnly())
+	if err != nil {
+		m.logger.Warn("lfs upload session sweep: list failed", "error", err)
+		return
+	}
+	for _, kv := range resp.Kvs {
+		id := strings.TrimPrefix(string(kv.Key), m.uploadSessionPrefix())
+		if !validUploadSessionID(id) {
+			continue
 		}
-		for _, object := range page.Contents {
-			key := aws.ToString(object.Key)
-			id := strings.TrimSuffix(strings.TrimPrefix(key, m.uploadSessionPrefix()), ".json")
-			if !validUploadSessionID(id) {
-				continue
-			}
-			m.sweepUploadSession(ctx, now, id, key, aws.ToTime(object.LastModified))
-		}
+		m.sweepUploadSession(ctx, now, id)
 	}
 }
 
-func (m *lfsModule) sweepUploadSession(ctx context.Context, now time.Time, id, key string, modified time.Time) {
-	unlock := m.uploadSessionLock(id)
-	defer unlock()
-	record, err := m.readUploadSessionRecord(ctx, key)
+func (m *lfsModule) sweepUploadSession(ctx context.Context, now time.Time, id string) {
+	cleanupCtx, cancel := m.uploadSessionCleanupContext(ctx)
+	defer cancel()
+	session, unlock, err := m.acquireUploadSession(cleanupCtx, id)
 	if errors.Is(err, errUploadSessionNotFound) {
 		return
 	}
 	if err != nil {
-		if modified.IsZero() || now.Sub(modified) < m.uploadSessionTTL+lfsLostMultipartUploadGrace {
-			return
-		}
-		m.logger.Warn("lfs upload session sweep: removing unreadable session", "key", logSafe(key), "error", err)
-	} else {
-		if now.Before(record.ExpiresAt) {
-			return
-		}
-		if err := m.abortMultipartIgnoringMissing(ctx, record.S3Key, record.UploadID); err != nil {
-			m.logger.Warn("lfs upload session sweep: abort failed", "uploadId", logSafe(id), "error", err)
-			return
-		}
+		m.logger.Warn("lfs upload session sweep: read failed", "uploadId", logSafe(id), "error", err)
+		return
 	}
-	if err := m.deleteUploadSession(ctx, id); err != nil {
+	defer unlock()
+	if now.Before(session.ExpiresAt) {
+		return
+	}
+	if err := m.abortMultipartIgnoringMissing(cleanupCtx, session.S3Key, session.UploadID); err != nil {
+		m.logger.Warn("lfs upload session sweep: abort failed", "uploadId", logSafe(id), "error", err)
+		return
+	}
+	if err := m.deleteUploadSession(cleanupCtx, session); err != nil {
 		m.logger.Warn("lfs upload session sweep: delete failed", "uploadId", logSafe(id), "error", err)
 		return
 	}
@@ -436,6 +467,9 @@ func (m *lfsModule) sweepUploadSession(ctx context.Context, now time.Time, id, k
 }
 
 func (m *lfsModule) sweepLostMultipartUploads(ctx context.Context, now time.Time) {
+	if m.uploadSessionClient == nil {
+		return
+	}
 	cutoff := now.Add(-(m.uploadSessionTTL + lfsLostMultipartUploadGrace))
 	input := &s3.ListMultipartUploadsInput{
 		Bucket: aws.String(m.s3Uploader.bucket),
@@ -454,6 +488,16 @@ func (m *lfsModule) sweepLostMultipartUploads(ctx context.Context, now time.Time
 			}
 			key := aws.ToString(upload.Key)
 			uploadID := aws.ToString(upload.UploadId)
+			// Session TTLs may differ during a rollout. A trusted session, including
+			// one with a later persisted expiry, must never be treated as lost by age.
+			current, err := m.uploadSessionClient.Get(ctx, m.uploadSessionIndexKey(key, uploadID))
+			if err != nil {
+				m.logger.Warn("lfs upload session sweep: ownership read failed", "error", err)
+				return
+			}
+			if len(current.Kvs) > 0 {
+				continue
+			}
 			if err := m.abortMultipartIgnoringMissing(ctx, key, uploadID); err != nil {
 				m.logger.Warn("lfs upload session sweep: abort of lost multipart upload failed", "s3Key", logSafe(key), "error", err)
 				continue
@@ -476,11 +520,11 @@ func (m *lfsModule) uploadSessionCleanupContext(ctx context.Context) (context.Co
 	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
-func (m *lfsModule) dropUploadSession(ctx context.Context, requestID, id string) {
+func (m *lfsModule) dropUploadSession(ctx context.Context, requestID string, session *uploadSession) {
 	cleanupCtx, cancel := m.uploadSessionCleanupContext(ctx)
 	defer cancel()
-	if err := m.deleteUploadSession(cleanupCtx, id); err != nil {
-		m.logger.Warn("multipart upload session delete failed", "requestId", logSafe(requestID), "uploadId", logSafe(id), "error", err)
+	if err := m.deleteUploadSession(cleanupCtx, session); err != nil {
+		m.logger.Warn("multipart upload session delete failed", "requestId", logSafe(requestID), "uploadId", logSafe(session.ID), "error", err)
 	}
 }
 
@@ -489,7 +533,10 @@ func (m *lfsModule) writeUploadSessionError(w http.ResponseWriter, requestID str
 		m.lfsWriteHTTPError(w, requestID, "", http.StatusNotFound, "upload_not_found", "upload session not found")
 		return
 	}
-	m.metrics.IncS3Errors()
-	m.logger.Warn("multipart upload session read failed", "requestId", logSafe(requestID), "error", err)
-	m.lfsWriteHTTPError(w, requestID, "", http.StatusBadGateway, "s3_upload_failed", "upload session read failed")
+	if errors.Is(err, errUploadSessionConflict) {
+		m.lfsWriteHTTPError(w, requestID, "", http.StatusConflict, "upload_conflict", "upload session changed; retry the request")
+		return
+	}
+	m.logger.Warn("multipart upload session store failed", "requestId", logSafe(requestID), "error", err)
+	m.lfsWriteHTTPError(w, requestID, "", http.StatusServiceUnavailable, "session_store_unavailable", "multipart upload session store unavailable")
 }

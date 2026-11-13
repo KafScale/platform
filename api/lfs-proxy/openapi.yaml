@@ -222,6 +222,8 @@ paths:
       summary: Initiate a resumable multipart upload
       description: |
         Starts a multipart upload session for large, resumable uploads.
+        Requires the configured etcd session store, including with static brokers.
+        Sessions and checksum state are shared across replicas in etcd.
         Clients upload parts to `/lfs/uploads/{upload_id}/parts/{part_number}`
         and finalize with `/lfs/uploads/{upload_id}/complete`.
       operationId: lfsUploadInit
@@ -250,6 +252,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
           description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Session store or proxy unavailable (session_store_unavailable)
           content:
             application/json:
               schema:
@@ -318,6 +326,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Upload state changed or part arrived out of order; retry sequentially
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Session store or proxy unavailable (session_store_unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /lfs/uploads/{upload_id}/complete:
     post:
@@ -363,6 +383,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Upload state changed or part arrived out of order; retry sequentially
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Session store or proxy unavailable (session_store_unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /lfs/uploads/{upload_id}:
     delete:
@@ -386,6 +418,18 @@ paths:
           description: Upload aborted
         "404":
           description: Upload session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Upload state changed or part arrived out of order; retry sequentially
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Session store or proxy unavailable (session_store_unavailable)
           content:
             application/json:
               schema:

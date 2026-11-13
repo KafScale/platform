@@ -594,24 +594,44 @@ HTTP endpoints (served on `KAFSCALE_LFS_PROXY_HTTP_ADDR`):
 
 Multipart upload cleanup:
 
-Upload sessions are kept in S3, next to the LFS objects, at
-`<namespace>/@lfs-uploads/<id>.json`, so the part and complete calls of one
-upload can go to any LFS proxy replica behind the Service, also after a proxy
-restart. The record holds the S3 multipart upload id, the parts received so far
-and the checksum state, and it is written again after every part. It is deleted
-when the upload completes or is aborted. Send the parts of one upload one after
-the other, as before; parts sent at the same time to different replicas are not
-supported. A part or complete call on an expired session aborts its S3 multipart
-upload and returns 410 `upload_expired`. Every replica with the HTTP API also
-runs a cleanup every half session TTL
-(`KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`), but not more often than every
-30 seconds and at least every 10 minutes. It aborts the S3 multipart
-upload of each expired session and deletes its record, and it aborts multipart
-uploads under `<namespace>/@lfs/` that were started more than the session TTL
-plus one hour ago, which covers sessions that were lost, for example by an older
-proxy version that kept them in memory. The proxy needs `s3:ListBucket` and
-`s3:ListBucketMultipartUploads` on the bucket for this cleanup; without them it
-logs a warning and uploads keep working. As a second safety net, configure an S3
+Multipart uploads require `KAFSCALE_PROXY_ETCD_ENDPOINTS`, including when
+`KAFSCALE_PROXY_BACKENDS` lists static brokers. The operator and Docker Compose
+already provide this connection. The proxy uses its existing etcd credentials;
+they must allow reads and writes under `/kafscale/lfs-upload-sessions/`,
+`/kafscale/lfs-upload-index/`, and `/kafscale/lfs-upload-locks/`, plus lease
+operations. Without a session store, multipart initialization returns 503
+`session_store_unavailable` before starting an S3 multipart upload.
+
+Authoritative sessions and checksum state live in etcd under
+`/kafscale/lfs-upload-sessions/<bucket>/<namespace>/<id>` (bucket and namespace
+components are URL-escaped). S3 remains untrusted blob storage. The proxy does
+not load the unsigned session JSON used by the earlier pre-release branch;
+restart uploads begun by that version after upgrading.
+
+Part, completion, and abort calls can reach any replica after a restart. An
+etcd mutex serializes requests for each upload, and every session update or
+delete checks both the record revision and lock ownership. A timed-out old
+request cannot overwrite newer acknowledged progress. Lost lock leases cancel
+the active request. Send parts sequentially as before; an out-of-order part
+returns 409. State-store failures return 503 `session_store_unavailable` and a
+rejected stale update returns 409 `upload_conflict`; retry using the same upload
+ID and part number. Session records are removed on completion or abort.
+
+A part or complete call on an expired session aborts the multipart upload and
+returns 410 `upload_expired`. Every replica with the HTTP API sweeps every half
+session TTL (`KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`), bounded to between
+30 seconds and 10 minutes. Expiry uses each session's persisted `ExpiresAt`,
+so a replica with a shorter configured TTL cannot abort an unexpired session
+during a rollout. Session records and an index by S3 key/upload ID are written
+and deleted atomically. The orphan sweep checks this trusted index before
+aborting uploads under `<namespace>/@lfs/` older than the configured TTL plus
+one hour. It skips tracked sessions, and performs no orphan abort if etcd
+cannot confirm ownership. This also reclaims uploads left by older versions
+that stored sessions only in pod memory.
+
+The orphan sweep needs `s3:ListBucketMultipartUploads` and
+`s3:AbortMultipartUpload`. If listing is denied, the proxy logs a warning and
+uploads keep working. As a second safety net, configure an S3
 bucket lifecycle rule with `AbortIncompleteMultipartUpload` for the LFS object
 prefix, or the whole bucket if it is dedicated to LFS. For example, set
 `DaysAfterInitiation` to `7`, choosing an interval longer than the longest
