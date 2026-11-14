@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/KafScale/platform/internal/s3env"
@@ -1040,8 +1041,57 @@ func (h *handler) acquirePartitionLeases(ctx context.Context, req *kmsg.ProduceR
 	}
 	results := h.leaseManager.AcquireAll(ctx, partitions)
 	var errs map[metadata.PartitionID]error
+	type topicLeaseMetadata struct {
+		partitions map[int32]struct{}
+		err        error
+	}
+	var checkedTopics map[string]topicLeaseMetadata
+	var refreshed bool
+	var refreshErr error
 	for _, r := range results {
 		if r.Err != nil {
+			if errors.Is(r.Err, metadata.ErrNotOwner) {
+				// A previous invalid request may have acquired a lease for a
+				// nonexistent partition. Check metadata before redirecting it.
+				// Refresh once to avoid rejecting a valid partition from an old
+				// snapshot. Healthy owned requests skip this work entirely.
+				if !refreshed {
+					refreshed = true
+					if store, ok := h.store.(interface{ RefreshSnapshot(context.Context) error }); ok {
+						refreshErr = store.RefreshSnapshot(ctx)
+					}
+				}
+				if checkedTopics == nil {
+					checkedTopics = make(map[string]topicLeaseMetadata)
+				}
+				view, checked := checkedTopics[r.Partition.Topic]
+				if !checked && refreshErr == nil {
+					if meta, err := h.store.Metadata(ctx, []string{r.Partition.Topic}); err == nil && meta != nil {
+						view.err = metadata.ErrUnknownTopic
+						for _, topic := range meta.Topics {
+							if topic.Topic == nil || *topic.Topic != r.Partition.Topic {
+								continue
+							}
+							view.err = kerr.ErrorForCode(topic.ErrorCode)
+							if view.err == nil {
+								view.partitions = make(map[int32]struct{})
+								for _, part := range topic.Partitions {
+									view.partitions[part.Partition] = struct{}{}
+								}
+							}
+							break
+						}
+					}
+					checkedTopics[r.Partition.Topic] = view
+				}
+				if view.err != nil {
+					r.Err = view.err
+				} else if view.partitions != nil {
+					if _, exists := view.partitions[r.Partition.Partition]; !exists {
+						r.Err = metadata.ErrUnknownTopic
+					}
+				}
+			}
 			if errs == nil {
 				errs = make(map[metadata.PartitionID]error)
 			}
@@ -1137,21 +1187,24 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				continue
 			}
 			if leaseErr, hasErr := leaseErrors[metadata.PartitionID{Topic: topic.Topic, Partition: part.Partition}]; hasErr {
-				if errors.Is(leaseErr, metadata.ErrNotOwner) || errors.Is(leaseErr, metadata.ErrShuttingDown) {
-					p := kmsg.NewProduceResponseTopicPartition()
-					p.Partition = part.Partition
-					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
-					partitionResponses = append(partitionResponses, p)
-					if h.traceKafka {
-						h.logger.Debug("produce rejected: not partition owner", "topic", topic.Topic, "partition", part.Partition)
-					}
-					continue
-				}
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
-				p.ErrorCode = protocol.REQUEST_TIMED_OUT
+				var topicErr *kerr.Error
+				switch {
+				case errors.Is(leaseErr, metadata.ErrUnknownTopic):
+					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
+				case errors.Is(leaseErr, metadata.ErrNotOwner), errors.Is(leaseErr, metadata.ErrShuttingDown):
+					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				case errors.As(leaseErr, &topicErr):
+					p.ErrorCode = topicErr.Code
+				default:
+					p.ErrorCode = protocol.REQUEST_TIMED_OUT
+					h.logger.Warn("partition lease acquire failed", "topic", topic.Topic, "partition", part.Partition, "error", leaseErr)
+				}
 				partitionResponses = append(partitionResponses, p)
-				h.logger.Warn("partition lease acquire failed", "topic", topic.Topic, "partition", part.Partition, "error", leaseErr)
+				if h.traceKafka {
+					h.logger.Debug("produce rejected", "topic", topic.Topic, "partition", part.Partition, "error_code", p.ErrorCode)
+				}
 				continue
 			}
 			if h.s3Health.State() != broker.S3StateHealthy {
@@ -1182,6 +1235,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
 				} else if errors.Is(err, metadata.ErrInvalidTopic) {
 					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				} else if errors.Is(err, metadata.ErrUnknownTopic) {
+					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
 				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 					p.ErrorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, storage.ErrObjectStorage) {
@@ -2274,6 +2329,9 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 				if err := h.ensureTopic(ctx, topic, partition); err != nil {
 					return nil, err
 				}
+				// An existing topic may still lack this partition. Retry its
+				// lookup once, including after a concurrent topic creation.
+				autoCreate = false
 				continue
 			}
 			return nil, err
