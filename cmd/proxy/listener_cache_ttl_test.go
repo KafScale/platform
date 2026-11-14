@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -160,10 +161,32 @@ type listenerClient struct {
 func dialListener(t *testing.T, p *proxy) *listenerClient {
 	t.Helper()
 	server, client := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); p.handleConnection(context.Background(), server) }()
-	t.Cleanup(func() { _ = client.Close(); <-done })
+	go func() { defer close(done); p.handleConnection(ctx, server) }()
+	t.Cleanup(func() {
+		defer cancel()
+		_ = client.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			cancel()
+			_ = server.Close()
+			t.Error("listener did not stop within 5s after client disconnect")
+		}
+	})
 	return &listenerClient{t: t, conn: client, formatter: kmsg.NewRequestFormatter(kmsg.FormatterClientID("client"))}
+}
+
+func (c *listenerClient) expectClosed() {
+	c.t.Helper()
+	if err := c.conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil && err != io.ErrClosedPipe {
+		c.t.Fatal(err)
+	}
+	var extra [1]byte
+	if n, err := c.conn.Read(extra[:]); n != 0 || err != io.EOF {
+		c.t.Fatalf("listener did not close after stale-cache response: read %d bytes, error %v", n, err)
+	}
 }
 
 func (c *listenerClient) roundTrip(req kmsg.Request) kmsg.Response {
@@ -350,6 +373,7 @@ func TestListenerStopsRoutingPastCacheTTL(t *testing.T) {
 			if got := broker.dials.Load(); got != dials {
 				t.Errorf("opened %d new broker connection(s) from stale routes", got-dials)
 			}
+			client.expectClosed()
 		})
 	}
 }
