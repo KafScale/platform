@@ -1040,8 +1040,46 @@ func (h *handler) acquirePartitionLeases(ctx context.Context, req *kmsg.ProduceR
 	}
 	results := h.leaseManager.AcquireAll(ctx, partitions)
 	var errs map[metadata.PartitionID]error
+	var checkedTopics map[string]map[int32]struct{}
+	var refreshed bool
+	var refreshErr error
 	for _, r := range results {
 		if r.Err != nil {
+			if errors.Is(r.Err, metadata.ErrNotOwner) {
+				// A previous invalid request may have acquired a lease for a
+				// nonexistent partition. Check metadata before redirecting it.
+				// Refresh once to avoid rejecting a valid partition from an old
+				// snapshot. Healthy owned requests skip this work entirely.
+				if !refreshed {
+					refreshed = true
+					if store, ok := h.store.(interface{ RefreshSnapshot(context.Context) error }); ok {
+						refreshErr = store.RefreshSnapshot(ctx)
+					}
+				}
+				if checkedTopics == nil {
+					checkedTopics = make(map[string]map[int32]struct{})
+				}
+				known, checked := checkedTopics[r.Partition.Topic]
+				if !checked && refreshErr == nil {
+					if meta, err := h.store.Metadata(ctx, []string{r.Partition.Topic}); err == nil && meta != nil {
+						known = make(map[int32]struct{})
+						for _, topic := range meta.Topics {
+							if topic.Topic == nil || *topic.Topic != r.Partition.Topic || topic.ErrorCode != 0 {
+								continue
+							}
+							for _, part := range topic.Partitions {
+								known[part.Partition] = struct{}{}
+							}
+						}
+					}
+					checkedTopics[r.Partition.Topic] = known
+				}
+				if known != nil {
+					if _, exists := known[r.Partition.Partition]; !exists {
+						r.Err = metadata.ErrUnknownTopic
+					}
+				}
+			}
 			if errs == nil {
 				errs = make(map[metadata.PartitionID]error)
 			}
@@ -1137,21 +1175,21 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				continue
 			}
 			if leaseErr, hasErr := leaseErrors[metadata.PartitionID{Topic: topic.Topic, Partition: part.Partition}]; hasErr {
-				if errors.Is(leaseErr, metadata.ErrNotOwner) || errors.Is(leaseErr, metadata.ErrShuttingDown) {
-					p := kmsg.NewProduceResponseTopicPartition()
-					p.Partition = part.Partition
-					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
-					partitionResponses = append(partitionResponses, p)
-					if h.traceKafka {
-						h.logger.Debug("produce rejected: not partition owner", "topic", topic.Topic, "partition", part.Partition)
-					}
-					continue
-				}
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
-				p.ErrorCode = protocol.REQUEST_TIMED_OUT
+				switch {
+				case errors.Is(leaseErr, metadata.ErrUnknownTopic):
+					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
+				case errors.Is(leaseErr, metadata.ErrNotOwner), errors.Is(leaseErr, metadata.ErrShuttingDown):
+					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				default:
+					p.ErrorCode = protocol.REQUEST_TIMED_OUT
+					h.logger.Warn("partition lease acquire failed", "topic", topic.Topic, "partition", part.Partition, "error", leaseErr)
+				}
 				partitionResponses = append(partitionResponses, p)
-				h.logger.Warn("partition lease acquire failed", "topic", topic.Topic, "partition", part.Partition, "error", leaseErr)
+				if h.traceKafka {
+					h.logger.Debug("produce rejected", "topic", topic.Topic, "partition", part.Partition, "error_code", p.ErrorCode)
+				}
 				continue
 			}
 			if h.s3Health.State() != broker.S3StateHealthy {

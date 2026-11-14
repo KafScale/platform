@@ -24,6 +24,7 @@ import (
 
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/pkg/storage"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -219,5 +220,123 @@ func TestProduceRejectsUnknownPartitionWithEtcdLeases(t *testing.T) {
 	}
 	if len(h.logs) != 0 {
 		t.Fatal("missing partition initialized a log with leases enabled")
+	}
+}
+
+type staleLeaseMetadataStore struct {
+	*metadata.EtcdStore
+	refreshed  atomic.Bool
+	refreshes  atomic.Int32
+	refreshErr error
+}
+
+func (s *staleLeaseMetadataStore) Metadata(ctx context.Context, topics []string) (*metadata.ClusterMetadata, error) {
+	if !s.refreshed.Load() {
+		return &metadata.ClusterMetadata{}, nil
+	}
+	return s.EtcdStore.Metadata(ctx, topics)
+}
+func (s *staleLeaseMetadataStore) RefreshSnapshot(ctx context.Context) error {
+	s.refreshes.Add(1)
+	if s.refreshErr != nil {
+		return s.refreshErr
+	}
+	if err := s.EtcdStore.RefreshSnapshot(ctx); err != nil {
+		return err
+	}
+	s.refreshed.Store(true)
+	return nil
+}
+
+func TestProduceUnknownPartitionWithAnotherLeaseOwner(t *testing.T) {
+	store := newEtcdTopicStore(t, context.Background())
+	a := newTestHandler(store)
+	b := newHandler(store, storage.NewMemoryS3Client(), protocol.MetadataBroker{NodeID: 2}, testLogger())
+	for _, h := range []*handler{a, b} {
+		t.Cleanup(h.coordinator.Stop)
+		t.Cleanup(h.leaseManager.ReleaseAll)
+		h.autoCreateTopics = true
+	}
+	for _, h := range []*handler{a, b} {
+		raw := producePromptly(t, h, unknownPartitionProduce("orders", 7, -1, 0))
+		p := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+		if p.ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+			t.Fatalf("broker %d returned %d for a nonexistent partition", h.brokerInfo.NodeID, p.ErrorCode)
+		}
+	}
+
+	// A real partition on the other broker must still produce a leader retry.
+	raw := producePromptly(t, a, unknownPartitionProduce("orders", 0, -1, 0))
+	if p := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]; p.ErrorCode != protocol.NONE {
+		t.Fatal(p.ErrorCode)
+	}
+	stale := &staleLeaseMetadataStore{EtcdStore: store}
+	b.store = stale
+	req := unknownPartitionProduce("orders", 0, -1, 0)
+	req.Topics[0].Partitions = append(req.Topics[0].Partitions, unknownPartitionProduce("orders", 7, -1, 0).Topics[0].Partitions[0])
+	raw = producePromptly(t, b, req)
+	parts := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions
+	if len(parts) != 2 || parts[0].ErrorCode != protocol.NOT_LEADER_OR_FOLLOWER || parts[1].ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+		t.Fatalf("mixed lease errors were misclassified: %+v", parts)
+	}
+	if !stale.refreshed.Load() || stale.refreshes.Load() != 1 {
+		t.Fatal("lease errors did not use one fresh metadata snapshot")
+	}
+	if next, err := store.NextOffset(context.Background(), "orders", 0); err != nil || next != 1 {
+		t.Fatalf("non-owner changed valid offsets: %d %v", next, err)
+	}
+	// A failed refresh cannot establish that a partition is absent.
+	failed := &staleLeaseMetadataStore{EtcdStore: store, refreshErr: fmt.Errorf("snapshot unavailable")}
+	b.store = failed
+	raw = producePromptly(t, b, unknownPartitionProduce("orders", 7, -1, 0))
+	if p := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]; p.ErrorCode != protocol.NOT_LEADER_OR_FOLLOWER {
+		t.Fatalf("failed metadata refresh changed the known ownership error: %d", p.ErrorCode)
+	}
+	if failed.refreshes.Load() != 1 {
+		t.Fatal("failed metadata refresh was not exercised")
+	}
+}
+
+func TestProduceConcurrentAutoCreateWithRequestedPartition(t *testing.T) {
+	const producers = 32
+	store := metadata.NewInMemoryStore(defaultMetadata())
+	h := newTestHandler(store)
+	t.Cleanup(h.coordinator.Stop)
+	h.autoCreateTopics = true
+	h.flushOnAck = true
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type result struct {
+		raw []byte
+		err error
+	}
+	done := make(chan result, producers)
+	for range producers {
+		go func() {
+			raw, err := h.handleProduce(ctx, &protocol.RequestHeader{APIVersion: 3}, unknownPartitionProduce("concurrent-topic", 2, -1, 0))
+			done <- result{raw, err}
+		}()
+	}
+	offsets := make(map[int64]bool)
+	for range producers {
+		select {
+		case out := <-done:
+			if out.err != nil {
+				t.Fatal(out.err)
+			}
+			p := decodeKmsgResponse(t, 3, out.raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+			if p.ErrorCode != protocol.NONE {
+				t.Fatalf("concurrent auto-create rejected valid partition: %d", p.ErrorCode)
+			}
+			if offsets[p.BaseOffset] {
+				t.Fatalf("duplicate acknowledged offset %d", p.BaseOffset)
+			}
+			offsets[p.BaseOffset] = true
+		case <-ctx.Done():
+			t.Fatal("concurrent auto-creation did not finish", ctx.Err())
+		}
+	}
+	if next, err := store.NextOffset(context.Background(), "concurrent-topic", 2); err != nil || next != producers {
+		t.Fatalf("lost acknowledged offsets: %d %v", next, err)
 	}
 }
