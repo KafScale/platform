@@ -137,6 +137,22 @@ func (k *unavailableLockDeleteKV) Delete(ctx context.Context, key string, opts .
 		return nil, ctx.Err()
 	}
 }
+
+// Delay lease setup beyond the old 250ms whole-request deadline. Cancellation
+// must be synchronized with contended cleanup, not with lease-grant latency.
+type delayedLockGrantLease struct {
+	clientv3.Lease
+}
+
+func (l delayedLockGrantLease) Grant(ctx context.Context, ttl int64) (*clientv3.LeaseGrantResponse, error) {
+	select {
+	case <-time.After(300 * time.Millisecond):
+		return l.Lease.Grant(ctx, ttl)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func TestLFSCanceledLockWaitHasBoundedCleanup(t *testing.T) {
 	a, b, _ := sharedSessionModules(t)
 	init := sessionInit(t, a, `{"topic":"orders","content_type":"application/octet-stream","size_bytes":7}`)
@@ -148,7 +164,16 @@ func TestLFSCanceledLockWaitHasBoundedCleanup(t *testing.T) {
 	b.dialTimeout = 50 * time.Millisecond
 	blocked := &unavailableLockDeleteKV{KV: b.uploadSessionClient.KV, contexts: make(chan context.Context, 4), recovered: make(chan struct{})}
 	b.uploadSessionClient.KV = blocked
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	b.uploadSessionClient.Lease = delayedLockGrantLease{Lease: b.uploadSessionClient.Lease}
+	recoverDeletes := func() {
+		select {
+		case <-blocked.recovered:
+		default:
+			close(blocked.recovered)
+		}
+	}
+	defer recoverDeletes()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
@@ -158,14 +183,24 @@ func TestLFSCanceledLockWaitHasBoundedCleanup(t *testing.T) {
 		}
 		done <- err
 	}()
+	var contexts []context.Context
+	select {
+	case cleanupCtx := <-blocked.contexts:
+		contexts = append(contexts, cleanupCtx)
+	case err := <-done:
+		t.Fatalf("waiter exited before reaching contended lock cleanup: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("waiter did not reach contended lock cleanup")
+	}
+	// Start measuring the cancellation bound only after setup and contention.
+	cancel()
 	select {
 	case err := <-done:
-		close(blocked.recovered)
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("waiter: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		close(blocked.recovered)
+		recoverDeletes()
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
@@ -173,11 +208,14 @@ func TestLFSCanceledLockWaitHasBoundedCleanup(t *testing.T) {
 		}
 		t.Fatal("canceled request remained blocked in unbounded cleanup")
 	}
-	if len(blocked.contexts) == 0 {
-		t.Fatal("did not exercise lock cleanup failure")
-	}
 	for len(blocked.contexts) > 0 {
-		if _, ok := (<-blocked.contexts).Deadline(); !ok {
+		contexts = append(contexts, <-blocked.contexts)
+	}
+	if len(contexts) < 2 {
+		t.Fatal("did not exercise release cleanup after canceling the contended lock request")
+	}
+	for _, cleanupCtx := range contexts {
+		if _, ok := cleanupCtx.Deadline(); !ok {
 			t.Fatal("lock cleanup used a context without a deadline")
 		}
 	}
