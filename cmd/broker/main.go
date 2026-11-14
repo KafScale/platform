@@ -1182,6 +1182,8 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
 				} else if errors.Is(err, metadata.ErrInvalidTopic) {
 					p.ErrorCode = protocol.INVALID_TOPIC_EXCEPTION
+				} else if errors.Is(err, metadata.ErrUnknownTopic) {
+					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
 				} else if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 					p.ErrorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, storage.ErrObjectStorage) {
@@ -2274,6 +2276,9 @@ func (h *handler) loadPartitionLog(ctx context.Context, topic string, partition 
 				if err := h.ensureTopic(ctx, topic, partition); err != nil {
 					return nil, err
 				}
+				// An existing topic may still lack this partition. Retry its
+				// lookup once, including after a concurrent topic creation.
+				autoCreate = false
 				continue
 			}
 			return nil, err
