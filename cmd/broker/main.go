@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/KafScale/platform/internal/s3env"
@@ -1040,7 +1041,11 @@ func (h *handler) acquirePartitionLeases(ctx context.Context, req *kmsg.ProduceR
 	}
 	results := h.leaseManager.AcquireAll(ctx, partitions)
 	var errs map[metadata.PartitionID]error
-	var checkedTopics map[string]map[int32]struct{}
+	type topicLeaseMetadata struct {
+		partitions map[int32]struct{}
+		err        error
+	}
+	var checkedTopics map[string]topicLeaseMetadata
 	var refreshed bool
 	var refreshErr error
 	for _, r := range results {
@@ -1057,25 +1062,32 @@ func (h *handler) acquirePartitionLeases(ctx context.Context, req *kmsg.ProduceR
 					}
 				}
 				if checkedTopics == nil {
-					checkedTopics = make(map[string]map[int32]struct{})
+					checkedTopics = make(map[string]topicLeaseMetadata)
 				}
-				known, checked := checkedTopics[r.Partition.Topic]
+				view, checked := checkedTopics[r.Partition.Topic]
 				if !checked && refreshErr == nil {
 					if meta, err := h.store.Metadata(ctx, []string{r.Partition.Topic}); err == nil && meta != nil {
-						known = make(map[int32]struct{})
+						view.err = metadata.ErrUnknownTopic
 						for _, topic := range meta.Topics {
-							if topic.Topic == nil || *topic.Topic != r.Partition.Topic || topic.ErrorCode != 0 {
+							if topic.Topic == nil || *topic.Topic != r.Partition.Topic {
 								continue
 							}
-							for _, part := range topic.Partitions {
-								known[part.Partition] = struct{}{}
+							view.err = kerr.ErrorForCode(topic.ErrorCode)
+							if view.err == nil {
+								view.partitions = make(map[int32]struct{})
+								for _, part := range topic.Partitions {
+									view.partitions[part.Partition] = struct{}{}
+								}
 							}
+							break
 						}
 					}
-					checkedTopics[r.Partition.Topic] = known
+					checkedTopics[r.Partition.Topic] = view
 				}
-				if known != nil {
-					if _, exists := known[r.Partition.Partition]; !exists {
+				if view.err != nil {
+					r.Err = view.err
+				} else if view.partitions != nil {
+					if _, exists := view.partitions[r.Partition.Partition]; !exists {
 						r.Err = metadata.ErrUnknownTopic
 					}
 				}
@@ -1177,11 +1189,14 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			if leaseErr, hasErr := leaseErrors[metadata.PartitionID{Topic: topic.Topic, Partition: part.Partition}]; hasErr {
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
+				var topicErr *kerr.Error
 				switch {
 				case errors.Is(leaseErr, metadata.ErrUnknownTopic):
 					p.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
 				case errors.Is(leaseErr, metadata.ErrNotOwner), errors.Is(leaseErr, metadata.ErrShuttingDown):
 					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
+				case errors.As(leaseErr, &topicErr):
+					p.ErrorCode = topicErr.Code
 				default:
 					p.ErrorCode = protocol.REQUEST_TIMED_OUT
 					h.logger.Warn("partition lease acquire failed", "topic", topic.Topic, "partition", part.Partition, "error", leaseErr)
