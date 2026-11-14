@@ -58,7 +58,11 @@ func TopicStorageName(topic string, generation int64) string {
 }
 
 func (s *EtcdStore) TopicGeneration(ctx context.Context, topic string) (int64, error) {
-	resp, err := s.client.Get(ctx, TopicGenerationKey(topic))
+	return s.topicGenerationAt(ctx, topic, 0)
+}
+
+func (s *EtcdStore) topicGenerationAt(ctx context.Context, topic string, revision int64) (int64, error) {
+	resp, err := s.client.Get(ctx, TopicGenerationKey(topic), clientv3.WithRev(revision))
 	s.recordEtcdResult(err)
 	if err != nil {
 		return 0, err
@@ -75,66 +79,60 @@ func (s *EtcdStore) RetireTopic(ctx context.Context, name, namespace string) err
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 
-	state, err := s.metadata.Metadata(ctx, nil)
-	if err != nil {
-		return err
-	}
-	remaining := *state
-	remaining.Topics = nil
-	var topicID [16]byte
-	found := false
-	for _, topic := range state.Topics {
-		if *topic.Topic == name {
-			topicID = topic.TopicID
-			found = true
-			continue
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var offsetKeys []string
+	var first int
+	var next string
+	var observedGeneration *int64
+	genKey := TopicGenerationKey(name)
+	retiredRevision, err := s.mutateSnapshot(ctx, func(candidate *InMemoryStore, revision int64) ([]clientv3.Cmp, []clientv3.Op, error) {
+		state, err := candidate.Metadata(ctx, []string{name})
+		if err != nil {
+			return nil, nil, err
 		}
-		remaining.Topics = append(remaining.Topics, topic)
-	}
-	if !found {
-		return ErrUnknownTopic
-	}
-	snapshot, err := json.Marshal(remaining)
-	if err != nil {
-		return err
-	}
-	generation, err := s.TopicGeneration(ctx, name)
-	if err != nil {
-		return err
-	}
-	record, err := json.Marshal(DeletedTopic{
-		Name:       name,
-		TopicID:    fmt.Sprintf("%x", topicID),
-		Generation: generation,
-		Prefix:     path.Join(namespace, TopicStorageName(name, generation)) + "/",
-		DeletedAt:  time.Now().UTC().Format(time.RFC3339),
+		if len(state.Topics) == 0 || state.Topics[0].ErrorCode != 0 {
+			return nil, nil, ErrUnknownTopic
+		}
+		generation, err := s.topicGenerationAt(ctx, name, revision)
+		if err != nil {
+			return nil, nil, err
+		}
+		if observedGeneration != nil && *observedGeneration != generation {
+			return nil, nil, ErrTopicGenerationChanged
+		}
+		observedGeneration = &generation
+		record, err := json.Marshal(DeletedTopic{
+			Name: name, TopicID: fmt.Sprintf("%x", state.Topics[0].TopicID), Generation: generation,
+			Prefix:    path.Join(namespace, TopicStorageName(name, generation)) + "/",
+			DeletedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		offsetKeys, err = s.consumerOffsetKeys(ctx, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		next = strconv.FormatInt(generation+1, 10)
+		ops := []clientv3.Op{
+			clientv3.OpDelete(fmt.Sprintf("/kafscale/topics/%s/", name), clientv3.WithPrefix()),
+			clientv3.OpPut(genKey, next),
+			clientv3.OpPut(DeletedTopicKey(name, generation), string(record)),
+		}
+		first = min(len(offsetKeys), maxTxnOps-len(ops)-1)
+		for _, key := range offsetKeys[:first] {
+			ops = append(ops, clientv3.OpDelete(key))
+		}
+		if err := candidate.DeleteTopic(ctx, name); err != nil {
+			return nil, nil, err
+		}
+		return []clientv3.Cmp{generationIs(genKey, generation)}, ops, nil
 	})
 	if err != nil {
 		return err
 	}
-	offsetKeys, err := s.consumerOffsetKeys(ctx, name)
-	if err != nil {
-		return err
-	}
-	genKey := TopicGenerationKey(name)
-	next := strconv.FormatInt(generation+1, 10)
-	ops := []clientv3.Op{
-		clientv3.OpPut(snapshotKey(), string(snapshot)),
-		clientv3.OpDelete(fmt.Sprintf("/kafscale/topics/%s/", name), clientv3.WithPrefix()),
-		clientv3.OpPut(genKey, next),
-		clientv3.OpPut(DeletedTopicKey(name, generation), string(record)),
-	}
-	first := min(len(offsetKeys), maxTxnOps-len(ops))
-	for _, key := range offsetKeys[:first] {
-		ops = append(ops, clientv3.OpDelete(key))
-	}
-	retiredRevision, err := s.commitGuardedAt(ctx, generationIs(genKey, generation), ops)
-	if err != nil {
-		return err
-	}
-	if err := s.metadata.DeleteTopic(ctx, name); err != nil && !errors.Is(err, ErrUnknownTopic) {
-		return err
-	}
+
 	rest := offsetKeys[first:]
 	for len(rest) > 0 {
 		// Each conditional delete uses a nested transaction plus its delete op.

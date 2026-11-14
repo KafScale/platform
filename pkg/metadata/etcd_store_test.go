@@ -131,6 +131,8 @@ func TestEtcdStoreDeleteTopicRemovesOffsets(t *testing.T) {
 	}
 	store := newTestEtcdStore(t, ctx, initial, endpoints)
 
+	writeSnapshotFixture(t, store.client, initial)
+
 	if err := store.UpdateOffsets(ctx, "orders", 0, 10); err != nil {
 		t.Fatalf("UpdateOffsets: %v", err)
 	}
