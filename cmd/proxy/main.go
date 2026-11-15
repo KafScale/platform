@@ -922,14 +922,29 @@ func (p *proxy) handleProduceRouting(ctx context.Context, header *protocol.Reque
 	}
 
 	if produceReq.Acks == 0 {
-		p.fireAndForgetProduce(ctx, header, produceReq, payload, pool)
+		written := p.fireAndForgetProduce(ctx, header, produceReq, payload, pool)
+		if len(lfsOrphans) > 0 {
+			p.lfs.trackUnconfirmedUploads(lfsOrphans, written)
+		}
 		return nil, nil
 	}
 
 	groups := p.groupPartitionsByBroker(ctx, produceReq, nil)
 	resp, err := p.forwardProduce(ctx, header, produceReq, payload, groups, pool)
-	if err != nil && p.lfs != nil && len(lfsOrphans) > 0 {
-		p.lfs.trackOrphans(lfsOrphans)
+	if len(lfsOrphans) > 0 {
+		confirmed := make(map[producePartition]bool)
+		if err == nil {
+			if result, parseErr := parseProduceResponse(resp, header.APIVersion); parseErr == nil {
+				for _, topic := range result.Topics {
+					for _, part := range topic.Partitions {
+						if part.ErrorCode == 0 {
+							confirmed[producePartition{topic.Topic, part.Partition}] = true
+						}
+					}
+				}
+			}
+		}
+		p.lfs.trackUnconfirmedUploads(lfsOrphans, confirmed)
 	}
 	return resp, err
 }
@@ -953,12 +968,13 @@ func (p *proxy) forwardProduceRaw(ctx context.Context, payload []byte, pool *con
 // fireAndForgetProduce writes a produce request to backends without reading a
 // response. Used for acks=0 produces where the Kafka protocol specifies no
 // server response.
-func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.RequestHeader, req *kmsg.ProduceRequest, originalPayload []byte, pool *connPool) {
+func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.RequestHeader, req *kmsg.ProduceRequest, originalPayload []byte, pool *connPool) map[producePartition]bool {
 	groups := p.groupPartitionsByBroker(ctx, req, nil)
+	written := make(map[producePartition]bool)
 
 	for addr, subReq := range groups {
 		var payload []byte
-		if len(groups) == 1 {
+		if originalPayload != nil && len(groups) == 1 {
 			payload = originalPayload
 		} else {
 			payload = encodeProduceRequest(header, subReq)
@@ -975,7 +991,13 @@ func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.Reque
 			continue
 		}
 		pool.Return(targetAddr, conn)
+		for _, topic := range subReq.Topics {
+			for _, part := range topic.Partitions {
+				written[producePartition{topic.Topic, part.Partition}] = true
+			}
+		}
 	}
+	return written
 }
 
 // groupPartitionsByBroker groups topic-partitions by the owning broker's address.

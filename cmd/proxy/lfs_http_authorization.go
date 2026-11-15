@@ -40,7 +40,7 @@ func (m *lfsModule) authorizeHTTPUpload(w http.ResponseWriter, requestID, topic 
 // A completed TCP exchange is not a Kafka acknowledgement. Require the expected
 // partition and correlation ID, and reject every broker error before HTTP 200.
 func (m *lfsModule) produceHTTPRecord(ctx context.Context, conn net.Conn, payload []byte, topic string, partition, correlationID int32) (int64, error) {
-	data, err := m.forwardToBackend(ctx, conn, payload)
+	data, err := m.forwardToBackend(ctx, conn, payload, lfsProduceTimeoutMillis*time.Millisecond)
 	if err != nil {
 		return 0, err
 	}
