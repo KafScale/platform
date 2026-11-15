@@ -387,7 +387,7 @@ func (m *lfsModule) handleHTTPProduce(w http.ResponseWriter, r *http.Request) {
 
 	produceReq := &kmsg.ProduceRequest{
 		Acks:          1,
-		TimeoutMillis: 15000,
+		TimeoutMillis: lfsProduceTimeoutMillis,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: topic,
 			Partitions: []kmsg.ProduceRequestTopicPartition{{
@@ -1186,7 +1186,7 @@ func (m *lfsModule) handleHTTPUploadComplete(w http.ResponseWriter, r *http.Requ
 
 	produceReq := &kmsg.ProduceRequest{
 		Acks:          1,
-		TimeoutMillis: 15000,
+		TimeoutMillis: lfsProduceTimeoutMillis,
 		Topics: []kmsg.ProduceRequestTopic{{
 			Topic: session.Topic,
 			Partitions: []kmsg.ProduceRequestTopicPartition{{

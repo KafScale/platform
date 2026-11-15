@@ -664,7 +664,7 @@ supports and applies this action. See the
 Kafka backends:
 
 - `KAFSCALE_LFS_PROXY_BACKENDS` – Comma-separated broker list used by the LFS module and tracker. When it is unset, the LFS HTTP API uses the brokers registered in etcd, as the Kafka listener does, and the tracker is off.
-- `KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS` (default `5000`), `KAFSCALE_LFS_PROXY_BACKEND_RETRIES` (default `6`, minimum `1`), `KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS` (default `500`).
+- `KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS` (default `5000`), `KAFSCALE_LFS_PROXY_BACKEND_RETRIES` (default `6`, minimum `1`), `KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS` (default `500`). The dial timeout also bounds the LFS HTTP Kafka request write. After the write, the response gets a separate budget of 15 seconds (the broker Produce timeout) plus the dial timeout, 20 seconds by default. An earlier HTTP request deadline or cancellation stops the exchange.
 - `KAFSCALE_LFS_PROXY_BACKEND_SASL_MECHANISM`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_USERNAME`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_PASSWORD` – SASL for backend connections.
 - `KAFSCALE_LFS_PROXY_BACKEND_TLS_ENABLED` (default `false`), `KAFSCALE_LFS_PROXY_BACKEND_TLS_CA_FILE`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_CERT_FILE`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_KEY_FILE` (cert and key must be set together), `KAFSCALE_LFS_PROXY_BACKEND_TLS_SERVER_NAME`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_INSECURE_SKIP_VERIFY` (default `false`).
 

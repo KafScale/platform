@@ -44,6 +44,7 @@ const (
 	defaultLFSMaxBlob              = int64(5 << 30)
 	defaultLFSChunkSize            = int64(5 << 20)
 	defaultLFSDialTimeoutMs        = 5000
+	lfsProduceTimeoutMillis        = 15000
 	defaultLFSMetadataTimeoutMs    = 3000
 	defaultLFSBackendBackoffMs     = 500
 	defaultLFSS3HealthIntervalSec  = 30
@@ -687,16 +688,36 @@ func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, p
 }
 
 // forwardToBackend writes a frame and reads the response.
-func (m *lfsModule) forwardToBackend(ctx context.Context, conn net.Conn, payload []byte) ([]byte, error) {
-	deadline := time.Now().Add(m.dialTimeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
+func (m *lfsModule) forwardToBackend(ctx context.Context, conn net.Conn, payload []byte, produceTimeout time.Duration) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	_ = conn.SetDeadline(deadline)
-	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close(); close(closed) })
+	defer func() {
+		if !stop() {
+			<-closed
+		}
+		_ = conn.SetDeadline(time.Time{})
+	}()
+	ioTimeout := m.dialTimeout
+	if ioTimeout <= 0 {
+		ioTimeout = defaultLFSDialTimeoutMs * time.Millisecond
+	}
+	deadline := func(budget time.Duration) time.Time {
+		until := time.Now().Add(budget)
+		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(until) {
+			return ctxDeadline
+		}
+		return until
+	}
+	_ = conn.SetWriteDeadline(deadline(ioTimeout))
 	if err := protocol.WriteFrame(conn, payload); err != nil {
 		return nil, err
 	}
+	// The broker may use the entire Produce timeout before replying. Allow
+	// that interval plus the I/O budget, independently of the upload/write.
+	_ = conn.SetReadDeadline(deadline(produceTimeout + ioTimeout))
 	frame, err := protocol.ReadFrame(conn)
 	if err != nil {
 		return nil, err

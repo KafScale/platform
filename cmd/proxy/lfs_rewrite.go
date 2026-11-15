@@ -46,7 +46,13 @@ type lfsRewriteResult struct {
 	duration    float64
 }
 
+type producePartition struct {
+	topic     string
+	partition int32
+}
+
 type orphanInfo struct {
+	Partition int32
 	Topic     string
 	Key       string
 	RequestID string
@@ -213,7 +219,7 @@ func (m *lfsModule) rewriteProduceRecords(ctx context.Context, header *protocol.
 				rec.Value = encoded
 				rec.Headers = lfsDropHeader(headers, "LFS_BLOB")
 				uploadBytes += int64(len(payload))
-				orphans = append(orphans, orphanInfo{Topic: dp.topic, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
+				orphans = append(orphans, orphanInfo{Topic: dp.topic, Partition: dp.partition.Partition, Key: key, RequestID: "", Reason: "kafka_produce_failed"})
 			}
 			if !recordChanged {
 				continue
@@ -408,4 +414,16 @@ func lfsDropHeader(headers []kmsg.Header, key string) []kmsg.Header {
 
 func lfsInt32FromBytes(b []byte) int32 {
 	return int32(uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]))
+}
+
+// Track failed and ambiguous publications by partition. Never delete these
+// objects: a lost acknowledgement can still leave an envelope in Kafka.
+func (m *lfsModule) trackUnconfirmedUploads(uploads []orphanInfo, confirmed map[producePartition]bool) {
+	var orphans []orphanInfo
+	for _, upload := range uploads {
+		if !confirmed[producePartition{upload.Topic, upload.Partition}] {
+			orphans = append(orphans, upload)
+		}
+	}
+	m.trackOrphans(orphans)
 }
