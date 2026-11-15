@@ -41,7 +41,7 @@ limitations under the License.
 
 - The SQL proxy contains malformed upstream PostgreSQL decoder panics (GO-2026-4518), closes the failed exchange and continues serving other connections. The archived codec has no patched v2 release.
 
-- Update vulnerable Go and JavaScript dependencies: OpenTelemetry SDK/trace 1.47.0, JOSE 4.1.6, compress 1.20.2, x/net 0.60.0 and fast-xml-parser 5.12.0. Processor modules use the same patched dependency versions. Build binaries with Go 1.26.11 to include the HTTP server security fix.
+- Update vulnerable Go and JavaScript dependencies: OpenTelemetry SDK/trace 1.47.0, JOSE 4.1.6, Brotli 1.2.7, compress 1.20.2, x/net 0.62.0, x/crypto 0.59.0 and fast-xml-parser 5.12.0. Processor modules use the same patched dependency versions. Build KafScale binaries with Go 1.26.11 to include the HTTP server security fix.
 - Managed etcd and snapshot tools use etcd 3.6.14. The managed server image comes from `gcr.io/etcd-development/etcd` and is pinned by digest; Docker Compose keeps the 3.5 line and moves to 3.5.33. These releases fix watch/transaction authorization bypasses and unbounded TLS handshakes. Existing image overrides take precedence. Demo probes use the shell-equipped snapshot tools image.
 - CI installs Python dependency closures pinned by version and SHA-256, and processor base images are pinned by digest.
 - Group-routing failures log fixed reason codes instead of raw errors containing request data. Group and generic backend failures build their Kafka error responses from the request body, so a failed broker connection returns `REQUEST_TIMED_OUT` instead of closing without a response.

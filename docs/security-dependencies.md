@@ -23,9 +23,11 @@ The security changes are based on PR #332. Alert closure must be checked on
 | Component | Patched version | Scope |
 | --- | --- | --- |
 | OpenTelemetry SDK and trace | 1.47.0 | Root, SQL and Iceberg Go modules |
-| klauspost/compress | 1.20.2 | Root, SQL and Iceberg Go modules |
-| golang.org/x/net | 0.60.0 | Root, SQL and Iceberg Go modules |
+| klauspost/compress | 1.20.2 | Root and Iceberg Go modules |
+| golang.org/x/net | 0.62.0 | Root, SQL and Iceberg Go modules |
+| golang.org/x/crypto | 0.59.0 | Root, SQL and Iceberg Go modules |
 | go-jose/v4 | 4.1.6 | Iceberg processor |
+| andybalholm/brotli | 1.2.7 | Iceberg processor |
 | fast-xml-parser | 5.12.0 | Node LFS SDK; compatible XML builder 1.3.1 |
 | Go build toolchain | 1.26.11 | Go modules and container builders |
 | etcd | 3.6.14 | Root/Iceberg modules, managed server and snapshot tools |
@@ -73,3 +75,13 @@ send both `-2` and the minimum signed 32-bit field length. Valid relay traffic
 and ordinary read errors retain their existing behavior. The module still
 appears in the static vulnerability scan; the runtime panic is contained.
 A migration to the maintained pgx codec remains separate compatibility work.
+
+## Other module-only findings
+
+The Iceberg dependency graph includes AWS SDK v1 through upstream libraries.
+The module scan reports [GO-2022-0635](https://pkg.go.dev/vuln/GO-2022-0635) and
+[GO-2022-0646](https://pkg.go.dev/vuln/GO-2022-0646) for its S3 client-side
+cryptography implementation; no patched v1 release exists. The full call scan
+found no affected production call paths. KafScale's own S3 clients use AWS SDK
+v2. These module findings remain recorded, and a future upstream-library
+migration must keep them outside the execution paths.
