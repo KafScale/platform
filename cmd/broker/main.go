@@ -2216,9 +2216,23 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 var fetchPollInterval = 10 * time.Millisecond
 
 func (h *handler) ensureTopic(ctx context.Context, topic string, partition int32) error {
-	desired := int32(h.autoCreatePartitions)
-	if desired < partition+1 {
-		desired = partition + 1
+	desired := h.autoCreatePartitions
+	if desired < 1 {
+		desired = 1
+	}
+	if partition < 0 {
+		return metadata.ErrUnknownTopic
+	}
+	if partition >= desired {
+		// The configured count bounds new-topic allocation. A larger existing
+		// topic may still have this partition, including after a stale read.
+		if store, ok := h.store.(interface{ RefreshSnapshot(context.Context) error }); ok {
+			if err := store.RefreshSnapshot(ctx); err != nil {
+				return err
+			}
+		}
+		_, err := h.store.NextOffset(ctx, topic, partition)
+		return err
 	}
 	spec := metadata.TopicSpec{
 		Name:              topic,

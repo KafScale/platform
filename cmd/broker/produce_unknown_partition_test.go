@@ -170,6 +170,7 @@ func TestProduceAutoCreateRaceRejectsMissingPartition(t *testing.T) {
 	h := newTestHandler(store)
 	t.Cleanup(h.coordinator.Stop)
 	h.autoCreateTopics = true
+	h.autoCreatePartitions = 8
 	raw := producePromptly(t, h, unknownPartitionProduce("raced", 7, -1, 0))
 	if p := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]; p.ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
 		t.Fatal(p.ErrorCode)
@@ -200,6 +201,7 @@ func TestProduceAutoCreatesMissingTopicWithRequestedPartition(t *testing.T) {
 	h := newTestHandler(store)
 	t.Cleanup(h.coordinator.Stop)
 	h.autoCreateTopics = true
+	h.autoCreatePartitions = 3
 	raw := producePromptly(t, h, unknownPartitionProduce("new-topic", 2, -1, 0))
 	if p := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]; p.ErrorCode != protocol.NONE || p.BaseOffset != 0 {
 		t.Fatalf("auto-create failed: %+v", p)
@@ -303,6 +305,7 @@ func TestProduceConcurrentAutoCreateWithRequestedPartition(t *testing.T) {
 	h := newTestHandler(store)
 	t.Cleanup(h.coordinator.Stop)
 	h.autoCreateTopics = true
+	h.autoCreatePartitions = 3
 	h.flushOnAck = true
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

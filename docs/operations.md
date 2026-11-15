@@ -463,7 +463,7 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
 - `KAFSCALE_CACHE_BYTES` – Broker cache size in bytes. `KAFSCALE_CACHE_SIZE` is accepted as a legacy alias when `KAFSCALE_CACHE_BYTES` is unset or not positive.
 - `KAFSCALE_READAHEAD_SEGMENTS` – Segment readahead count.
 - `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
-- `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics.
+- `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics (default `1`). Produce requests cannot increase this count by naming a higher partition. An out-of-range partition on a missing topic is rejected without creating the topic. Existing topics retain their own partition counts.
 - `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
 - `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes` to zero or more; zero disables expiry and omission uses the broker default. Retention is checked once per minute under the group coordination lease. Groups are listed for the check from the group index, with a full scan of the group and offset keys once an hour; see [Consumer Group Keys In Etcd](#consumer-group-keys-in-etcd).
 - `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
