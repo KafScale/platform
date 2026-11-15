@@ -39,7 +39,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
 
-By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.6.3`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
+By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a specific release (for example, `v1.6.3`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
 
 ### Per-cluster broker image
 
@@ -634,7 +634,7 @@ advertised address.
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET`: Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`, separate from broker segment storage).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX`: Snapshot prefix (default `etcd-snapshots`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE`: Cron schedule for snapshots (default `0 * * * *`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE`: Etcdctl image for snapshots, restore and maintenance jobs (default `ghcr.io/kafscale/kafscale-etcd-tools:dev`; this `:dev` tag is the code default, so pin a release tag in production).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE`: Etcdctl image for snapshots, restore and maintenance jobs (code default `ghcr.io/kafscale/kafscale-etcd-tools:dev`; the Helm chart sets the chart appVersion tag).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE`: AWS CLI image for uploads (default `amazon/aws-cli:2.15.0`).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT`: S3 endpoint override (MinIO/custom).
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`: Staleness threshold seconds (default `7200`).

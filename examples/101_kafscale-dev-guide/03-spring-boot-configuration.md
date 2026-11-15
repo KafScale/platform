@@ -111,6 +111,8 @@ spring:
         bootstrap.servers: localhost:39092
 ```
 
+> **Tip:** For a working configuration in a complete app, see [`application.yml`](../E20_spring-boot-kafscale-demo/src/main/resources/application.yml) in the Spring Boot demo.
+
 ## Migrating from Existing Kafka Configuration
 
 If you're migrating from an existing Kafka setup, here's what you need to change:

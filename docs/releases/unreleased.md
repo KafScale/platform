@@ -300,8 +300,9 @@ ones most likely to affect you.
   [Proxy behavior when etcd is down](../operations.md#proxy-behavior-when-etcd-is-down).
 - **LFS produce returns 503 instead of 502.** `/lfs/produce` and multipart
   completion return 503 `backend_unavailable` and delete the uploaded object when
-  no broker can be reached, when the etcd TTL has passed, or when every broker
-  tried answers that it does not lead the partition.
+  no broker can be reached, when the etcd TTL has passed, or when the brokers it
+  tries, at most 3 (`lfsProduceAttempts`), all answer that they do not lead the
+  partition.
   - Any other broker rejection still returns 502 (403 for authorization errors),
     and the object is kept as an orphan.
   - Clients that treat 502 as final should also retry on 503 (#318).
