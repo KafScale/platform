@@ -238,7 +238,7 @@ func sendStartup(conn net.Conn, startup *pgproto3.StartupMessage) error {
 
 func relayUntilReady(frontend *pgproto3.Frontend, client net.Conn) error {
 	for {
-		msg, err := frontend.Receive()
+		msg, err := receiveUpstream(frontend)
 		if err != nil {
 			return err
 		}

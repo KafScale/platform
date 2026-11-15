@@ -96,7 +96,8 @@ jobs:
       - name: Run Python SDK tests
         working-directory: lfs-client-sdk/python
         run: |
-          python -m pip install . pytest
+          python -m pip install --require-hashes -r ../../.github/requirements/lfs-sdk.txt
+          python -m pip install --no-deps --no-build-isolation -e .
           python -m pytest
       - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
@@ -182,7 +183,7 @@ jobs:
           KAFSCALE_SR_PYTHON: /tmp/sr-venv/bin/python
         run: |
           python3 -m venv /tmp/sr-venv
-          /tmp/sr-venv/bin/pip install "confluent-kafka[avro,json,protobuf,schemaregistry]==2.16.1"
+          /tmp/sr-venv/bin/pip install --require-hashes -r .github/requirements/schema-registry.txt
           make test-schema-registry
 
       - name: Consumer group recovery end-to-end tests
