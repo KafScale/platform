@@ -114,7 +114,7 @@ brew install buf      # or equivalent
 make proto            # runs `buf generate`
 ```
 
-The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit generated files manually—re-run `make proto` whenever the `.proto` sources change.
+The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit generated files manually. Re-run `make proto` whenever the `.proto` sources change.
 
 ## Release Workflow
 
@@ -293,7 +293,7 @@ We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer 
 - Keep all new code documented in `kafscale-spec.md` or cross-link back to the spec
 - Favor context-rich structured logging (zerolog) and Prometheus metrics
 - Protobufs should remain backward compatible; prefer adding optional fields over rewriting existing ones
-- No stream processing primitives in the broker—hand those workloads off to Flink/Wayang or equivalent engines
+- No stream processing primitives in the broker. Hand those workloads off to Flink/Wayang or equivalent engines
 - Every change must land with unit tests, smoke/integration coverage, and regression tests where appropriate; skipping tests requires an explicit TODO anchored to a tracking issue.
 - Secrets live only in Kubernetes; never write S3 or etcd credentials into source control or etcd. Reference them via `credentialsSecretRef` and let the operator project them at runtime.
 - When testing against etcd locally, set `KAFSCALE_ETCD_ENDPOINTS` (comma-separated), plus `KAFSCALE_ETCD_USERNAME` / `KAFSCALE_ETCD_PASSWORD` if auth is enabled. The broker will fall back to the in-memory store when those vars are absent.

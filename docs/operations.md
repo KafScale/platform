@@ -17,13 +17,13 @@ limitations under the License.
 
 # Kafscale Production Operations Guide
 
-This guide explains how to install the Kafscale control plane via Helm, configure S3 and etcd dependencies, and expose the operations console.  It assumes you already have a Kubernetes cluster and the prerequisites listed below.
+This guide explains how to install the Kafscale control plane with Helm, configure S3 and etcd, and expose the operations console. It assumes you already have a Kubernetes cluster and the prerequisites listed below.
 
 ## Prerequisites
 
 - Kubernetes 1.26+
 - Helm 3.12+
-- A reachable etcd cluster (the operator uses it for metadata + leader election)
+- etcd for metadata. The operator can run a managed etcd for you (the default), or you can point it at an existing cluster with `operator.etcdEndpoints`
 - An S3 bucket per environment plus IAM credentials with permission to list/create objects
 - Optional: an ingress controller for the console UI
 
@@ -33,8 +33,8 @@ This guide explains how to install the Kafscale control plane via Helm, configur
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
-  --set operator.image.tag=v0.1.0 \
-  --set console.image.tag=v0.1.0
+  --set operator.image.tag=v1.6.3 \
+  --set console.image.tag=v1.6.3
 ```
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
@@ -65,9 +65,9 @@ the override returns that cluster to the operator default.
 
 | Value | Purpose |
 |-------|---------|
-| `operator.replicaCount` | Number of operator replicas (default `2`).  Operators use etcd to elect a leader and stay HA. |
+| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. |
 | `operator.leaderKey` | Kubernetes leader election lock name. Use a DNS-1123 compatible name. |
-| `console.service.*` | Type/port used to expose the UI.  Combine with `.console.ingress` to publish via an ingress controller. |
+| `console.service.*` | Type/port used to expose the UI. Combine with `.console.ingress` to publish via an ingress controller. |
 | `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
 | `imagePullSecrets` | Provide if your container registry (e.g., GHCR) is private. |
 
@@ -105,7 +105,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set console.auth.password='use-a-secret'
 ```
 
-- **TLS** – Terminate TLS at your ingress or service mesh; broker/console TLS env flags are not wired in v1.
+- **TLS** – For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
 - **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Topic deletion** – DeleteTopics keeps the topic's data in S3. Each broker drops its cached partition logs for the topic, and a topic re-created with the same name starts empty at offset 0 under a new prefix. A topic that was never deleted stores segments under `<namespace>/<topic>/<partition>/`. After the Nth delete, the next topic with that name stores them under `<namespace>/<topic>@<N>/<partition>/`. `<namespace>` is `KAFSCALE_S3_NAMESPACE`. LFS objects live under their own prefix, `<namespace>/@lfs/<topic>/` for generation 0 and `<namespace>/@lfs/<topic>@<N>/` after the Nth delete. See [LFS proxy](#lfs-proxy).
 - **Find retained topic data** – Each delete writes a record to etcd at `/kafscale/deleted-topics/<topic>/<generation>` with `name`, `topic_id`, `generation`, `prefix` and `deleted_at`. The current generation of a topic name is at `/kafscale/topic-generations/<topic>`. List the records with `etcdctl get --prefix /kafscale/deleted-topics/`. The data under each `prefix` stays in S3 until you remove it.
@@ -147,8 +147,8 @@ with TLS passthrough. See [Kafka proxy authentication](kafka-authentication.md).
 The external termination configuration below provides transport security but does
 not forward certificate identities.
 
-The proxy is the external Kafka entrypoint. For TLS in v1.5, terminate TLS at
-the cloud LoadBalancer by supplying Service annotations in the Helm values.
+The proxy is the external Kafka entrypoint. To terminate TLS outside the proxy,
+do it at the cloud LoadBalancer by supplying Service annotations in the Helm values.
 This keeps broker traffic plaintext inside the cluster while enabling HTTPS/TLS
 for clients.
 
@@ -264,7 +264,13 @@ Kafscale uses a snapshot-based metadata schema today: the operator publishes a f
 - `/kafscale/consumers/<group>/offsets/<topic>/<partition>` holds each committed offset.
 - `/kafscale/consumer-groups/<group>` is an empty index key. Brokers write it in the same etcd transaction as a group's metadata when they create the group, when a member joins a group that has no index key, and when the retention sweep sets or refreshes a group's `EmptySince` time. They delete it with the group.
 
-The retention sweep runs on the broker that holds the `/kafscale/retention-sweeper` lease. Most sweeps list groups from the index keys only, page by page, so a sweep reads one index key and one metadata key per group instead of every offset key name. Once an hour, and on the first sweep after a broker takes the lease, the sweep reads all keys under `/kafscale/consumers/` page by page instead. That full scan finds groups that have offsets but no metadata, and adds index keys, up to 100 per etcd transaction, for groups that have metadata but no index key, which includes every group created before this change or by a broker running an older version. The sweep removes an index key whose group has no metadata and no offsets. Kafka `ListGroups` still reads all keys under `/kafscale/consumers/`, page by page, so it also lists groups that have only offsets.
+The retention sweep runs on the broker that holds the `/kafscale/retention-sweeper` lease.
+
+- Most sweeps list groups from the index keys only, page by page, so a sweep reads one index key and one metadata key per group instead of every offset key name.
+- Once an hour, and on the first sweep after a broker takes the lease, the sweep reads all keys under `/kafscale/consumers/` page by page instead.
+- That full scan finds groups that have offsets but no metadata, and adds index keys, up to 100 per etcd transaction, for groups that have metadata but no index key, which includes every group created before this change or by a broker running an older version.
+- The sweep removes an index key whose group has no metadata and no offsets.
+- Kafka `ListGroups` still reads all keys under `/kafscale/consumers/`, page by page, so it also lists groups that have only offsets.
 
 ### Etcd Availability Signals (clients)
 
@@ -283,7 +289,14 @@ Snapshot job defaults and operator env overrides:
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` (optional, set to `1` to enable versioning + block public access)
 - `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` (optional, set to `1` to skip the operator S3 write check)
 
-The operator performs an S3 write preflight before enabling snapshots. If the check fails, the `EtcdSnapshotAccess` condition is set to `False`, `Ready` is `False` with `SnapshotAccessFailed`, and reconciliation returns an error until access is restored. While it fails, the operator still applies the broker and LFS proxy workloads of a cluster whose broker StatefulSet exists, so all broker and LFS proxy spec changes, credential rollouts included, are still applied, and the cluster metadata is still published to etcd. For a new cluster, the cluster controller does not create the brokers or LFS proxy or publish the cluster metadata until the check passes, so no brokers start writing etcd state that cannot be snapshotted. The topic controller does not run this check, so a KafscaleTopic that references the cluster still publishes its metadata, topics included, to etcd. `Ready` becomes `True` only after the check passes. Snapshots are uploaded as timestamped files plus a `.sha256` checksum for recovery validation.
+The operator performs an S3 write preflight before enabling snapshots.
+
+- If the check fails, the `EtcdSnapshotAccess` condition is set to `False`, `Ready` is `False` with `SnapshotAccessFailed`, and reconciliation returns an error until access is restored.
+- While it fails, the operator still applies the broker and LFS proxy workloads of a cluster whose broker StatefulSet exists, so all broker and LFS proxy spec changes, credential rollouts included, are still applied, and the cluster metadata is still published to etcd.
+- For a new cluster, the cluster controller does not create the brokers or LFS proxy or publish the cluster metadata until the check passes, so no brokers start writing etcd state that cannot be snapshotted.
+- The topic controller does not run this check, so a KafscaleTopic that references the cluster still publishes its metadata, topics included, to etcd.
+- `Ready` becomes `True` only after the check passes.
+- Snapshots are uploaded as timestamped files plus a `.sha256` checksum for recovery validation.
 
 ### Snapshot Restore (KafScale managed etcd)
 
@@ -295,7 +308,13 @@ When the KafScale operator manages etcd, each cluster pod runs ```restore init c
 - The restore container runs `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted` if the data directory is empty and a snapshot file is present. The bump keeps etcd revisions moving forward after the restore, and marking them compacted ends every watch that started before it.
 - If no snapshot is available, etcd starts with a clean data directory.
 
-The schema registry keeps its state in the same etcd. Registry pods watch their keys and clear their schema cache when that watch reports a compaction, so a restore run by the operator is handled without restarting them. For a manual restore, run `etcdutl snapshot restore` with `--bump-revision` and `--mark-compacted`, or restart every registry pod afterwards. Without those flags a pod can't always tell that etcd was restored: the restore keeps the cluster id, and the revision soon climbs past what the pod saw, so each pod keeps serving the schemas it had cached. When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 with a create-only write and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again. See [schema-registry.md](schema-registry.md#storage).
+The schema registry keeps its state in the same etcd.
+
+- Registry pods watch their keys and clear their schema cache when that watch reports a compaction, so a restore run by the operator is handled without restarting them.
+- For a manual restore, run `etcdutl snapshot restore` with `--bump-revision` and `--mark-compacted`, or restart every registry pod afterwards.
+- Without those flags a pod can't always tell that etcd was restored: the restore keeps the cluster id, and the revision soon climbs past what the pod saw, so each pod keeps serving the schemas it had cached.
+- When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 with a create-only write and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again.
+- See [schema-registry.md](schema-registry.md#storage).
 
 The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.14. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
@@ -395,6 +414,56 @@ broker serves Fetch. An installer that waits for proxy readiness before creating
 the cluster resource that produces the broker will therefore deadlock. Create
 the broker first, or do not gate the install on proxy readiness.
 
+## Proxy behavior when etcd is down
+
+The proxy reads broker and topic metadata from etcd every 10 seconds. When etcd
+cannot be read, `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`) decides how
+long it keeps going on its last good read. The TTL counts from the last
+successful read.
+
+### Within the TTL
+
+- The Kafka listener keeps using the brokers, routes and metadata it last read.
+- Clients still get metadata and reach a broker, but their produces wait. Brokers
+  do not ack produces while etcd is down, so the TTL does not keep produces
+  working.
+- The LFS HTTP API already fails. `/lfs/produce` and `/lfs/uploads` read the
+  topic generation from etcd on every request, so they return 503
+  `metadata_unavailable` as soon as etcd cannot be read.
+
+### Past the TTL
+
+- `/readyz` reports NotReady.
+- The Kafka listener answers no Metadata or FindCoordinator request and routes
+  no request to a broker, not even over a broker connection that is already open.
+- Each rejected request gets `REQUEST_TIMED_OUT`, which clients retry. It is set
+  on the response, or on each topic, partition, group or resource the request
+  names.
+- A Metadata request for all topics names nothing, so it gets an empty reply with
+  no brokers, no topics and no error code. `kcat -L` and most clients send this at
+  startup. Clients treat it as failed metadata and retry.
+- A request type that has no not-ready reply gets no answer.
+- After the reply, the proxy closes the client connection.
+- ApiVersions is still answered.
+- The LFS HTTP API sends nothing to a broker. `/lfs/produce` checks the TTL again
+  after the upload, right before the record is sent. An upload that outlasts the
+  TTL is deleted and gets 503.
+
+### Recovery
+
+Before it rejects a request, the proxy tries to read etcd again. It serves again
+as soon as etcd answers, and `/readyz` turns Ready on the next check.
+
+### Notes
+
+- Because reads happen every 10 seconds, an outage gets between the TTL minus 10
+  seconds and the full TTL before the proxy stops. With a TTL of 10 seconds or
+  less it stops almost at once.
+- The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
+- This is on purpose. When etcd is down the cluster has to stop writing to avoid
+  data loss, so past the TTL the proxy stops instead of letting clients write
+  through stale routing.
+
 ## Environment Variable Index
 
 ### Operator
@@ -433,7 +502,15 @@ the broker first, or do not gate the install on proxy readiness.
 ### Broker
 
 - `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
-- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – How long a write of a Kafka response may wait for a slow client on the broker and proxy (default `30000` milliseconds; nonpositive uses the default). The response is written in 256 KiB pieces and the idle timeout restarts before each piece. The complete frame has a five-minute deadline, including clients that keep reading slowly. A piece only waits when the socket send buffer is full, and the kernel lets it continue once a large part of that buffer has drained, roughly a third to a half of it. So a client must read that much of the send buffer within each timeout, which can be several MB on a fast link, not 256 KiB. A large response to a client that keeps reading at that pace can continue until the overall five-minute limit. On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value; for the proxy chart, set `proxy.responseWriteTimeoutMs`. The proxy logs a warning and uses the default when an integer setting is not a number. A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
+- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – How long a write of a Kafka response may wait for a slow client on the broker and proxy (default `30000` milliseconds; nonpositive uses the default).
+  - The response is written in 256 KiB pieces and the idle timeout restarts before each piece.
+  - The complete frame has a five-minute deadline, including clients that keep reading slowly.
+  - A piece only waits when the socket send buffer is full, and the kernel lets it continue once a large part of that buffer has drained, roughly a third to a half of it.
+  - So a client must read that much of the send buffer within each timeout, which can be several MB on a fast link, not 256 KiB.
+  - A large response to a client that keeps reading at that pace can continue until the overall five-minute limit.
+  - On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value; for the proxy chart, set `proxy.responseWriteTimeoutMs`.
+  - The proxy logs a warning and uses the default when an integer setting is not a number.
+  - A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
 - `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
 - `KAFSCALE_BROKER_PORT` – Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
 - `KAFSCALE_BROKER_ID` – Broker node ID.
@@ -503,7 +580,7 @@ Cost-optimized (accepts a larger loss window after crash):
 - `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
 - `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
 - `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
-- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – Seconds to cache backend metadata before refreshing from etcd (default `60`). While etcd cannot be read, the proxy keeps using the brokers, routes and metadata it last read until this time has passed since the last successful read. After that it reports NotReady, and its Kafka listener answers no Metadata or FindCoordinator request and routes no request to a broker, not even over a broker connection that is already open. Each such request gets the reply the proxy already sends while it is not ready: `REQUEST_TIMED_OUT`, which clients retry, on the response or on each topic, partition, group or resource the request names. A Metadata request for all topics, which `kcat -L` and most clients send at startup, names none, so it gets an empty reply with no brokers, no topics and no error code, and clients treat it as failed metadata and retry. A request type with no not-ready reply gets no answer. The client connection is then closed. ApiVersions is still answered. Before rejecting a request the proxy tries to read etcd again, so it serves again as soon as etcd answers. The LFS HTTP API needs etcd for every request: `/lfs/produce` and `/lfs/uploads` read the topic generation from etcd each time, so they return 503 `metadata_unavailable` as soon as etcd cannot be read, even within the TTL. Past the TTL they send nothing to a broker, and `/lfs/produce` checks the TTL again after the upload, right before the record is sent, so an upload that outlasts it is deleted and gets 503. The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers. The TTL counts from the last successful etcd read. The proxy reads etcd every 10 seconds, so an outage gets between the TTL minus 10 seconds and the full TTL before the proxy stops, or close to none with a TTL of 10 seconds or less. The TTL does not keep produces working: brokers stop acking produces while etcd is down, so within the TTL clients still get metadata and reach a broker, but their produces wait until etcd is back. This is on purpose: when etcd is down, the cluster has to stop to avoid data loss, so past the TTL the proxy stops instead of letting clients write through stale routing.
+- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – How long the proxy keeps serving from its last etcd read when etcd cannot be read (default `60` seconds). Past this time the proxy goes NotReady and stops routing. See [Proxy behavior when etcd is down](#proxy-behavior-when-etcd-is-down). The operator sets it from `spec.lfsProxy.backendCacheTTLSeconds`.
 - `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
 - `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
 - `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
@@ -518,7 +595,15 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_USERNAME`, `KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD`: Etcd auth for the registry.
 - `KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT`: Time limit for one request as a Go duration (default `10s`). A write that is still retrying when it runs out fails with error code 50002.
 - `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`: Schema text above this size is stored in S3 instead of etcd (default `65536`).
-- `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. Used for schema text above the inline limit and for the schema id records described in [schema-registry.md](schema-registry.md#storage). Without a bucket, schemas above the inline limit are rejected. With a bucket, the backend must support `PutObject` with `If-None-Match: *`, otherwise the registry exits at startup. When `KAFSCALE_S3_PATH_STYLE` is not set, path style addressing is used when `KAFSCALE_S3_ENDPOINT` is set. As in the broker, an unset or blank `KAFSCALE_S3_NAMESPACE` means `default`. With a bucket set and the namespace `default`, the registry logs a warning at startup, because registries on different etcd clusters that use the same bucket and namespace share one schema id space. Set it per cluster, for example to the namespace the operator gives the brokers. The registry needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `<namespace>/@schemas/`.
+- `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker.
+  - Used for schema text above the inline limit and for the schema id records described in [schema-registry.md](schema-registry.md#storage).
+  - Without a bucket, schemas above the inline limit are rejected.
+  - With a bucket, the backend must support `PutObject` with `If-None-Match: *`, otherwise the registry exits at startup.
+  - When `KAFSCALE_S3_PATH_STYLE` is not set, path style addressing is used when `KAFSCALE_S3_ENDPOINT` is set.
+  - As in the broker, an unset or blank `KAFSCALE_S3_NAMESPACE` means `default`.
+  - With a bucket set and the namespace `default`, the registry logs a warning at startup, because registries on different etcd clusters that use the same bucket and namespace share one schema id space.
+  - Set it per cluster, for example to the namespace the operator gives the brokers.
+  - The registry needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `<namespace>/@schemas/`.
 - After restoring etcd from a backup, restart the registry pods so that no instance serves cached schemas from before the restore.
 
 ### Console
@@ -555,7 +640,15 @@ S3 storage:
 
 Object keys:
 
-- New LFS objects are written to `<namespace>/@lfs/<topic>/<yyyy>/<mm>/<dd>/obj-<uuid>`. After the Nth delete of a topic, the topic part is `<topic>@<N>`, the same name its segments use, so LFS objects of a deleted incarnation stay apart from the current one. When etcd is configured, the proxy reads the generation from etcd before it uploads anything, once per topic per request, so etcd must be reachable for LFS produce. The lookup times out after `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` (default `3000`). If it fails or times out, `/lfs/produce` and `/lfs/uploads` return 503 `metadata_unavailable` and a Kafka produce with LFS records fails, and nothing is uploaded. Without etcd the proxy uses generation 0. After the upload finishes and right before the produce, the proxy looks up the generation again with the same timeout. If the topic was deleted and recreated in the meantime, or the lookup fails, the proxy deletes the uploaded objects, does not produce, and returns the same 503 `metadata_unavailable` or produce error. Objects it cannot delete are reported as orphans. A delete and recreate in the short gap between this second lookup and the produce is not caught, so in that rare case a record can still point at an object under the previous generation's prefix.
+- New LFS objects are written to `<namespace>/@lfs/<topic>/<yyyy>/<mm>/<dd>/obj-<uuid>`.
+  - After the Nth delete of a topic, the topic part is `<topic>@<N>`, the same name its segments use, so LFS objects of a deleted incarnation stay apart from the current one.
+  - When etcd is configured, the proxy reads the generation from etcd before it uploads anything, once per topic per request, so etcd must be reachable for LFS produce.
+  - The lookup times out after `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` (default `3000`).
+  - If it fails or times out, `/lfs/produce` and `/lfs/uploads` return 503 `metadata_unavailable` and a Kafka produce with LFS records fails, and nothing is uploaded. Without etcd the proxy uses generation 0.
+  - After the upload finishes and right before the produce, the proxy looks up the generation again with the same timeout.
+  - If the topic was deleted and recreated in the meantime, or the lookup fails, the proxy deletes the uploaded objects, does not produce, and returns the same 503 `metadata_unavailable` or produce error.
+  - Objects it cannot delete are reported as orphans.
+  - A delete and recreate in the short gap between this second lookup and the produce is not caught, so in that rare case a record can still point at an object under the previous generation's prefix.
 - `@` is not allowed in Kafka topic names, so `@lfs` never clashes with a topic prefix.
 - Proxies before this change wrote to `<namespace>/<topic>/lfs/<yyyy>/<mm>/<dd>/obj-<uuid>`. Those objects are not moved. The envelope stores the full key, so consumers, SDKs and `/lfs/download` still read them. `/lfs/download` only accepts keys that start with `<namespace>/@lfs/` or have the old `<namespace>/<topic>/lfs/` shape.
 
@@ -610,56 +703,45 @@ restart uploads begun by that version after upgrading. Sessions from the earlier
 development format without durable part hashes also require a restart; they
 return 410 `upload_restart_required` and are aborted rather than resumed.
 
-Part, completion, and abort calls can reach any replica after a restart. An
-etcd mutex serializes requests for each upload, and every session update or
-delete checks both the record revision and lock ownership. A timed-out old
-request cannot overwrite newer acknowledged progress. Lost lock leases cancel
-the active request. Lock acquisition uses cancellable attempts, and lock-key
-and lease cleanup share a bounded timeout, including after cancellation.
-Before issuing an S3 part upload, the proxy persists that part's SHA-256 identity
-in etcd. All retries for the same part number must contain exactly the same
-bytes, including retries after a timeout or a successful acknowledgement.
-Conflicting retry bytes return 409 `part_conflict` without reaching S3. This
-prevents an old in-flight request from replacing different, acknowledged bytes.
-Failed S3 attempts do not advance the aggregate checksum. Completion requires
-every uploaded part exactly once in order. The expected checksum is verified
-before S3 finalization, and a mismatch aborts the multipart upload. If S3 already
-completed the upload but its response was lost, a retry checks the unique object
-key and declared size with `s3:GetObject` and resumes publishing the envelope.
-The expected checksum still comes from etcd. Durable publication and discard
-markers fence cleanup across ownership changes. Cleanup does not delete a
-completed blob once a Kafka request may have referenced it, including after an
-ambiguous acknowledgement; explicit abort can still remove the session record.
-As with ordinary produces, retrying
-after an ambiguous Kafka acknowledgement can produce duplicate envelopes.
+Part, completion, and abort calls can reach any replica after a restart.
+
+- An etcd mutex serializes requests for each upload, and every session update or delete checks both the record revision and lock ownership.
+- A timed-out old request cannot overwrite newer acknowledged progress. Lost lock leases cancel the active request.
+- Lock acquisition uses cancellable attempts, and lock-key and lease cleanup share a bounded timeout, including after cancellation.
+- Before issuing an S3 part upload, the proxy persists that part's SHA-256 identity in etcd.
+- All retries for the same part number must contain exactly the same bytes, including retries after a timeout or a successful acknowledgement.
+- Conflicting retry bytes return 409 `part_conflict` without reaching S3.
+- This prevents an old in-flight request from replacing different, acknowledged bytes.
+- Failed S3 attempts do not advance the aggregate checksum.
+- Completion requires every uploaded part exactly once in order.
+- The expected checksum is verified before S3 finalization, and a mismatch aborts the multipart upload.
+- If S3 already completed the upload but its response was lost, a retry checks the unique object key and declared size with `s3:GetObject` and resumes publishing the envelope. The expected checksum still comes from etcd.
+- Durable publication and discard markers fence cleanup across ownership changes.
+- Cleanup does not delete a completed blob once a Kafka request may have referenced it, including after an ambiguous acknowledgement; explicit abort can still remove the session record.
+- As with ordinary produces, retrying after an ambiguous Kafka acknowledgement can produce duplicate envelopes.
 
 Send parts sequentially as before; an out-of-order part
 returns 409. State-store failures return 503 `session_store_unavailable` and a
 rejected stale update returns 409 `upload_conflict`; retry using the same upload
 ID and part number. Session records are removed on completion or abort.
 
-A part or complete call on an expired session aborts the multipart upload and
-returns 410 `upload_expired`. Every replica with the HTTP API sweeps every half
-session TTL (`KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`), bounded to between
-30 seconds and 10 minutes. Expiry uses each session's persisted `ExpiresAt`,
-so a replica with a shorter configured TTL cannot abort an unexpired session
-during a rollout. Session records and an index by S3 key/upload ID are written
-and deleted atomically. The orphan sweep checks this trusted index before
-aborting uploads under `<namespace>/@lfs/` older than the configured TTL plus
-one hour. It skips tracked sessions, and performs no orphan abort if etcd
-cannot confirm ownership. This also reclaims uploads left by older versions
-that stored sessions only in pod memory.
+A part or complete call on an expired session aborts the multipart upload and returns 410 `upload_expired`.
 
-The orphan sweep needs `s3:ListBucketMultipartUploads` and
-`s3:AbortMultipartUpload`. If listing is denied, the proxy logs a warning and
-uploads keep working. As a second safety net, configure an S3
-bucket lifecycle rule with `AbortIncompleteMultipartUpload` for the LFS object
-prefix, or the whole bucket if it is dedicated to LFS. For example, set
-`DaysAfterInitiation` to `7`, choosing an interval longer than the longest
-intended upload. This action leaves completed objects intact. Merge the rule into the bucket's existing
-lifecycle configuration. For S3-compatible storage, verify that the provider
-supports and applies this action. See the
-[Amazon S3 lifecycle configuration guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html).
+- Every replica with the HTTP API sweeps every half session TTL (`KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`), bounded to between 30 seconds and 10 minutes.
+- Expiry uses each session's persisted `ExpiresAt`, so a replica with a shorter configured TTL cannot abort an unexpired session during a rollout.
+- Session records and an index by S3 key/upload ID are written and deleted atomically.
+- The orphan sweep checks this trusted index before aborting uploads under `<namespace>/@lfs/` older than the configured TTL plus one hour.
+- It skips tracked sessions, and performs no orphan abort if etcd cannot confirm ownership.
+- This also reclaims uploads left by older versions that stored sessions only in pod memory.
+
+The orphan sweep needs `s3:ListBucketMultipartUploads` and `s3:AbortMultipartUpload`.
+
+- If listing is denied, the proxy logs a warning and uploads keep working.
+- As a second safety net, configure an S3 bucket lifecycle rule with `AbortIncompleteMultipartUpload` for the LFS object prefix, or the whole bucket if it is dedicated to LFS.
+- For example, set `DaysAfterInitiation` to `7`, choosing an interval longer than the longest intended upload. This action leaves completed objects intact.
+- Merge the rule into the bucket's existing lifecycle configuration.
+- For S3-compatible storage, verify that the provider supports and applies this action.
+- See the [Amazon S3 lifecycle configuration guide](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpu-abort-incomplete-mpu-lifecycle-config.html).
 
 Kafka backends:
 
@@ -674,9 +756,151 @@ LFS tracker (writes LFS operation events to Kafka):
 
 Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets `KAFSCALE_LFS_PROXY_ADDR`, `KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_LFS_PROXY_ADVERTISED_HOST`, `KAFSCALE_LFS_PROXY_ADVERTISED_PORT`, `KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC`, `KAFSCALE_LFS_PROXY_BACKENDS` and `KAFSCALE_LFS_PROXY_HEALTH_ADDR`, and the same values under the `KAFSCALE_PROXY_` names that the proxy binary reads, plus `KAFSCALE_PROXY_LFS_ENABLED=true` (pkg/operator/lfs_proxy_resources.go).
 
-The secret named by `spec.s3.credentialsSecretRef` can hold `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` (optionally `KAFSCALE_S3_SESSION_TOKEN`), or `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (optionally `AWS_SESSION_TOKEN`). The brokers and the managed etcd snapshot upload job and restore init container accept either pair. Every consumer treats a key whose value is empty or only whitespace as unset, and trims whitespace around other values: the operator `S3Credentials` condition and snapshot check, the brokers, the LFS proxy, the schema registry and the etcd snapshot containers. Whitespace means space, tab, newline, carriage return, vertical tab and form feed. Unicode spaces such as U+00A0 are kept as part of the value. The snapshot containers and the operator snapshot check use the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair when both keys are set, otherwise the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair. With the first pair they use `KAFSCALE_S3_SESSION_TOKEN` when the secret holds that key, where a blank value means no token, and `AWS_SESSION_TOKEN` otherwise; with the second pair they use `AWS_SESSION_TOKEN`. A `spec.s3.credentialsSecretRef` that is empty or only whitespace means no secret. When a secret holds both pairs, the brokers and the snapshot containers use `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` and the LFS proxy uses `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. A missing key no longer stops the pod from starting; without a complete pair, the proxy uses the default AWS credential chain if one is available. The broker and LFS proxy pod templates carry a `kafscale.io/s3-credentials-checksum` annotation computed over the credential keys present in the secret, so those pods roll when one of those keys changes, also while the etcd snapshot check fails; other keys in the secret do not roll them. The operator reports this on the KafscaleCluster as the `S3Credentials` condition: `False` with reason `SecretNotFound`, `SecretReadFailed` or `SecretKeysMissing` when the referenced secret is missing, cannot be read or holds no complete pair, `False` with `SecretKeysMixed` when it holds the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair plus some but not both of `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` or a `KAFSCALE_S3_SESSION_TOKEN` without that pair, with values that are not blank. Every workload then uses the `AWS_*` pair and ignores those keys, so the condition flags them as a likely mistake. It is also `False` with `SecretKeysMixed` when it holds the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair and `AWS_SESSION_TOKEN` but no `KAFSCALE_S3_SESSION_TOKEN`, because the etcd snapshot containers and the operator snapshot check then sign with a token from the other pair, and `True` with `SecretKeysFound`, or `SecretNotReferenced` when no secret is set. With `SecretNotFound`, or `SecretKeysMissing` and no credential keys at all, workloads get no static keys from the secret and use the default AWS credential chain if one is available. When the secret holds only part of a pair, the `SecretKeysMissing` message names the keys it found. The brokers and the LFS proxy then use the default AWS credential chain if one is available, but the etcd snapshot jobs run the AWS CLI, which fails on an access key without a secret key instead of falling back. The snapshot jobs disable the EC2 instance metadata service, so their default chain has no node role. `SecretReadFailed` means the operator could not read or verify the secret, for example because of RBAC; it says nothing about the keys the pods receive. It logs a warning once each time the condition turns `False`. The condition covers the brokers and snapshot jobs as well and never stops a reconcile on its own; a missing secret still fails the managed etcd snapshot check, as before. At startup the proxy logs `lfs s3 credentials` with the source it uses, static keys or the default AWS credential chain. Static keys also include a boolean `session_token` flag; no key or token values are logged. The flag is omitted for the default chain because its provider may resolve credentials later.
+#### S3 credentials secret
 
-The LFS proxy, including its HTTP API, finds brokers through etcd at their advertised address. Brokers in `spec.lfsProxy.backends` take priority over the ones found in etcd. When etcd lists no brokers, the HTTP API has no broker. When etcd cannot be read, it uses the brokers it last found for as long as `spec.lfsProxy.backendCacheTTLSeconds` (default 60 seconds), as the Kafka listener does. Before the HTTP API uploads an object to S3 or starts a multipart upload, it connects to a broker, and it returns 503 `backend_unavailable` without uploading when it cannot reach one. When a broker goes away after the object was uploaded and the proxy cannot connect to any broker, it deletes the object again. With brokers from etcd, `/lfs/produce` and multipart completion send the produce to the broker that owns the partition, using the same partition routes as the Kafka listener, and reuse an idle broker connection only when it goes to that broker. When the owner is not known yet, they pick one of the listed brokers. When a broker answers that it does not lead the partition (`NOT_LEADER_OR_FOLLOWER`, `LEADER_NOT_AVAILABLE`, `FENCED_LEADER_EPOCH` or `UNKNOWN_LEADER_EPOCH`), the proxy sends the produce to the current owner, to at most 3 brokers in total, and checks the backend cache TTL before each new attempt. If no broker accepts it, the object is deleted and the request gets 503 `backend_unavailable`. With static backends the proxy picks a broker as before, and when that broker answers that it does not lead the partition, it tries another listed broker if there is one. With only one address, for example a broker Service, there is no other broker to try, so a non-owner answer gives 503 `backend_unavailable` and the object is deleted. When that address is not reachable from inside the cluster, for example when brokers advertise a host port forward, set `spec.lfsProxy.backends` to the broker service, such as `kafscale-broker.<namespace>.svc.cluster.local:9092`; otherwise the proxy stays NotReady. The LFS tracker uses `backends` only as seed brokers and then produces to the advertised address of the partition leader, so it needs brokers that advertise an address pods can reach. Without that, `__lfs_ops_state` gets no events and the proxy logs `lfs ops tracker: ensure topic failed`. To reach the cluster from a host, advertise the in-cluster broker address and port forward to the LFS proxy with `spec.lfsProxy.advertisedHost` and `advertisedPort` set to the forwarded address, as `make lfs-demo` does.
+The secret named by `spec.s3.credentialsSecretRef` can hold either key pair:
+
+| Pair | Optional token |
+|------|----------------|
+| `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` | `KAFSCALE_S3_SESSION_TOKEN` |
+| `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | `AWS_SESSION_TOKEN` |
+
+The brokers, the managed etcd snapshot upload job and the restore init container
+accept either pair.
+
+**Blank values and whitespace**
+
+- Every consumer treats a key whose value is empty or only whitespace as unset,
+  and trims whitespace around other values. This covers the operator
+  `S3Credentials` condition and snapshot check, the brokers, the LFS proxy, the
+  schema registry and the etcd snapshot containers.
+- Whitespace means space, tab, newline, carriage return, vertical tab and form
+  feed. Unicode spaces such as U+00A0 are kept as part of the value.
+- A `spec.s3.credentialsSecretRef` that is empty or only whitespace means no
+  secret.
+
+**Which pair is used**
+
+- When a secret holds both pairs, the brokers and the snapshot containers use
+  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`. The LFS proxy uses
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- The snapshot containers and the operator snapshot check use the `KAFSCALE_S3_*`
+  pair when both of its keys are set, otherwise the `AWS_*` pair.
+- With the `KAFSCALE_S3_*` pair they use `KAFSCALE_S3_SESSION_TOKEN` when the
+  secret holds that key (a blank value means no token), and `AWS_SESSION_TOKEN`
+  otherwise. With the `AWS_*` pair they use `AWS_SESSION_TOKEN`.
+- A missing key does not stop a pod from starting. Without a complete pair, the
+  proxy uses the default AWS credential chain if one is available.
+
+**Rotation**
+
+The broker and LFS proxy pod templates carry a
+`kafscale.io/s3-credentials-checksum` annotation, computed over the credential
+keys present in the secret. When one of those keys changes, those pods roll,
+also while the etcd snapshot check fails. Other keys in the secret do not roll
+them.
+
+**The `S3Credentials` condition**
+
+The operator reports the secret state on the KafscaleCluster:
+
+| Status | Reason | Meaning |
+|--------|--------|---------|
+| `True` | `SecretKeysFound` | A complete pair was found. |
+| `True` | `SecretNotReferenced` | No secret is set. |
+| `False` | `SecretNotFound` | The referenced secret does not exist. |
+| `False` | `SecretReadFailed` | The operator could not read or verify the secret, for example because of RBAC. It says nothing about the keys the pods receive. |
+| `False` | `SecretKeysMissing` | The secret holds no complete pair. When it holds part of a pair, the message names the keys it found. |
+| `False` | `SecretKeysMixed` | See below. |
+
+`SecretKeysMixed` flags a likely mistake in two cases:
+
+- The secret holds the `AWS_*` pair plus one but not both of
+  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, or a
+  `KAFSCALE_S3_SESSION_TOKEN` without that pair, with values that are not blank.
+  Every workload then uses the `AWS_*` pair and ignores those keys.
+- The secret holds the `KAFSCALE_S3_*` pair and `AWS_SESSION_TOKEN` but no
+  `KAFSCALE_S3_SESSION_TOKEN`. The etcd snapshot containers and the operator
+  snapshot check would then sign with a token from the other pair.
+
+What happens with each failure:
+
+- With `SecretNotFound`, or `SecretKeysMissing` and no credential keys at all,
+  workloads get no static keys and use the default AWS credential chain if one is
+  available.
+- With only part of a pair, the brokers and the LFS proxy use the default AWS
+  credential chain if one is available. The etcd snapshot jobs run the AWS CLI,
+  which fails on an access key without a secret key instead of falling back.
+- The snapshot jobs disable the EC2 instance metadata service, so their default
+  chain has no node role.
+- The operator logs a warning once each time the condition turns `False`.
+- The condition covers the brokers and snapshot jobs too, and never stops a
+  reconcile on its own. A missing secret still fails the managed etcd snapshot
+  check, as before.
+
+At startup the proxy logs `lfs s3 credentials` with the source it uses: static
+keys or the default AWS credential chain. For static keys it also logs a boolean
+`session_token` flag. No key or token values are logged. The flag is left out for
+the default chain because its provider may resolve credentials later.
+
+#### How the LFS proxy finds brokers
+
+The LFS proxy, including its HTTP API, finds brokers through etcd at their
+advertised address.
+
+- Brokers in `spec.lfsProxy.backends` take priority over the ones found in etcd.
+- When etcd lists no brokers, the HTTP API has no broker.
+- When etcd cannot be read, it uses the brokers it last found for as long as
+  `spec.lfsProxy.backendCacheTTLSeconds` (default 60 seconds), as the Kafka
+  listener does.
+
+**Before and after the upload**
+
+- Before the HTTP API uploads an object to S3 or starts a multipart upload, it
+  connects to a broker. If it cannot reach one, it returns 503
+  `backend_unavailable` and uploads nothing.
+- If a broker goes away after the upload and the proxy cannot connect to any
+  broker, it deletes the object again.
+
+**Routing to the partition owner**
+
+- With brokers from etcd, `/lfs/produce` and multipart completion send the
+  produce to the broker that owns the partition. They use the same partition
+  routes as the Kafka listener, and reuse an idle broker connection only when it
+  goes to that broker.
+- When the owner is not known yet, they pick one of the listed brokers.
+- When a broker answers that it does not lead the partition
+  (`NOT_LEADER_OR_FOLLOWER`, `LEADER_NOT_AVAILABLE`, `FENCED_LEADER_EPOCH` or
+  `UNKNOWN_LEADER_EPOCH`), the proxy sends the produce to the current owner, to
+  at most 3 brokers in total. It checks the backend cache TTL before each new
+  attempt.
+- If no broker accepts it, the object is deleted and the request gets 503
+  `backend_unavailable`.
+
+**Static backends**
+
+- With static backends the proxy picks a broker as before. When that broker
+  answers that it does not lead the partition, the proxy tries another listed
+  broker if there is one.
+- With only one address, for example a broker Service, there is no other broker
+  to try. A non-owner answer gives 503 `backend_unavailable` and the object is
+  deleted.
+- When the advertised address is not reachable from inside the cluster, for
+  example when brokers advertise a host port forward, set
+  `spec.lfsProxy.backends` to the broker service, such as
+  `kafscale-broker.<namespace>.svc.cluster.local:9092`. Otherwise the proxy stays
+  NotReady.
+
+**LFS tracker**
+
+- The tracker uses `backends` only as seed brokers. It then produces to the
+  advertised address of the partition leader, so it needs brokers that advertise
+  an address pods can reach.
+- Without that, `__lfs_ops_state` gets no events and the proxy logs
+  `lfs ops tracker: ensure topic failed`.
+- To reach the cluster from a host, advertise the in-cluster broker address and
+  port forward to the LFS proxy, with `spec.lfsProxy.advertisedHost` and
+  `advertisedPort` set to the forwarded address. `make lfs-demo` does this.
 
 ### Iceberg processor LFS overrides
 

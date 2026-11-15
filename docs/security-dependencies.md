@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Dependency security review — 2026-11-15
+# Dependency security review (2026-11-15)
 
 The security changes are based on PR #332. Alert closure must be checked on
 `main` after the security PR merges and GitHub scans that commit.

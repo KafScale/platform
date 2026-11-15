@@ -39,7 +39,7 @@ For install + bootstrap steps, follow `docs/quickstart.md`.
 
 ### Java (plain)
 
-Start with a minimal set of producer properties. We disable idempotence because Kafscale does not support transactional semantics.
+Start with a minimal set of producer properties. Turn idempotence off: KafScale does not implement `InitProducerId`, so idempotent and transactional producers cannot start.
 ```properties
 # Java producer properties
 bootstrap.servers=kafscale-broker:9092
@@ -158,7 +158,7 @@ The operator uses Kubernetes HPA and the BrokerControl gRPC API to safely drain 
 
 ## Limits / Non-Goals
 
-- No embedded stream processing features—pair Kafscale with Flink, Wayang, Spark, etc.
+- No embedded stream processing features. Pair Kafscale with Flink, Wayang, Spark, etc.
 - Transactions, idempotent producers, and log compaction are out of scope for KafScale.
 
 For deployment and operations, read `docs/operations.md`.

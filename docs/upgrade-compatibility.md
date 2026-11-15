@@ -164,28 +164,36 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
 
 - Schema registry rollback: rolling back to a main build from between #277 and #282 registers duplicate versions for 5 of the 54 edge schemas in our upgrade test. These are the Avro schemas with the `5e-324` and `1e-323` double defaults, registered with and without `normalize=true`, and the schema with an empty nested namespace registered with `normalize=true`. Those builds do not match the hashes that #282 stores, so re-registering one of these schemas creates a new version and id. The #282 review build `035b209` passed that 54-schema regression; this does not establish general rollback safety.
 
-- The proxy no longer keeps serving through an etcd outage without a time limit. When etcd cannot be read, the proxy, including its Kafka listener, readiness check and LFS HTTP API, uses the brokers, routes and metadata it last read for `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default 60 seconds) after the last successful read. After that it reports NotReady, and its Kafka listener answers no Metadata or FindCoordinator request and routes no request to a broker, not even over a broker connection that is already open. Each such request gets the reply the proxy already sends while it is not ready: `REQUEST_TIMED_OUT`, which clients retry, on the response or on each topic, partition, group or resource the request names. A Metadata request for all topics, which `kcat -L` and most clients send at startup, names none, so it gets an empty reply with no brokers, no topics and no error code, and clients treat it as failed metadata and retry. A request type with no not-ready reply gets no answer. The client connection is then closed. ApiVersions is still answered. Before rejecting a request the proxy tries to read etcd again, so it serves again as soon as etcd answers. The LFS HTTP API needs etcd for every request: `/lfs/produce` and `/lfs/uploads` read the topic generation from etcd each time, so they return 503 `metadata_unavailable` as soon as etcd cannot be read, even within the TTL. Past the TTL they send nothing to a broker, and `/lfs/produce` checks the TTL again after the upload, right before the record is sent, so an upload that outlasts it is deleted and gets 503. The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers. Earlier builds kept using the last broker list with no limit. This is on purpose: when etcd is down, the cluster has to stop to avoid data loss, so past the TTL the proxy stops instead of letting clients write through stale routing. The TTL counts from the last successful etcd read. The proxy reads etcd every 10 seconds, so an outage gets between the TTL minus 10 seconds and the full TTL before the proxy stops, or close to none with a TTL of 10 seconds or less. The TTL does not keep produces working: brokers stop acking produces while etcd is down, so within the TTL clients still get metadata and reach a broker, but their produces wait until etcd is back (#318).
+- The proxy no longer keeps serving through an etcd outage without a time limit. Earlier builds kept using the last broker list with no limit.
+  - Within `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`) of the last successful etcd read, the Kafka listener keeps using its last metadata. Produces still wait, because brokers do not ack while etcd is down.
+  - Past the TTL the proxy reports NotReady, answers Kafka requests with `REQUEST_TIMED_OUT` (an all-topics Metadata request gets an empty reply), closes the client connection, and still answers ApiVersions.
+  - The LFS HTTP API returns 503 `metadata_unavailable` as soon as etcd cannot be read, even within the TTL.
+  - The proxy serves again as soon as etcd answers. The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
+  - Full details: [Proxy behavior when etcd is down](operations.md#proxy-behavior-when-etcd-is-down).
 
-- With brokers found in etcd, the LFS HTTP API now sends `/lfs/produce` and multipart completion to the broker that owns the partition. A broker that does not lead the partition used to make these requests fail with HTTP 502 and leave the uploaded object in S3 as an orphan. The proxy now tries the current owner, and when no broker accepts the produce the request gets 503 `backend_unavailable` and the object is deleted. This also applies to static backends (`spec.lfsProxy.backends`): a non-owner answer now gives 503 with the object deleted instead of 502 with an orphan, after another listed broker was tried if there is one. With only one address, for example a broker Service, there is no other broker to try. Clients that treat 502 from these endpoints as final should also retry on 503 (#318).
+- Brokers now upload segments with `PutObject` and `If-None-Match: *` (#324, #327).
+  - A broker that lost its partition lease can no longer overwrite segments written by the new owner.
+  - The S3 backend must honor the condition. AWS S3 and MinIO do. Backblaze B2 and the Google Cloud Storage XML API do not.
+  - Brokers do not check this at startup. A backend that ignores the header silently turns the protection off, and one that rejects it makes every produce fail. Check your provider before upgrading. See [Conditional writes](supported.md#conditional-writes).
+  - Code that implements `storage.S3Client` itself must make `UploadSegment` fail with `storage.ErrPreconditionFailed` when the key already exists.
+
+- With brokers found in etcd, the LFS HTTP API now sends `/lfs/produce` and multipart completion to the broker that owns the partition.
+  - A broker that does not lead the partition used to make these requests fail with HTTP 502 and leave the uploaded object in S3 as an orphan.
+  - The proxy now tries the current owner, and when no broker accepts the produce the request gets 503 `backend_unavailable` and the object is deleted.
+  - This also applies to static backends (`spec.lfsProxy.backends`): a non-owner answer now gives 503 with the object deleted instead of 502 with an orphan, after another listed broker was tried if there is one.
+  - With only one address, for example a broker Service, there is no other broker to try.
+  - Clients that treat 502 from these endpoints as final should also retry on 503 (#318).
 
 ## LFS proxy S3 credential keys
 
-Before this release, an operator managed LFS proxy (`spec.lfsProxy`) read only
-the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys of the
-`spec.s3.credentialsSecretRef` secret. A secret with only the
-`KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` keys, the format the
-brokers and snapshot jobs use, kept the LFS proxy pods in
-`CreateContainerConfigError`. The proxy now accepts either pair. No migration is
-needed: secrets with the `AWS_` keys work as before and keep priority when both
-pairs are present. A secret that has neither pair, or does not exist, no longer
-blocks the pod; the proxy then uses the default AWS credential chain if one is
-available. The operator flags such a secret, and one it cannot read, with the
-`S3Credentials` condition set to `False` and a warning in its log. When the
-secret holds only part of a pair, the condition message names the keys found,
-because the etcd snapshot jobs can fail on such a secret instead of falling
-back. The proxy logs which credential source it uses at startup, so check both
-the condition and that log if LFS uploads fail with S3 access errors after the
-upgrade.
+Before this release, an operator managed LFS proxy (`spec.lfsProxy`) read only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys of the `spec.s3.credentialsSecretRef` secret.
+
+- A secret with only the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` keys, the format the brokers and snapshot jobs use, kept the LFS proxy pods in `CreateContainerConfigError`. The proxy now accepts either pair.
+- No migration is needed: secrets with the `AWS_` keys work as before and keep priority when both pairs are present.
+- A secret that has neither pair, or does not exist, no longer blocks the pod; the proxy then uses the default AWS credential chain if one is available.
+- The operator flags such a secret, and one it cannot read, with the `S3Credentials` condition set to `False` and a warning in its log.
+- When the secret holds only part of a pair, the condition message names the keys found, because the etcd snapshot jobs can fail on such a secret instead of falling back.
+- The proxy logs which credential source it uses at startup, so check both the condition and that log if LFS uploads fail with S3 access errors after the upgrade.
 
 The LFS proxy forwards `AWS_SESSION_TOKEN` alongside the AWS key pair. When both
 pairs are present, it uses the AWS pair and its token; the KafScale fallback
@@ -194,36 +202,21 @@ The startup credential log includes `session_token=true/false` for static keys,
 without exposing the token. The flag is omitted for default-chain credentials,
 which may resolve later through a provider.
 
-When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll
-once after the upgrade, because their pod templates gain the
-`kafscale.io/s3-credentials-checksum` annotation, and roll again whenever a
-credential key in the secret changes. This also happens while the managed etcd
-snapshot check fails, for example with a 403 on the snapshot bucket: `Ready`
-then stays `False` with `SnapshotAccessFailed`, but the broker and LFS proxy
-workloads are still applied, with every spec change (for example image,
-replicas and resources), not only credential changes. The cluster metadata in
-etcd is still published to match, so a scale-down does not leave removed
-brokers as partition leaders. Earlier releases held
-back all broker and LFS proxy workload updates while the check failed. If you
-relied on a failed snapshot check to freeze broker updates, that no longer
-happens. Only a new cluster waits for that check before its brokers and LFS
-proxy are created.
+When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll once after the upgrade, because their pod templates gain the `kafscale.io/s3-credentials-checksum` annotation, and roll again whenever a credential key in the secret changes.
 
-S3 key values in the secret that are empty or only whitespace now count as
-unset everywhere, and other values are trimmed before use. Before, the operator
-condition, the operator snapshot check and the LFS proxy static keys trimmed
-them, but the brokers, the LFS proxy fallback keys and the AWS CLI in the etcd
-snapshot containers used the raw values, so a blank `KAFSCALE_S3_*` key next to
-a valid `AWS_*` pair gave the snapshot containers an empty or blank key, and a
-padded value failed to sign. The snapshot containers now select the pair in
-their script instead of through `secretKeyRef` environment variables: the
-`KAFSCALE_S3_*` pair when both keys are set, otherwise the `AWS_*` pair with
-`AWS_SESSION_TOKEN`. Secrets with valid keys keep working with the same pair
-and token as before. A secret with the `AWS_*` pair and blank `KAFSCALE_S3_*`
-keys now reports `S3Credentials` as `True` with `SecretKeysFound`. This changes
-the managed etcd pod template, which the earlier change in this release already
-does, so an upgrade from the last release still restarts the managed etcd pods
-once.
+- This also happens while the managed etcd snapshot check fails, for example with a 403 on the snapshot bucket: `Ready` then stays `False` with `SnapshotAccessFailed`, but the broker and LFS proxy workloads are still applied, with every spec change (for example image, replicas and resources), not only credential changes.
+- The cluster metadata in etcd is still published to match, so a scale-down does not leave removed brokers as partition leaders.
+- Earlier releases held back all broker and LFS proxy workload updates while the check failed.
+- If you relied on a failed snapshot check to freeze broker updates, that no longer happens.
+- Only a new cluster waits for that check before its brokers and LFS proxy are created.
+
+S3 key values in the secret that are empty or only whitespace now count as unset everywhere, and other values are trimmed before use.
+
+- Before, the operator condition, the operator snapshot check and the LFS proxy static keys trimmed them, but the brokers, the LFS proxy fallback keys and the AWS CLI in the etcd snapshot containers used the raw values, so a blank `KAFSCALE_S3_*` key next to a valid `AWS_*` pair gave the snapshot containers an empty or blank key, and a padded value failed to sign.
+- The snapshot containers now select the pair in their script instead of through `secretKeyRef` environment variables: the `KAFSCALE_S3_*` pair when both keys are set, otherwise the `AWS_*` pair with `AWS_SESSION_TOKEN`.
+- Secrets with valid keys keep working with the same pair and token as before.
+- A secret with the `AWS_*` pair and blank `KAFSCALE_S3_*` keys now reports `S3Credentials` as `True` with `SecretKeysFound`.
+- This changes the managed etcd pod template, which the earlier change in this release already does, so an upgrade from the last release still restarts the managed etcd pods once.
 
 Whitespace here means space, tab, newline, carriage return, vertical tab and
 form feed, in the Go code and in the snapshot container scripts alike. Unicode
@@ -279,16 +272,13 @@ standard AWS credentials configured:
 LFS_S3_ENDPOINT=http://127.0.0.1:9000 npm --prefix lfs-client-sdk/js run test:s3
 ```
 
-It creates a unique bucket and runs one pass each for `sha256`, `md5`, `crc32`
-and `none` envelopes. Each pass uploads 262,144 bytes, verifies exact valid
-bytes, overwrites the same key with a same-length first-byte mutation, requires
-default and explicit validation to reject it, and verifies disabled validation
-returns the altered bytes. It deletes its object and bucket afterward. This is a real
-S3 API test; it does not rerun the historical native Kafka round trip. Unit tests
-must fail against the old resolver and pass against the candidate. Before a merge
-recommendation, inspect every PR review/comment against final head and repeat
-focused corruption and compatibility regressions. Publishing and release version
-selection are separate decisions.
+It creates a unique bucket and runs one pass each for `sha256`, `md5`, `crc32` and `none` envelopes.
+
+- Each pass uploads 262,144 bytes, verifies exact valid bytes, overwrites the same key with a same-length first-byte mutation, requires default and explicit validation to reject it, and verifies disabled validation returns the altered bytes. It deletes its object and bucket afterward.
+- This is a real S3 API test; it does not rerun the historical native Kafka round trip.
+- Unit tests must fail against the old resolver and pass against the candidate.
+- Before a merge recommendation, inspect every PR review/comment against final head and repeat focused corruption and compatibility regressions.
+- Publishing and release version selection are separate decisions.
 
 ## CodeQL port-conversion triage
 

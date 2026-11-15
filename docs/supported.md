@@ -26,12 +26,12 @@ KafScale uses S3-compatible object storage as its source of truth. While designe
 | AWS S3 | ✅ Native | Full support, including IRSA |
 | DigitalOcean Spaces | ✅ Native | Drop-in replacement |
 | Cloudflare R2 | ✅ Native | Zero egress fees |
-| Backblaze B2 | ✅ Native | S3-compatible API |
+| Backblaze B2 | ❌ Not supported | No conditional writes (`If-None-Match: *`), see below |
 | Wasabi | ✅ Native | Flat pricing model |
 | Linode Object Storage | ✅ Native | S3-compatible |
 | Vultr Object Storage | ✅ Native | S3-compatible |
 | MinIO | ✅ Native | Self-hosted, any infrastructure |
-| Google Cloud Storage | ⚠️ Interop | Requires HMAC keys, XML API |
+| Google Cloud Storage | ❌ Not supported | XML API supports `If-None-Match` only on reads, see below |
 | Oracle Cloud | ⚠️ Interop | S3 Compatibility API |
 | IBM Cloud Object Storage | ⚠️ Interop | S3-compatible API |
 | Azure Blob Storage | ❌ Not supported | Not S3-compatible; MinIO has no gateway mode |
@@ -39,7 +39,29 @@ KafScale uses S3-compatible object storage as its source of truth. While designe
 **Legend:**
 - ✅ Native: Standard S3 SDK works with endpoint change
 - ⚠️ Interop: Works via compatibility layer, minor config differences
-- ❌ Proxy: Requires additional infrastructure
+- ❌ Not supported: does not work with KafScale
+
+## Conditional writes
+
+Brokers upload every segment with `PutObject` and `If-None-Match: *`. This is
+what stops a broker that lost its partition lease from overwriting segments that
+the new owner already wrote. The schema registry uses the same condition for its
+id records.
+
+The backend must reject a create-only write to an existing key with `412
+Precondition Failed`.
+
+- AWS S3 and MinIO support it and are tested.
+- Cloudflare R2 documents atomic `If-None-Match: *` on `PutObject`. Ceph RGW is
+  reported to support it. Neither was tested here.
+- Backblaze B2 does not support conditional writes. The Google Cloud Storage XML
+  API supports `If-None-Match` only on reads.
+- For other providers, check their documentation before upgrading. A backend
+  that ignores the header turns off this protection without an error. A backend
+  that rejects the header makes every produce fail.
+
+The schema registry checks this at startup and refuses to start when the
+condition is not honored. Brokers do not run that check.
 
 ---
 
@@ -191,6 +213,8 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ## Backblaze B2
 
+> **Not supported in this release.** It does not honor `If-None-Match: *` on `PutObject`, which brokers need for segment uploads. See [Conditional writes](#conditional-writes). The configuration below is kept for reference.
+
 Cost-effective S3-compatible storage.
 
 ### KafScaleCluster
@@ -265,6 +289,8 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ## Google Cloud Storage
 
+> **Not supported in this release.** It does not honor `If-None-Match: *` on `PutObject`, which brokers need for segment uploads. See [Conditional writes](#conditional-writes). The configuration below is kept for reference.
+
 GCS provides S3 interoperability via its XML API. Requires HMAC keys.
 
 ### Setup
@@ -320,7 +346,7 @@ MinIO no longer has a gateway mode: `minio gateway` is not a subcommand in the M
 
 ## MinIO (Self-Hosted)
 
-Run your own S3-compatible storage on any infrastructure—on-prem, edge, or any cloud.
+Run your own S3-compatible storage on any infrastructure: on-prem, edge, or any cloud.
 
 ### Docker Compose (Development)
 
@@ -387,7 +413,7 @@ Place your storage in the same region as your Kubernetes cluster. KafScale's ~50
 
 ### Bucket Lifecycle
 
-KafScale manages segment files in `.kfs` format. Configure bucket lifecycle policies carefully—avoid auto-deletion rules that could remove active segments.
+KafScale manages segment files in `.kfs` format. Configure bucket lifecycle policies carefully. Avoid auto-deletion rules that could remove active segments.
 
 ### Testing Your Backend
 
