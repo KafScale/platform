@@ -61,13 +61,13 @@ wait_for_etcd_leader() {
 
   for i in $(seq 1 "${attempts}"); do
     if kubectl -n "${ICEBERG_DEMO_NAMESPACE}" run "iceberg-etcd-health-$$-${RANDOM}" \
-      --restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
+      --restart=Never --rm -i --image=ghcr.io/kafscale/kafscale-etcd-tools:dev \
       --command -- /bin/sh -c "out=\$(etcdctl --endpoints=${service_endpoint} endpoint status -w json 2>/dev/null || true); case \"\$out\" in *'\"Leader\":true'*|*'\"leader\":true'* ) exit 0 ;; *'\"leader\":0'*|*'\"Leader\":0'* ) exit 1 ;; *'\"leader\":'*|*'\"Leader\":'* ) exit 0 ;; * ) exit 1 ;; esac" >/dev/null 2>&1; then
       return 0
     fi
     for endpoint in "${endpoints[@]}"; do
       if kubectl -n "${ICEBERG_DEMO_NAMESPACE}" run "iceberg-etcd-health-$$-${RANDOM}" \
-        --restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
+        --restart=Never --rm -i --image=ghcr.io/kafscale/kafscale-etcd-tools:dev \
         --command -- /bin/sh -c "out=\$(etcdctl --endpoints=${endpoint} endpoint status -w json 2>/dev/null || true); case \"\$out\" in *'\"Leader\":true'*|*'\"leader\":true'* ) exit 0 ;; *'\"leader\":0'*|*'\"Leader\":0'* ) exit 1 ;; *'\"leader\":'*|*'\"Leader\":'* ) exit 0 ;; * ) exit 1 ;; esac" >/dev/null 2>&1; then
         return 0
       fi
@@ -76,7 +76,7 @@ wait_for_etcd_leader() {
   done
   echo "etcd leader not ready for endpoints: ${endpoints[*]}" >&2
   kubectl -n "${ICEBERG_DEMO_NAMESPACE}" run "iceberg-etcd-health-$$-${RANDOM}" \
-    --restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
+    --restart=Never --rm -i --image=ghcr.io/kafscale/kafscale-etcd-tools:dev \
     --command -- /bin/sh -c "etcdctl --endpoints=${endpoints[0]} endpoint status --cluster -w table || true" >&2 || true
   return 1
 }
@@ -124,7 +124,7 @@ wait_for_etcd_stable() {
     endpoints="$(etcd_client_endpoints)"
     if [[ -n "${endpoints}" ]]; then
       if kubectl -n "${ICEBERG_DEMO_NAMESPACE}" run "iceberg-etcd-stable-$$-${RANDOM}" \
-        --restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
+        --restart=Never --rm -i --image=ghcr.io/kafscale/kafscale-etcd-tools:dev \
         --command -- /bin/sh -c "etcdctl --endpoints=${endpoints} endpoint status --cluster -w json >/dev/null 2>&1"; then
         consecutive=$((consecutive + 1))
         if [[ "${consecutive}" -ge "${need_consecutive}" ]]; then
@@ -139,7 +139,7 @@ wait_for_etcd_stable() {
   echo "etcd cluster not stable after ${attempts} attempts (needed ${need_consecutive} consecutive successes)" >&2
   if [[ -n "${endpoints}" ]]; then
     kubectl -n "${ICEBERG_DEMO_NAMESPACE}" run "iceberg-etcd-stable-$$-${RANDOM}" \
-      --restart=Never --rm -i --image=kubesphere/etcd:3.6.4-0 \
+      --restart=Never --rm -i --image=ghcr.io/kafscale/kafscale-etcd-tools:dev \
       --command -- /bin/sh -c "etcdctl --endpoints=${endpoints} endpoint status --cluster -w table || true" >&2 || true
   fi
   return 1

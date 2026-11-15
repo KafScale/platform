@@ -69,7 +69,7 @@ const (
 	operatorEtcdDefragScheduleEnv = "KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE"
 	operatorEtcdDefragEnabledEnv  = "KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED"
 
-	defaultEtcdImage                 = "kubesphere/etcd:3.6.4-0"
+	defaultEtcdImage                 = "gcr.io/etcd-development/etcd:v3.6.14@sha256:a491baeaa0cb0c9cd89c0062ac44ece53886e3e5bddad18d2daf36678ce665b6"
 	etcdRestoreRevisionBump          = 1000000000
 	defaultEtcdctlImage              = "ghcr.io/kafscale/kafscale-etcd-tools:dev"
 	defaultEtcdStorageSize           = "10Gi"

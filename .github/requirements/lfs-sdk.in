@@ -1,0 +1,4 @@
+# Build and test tools; runtime dependencies come from the SDK pyproject.toml.
+pytest
+setuptools
+wheel

@@ -306,3 +306,12 @@ to `1..65535` makes the narrowing safe. Invalid fallback values use `9092`.
 Boundary tests cover `1`, `65535`, zero, negative, `65536`, signed-32-bit edges,
 wraparound candidates, malformed input and overflow. No alert was dismissed or
 reclassified by this change.
+
+### Security dependency updates
+
+Builds use Go 1.26.11. The operator's default managed etcd image is
+`gcr.io/etcd-development/etcd:v3.6.14`, pinned by digest, and snapshot tools
+include etcdctl/etcdutl 3.6.14. Allow pulls from `gcr.io` when using the default.
+An explicit `KAFSCALE_OPERATOR_ETCD_IMAGE` selects the supplied image instead;
+update custom images to a patched etcd release as well. Docker Compose uses
+etcd 3.5.33 to preserve its existing 3.5 data-format release line.

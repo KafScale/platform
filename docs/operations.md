@@ -297,7 +297,7 @@ When the KafScale operator manages etcd, each cluster pod runs ```restore init c
 
 The schema registry keeps its state in the same etcd. Registry pods watch their keys and clear their schema cache when that watch reports a compaction, so a restore run by the operator is handled without restarting them. For a manual restore, run `etcdutl snapshot restore` with `--bump-revision` and `--mark-compacted`, or restart every registry pod afterwards. Without those flags a pod can't always tell that etcd was restored: the restore keeps the cluster id, and the revision soon climbs past what the pod saw, so each pod keeps serving the schemas it had cached. When the registry has `KAFSCALE_S3_BUCKET` set, it records every id it gives out in S3 with a create-only write and skips ids recorded there, so schemas registered after the restore get ids that data written before the restore does not carry. Without S3 it gives out those ids again. See [schema-registry.md](schema-registry.md#storage).
 
-The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.8. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
+The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.14. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
 ### Topic Recovery On The DR Spine
 
@@ -400,7 +400,7 @@ the broker first, or do not gate the install on proxy readiness.
 ### Operator
 
 - `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` – Comma-separated etcd endpoints to use instead of managed etcd.
-- `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `kubesphere/etcd:3.6.4-0`).
+- `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `gcr.io/etcd-development/etcd:v3.6.14`, pinned by digest).
 - `KAFSCALE_OPERATOR_ETCD_REPLICAS` – Managed etcd replica count (default `3`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` – PVC size for managed etcd (default `10Gi`).
 - `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` – StorageClass for managed etcd PVCs.

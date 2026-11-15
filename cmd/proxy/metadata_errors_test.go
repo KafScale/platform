@@ -27,3 +27,19 @@ func TestMetadataFailureReasonsDoNotLogRequestData(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupFailureReasonsDoNotLogRequestData(t *testing.T) {
+	private := errors.New("request contains private group data")
+	for _, test := range []struct {
+		err    error
+		reason string
+	}{
+		{errors.Join(context.DeadlineExceeded, private), "timeout"},
+		{errors.Join(context.Canceled, private), "canceled"},
+		{private, "group_routing"},
+	} {
+		if reason := groupFailureReason(test.err); reason != test.reason {
+			t.Fatal("unsafe group log reason", reason)
+		}
+	}
+}

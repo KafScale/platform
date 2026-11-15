@@ -796,8 +796,8 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 					continue
 				default:
 				}
-				p.logger.Warn("group routing failed", "error", err)
-				p.respondBackendError(writeResponse, header, frame.Payload)
+				p.logger.Warn("group routing failed", "reason", groupFailureReason(err))
+				p.respondBackendError(writeResponse, header, body)
 				return
 			}
 			writeResponse(resp)
@@ -809,7 +809,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			backendConn, backendAddr, err = p.connectBackend(ctx)
 			if err != nil {
 				p.logger.Error("backend connect failed", "error", err)
-				p.respondBackendError(writeResponse, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, body)
 				return
 			}
 		}
@@ -820,13 +820,13 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			backendConn, backendAddr, err = p.connectBackend(ctx)
 			if err != nil {
 				p.logger.Warn("backend reconnect failed", "error", err)
-				p.respondBackendError(writeResponse, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, body)
 				return
 			}
 			resp, err = p.forwardToBackend(ctx, backendConn, backendAddr, frame.Payload)
 			if err != nil {
 				p.logger.Warn("backend forward failed", "error", err)
-				p.respondBackendError(writeResponse, header, frame.Payload)
+				p.respondBackendError(writeResponse, header, body)
 				return
 			}
 		}

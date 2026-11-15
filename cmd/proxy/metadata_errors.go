@@ -43,3 +43,16 @@ func metadataFailureReason(err error) string {
 		return "metadata_processing"
 	}
 }
+
+// Routing errors can contain request fields, including consumer group IDs.
+// Keep the failure category without writing those values to the log.
+func groupFailureReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "group_routing"
+	}
+}
