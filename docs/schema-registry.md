@@ -56,7 +56,10 @@ Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_
   - These rules differ from a general proof that every old JSON instance satisfies a new schema.
   - Object key order is preserved by default; `normalize=true` sorts object keys while preserving array order and numeric scale.
   - The existing CLI import command preserves JSON Schema ids, versions and references.
-- Compatibility levels: `NONE`, `BACKWARD` (the default), `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL` and `FULL_TRANSITIVE`, as in Confluent Schema Registry 8.4.0. `BACKWARD` means the new schema can read data written with the old one, `FORWARD` means the old schema can read data written with the new one, and `FULL` means both. The plain levels check against the latest live version of the subject, the `_TRANSITIVE` levels against every live version. Soft deleted versions are not checked. `PUT /config` accepts the level in any case and returns it in upper case. Other values are rejected with 42203.
+- Compatibility levels: `NONE`, `BACKWARD` (the default), `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL` and `FULL_TRANSITIVE`, as in Confluent Schema Registry 8.4.0.
+  - `BACKWARD` means the new schema can read data written with the old one, `FORWARD` means the old schema can read data written with the new one, and `FULL` means both.
+  - The plain levels check against the latest live version of the subject, the `_TRANSITIVE` levels against every live version. Soft deleted versions are not checked.
+  - `PUT /config` accepts the level in any case and returns it in upper case. Other values are rejected with 42203.
 - Modes: `READWRITE` (the default), `READONLY` and `IMPORT`.
 - Schema references, resolved by subject and version, nested up to 32 levels.
 - Soft and hard deletes of subjects and versions.
@@ -100,7 +103,11 @@ Endpoints:
 - Compatibility against a subject that does not exist returns `is_compatible: true` for `latest` or no version, and 40402 for a numbered version.
 - `DELETE /config/{subject}` and `DELETE /mode/{subject}` return 40401 when the subject has no setting.
 - `DELETE /config` returns the previous global level and resets it to `BACKWARD`.
-- Errors use the Confluent body `{"error_code": ..., "message": ...}` and codes: 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set, 40901 incompatible schema (HTTP 409), 400 malformed request body, 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 42209 schema too large, 50001 store error, 50002 operation timed out.
+- Errors use the Confluent body `{"error_code": ..., "message": ...}` and these codes:
+  - 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set.
+  - 40901 incompatible schema (HTTP 409), 400 malformed request body.
+  - 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 42209 schema too large.
+  - 50001 store error, 50002 operation timed out.
 
 ### Ids and versions
 
@@ -167,7 +174,12 @@ In `READONLY` and `IMPORT` mode, registering a schema that the subject already h
 
 ### Storage
 
-All state lives in etcd under `/kafscale/schemas/`. Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201. The object key is the hash of the text, so retries and identical schemas write the same object once per request. When a write uploads the text and then fails in etcd, the object stays in S3 without an etcd key pointing to it. Such objects are not removed today. To find them, list `<namespace>/@schemas/sha256/` and compare it with the `s3Key` values under `/kafscale/schemas/ids/`.
+All state lives in etcd under `/kafscale/schemas/`.
+
+- Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201.
+- The object key is the hash of the text, so retries and identical schemas write the same object once per request.
+- When a write uploads the text and then fails in etcd, the object stays in S3 without an etcd key pointing to it. Such objects are not removed today.
+- To find them, list `<namespace>/@schemas/sha256/` and compare it with the `s3Key` values under `/kafscale/schemas/ids/`.
 
 Each instance caches schemas by id, up to 32 MiB of schema text, and drops entries when the cache is full. It drops the whole cache when etcd reports a lower revision, a different cluster id, a lower raft term or a lower id counter than it has seen.
 

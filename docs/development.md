@@ -156,7 +156,7 @@ Default MinIO settings (used when `KAFSCALE_USE_MEMORY_S3=1` is not set):
 | Region | `us-east-1` |
 | Addressing | Path-style |
 
-To point at a different S3-compatible endpoint, set the `KAFSCALE_S3_*` variables listed under Environment Variables. To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
+To point at a different S3-compatible endpoint, set `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` (listed under Environment Variables). To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
 
 Related targets:
 - `make test-produce-consume` runs the MinIO-backed produce/consume suite plus a Kafka CLI producer smoke test (configure `KAFSCALE_KAFKA_CLI_IMAGE` / `KAFSCALE_KAFKA_CLI_CMD` if needed).
@@ -192,17 +192,17 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 
 ### Test and E2E
 
-- `KAFSCALE_E2E` – Enable e2e tests.
-- `KAFSCALE_E2E_KIND` – Enable kind-based e2e.
-- `KAFSCALE_KIND_CLUSTER` – Kind cluster name.
-- `KAFSCALE_KIND_RECREATE` – Force kind cluster recreation.
+- `KAFSCALE_E2E`: Enable e2e tests.
+- `KAFSCALE_E2E_KIND`: Enable kind-based e2e.
+- `KAFSCALE_KIND_CLUSTER`: Kind cluster name.
+- `KAFSCALE_KIND_RECREATE`: Force kind cluster recreation.
 - `KAFSCALE_KIND_KUBE_PROXY_MODE` set to `nftables` creates the kind cluster with `networking.kubeProxyMode: nftables`. Leave it unset to keep kind's default. Any other value fails the test.
-- `KAFSCALE_E2E_DEMO` – Run demo stack test.
-- `KAFSCALE_E2E_OPEN_UI` – Open UI during demo test.
-- `KAFSCALE_E2E_DEBUG` – Enable debug output in e2e tests.
-- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE` – Image overrides for kind e2e.
-- `KAFSCALE_MINIO_IMAGE` – MinIO image for kind e2e and the Java LFS integration test (default `kafscale-minio:local`, built by `make docker-build-minio`).
-- `KAFSCALE_LOCAL_FRANZ` – Use local franz-go build in tests.
+- `KAFSCALE_E2E_DEMO`: Run demo stack test.
+- `KAFSCALE_E2E_OPEN_UI`: Open UI during demo test.
+- `KAFSCALE_E2E_DEBUG`: Enable debug output in e2e tests.
+- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE`: Image overrides for kind e2e.
+- `KAFSCALE_MINIO_IMAGE`: MinIO image for kind e2e and the Java LFS integration test (default `kafscale-minio:local`, built by `make docker-build-minio`).
+- `KAFSCALE_LOCAL_FRANZ`: Use local franz-go build in tests.
 
 ### Demo workload tuning
 

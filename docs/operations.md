@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Kafscale Production Operations Guide
+# KafScale production operations guide
 
 This guide explains how to install the Kafscale control plane with Helm, configure S3 and etcd, and expose the operations console. It assumes you already have a Kubernetes cluster and the prerequisites listed below.
 
@@ -39,7 +39,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
 
-By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.1.0`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
+By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a different release (for example, `v1.6.3`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
 
 ### Per-cluster broker image
 
@@ -71,7 +71,7 @@ the override returns that cluster to the operator default.
 | `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
 | `imagePullSecrets` | Provide if your container registry (e.g., GHCR) is private. |
 
-## Post-install Steps
+## Post-install steps
 
 1. Apply a `KafscaleCluster` custom resource describing the S3 bucket, etcd endpoints, cache sizes, and credentials secret.
 2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
@@ -93,11 +93,11 @@ Restore still lists all objects and reads a footer and index per eligible segmen
 large partitions can still take time. This change does not merge small segments or
 add a persistent manifest. Requests for the restoring partition wait for completion.
 
-## Security & Hardening
+## Security & hardening
 
-- **RBAC** – The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
-- **S3 credentials** – Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into the AWS CLI env vars (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) automatically.
-- **Console auth** – The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, set `console.auth.username` and `console.auth.password`, for example:
+- **RBAC**: The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
+- **S3 credentials**: Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into the AWS CLI env vars (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) automatically.
+- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, set `console.auth.username` and `console.auth.password`, for example:
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
@@ -105,23 +105,35 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set console.auth.password='use-a-secret'
 ```
 
-- **TLS** – For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
-- **Admin APIs** – Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
-- **Topic deletion** – DeleteTopics keeps the topic's data in S3. Each broker drops its cached partition logs for the topic, and a topic re-created with the same name starts empty at offset 0 under a new prefix. A topic that was never deleted stores segments under `<namespace>/<topic>/<partition>/`. After the Nth delete, the next topic with that name stores them under `<namespace>/<topic>@<N>/<partition>/`. `<namespace>` is `KAFSCALE_S3_NAMESPACE`. LFS objects live under their own prefix, `<namespace>/@lfs/<topic>/` for generation 0 and `<namespace>/@lfs/<topic>@<N>/` after the Nth delete. See [LFS proxy](#lfs-proxy).
-- **Find retained topic data** – Each delete writes a record to etcd at `/kafscale/deleted-topics/<topic>/<generation>` with `name`, `topic_id`, `generation`, `prefix` and `deleted_at`. The current generation of a topic name is at `/kafscale/topic-generations/<topic>`. List the records with `etcdctl get --prefix /kafscale/deleted-topics/`. The data under each `prefix` stays in S3 until you remove it.
-- **Network policies** – If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
-- **Pod Security (restricted)** – Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults (`runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault`, UID/GID `10001`). Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`. The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
-- **Pod placement** – Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname` so replicas spread across nodes on multi-node clusters while still scheduling on single-node dev clusters. Set `proxy.affinity` explicitly to replace the chart default. For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
-- **ACLs (v1.5)** – Optional, basic ACL enforcement is available at the broker. With proxy mTLS enabled, identity comes from the client certificate mapping. Without it, identity comes from Kafka `client.id` or network identity, which is not authentication. Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`. Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
-  - **Authenticated proxy** – With `KAFSCALE_PROXY_IDENTITY_KEY_FILE` configured,
+- **TLS**: For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
+- **Admin APIs**: Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
+- **Topic deletion**: DeleteTopics keeps the topic's data in S3.
+  - Each broker drops its cached partition logs for the topic. A topic re-created with the same name starts empty at offset 0 under a new prefix.
+  - A topic that was never deleted stores segments under `<namespace>/<topic>/<partition>/`. After the Nth delete, the next topic with that name stores them under `<namespace>/<topic>@<N>/<partition>/`. `<namespace>` is `KAFSCALE_S3_NAMESPACE`.
+  - LFS objects live under their own prefix: `<namespace>/@lfs/<topic>/` for generation 0 and `<namespace>/@lfs/<topic>@<N>/` after the Nth delete. See [LFS proxy](#lfs-proxy).
+- **Find retained topic data**: Each delete writes a record to etcd at `/kafscale/deleted-topics/<topic>/<generation>` with `name`, `topic_id`, `generation`, `prefix` and `deleted_at`. The current generation of a topic name is at `/kafscale/topic-generations/<topic>`. List the records with `etcdctl get --prefix /kafscale/deleted-topics/`. The data under each `prefix` stays in S3 until you remove it.
+- **Network policies**: If your cluster enforces policies, allow the operator + brokers to reach etcd and S3 endpoints and lock everything else down.
+- **Pod Security (restricted)**: Chart-templated workloads (operator, proxy, console, MCP) ship PSA `restricted`-compatible `securityContext` defaults.
+  - The defaults are `runAsNonRoot`, dropped capabilities, `readOnlyRootFilesystem`, `seccompProfile: RuntimeDefault` and UID/GID `10001`.
+  - Override per component via `<component>.podSecurityContext` and `<component>.containerSecurityContext`.
+  - The proxy mounts a writable `/tmp` `emptyDir` for LFS verify temp files.
+- **Pod placement**: Operator-managed broker and etcd StatefulSets, and the chart proxy Deployment (when `proxy.affinity` is empty), use soft (`preferredDuringSchedulingIgnoredDuringExecution`) pod anti-affinity on `kubernetes.io/hostname`.
+  - Replicas spread across nodes on multi-node clusters and still schedule on single-node dev clusters.
+  - Set `proxy.affinity` explicitly to replace the chart default.
+  - For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
+- **ACLs (v1.5)**: Optional, basic ACL enforcement is available at the broker.
+  - With proxy mTLS enabled, identity comes from the client certificate mapping. Without it, identity comes from Kafka `client.id` or network identity, which is not authentication.
+  - Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`.
+  - Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
+  - **Authenticated proxy**: With `KAFSCALE_PROXY_IDENTITY_KEY_FILE` configured,
     the broker requires the proxy identity handshake and ignores legacy principal
     sources. See [Kafka proxy authentication](kafka-authentication.md).
-  - **Principal source** – Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
-  - **Auth denials** – Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
-  - **Trust boundary** – Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
-  - **Fail-closed** – When `KAFSCALE_PROXY_PROTOCOL=true`, brokers reject connections that do not include a valid PROXY header.
-  - **Header limits** – PROXY v1 headers are capped at 256 bytes; oversized headers are rejected.
-  - **Health checks** – PROXY v2 `LOCAL` connections are accepted (no identity); ensure LB health checks don’t rely on ACL-protected operations.
+  - **Principal source**: Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
+  - **Auth denials**: Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
+  - **Trust boundary**: Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
+  - **Fail-closed**: When `KAFSCALE_PROXY_PROTOCOL=true`, brokers reject connections that do not include a valid PROXY header.
+  - **Header limits**: PROXY v1 headers are capped at 256 bytes; oversized headers are rejected.
+  - **Health checks**: PROXY v2 `LOCAL` connections are accepted (no identity); ensure LB health checks don’t rely on ACL-protected operations.
 
 Example ACL values (Helm operator):
 ```yaml
@@ -136,9 +148,9 @@ operator:
     principalSource: "proxy_addr"
     proxyProtocol: true
 ```
-- **Health / metrics** – Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
-- **Startup gating** – Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
-- **Leader IDs** – Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
+- **Health / metrics**: Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
+- **Startup gating**: Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
+- **Leader IDs**: Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
 ### Proxy TLS via LoadBalancer
 
@@ -170,7 +182,7 @@ If you need in-cluster ACME/Let’s Encrypt support, document it as an optional
 stack (Traefik or another TCP-capable gateway + cert-manager). Keep it off by
 default to avoid extra operational dependencies.
 
-#### Provider Examples (Verify with your cloud)
+#### Provider examples (verify with your cloud)
 
 These snippets show common patterns; annotation keys vary by provider and
 feature. Always validate against your cloud provider docs.
@@ -191,7 +203,95 @@ GCP / Azure:
   a provider gateway/ingress (or a TCP-capable ingress controller).
 - If you terminate TLS outside the Service, keep the proxy Service as plain TCP.
 
-## Ops API Examples
+## S3 credentials secret
+
+The secret named by `spec.s3.credentialsSecretRef` can hold either key pair:
+
+| Pair | Optional token |
+|------|----------------|
+| `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` | `KAFSCALE_S3_SESSION_TOKEN` |
+| `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | `AWS_SESSION_TOKEN` |
+
+The brokers, the managed etcd snapshot upload job and the restore init container
+accept either pair.
+
+**Blank values and whitespace**
+
+- Every consumer treats a key whose value is empty or only whitespace as unset,
+  and trims whitespace around other values. This covers the operator
+  `S3Credentials` condition and snapshot check, the brokers, the LFS proxy, the
+  schema registry and the etcd snapshot containers.
+- Whitespace means space, tab, newline, carriage return, vertical tab and form
+  feed. Unicode spaces such as U+00A0 are kept as part of the value.
+- A `spec.s3.credentialsSecretRef` that is empty or only whitespace means no
+  secret.
+
+**Which pair is used**
+
+- When a secret holds both pairs, the brokers and the snapshot containers use
+  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`. The LFS proxy uses
+  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- The snapshot containers and the operator snapshot check use the
+  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair when both keys are
+  set, otherwise the `AWS_*` pair.
+- With the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair they use `KAFSCALE_S3_SESSION_TOKEN` when the
+  secret holds that key (a blank value means no token), and `AWS_SESSION_TOKEN`
+  otherwise. With the `AWS_*` pair they use `AWS_SESSION_TOKEN`.
+- A missing key does not stop a pod from starting. Without a complete pair, the
+  proxy uses the default AWS credential chain if one is available.
+
+**Rotation**
+
+The broker and LFS proxy pod templates carry a
+`kafscale.io/s3-credentials-checksum` annotation, computed over the credential
+keys present in the secret. When one of those keys changes, those pods roll,
+also while the etcd snapshot check fails. Other keys in the secret do not roll
+them.
+
+**The `S3Credentials` condition**
+
+The operator reports the secret state on the KafscaleCluster:
+
+| Status | Reason | Meaning |
+|--------|--------|---------|
+| `True` | `SecretKeysFound` | A complete pair was found. |
+| `True` | `SecretNotReferenced` | No secret is set. |
+| `False` | `SecretNotFound` | The referenced secret does not exist. |
+| `False` | `SecretReadFailed` | The operator could not read or verify the secret, for example because of RBAC. It says nothing about the keys the pods receive. |
+| `False` | `SecretKeysMissing` | The secret holds no complete pair. When it holds part of a pair, the message names the keys it found. |
+| `False` | `SecretKeysMixed` | See below. |
+
+`SecretKeysMixed` flags a likely mistake in two cases:
+
+- The secret holds the `AWS_*` pair plus one but not both of
+  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, or a
+  `KAFSCALE_S3_SESSION_TOKEN` without that pair, with values that are not blank.
+  Every workload then uses the `AWS_*` pair and ignores those keys.
+- The secret holds the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair and `AWS_SESSION_TOKEN` but no
+  `KAFSCALE_S3_SESSION_TOKEN`. The etcd snapshot containers and the operator
+  snapshot check would then sign with a token from the other pair.
+
+What happens with each failure:
+
+- With `SecretNotFound`, or `SecretKeysMissing` and no credential keys at all,
+  workloads get no static keys and use the default AWS credential chain if one is
+  available.
+- With only part of a pair, the brokers and the LFS proxy use the default AWS
+  credential chain if one is available. The etcd snapshot jobs run the AWS CLI,
+  which fails on an access key without a secret key instead of falling back.
+- The snapshot jobs disable the EC2 instance metadata service, so their default
+  chain has no node role.
+- The operator logs a warning once each time the condition turns `False`.
+- The condition covers the brokers and snapshot jobs too, and never stops a
+  reconcile on its own. A missing secret still fails the managed etcd snapshot
+  check, as before.
+
+At startup the proxy logs `lfs s3 credentials` with the source it uses: static
+keys or the default AWS credential chain. For static keys it also logs a boolean
+`session_token` flag. No key or token values are logged. The flag is left out for
+the default chain because its provider may resolve credentials later.
+
+## Ops API examples
 
 Kafscale exposes Kafka admin APIs for operator workflows (consumer group visibility,
 config inspection, cleanup). The canonical plan and scope live in `docs/ops-api.md`.
@@ -217,7 +317,7 @@ kafka-configs.sh --bootstrap-server <broker> --alter --entity-type topics --enti
   --add-config retention.ms=604800000
 ```
 
-## etcd Availability & Storage
+## etcd availability & storage
 
 Kafscale depends on etcd for metadata + offsets. Treat etcd as a production datastore:
 
@@ -246,7 +346,7 @@ The operator tunes managed etcd automatically:
 
 Override schedules and thresholds via the operator etcd env vars listed below.
 
-### Etcd Endpoint Resolution
+### etcd endpoint resolution
 
 The operator resolves etcd endpoints in this order:
 
@@ -254,11 +354,11 @@ The operator resolves etcd endpoints in this order:
 2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`
 3. Managed etcd (operator creates a 3-node StatefulSet)
 
-### Etcd Schema Direction
+### etcd schema direction
 
 Kafscale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
 
-### Consumer Group Keys In Etcd
+### Consumer group keys in etcd
 
 - `/kafscale/consumers/<group>/metadata` holds the group metadata.
 - `/kafscale/consumers/<group>/offsets/<topic>/<partition>` holds each committed offset.
@@ -272,22 +372,11 @@ The retention sweep runs on the broker that holds the `/kafscale/retention-sweep
 - The sweep removes an index key whose group has no metadata and no offsets.
 - Kafka `ListGroups` still reads all keys under `/kafscale/consumers/`, page by page, so it also lists groups that have only offsets.
 
-### Etcd Availability Signals (clients)
+### etcd availability signals (clients)
 
 When etcd is unavailable, the broker rejects producer/admin/consumer-group operations with `REQUEST_TIMED_OUT`. Producers see per-partition errors in the Produce response; admin and group APIs return the same code in their response payloads.
 
-Snapshot job defaults and operator env overrides:
-
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (default: `kafscale-etcd-<namespace>-<cluster>`, separate from broker segment storage)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` (default: `etcd-snapshots`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` (default: `0 * * * *`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` (default: `ghcr.io/kafscale/kafscale-etcd-tools:dev`; this `:dev` tag is the code default, so pin a release tag in production)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` (default: `amazon/aws-cli:2.15.0`)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (optional, for MinIO or custom S3)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` (default: 7200)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` (optional, set to `1` to auto-create the backup bucket)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` (optional, set to `1` to enable versioning + block public access)
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` (optional, set to `1` to skip the operator S3 write check)
+Snapshot job defaults and operator env overrides are listed under [Operator](#operator).
 
 The operator performs an S3 write preflight before enabling snapshots.
 
@@ -298,7 +387,7 @@ The operator performs an S3 write preflight before enabling snapshots.
 - `Ready` becomes `True` only after the check passes.
 - Snapshots are uploaded as timestamped files plus a `.sha256` checksum for recovery validation.
 
-### Snapshot Restore (KafScale managed etcd)
+### Snapshot restore (KafScale managed etcd)
 
 Snapshot restore refers to **etcd operational data** (cluster metadata/offsets). It is not the broker topic snapshot flow.
 
@@ -318,7 +407,7 @@ The schema registry keeps its state in the same etcd.
 
 The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.14. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
-### Topic Recovery On The DR Spine
+### Topic recovery on the DR spine
 
 For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
 
@@ -340,7 +429,7 @@ Operational semantics:
 - Offsets are preserved inside the recovered topic so replay, validation, and downstream cutover can happen without rewriting the source topic.
 - The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
 
-### Pruning Deleted Topic Data
+### Pruning deleted topic data
 
 DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`:
 
@@ -362,7 +451,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 - On a bucket with versioning enabled, prune only adds delete markers. Add a lifecycle rule that expires noncurrent versions to free the space.
 - Prune does not delete LFS objects. Topics deleted before the upgrade that added generations have no record, so prune does not cover their data.
 
-### Consumer Offsets After Restore
+### Consumer offsets after restore
 
 Etcd restores recover committed consumer offsets. If a consumer has **no committed offsets**, it may start at the end and see zero records even though data exists in S3. In production:
 
@@ -376,9 +465,9 @@ Minimal env + spec checklist for a smooth run:
 - Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
 
 Recommended operator alerting (when using Prometheus Operator):
-- `KafscaleSnapshotAccessFailed` – S3 snapshot writes failing.
-- `KafscaleSnapshotStale` – last successful snapshot older than the staleness threshold.
-- `KafscaleSnapshotNeverSucceeded` – no successful snapshots recorded.
+- `KafscaleSnapshotAccessFailed`: S3 snapshot writes failing.
+- `KafscaleSnapshotStale`: last successful snapshot older than the staleness threshold.
+- `KafscaleSnapshotNeverSucceeded`: no successful snapshots recorded.
 
 ## Proxy readiness
 
@@ -425,8 +514,8 @@ successful read.
 
 - The Kafka listener keeps using the brokers, routes and metadata it last read.
 - Clients still get metadata and reach a broker, but their produces wait. Brokers
-  do not ack produces while etcd is down, so the TTL does not keep produces
-  working.
+  reject produces with `REQUEST_TIMED_OUT` while etcd is down, and clients keep
+  retrying, so the TTL does not keep produces working.
 - The LFS HTTP API already fails. `/lfs/produce` and `/lfs/uploads` read the
   topic generation from etcd on every request, so they return 503
   `metadata_unavailable` as soon as etcd cannot be read.
@@ -464,45 +553,106 @@ as soon as etcd answers, and `/readyz` turns Ready on the next check.
   data loss, so past the TTL the proxy stops instead of letting clients write
   through stale routing.
 
-## Environment Variable Index
+### How the LFS proxy finds brokers
+
+The LFS proxy, including its HTTP API, finds brokers through etcd at their
+advertised address.
+
+- Brokers in `spec.lfsProxy.backends` take priority over the ones found in etcd.
+- When etcd lists no brokers, the HTTP API has no broker.
+- When etcd cannot be read, it uses the brokers it last found for as long as
+  `spec.lfsProxy.backendCacheTTLSeconds` (default 60 seconds), as the Kafka
+  listener does.
+- The broker list is cached, but `/lfs/produce` and `/lfs/uploads` still return
+  503 at once because they read the topic generation from etcd.
+
+**Before and after the upload**
+
+- Before the HTTP API uploads an object to S3 or starts a multipart upload, it
+  connects to a broker. If it cannot reach one, it returns 503
+  `backend_unavailable` and uploads nothing.
+- If a broker goes away after the upload and the proxy cannot connect to any
+  broker, it deletes the object again.
+
+**Routing to the partition owner**
+
+- With brokers from etcd, `/lfs/produce` and multipart completion send the
+  produce to the broker that owns the partition. They use the same partition
+  routes as the Kafka listener, and reuse an idle broker connection only when it
+  goes to that broker.
+- When the owner is not known yet, they pick one of the listed brokers.
+- When a broker answers that it does not lead the partition
+  (`NOT_LEADER_OR_FOLLOWER`, `LEADER_NOT_AVAILABLE`, `FENCED_LEADER_EPOCH` or
+  `UNKNOWN_LEADER_EPOCH`), the proxy sends the produce to the current owner, to
+  at most 3 brokers in total. It checks the backend cache TTL before each new
+  attempt.
+- If no broker accepts it, the object is deleted and the request gets 503
+  `backend_unavailable`.
+
+**Static backends**
+
+- With static backends the proxy picks a broker as before. When that broker
+  answers that it does not lead the partition, the proxy tries another listed
+  broker if there is one.
+- With only one address, for example a broker Service, there is no other broker
+  to try. A non-owner answer gives 503 `backend_unavailable` and the object is
+  deleted.
+- When the advertised address is not reachable from inside the cluster, for
+  example when brokers advertise a host port forward, set
+  `spec.lfsProxy.backends` to the broker service, such as
+  `kafscale-broker.<namespace>.svc.cluster.local:9092`. Otherwise the proxy stays
+  NotReady.
+
+**LFS tracker**
+
+- The tracker uses `backends` only as seed brokers. It then produces to the
+  advertised address of the partition leader, so it needs brokers that advertise
+  an address pods can reach.
+- Without that, `__lfs_ops_state` gets no events and the proxy logs
+  `lfs ops tracker: ensure topic failed`.
+- To reach the cluster from a host, advertise the in-cluster broker address and
+  port forward to the LFS proxy, with `spec.lfsProxy.advertisedHost` and
+  `advertisedPort` set to the forwarded address. `make lfs-demo` does this.
+
+## Environment variable index
 
 ### Operator
 
-- `KAFSCALE_OPERATOR_ETCD_ENDPOINTS` – Comma-separated etcd endpoints to use instead of managed etcd.
-- `KAFSCALE_OPERATOR_ETCD_IMAGE` – Managed etcd image (default `gcr.io/etcd-development/etcd:v3.6.14`, pinned by digest).
-- `KAFSCALE_OPERATOR_ETCD_REPLICAS` – Managed etcd replica count (default `3`).
-- `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE` – PVC size for managed etcd (default `10Gi`).
-- `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS` – StorageClass for managed etcd PVCs.
-- `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY` – Use in-memory `emptyDir` for etcd data (`1` to enable, test/dev only).
-- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_MODE` – Managed etcd compaction mode (`periodic` or `revision`; default `periodic`).
-- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_RETENTION` – Compaction retention (`5m` for periodic mode; default `5m`).
-- `KAFSCALE_OPERATOR_ETCD_QUOTA_BACKEND_BYTES` – Managed etcd backend quota in bytes (default `4294967296`, 4 GiB).
-- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE` – Baseline maintenance CronJob schedule (default `0 */6 * * *`).
-- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_CHECK_SCHEDULE` – Reactive size-check CronJob schedule (default `*/15 * * * *`).
-- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED` – Enable maintenance CronJobs (`0`/`false` to disable; enabled by default).
-- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SIZE_THRESHOLD_PCT` – Backend size threshold percent of quota before reactive maintenance runs (default `75`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` – Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX` – Snapshot prefix (default `etcd-snapshots`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE` – Cron schedule for snapshots (default `0 * * * *`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` – Etcdctl image for snapshots, restore and maintenance jobs (default `ghcr.io/kafscale/kafscale-etcd-tools:dev`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` – AWS CLI image for uploads.
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` – S3 endpoint override (MinIO/custom).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC` – Staleness threshold seconds (default `7200`).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET` – Auto-create the snapshot bucket (`1` to enable).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET` – Enable versioning + public access block (`1` to enable).
-- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT` – Skip the S3 write preflight (`1` to enable).
-- `KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE` – Deprecated alias for `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE`. Used only when the new variable is unset.
-- `KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED` – Deprecated alias for `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED`. Setting either one to `0`/`false`/`no`/`off` disables maintenance.
-- `KAFSCALE_OPERATOR_ETCD_SILENCE_LOGS` – Suppress etcd client logs from the operator snapshot publisher (`true` to enable).
-- `KAFSCALE_OPERATOR_LEADER_KEY` – Override the operator leader election ID (default `kafscale-operator`).
-- `KAFSCALE_S3_NAMESPACE` – Prefix used for broker S3 object keys (defaults to the cluster namespace).
-- `KAFSCALE_SEGMENT_BYTES` – Broker segment flush threshold in bytes (default `4194304`).
-- `KAFSCALE_FLUSH_INTERVAL_MS` – Broker flush interval in milliseconds (default `500`).
+- `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`: Comma-separated etcd endpoints to use instead of managed etcd.
+- `KAFSCALE_OPERATOR_ETCD_IMAGE`: Managed etcd image (default `gcr.io/etcd-development/etcd:v3.6.14`, pinned by digest).
+- `KAFSCALE_OPERATOR_ETCD_REPLICAS`: Managed etcd replica count (default `3`).
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_SIZE`: PVC size for managed etcd (default `10Gi`).
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_CLASS`: StorageClass for managed etcd PVCs.
+- `KAFSCALE_OPERATOR_ETCD_STORAGE_MEMORY`: Use in-memory `emptyDir` for etcd data (`1` to enable, test/dev only).
+- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_MODE`: Managed etcd compaction mode (`periodic` or `revision`; default `periodic`).
+- `KAFSCALE_OPERATOR_ETCD_AUTO_COMPACTION_RETENTION`: Compaction retention (`5m` for periodic mode; default `5m`).
+- `KAFSCALE_OPERATOR_ETCD_QUOTA_BACKEND_BYTES`: Managed etcd backend quota in bytes (default `4294967296`, 4 GiB).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE`: Baseline maintenance CronJob schedule (default `0 */6 * * *`).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_CHECK_SCHEDULE`: Reactive size-check CronJob schedule (default `*/15 * * * *`).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED`: Enable maintenance CronJobs (`0`/`false` to disable; enabled by default).
+- `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SIZE_THRESHOLD_PCT`: Backend size threshold percent of quota before reactive maintenance runs (default `75`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET`: Override snapshot bucket (default: `kafscale-etcd-<namespace>-<cluster>`, separate from broker segment storage).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PREFIX`: Snapshot prefix (default `etcd-snapshots`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE`: Cron schedule for snapshots (default `0 * * * *`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE`: Etcdctl image for snapshots, restore and maintenance jobs (default `ghcr.io/kafscale/kafscale-etcd-tools:dev`; this `:dev` tag is the code default, so pin a release tag in production).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE`: AWS CLI image for uploads (default `amazon/aws-cli:2.15.0`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT`: S3 endpoint override (MinIO/custom).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`: Staleness threshold seconds (default `7200`).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET`: Auto-create the snapshot bucket (`1` to enable).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_PROTECT_BUCKET`: Enable versioning + public access block (`1` to enable).
+- `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT`: Skip the S3 write preflight (`1` to enable).
+- `KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE`: Deprecated alias for `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE`. Used only when the new variable is unset.
+- `KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED`: Deprecated alias for `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED`. Setting either one to `0`/`false`/`no`/`off` disables maintenance.
+- `KAFSCALE_OPERATOR_ETCD_SILENCE_LOGS`: Suppress etcd client logs from the operator snapshot publisher (`true` to enable).
+- `KAFSCALE_OPERATOR_LEADER_KEY`: Override the operator leader election ID (default `kafscale-operator`).
+- `KAFSCALE_S3_NAMESPACE`: Prefix used for broker S3 object keys (defaults to the cluster namespace).
+- `KAFSCALE_SEGMENT_BYTES`: Broker segment flush threshold in bytes (default `4194304`).
+- `KAFSCALE_FLUSH_INTERVAL_MS`: Broker flush interval in milliseconds (default `500`).
 
 ### Broker
 
-- `KAFSCALE_BROKER_ADDR` – Kafka listener address (host:port).
-- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS` – How long a write of a Kafka response may wait for a slow client on the broker and proxy (default `30000` milliseconds; nonpositive uses the default).
+- `KAFSCALE_BROKER_ADDR`: Kafka listener address (host:port).
+- `KAFSCALE_RESPONSE_WRITE_TIMEOUT_MS`: How long a write of a Kafka response may wait for a slow client on the broker and proxy (default `30000` milliseconds; nonpositive uses the default).
   - The response is written in 256 KiB pieces and the idle timeout restarts before each piece.
   - The complete frame has a five-minute deadline, including clients that keep reading slowly.
   - A piece only waits when the socket send buffer is full, and the kernel lets it continue once a large part of that buffer has drained, roughly a third to a half of it.
@@ -511,23 +661,23 @@ as soon as etcd answers, and `/readyz` turns Ready on the next check.
   - On broker pods, configure `KafscaleCluster.spec.config.responseWriteTimeoutMs` with a positive value; for the proxy chart, set `proxy.responseWriteTimeoutMs`.
   - The proxy logs a warning and uses the default when an integer setting is not a number.
   - A write timeout closes the socket and drains complete requests already read, preserving acks=0 produces.
-- `KAFSCALE_BROKER_HOST` – Advertised host (used with `KAFSCALE_BROKER_PORT`).
-- `KAFSCALE_BROKER_PORT` – Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
-- `KAFSCALE_BROKER_ID` – Broker node ID.
-- `KAFSCALE_METRICS_ADDR` – Metrics listen address.
-- `KAFSCALE_CONTROL_ADDR` – Control-plane listen address.
-- `KAFSCALE_ETCD_ENDPOINTS` – Etcd endpoints for metadata/offsets.
-- `KAFSCALE_ETCD_USERNAME`, `KAFSCALE_ETCD_PASSWORD` – Etcd basic auth.
-- `KAFSCALE_S3_BUCKET` – S3 bucket for segments/snapshots.
-- `KAFSCALE_S3_REGION` – S3 region.
-- `KAFSCALE_S3_ENDPOINT` – S3 endpoint override.
-- `KAFSCALE_S3_READ_BUCKET` – Optional read replica bucket (CRR/MRAP).
-- `KAFSCALE_S3_READ_REGION` – Optional read replica region.
-- `KAFSCALE_S3_READ_ENDPOINT` – Optional read replica endpoint override.
-- `KAFSCALE_S3_PATH_STYLE` – Force path-style addressing (`true/false`).
-- `KAFSCALE_S3_KMS_ARN` – KMS key ARN for SSE-KMS.
-- `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN` – S3 credentials.
-- `KAFSCALE_S3_CONCURRENCY` – Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends. The `kafscale-cli` tool reads the same variable with a default of `16`.
+- `KAFSCALE_BROKER_HOST`: Advertised host (used with `KAFSCALE_BROKER_PORT`).
+- `KAFSCALE_BROKER_PORT`: Advertised port. The broker binary defaults to `19092` when run directly. The operator always sets it from the cluster spec (`9092` by default), and a port in `KAFSCALE_BROKER_ADDR` takes precedence.
+- `KAFSCALE_BROKER_ID`: Broker node ID.
+- `KAFSCALE_METRICS_ADDR`: Metrics listen address.
+- `KAFSCALE_CONTROL_ADDR`: Control-plane listen address.
+- `KAFSCALE_ETCD_ENDPOINTS`: Etcd endpoints for metadata/offsets.
+- `KAFSCALE_ETCD_USERNAME`, `KAFSCALE_ETCD_PASSWORD`: Etcd basic auth.
+- `KAFSCALE_S3_BUCKET`: S3 bucket for segments/snapshots.
+- `KAFSCALE_S3_REGION`: S3 region.
+- `KAFSCALE_S3_ENDPOINT`: S3 endpoint override.
+- `KAFSCALE_S3_READ_BUCKET`: Optional read replica bucket (CRR/MRAP).
+- `KAFSCALE_S3_READ_REGION`: Optional read replica region.
+- `KAFSCALE_S3_READ_ENDPOINT`: Optional read replica endpoint override.
+- `KAFSCALE_S3_PATH_STYLE`: Force path-style addressing (`true/false`).
+- `KAFSCALE_S3_KMS_ARN`: KMS key ARN for SSE-KMS.
+- `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`: S3 credentials.
+- `KAFSCALE_S3_CONCURRENCY`: Broker-wide cap on concurrent S3 operations (default `64`, `0` to disable). Lower for slower S3-compatible backends. The `kafscale-cli` tool reads the same variable with a default of `16`.
 
 Read replica example (multi-region reads):
 
@@ -537,24 +687,27 @@ export KAFSCALE_S3_REGION=us-east-1
 export KAFSCALE_S3_READ_BUCKET=prod-segments-replica
 export KAFSCALE_S3_READ_REGION=eu-west-1
 ```
-- `KAFSCALE_CACHE_BYTES` – Broker cache size in bytes. `KAFSCALE_CACHE_SIZE` is accepted as a legacy alias when `KAFSCALE_CACHE_BYTES` is unset or not positive.
-- `KAFSCALE_READAHEAD_SEGMENTS` – Segment readahead count.
-- `KAFSCALE_AUTO_CREATE_TOPICS` – Auto-create topics (`true/false`).
-- `KAFSCALE_AUTO_CREATE_PARTITIONS` – Partition count for auto-created topics (default `1`). Produce requests cannot increase this count by naming a higher partition. An out-of-range partition on a missing topic is rejected without creating the topic. Existing topics retain their own partition counts.
-- `KAFSCALE_USE_MEMORY_S3` – Use in-memory S3 client (dev only).
-- `KAFSCALE_OFFSETS_RETENTION_MINUTES` – Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry. In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes` to zero or more; zero disables expiry and omission uses the broker default. Retention is checked once per minute under the group coordination lease. Groups are listed for the check from the group index, with a full scan of the group and offset keys once an hour; see [Consumer Group Keys In Etcd](#consumer-group-keys-in-etcd).
-- `KAFSCALE_PRODUCE_SYNC_FLUSH` – Flush to S3 on Produce when `acks != 0` (default `true`).
-- `KAFSCALE_LOG_LEVEL` – Log level (`debug`, `info`, `warn`, `error`).
-- `KAFSCALE_TRACE_KAFKA` – Enable protocol tracing (`true/false`).
-- `KAFSCALE_THROUGHPUT_WINDOW_SEC` – Throughput window size seconds.
-- `KAFSCALE_S3_HEALTH_WINDOW_SEC` – S3 health sampling window seconds.
-- `KAFSCALE_S3_LATENCY_WARN_MS`, `KAFSCALE_S3_LATENCY_CRIT_MS` – Latency thresholds.
-- `KAFSCALE_S3_ERROR_RATE_WARN`, `KAFSCALE_S3_ERROR_RATE_CRIT` – Error-rate thresholds.
-- `KAFSCALE_STARTUP_TIMEOUT_SEC` – Broker startup timeout.
-- `KAFSCALE_LAG_SAMPLE_INTERVAL_SEC` – Consumer lag sampling interval in seconds (default `5`).
-- `KAFSCALE_ENV` – Set to `prod` to log a warning whenever a broker setting falls back to its default because the variable is unset or invalid.
+- `KAFSCALE_CACHE_BYTES`: Broker cache size in bytes. `KAFSCALE_CACHE_SIZE` is accepted as a legacy alias when `KAFSCALE_CACHE_BYTES` is unset or not positive.
+- `KAFSCALE_READAHEAD_SEGMENTS`: Segment readahead count.
+- `KAFSCALE_AUTO_CREATE_TOPICS`: Auto-create topics (`true/false`).
+- `KAFSCALE_AUTO_CREATE_PARTITIONS`: Partition count for auto-created topics (default `1`). Produce requests cannot increase this count by naming a higher partition. An out-of-range partition on a missing topic is rejected without creating the topic. Existing topics retain their own partition counts.
+- `KAFSCALE_USE_MEMORY_S3`: Use in-memory S3 client (dev only).
+- `KAFSCALE_OFFSETS_RETENTION_MINUTES`: Retention for Empty consumer groups and their committed offsets (default `10080`, seven days). Zero or negative disables automatic expiry.
+  - In Kubernetes, set `KafscaleCluster.spec.config.offsetsRetentionMinutes` to zero or more. Zero disables expiry, and omission uses the broker default.
+  - Retention is checked once per minute under the group coordination lease.
+  - Groups are listed for the check from the group index, with a full scan of the group and offset keys once an hour. See [Consumer group keys in etcd](#consumer-group-keys-in-etcd).
+- `KAFSCALE_PRODUCE_SYNC_FLUSH`: Flush to S3 on Produce when `acks != 0` (default `true`).
+- `KAFSCALE_LOG_LEVEL`: Log level (`debug`, `info`, `warn`, `error`).
+- `KAFSCALE_TRACE_KAFKA`: Enable protocol tracing (`true/false`).
+- `KAFSCALE_THROUGHPUT_WINDOW_SEC`: Throughput window size seconds.
+- `KAFSCALE_S3_HEALTH_WINDOW_SEC`: S3 health sampling window seconds.
+- `KAFSCALE_S3_LATENCY_WARN_MS`, `KAFSCALE_S3_LATENCY_CRIT_MS`: Latency thresholds.
+- `KAFSCALE_S3_ERROR_RATE_WARN`, `KAFSCALE_S3_ERROR_RATE_CRIT`: Error-rate thresholds.
+- `KAFSCALE_STARTUP_TIMEOUT_SEC`: Broker startup timeout.
+- `KAFSCALE_LAG_SAMPLE_INTERVAL_SEC`: Consumer lag sampling interval in seconds (default `5`).
+- `KAFSCALE_ENV`: Set to `prod` to log a warning whenever a broker setting falls back to its default because the variable is unset or invalid.
 
-### Produce Flush Policy (cost vs durability)
+### Produce flush policy (cost vs durability)
 
 By default, the broker flushes to S3 for every Produce request with `acks != 0`
 to minimize the loss window after a broker crash. You can relax this for lower
@@ -573,18 +726,18 @@ Cost-optimized (accepts a larger loss window after crash):
 
 ### Proxy
 
-- `KAFSCALE_PROXY_ADDR` – Proxy listen address (host:port).
-- `KAFSCALE_PROXY_HEALTH_ADDR` – Health/readiness listen address for `/readyz` and `/livez`. The proxy binary has no default: if unset, the health server does not start. The Helm chart sets `:9094` when `proxy.health.enabled` is true.
-- `KAFSCALE_PROXY_ADVERTISED_HOST` – Address Kafka clients should connect to.
-- `KAFSCALE_PROXY_ADVERTISED_PORT` – Advertised port (default `9092`).
-- `KAFSCALE_PROXY_ETCD_ENDPOINTS` – Etcd endpoints for metadata snapshots.
-- `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD` – Etcd auth for proxy.
-- `KAFSCALE_PROXY_BACKENDS` – Optional comma-separated broker list (`host:port`) for backend routing.
-- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` – How long the proxy keeps serving from its last etcd read when etcd cannot be read (default `60` seconds). Past this time the proxy goes NotReady and stops routing. See [Proxy behavior when etcd is down](#proxy-behavior-when-etcd-is-down). The operator sets it from `spec.lfsProxy.backendCacheTTLSeconds`.
-- `KAFSCALE_PROXY_BACKEND_BACKOFF_MS` – Backoff between backend connection retries (default `500`).
-- `KAFSCALE_PROXY_BACKEND_RETRIES` – Backend connection retry count (default `6`).
-- `KAFSCALE_PROXY_READYZ_FETCH_PROBE` – Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
-- `KAFSCALE_PROXY_LFS_ENABLED` – Enable the LFS module on the unified proxy (default `false`). See [LFS proxy](#lfs-proxy) for its settings.
+- `KAFSCALE_PROXY_ADDR`: Proxy listen address (host:port).
+- `KAFSCALE_PROXY_HEALTH_ADDR`: Health/readiness listen address for `/readyz` and `/livez`. The proxy binary has no default: if unset, the health server does not start. The Helm chart sets `:9094` when `proxy.health.enabled` is true.
+- `KAFSCALE_PROXY_ADVERTISED_HOST`: Address Kafka clients should connect to.
+- `KAFSCALE_PROXY_ADVERTISED_PORT`: Advertised port (default `9092`).
+- `KAFSCALE_PROXY_ETCD_ENDPOINTS`: Etcd endpoints for metadata snapshots.
+- `KAFSCALE_PROXY_ETCD_USERNAME`, `KAFSCALE_PROXY_ETCD_PASSWORD`: Etcd auth for proxy.
+- `KAFSCALE_PROXY_BACKENDS`: Optional comma-separated broker list (`host:port`) for backend routing.
+- `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC`: How long the proxy keeps serving from its last etcd read when etcd cannot be read (default `60` seconds). Past this time the proxy goes NotReady and stops routing. See [Proxy behavior when etcd is down](#proxy-behavior-when-etcd-is-down). The operator sets it from `spec.lfsProxy.backendCacheTTLSeconds`. The Helm chart proxy sets it from `proxy.backendCacheTTLSeconds` (default `60`).
+- `KAFSCALE_PROXY_BACKEND_BACKOFF_MS`: Backoff between backend connection retries (default `500`).
+- `KAFSCALE_PROXY_BACKEND_RETRIES`: Backend connection retry count (default `6`).
+- `KAFSCALE_PROXY_READYZ_FETCH_PROBE`: Gate `/readyz` on a real Fetch round-trip (default `true`). See [Proxy readiness](#proxy-readiness).
+- `KAFSCALE_PROXY_LFS_ENABLED`: Enable the LFS module on the unified proxy (default `false`). See [LFS proxy](#lfs-proxy) for its settings.
 
 ### Schema registry
 
@@ -608,17 +761,17 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 
 ### Console
 
-- `KAFSCALE_CONSOLE_HTTP_ADDR` – Console listen address.
-- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` – Etcd endpoints for metadata read-only access.
-- `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD` – Etcd auth for console.
-- `KAFSCALE_CONSOLE_BROKER_METRICS_URL` – Broker Prometheus endpoint.
-- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD` – Console login credentials.
-- `KAFSCALE_CONSOLE_LFS_ENABLED` – Enable the LFS views and API (`true` to enable; any other value disables them).
-- `KAFSCALE_CONSOLE_KAFKA_BROKERS` – Comma-separated brokers used to consume the LFS tracker topic.
-- `KAFSCALE_LFS_TRACKER_TOPIC` – Tracker topic to read (default `__lfs_ops_state`).
-- `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_REGION`, `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT` – S3 location for browsing LFS objects. Path-style addressing is used when an endpoint is set.
-- `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY` – S3 credentials for the console.
-- `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL` – Presigned URL lifetime in seconds (default `300`).
+- `KAFSCALE_CONSOLE_HTTP_ADDR`: Console listen address.
+- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS`: Etcd endpoints for metadata read-only access.
+- `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD`: Etcd auth for console.
+- `KAFSCALE_CONSOLE_BROKER_METRICS_URL`: Broker Prometheus endpoint.
+- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials.
+- `KAFSCALE_CONSOLE_LFS_ENABLED`: Enable the LFS views and API (`true` to enable; any other value disables them).
+- `KAFSCALE_CONSOLE_KAFKA_BROKERS`: Comma-separated brokers used to consume the LFS tracker topic.
+- `KAFSCALE_LFS_TRACKER_TOPIC`: Tracker topic to read (default `__lfs_ops_state`).
+- `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_REGION`, `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT`: S3 location for browsing LFS objects. Path-style addressing is used when an endpoint is set.
+- `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY`: S3 credentials for the console.
+- `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL`: Presigned URL lifetime in seconds (default `300`).
 
 When LFS is enabled, the console serves these authenticated endpoints: `/ui/api/lfs/status`, `/ui/api/lfs/objects`, `/ui/api/lfs/topics`, `/ui/api/lfs/topics/{topic}`, `/ui/api/lfs/events`, `/ui/api/lfs/orphans`, `/ui/api/lfs/s3/browse` and `/ui/api/lfs/s3/presign`.
 
@@ -628,15 +781,15 @@ These settings apply when `KAFSCALE_PROXY_LFS_ENABLED=true`. Defaults come from 
 
 S3 storage:
 
-- `KAFSCALE_LFS_PROXY_S3_BUCKET` – Required. The proxy refuses known example bucket names.
-- `KAFSCALE_LFS_PROXY_S3_REGION` – Required.
-- `KAFSCALE_LFS_PROXY_S3_ENDPOINT` – Endpoint override (MinIO or other S3-compatible stores).
-- `KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT` – Endpoint used in URLs handed to clients.
-- `KAFSCALE_LFS_PROXY_S3_ACCESS_KEY`, `KAFSCALE_LFS_PROXY_S3_SECRET_KEY`, `KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN` – S3 credentials.
-- `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE` – Path-style addressing (default `true` when an endpoint is set, otherwise `false`).
-- `KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET` – Create the bucket at startup (default `false`).
-- `KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC` – S3 health check interval (default `30`).
-- `KAFSCALE_S3_NAMESPACE` – Object key prefix (default `default` for the LFS module).
+- `KAFSCALE_LFS_PROXY_S3_BUCKET`: Required. The proxy refuses known example bucket names.
+- `KAFSCALE_LFS_PROXY_S3_REGION`: Required.
+- `KAFSCALE_LFS_PROXY_S3_ENDPOINT`: Endpoint override (MinIO or other S3-compatible stores).
+- `KAFSCALE_LFS_PROXY_S3_PUBLIC_ENDPOINT`: Endpoint used in URLs handed to clients.
+- `KAFSCALE_LFS_PROXY_S3_ACCESS_KEY`, `KAFSCALE_LFS_PROXY_S3_SECRET_KEY`, `KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN`: S3 credentials.
+- `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE`: Path-style addressing (default `true` when an endpoint is set, otherwise `false`).
+- `KAFSCALE_LFS_PROXY_S3_ENSURE_BUCKET`: Create the bucket at startup (default `false`).
+- `KAFSCALE_LFS_PROXY_S3_HEALTH_INTERVAL_SEC`: S3 health check interval (default `30`).
+- `KAFSCALE_S3_NAMESPACE`: Object key prefix (default `default` for the LFS module).
 
 Object keys:
 
@@ -654,36 +807,36 @@ Object keys:
 
 Blobs and checksums:
 
-- `KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE` – Maximum blob size in bytes (default `5368709120`, 5 GiB).
-- `KAFSCALE_LFS_PROXY_CHUNK_SIZE` – Multipart chunk size in bytes (default `5242880`, 5 MiB).
-- `KAFSCALE_LFS_PROXY_CHECKSUM_ALGO` – Checksum algorithm (default `sha256`).
-- `KAFSCALE_LFS_PROXY_ID` – Proxy identifier recorded in tracker events (no default).
-- `KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH` – Maximum topic name length (default `249`).
-- `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS` – Timeout for the etcd topic generation lookup before an LFS upload (default `3000`). In the Helm chart, set `proxy.lfsMetadataTimeoutMs`.
+- `KAFSCALE_LFS_PROXY_MAX_BLOB_SIZE`: Maximum blob size in bytes (default `5368709120`, 5 GiB).
+- `KAFSCALE_LFS_PROXY_CHUNK_SIZE`: Multipart chunk size in bytes (default `5242880`, 5 MiB).
+- `KAFSCALE_LFS_PROXY_CHECKSUM_ALGO`: Checksum algorithm (default `sha256`).
+- `KAFSCALE_LFS_PROXY_ID`: Proxy identifier recorded in tracker events (no default).
+- `KAFSCALE_LFS_PROXY_TOPIC_MAX_LENGTH`: Maximum topic name length (default `249`).
+- `KAFSCALE_LFS_PROXY_METADATA_TIMEOUT_MS`: Timeout for the etcd topic generation lookup before an LFS upload (default `3000`). In the Helm chart, set `proxy.lfsMetadataTimeoutMs`.
 
 HTTP API:
 
-- `KAFSCALE_LFS_PROXY_HTTP_ADDR` – Listen address for the LFS HTTP API. No default: the API is off unless set.
-- `KAFSCALE_LFS_PROXY_METRICS_ADDR` – Listen address for LFS metrics (`/metrics`). No default.
-- `KAFSCALE_LFS_PROXY_HTTP_API_KEY` – API key required on HTTP requests (unset means no key check).
+- `KAFSCALE_LFS_PROXY_HTTP_ADDR`: Listen address for the LFS HTTP API. No default: the API is off unless set.
+- `KAFSCALE_LFS_PROXY_METRICS_ADDR`: Listen address for LFS metrics (`/metrics`). No default.
+- `KAFSCALE_LFS_PROXY_HTTP_API_KEY`: API key required on HTTP requests (unset means no key check).
 - `KAFSCALE_LFS_PROXY_HTTP_READ_TIMEOUT_SEC` (default `30`), `KAFSCALE_LFS_PROXY_HTTP_WRITE_TIMEOUT_SEC` (default `300`), `KAFSCALE_LFS_PROXY_HTTP_IDLE_TIMEOUT_SEC` (default `60`), `KAFSCALE_LFS_PROXY_HTTP_HEADER_TIMEOUT_SEC` (default `10`), `KAFSCALE_LFS_PROXY_HTTP_SHUTDOWN_TIMEOUT_SEC` (default `10`).
-- `KAFSCALE_LFS_PROXY_HTTP_MAX_HEADER_BYTES` – Default `1048576` (1 MiB).
-- `KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC` – Multipart upload session lifetime (default `3600`).
-- `KAFSCALE_LFS_PROXY_DOWNLOAD_TTL_SEC` – Maximum download URL lifetime (default `120`).
-- `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED` – Enable presigned URLs (default `false`).
-- `KAFSCALE_LFS_PROXY_HTTP_TLS_ENABLED` – Serve the HTTP API over TLS (default `false`). Requires `KAFSCALE_LFS_PROXY_HTTP_TLS_CERT_FILE` and `KAFSCALE_LFS_PROXY_HTTP_TLS_KEY_FILE`. Minimum TLS 1.2.
-- `KAFSCALE_LFS_PROXY_HTTP_TLS_CLIENT_CA_FILE` – CA for client certificates. Client certificates are verified if given.
-- `KAFSCALE_LFS_PROXY_HTTP_TLS_REQUIRE_CLIENT_CERT` – Require client certificates when a client CA is set (default `false`).
+- `KAFSCALE_LFS_PROXY_HTTP_MAX_HEADER_BYTES`: Default `1048576` (1 MiB).
+- `KAFSCALE_LFS_PROXY_UPLOAD_SESSION_TTL_SEC`: Multipart upload session lifetime (default `3600`).
+- `KAFSCALE_LFS_PROXY_DOWNLOAD_TTL_SEC`: Maximum download URL lifetime (default `120`).
+- `KAFSCALE_LFS_PROXY_PRESIGN_ENABLED`: Enable presigned URLs (default `false`).
+- `KAFSCALE_LFS_PROXY_HTTP_TLS_ENABLED`: Serve the HTTP API over TLS (default `false`). Requires `KAFSCALE_LFS_PROXY_HTTP_TLS_CERT_FILE` and `KAFSCALE_LFS_PROXY_HTTP_TLS_KEY_FILE`. Minimum TLS 1.2.
+- `KAFSCALE_LFS_PROXY_HTTP_TLS_CLIENT_CA_FILE`: CA for client certificates. Client certificates are verified if given.
+- `KAFSCALE_LFS_PROXY_HTTP_TLS_REQUIRE_CLIENT_CERT`: Require client certificates when a client CA is set (default `false`).
 
 HTTP endpoints (served on `KAFSCALE_LFS_PROXY_HTTP_ADDR`):
 
-- `POST /lfs/produce` – Upload a blob and produce its envelope to Kafka.
-- `POST /lfs/download` – Get a download for a stored blob.
-- `POST /lfs/uploads` – Start a multipart upload session.
-- `PUT /lfs/uploads/{id}/parts/{n}` – Upload a part.
-- `POST /lfs/uploads/{id}/complete` – Complete the upload.
-- `DELETE /lfs/uploads/{id}` – Abort the upload.
-- `GET /swagger` and `GET /api/openapi.yaml` – API docs and OpenAPI spec.
+- `POST /lfs/produce`: Upload a blob and produce its envelope to Kafka.
+- `POST /lfs/download`: Get a download for a stored blob.
+- `POST /lfs/uploads`: Start a multipart upload session.
+- `PUT /lfs/uploads/{id}/parts/{n}`: Upload a part.
+- `POST /lfs/uploads/{id}/complete`: Complete the upload.
+- `DELETE /lfs/uploads/{id}`: Abort the upload.
+- `GET /swagger` and `GET /api/openapi.yaml`: API docs and OpenAPI spec.
 
 Multipart upload cleanup:
 
@@ -745,162 +898,23 @@ The orphan sweep needs `s3:ListBucketMultipartUploads` and `s3:AbortMultipartUpl
 
 Kafka backends:
 
-- `KAFSCALE_LFS_PROXY_BACKENDS` – Comma-separated broker list used by the LFS module and tracker. When it is unset, the LFS HTTP API uses the brokers registered in etcd, as the Kafka listener does, and the tracker is off.
-- `KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS` (default `5000`), `KAFSCALE_LFS_PROXY_BACKEND_RETRIES` (default `6`, minimum `1`), `KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS` (default `500`). The dial timeout also bounds the LFS HTTP Kafka request write. After the write, the response gets a separate budget of 15 seconds (the broker Produce timeout) plus the dial timeout, 20 seconds by default. An earlier HTTP request deadline or cancellation stops the exchange.
-- `KAFSCALE_LFS_PROXY_BACKEND_SASL_MECHANISM`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_USERNAME`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_PASSWORD` – SASL for backend connections.
+- `KAFSCALE_LFS_PROXY_BACKENDS`: Comma-separated broker list used by the LFS module and tracker. When it is unset, the LFS HTTP API uses the brokers registered in etcd, as the Kafka listener does, and the tracker is off.
+- `KAFSCALE_LFS_PROXY_DIAL_TIMEOUT_MS` (default `5000`), `KAFSCALE_LFS_PROXY_BACKEND_RETRIES` (default `6`, minimum `1`), `KAFSCALE_LFS_PROXY_BACKEND_BACKOFF_MS` (default `500`).
+  - The dial timeout also bounds the LFS HTTP Kafka request write.
+  - After the write, the response gets a separate budget of 15 seconds (the broker Produce timeout) plus the dial timeout, 20 seconds by default.
+  - An earlier HTTP request deadline or cancellation stops the exchange.
+- `KAFSCALE_LFS_PROXY_BACKEND_SASL_MECHANISM`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_USERNAME`, `KAFSCALE_LFS_PROXY_BACKEND_SASL_PASSWORD`: SASL for backend connections.
 - `KAFSCALE_LFS_PROXY_BACKEND_TLS_ENABLED` (default `false`), `KAFSCALE_LFS_PROXY_BACKEND_TLS_CA_FILE`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_CERT_FILE`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_KEY_FILE` (cert and key must be set together), `KAFSCALE_LFS_PROXY_BACKEND_TLS_SERVER_NAME`, `KAFSCALE_LFS_PROXY_BACKEND_TLS_INSECURE_SKIP_VERIFY` (default `false`).
 
 LFS tracker (writes LFS operation events to Kafka):
 
 - `KAFSCALE_LFS_TRACKER_ENABLED` (default `true`), `KAFSCALE_LFS_TRACKER_TOPIC` (default `__lfs_ops_state`), `KAFSCALE_LFS_TRACKER_BATCH_SIZE` (default `100`), `KAFSCALE_LFS_TRACKER_FLUSH_MS` (default `100`), `KAFSCALE_LFS_TRACKER_ENSURE_TOPIC` (default `true`), `KAFSCALE_LFS_TRACKER_PARTITIONS` (default `3`), `KAFSCALE_LFS_TRACKER_REPLICATION_FACTOR` (default `1`).
 
-Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets `KAFSCALE_LFS_PROXY_ADDR`, `KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_LFS_PROXY_ADVERTISED_HOST`, `KAFSCALE_LFS_PROXY_ADVERTISED_PORT`, `KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC`, `KAFSCALE_LFS_PROXY_BACKENDS` and `KAFSCALE_LFS_PROXY_HEALTH_ADDR`, and the same values under the `KAFSCALE_PROXY_` names that the proxy binary reads, plus `KAFSCALE_PROXY_LFS_ENABLED=true` (pkg/operator/lfs_proxy_resources.go).
+Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets these variables (pkg/operator/lfs_proxy_resources.go):
 
-#### S3 credentials secret
-
-The secret named by `spec.s3.credentialsSecretRef` can hold either key pair:
-
-| Pair | Optional token |
-|------|----------------|
-| `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` | `KAFSCALE_S3_SESSION_TOKEN` |
-| `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | `AWS_SESSION_TOKEN` |
-
-The brokers, the managed etcd snapshot upload job and the restore init container
-accept either pair.
-
-**Blank values and whitespace**
-
-- Every consumer treats a key whose value is empty or only whitespace as unset,
-  and trims whitespace around other values. This covers the operator
-  `S3Credentials` condition and snapshot check, the brokers, the LFS proxy, the
-  schema registry and the etcd snapshot containers.
-- Whitespace means space, tab, newline, carriage return, vertical tab and form
-  feed. Unicode spaces such as U+00A0 are kept as part of the value.
-- A `spec.s3.credentialsSecretRef` that is empty or only whitespace means no
-  secret.
-
-**Which pair is used**
-
-- When a secret holds both pairs, the brokers and the snapshot containers use
-  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`. The LFS proxy uses
-  `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
-- The snapshot containers and the operator snapshot check use the `KAFSCALE_S3_*`
-  pair when both of its keys are set, otherwise the `AWS_*` pair.
-- With the `KAFSCALE_S3_*` pair they use `KAFSCALE_S3_SESSION_TOKEN` when the
-  secret holds that key (a blank value means no token), and `AWS_SESSION_TOKEN`
-  otherwise. With the `AWS_*` pair they use `AWS_SESSION_TOKEN`.
-- A missing key does not stop a pod from starting. Without a complete pair, the
-  proxy uses the default AWS credential chain if one is available.
-
-**Rotation**
-
-The broker and LFS proxy pod templates carry a
-`kafscale.io/s3-credentials-checksum` annotation, computed over the credential
-keys present in the secret. When one of those keys changes, those pods roll,
-also while the etcd snapshot check fails. Other keys in the secret do not roll
-them.
-
-**The `S3Credentials` condition**
-
-The operator reports the secret state on the KafscaleCluster:
-
-| Status | Reason | Meaning |
-|--------|--------|---------|
-| `True` | `SecretKeysFound` | A complete pair was found. |
-| `True` | `SecretNotReferenced` | No secret is set. |
-| `False` | `SecretNotFound` | The referenced secret does not exist. |
-| `False` | `SecretReadFailed` | The operator could not read or verify the secret, for example because of RBAC. It says nothing about the keys the pods receive. |
-| `False` | `SecretKeysMissing` | The secret holds no complete pair. When it holds part of a pair, the message names the keys it found. |
-| `False` | `SecretKeysMixed` | See below. |
-
-`SecretKeysMixed` flags a likely mistake in two cases:
-
-- The secret holds the `AWS_*` pair plus one but not both of
-  `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, or a
-  `KAFSCALE_S3_SESSION_TOKEN` without that pair, with values that are not blank.
-  Every workload then uses the `AWS_*` pair and ignores those keys.
-- The secret holds the `KAFSCALE_S3_*` pair and `AWS_SESSION_TOKEN` but no
-  `KAFSCALE_S3_SESSION_TOKEN`. The etcd snapshot containers and the operator
-  snapshot check would then sign with a token from the other pair.
-
-What happens with each failure:
-
-- With `SecretNotFound`, or `SecretKeysMissing` and no credential keys at all,
-  workloads get no static keys and use the default AWS credential chain if one is
-  available.
-- With only part of a pair, the brokers and the LFS proxy use the default AWS
-  credential chain if one is available. The etcd snapshot jobs run the AWS CLI,
-  which fails on an access key without a secret key instead of falling back.
-- The snapshot jobs disable the EC2 instance metadata service, so their default
-  chain has no node role.
-- The operator logs a warning once each time the condition turns `False`.
-- The condition covers the brokers and snapshot jobs too, and never stops a
-  reconcile on its own. A missing secret still fails the managed etcd snapshot
-  check, as before.
-
-At startup the proxy logs `lfs s3 credentials` with the source it uses: static
-keys or the default AWS credential chain. For static keys it also logs a boolean
-`session_token` flag. No key or token values are logged. The flag is left out for
-the default chain because its provider may resolve credentials later.
-
-#### How the LFS proxy finds brokers
-
-The LFS proxy, including its HTTP API, finds brokers through etcd at their
-advertised address.
-
-- Brokers in `spec.lfsProxy.backends` take priority over the ones found in etcd.
-- When etcd lists no brokers, the HTTP API has no broker.
-- When etcd cannot be read, it uses the brokers it last found for as long as
-  `spec.lfsProxy.backendCacheTTLSeconds` (default 60 seconds), as the Kafka
-  listener does.
-
-**Before and after the upload**
-
-- Before the HTTP API uploads an object to S3 or starts a multipart upload, it
-  connects to a broker. If it cannot reach one, it returns 503
-  `backend_unavailable` and uploads nothing.
-- If a broker goes away after the upload and the proxy cannot connect to any
-  broker, it deletes the object again.
-
-**Routing to the partition owner**
-
-- With brokers from etcd, `/lfs/produce` and multipart completion send the
-  produce to the broker that owns the partition. They use the same partition
-  routes as the Kafka listener, and reuse an idle broker connection only when it
-  goes to that broker.
-- When the owner is not known yet, they pick one of the listed brokers.
-- When a broker answers that it does not lead the partition
-  (`NOT_LEADER_OR_FOLLOWER`, `LEADER_NOT_AVAILABLE`, `FENCED_LEADER_EPOCH` or
-  `UNKNOWN_LEADER_EPOCH`), the proxy sends the produce to the current owner, to
-  at most 3 brokers in total. It checks the backend cache TTL before each new
-  attempt.
-- If no broker accepts it, the object is deleted and the request gets 503
-  `backend_unavailable`.
-
-**Static backends**
-
-- With static backends the proxy picks a broker as before. When that broker
-  answers that it does not lead the partition, the proxy tries another listed
-  broker if there is one.
-- With only one address, for example a broker Service, there is no other broker
-  to try. A non-owner answer gives 503 `backend_unavailable` and the object is
-  deleted.
-- When the advertised address is not reachable from inside the cluster, for
-  example when brokers advertise a host port forward, set
-  `spec.lfsProxy.backends` to the broker service, such as
-  `kafscale-broker.<namespace>.svc.cluster.local:9092`. Otherwise the proxy stays
-  NotReady.
-
-**LFS tracker**
-
-- The tracker uses `backends` only as seed brokers. It then produces to the
-  advertised address of the partition leader, so it needs brokers that advertise
-  an address pods can reach.
-- Without that, `__lfs_ops_state` gets no events and the proxy logs
-  `lfs ops tracker: ensure topic failed`.
-- To reach the cluster from a host, advertise the in-cluster broker address and
-  port forward to the LFS proxy, with `spec.lfsProxy.advertisedHost` and
-  `advertisedPort` set to the forwarded address. `make lfs-demo` does this.
+- `KAFSCALE_LFS_PROXY_ADDR`, `KAFSCALE_LFS_PROXY_ETCD_ENDPOINTS`, `KAFSCALE_LFS_PROXY_ADVERTISED_HOST`, `KAFSCALE_LFS_PROXY_ADVERTISED_PORT`, `KAFSCALE_LFS_PROXY_BACKEND_CACHE_TTL_SEC`, `KAFSCALE_LFS_PROXY_BACKENDS` and `KAFSCALE_LFS_PROXY_HEALTH_ADDR`.
+- The same values under the names that the proxy binary reads, such as `KAFSCALE_PROXY_ADDR` and `KAFSCALE_PROXY_ETCD_ENDPOINTS`.
+- `KAFSCALE_PROXY_LFS_ENABLED=true`.
 
 ### Iceberg processor LFS overrides
 
@@ -910,11 +924,11 @@ The Iceberg processor addon has its own LFS environment overrides. See `addons/p
 
 `idoc-explode` (cmd/idoc-explode) reads SAP IDoc XML or JSONL envelopes and writes one file per topic. Flags: `-input` (file path; empty reads stdin) and `-out` (output directory).
 
-- `KAFSCALE_IDOC_OUTPUT_DIR` – Default for `-out` (default `idoc-output`).
+- `KAFSCALE_IDOC_OUTPUT_DIR`: Default for `-out` (default `idoc-output`).
 - `KAFSCALE_IDOC_ITEM_SEGMENTS` (default `E1EDP01,E1EDP19`), `KAFSCALE_IDOC_PARTNER_SEGMENTS` (default `E1EDKA1`), `KAFSCALE_IDOC_STATUS_SEGMENTS` (default `E1STATS`), `KAFSCALE_IDOC_DATE_SEGMENTS` (default `E1EDK03`).
 - `KAFSCALE_IDOC_TOPIC_HEADER` (default `idoc-headers`), `KAFSCALE_IDOC_TOPIC_SEGMENTS` (default `idoc-segments`), `KAFSCALE_IDOC_TOPIC_ITEMS` (default `idoc-items`), `KAFSCALE_IDOC_TOPIC_PARTNERS` (default `idoc-partners`), `KAFSCALE_IDOC_TOPIC_STATUS` (default `idoc-status`), `KAFSCALE_IDOC_TOPIC_DATES` (default `idoc-dates`).
-- `KAFSCALE_IDOC_MAX_BLOB_SIZE` – Maximum LFS blob size to resolve (default `0`, no limit).
-- `KAFSCALE_IDOC_VALIDATE_CHECKSUM` – Validate LFS checksums (default `true`).
+- `KAFSCALE_IDOC_MAX_BLOB_SIZE`: Maximum LFS blob size to resolve (default `0`, no limit).
+- `KAFSCALE_IDOC_VALIDATE_CHECKSUM`: Validate LFS checksums (default `true`).
 - LFS blobs are resolved from S3 using `KAFSCALE_LFS_PROXY_S3_BUCKET`, `KAFSCALE_LFS_PROXY_S3_REGION`, `KAFSCALE_LFS_PROXY_S3_ENDPOINT`, `KAFSCALE_LFS_PROXY_S3_ACCESS_KEY`, `KAFSCALE_LFS_PROXY_S3_SECRET_KEY`, `KAFSCALE_LFS_PROXY_S3_SESSION_TOKEN` and `KAFSCALE_LFS_PROXY_S3_FORCE_PATH_STYLE`. Without bucket and region, blobs are not fetched from S3.
 
 ### Topic auto-creation through the proxy
@@ -928,7 +942,7 @@ disabled, the response contains `UNKNOWN_TOPIC_OR_PARTITION`. Known-topic and
 ID-based lookups continue to use the metadata store. Authenticated proxies always
 forward Metadata to enforce broker ACLs.
 
-## External Kafka Access
+## External Kafka access
 
 By default, brokers advertise the in-cluster service DNS name. That works for
 clients running inside Kubernetes. External clients need a reachable address in
@@ -947,9 +961,9 @@ NodePort does not replace the proxy entrypoint in scaled deployments.
 
 The Helm chart does **not** ship a Kafka Ingress resource. External TLS uses
 LoadBalancer annotations or an external TCP gateway (see
-[Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer-recommended)).
+[Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)).
 
-### Kafka Proxy (recommended)
+### Kafka proxy (recommended)
 
 Recommended settings:
 - Run 2+ proxy replicas behind a LoadBalancer service.
@@ -999,12 +1013,12 @@ Helm chart docs: `deploy/helm/kafscale/README.md`.
 ### Direct broker exposure (optional)
 
 Broker exposure settings (KafscaleCluster `spec.brokers`):
-- `advertisedHost` / `advertisedPort` – Address Kafka clients should connect to.
-- `service.type` – `ClusterIP`, `LoadBalancer`, or `NodePort`.
-- `service.annotations` – Cloud provider LB annotations.
-- `service.loadBalancerIP` / `service.loadBalancerSourceRanges` – Static IP + CIDR allowlist.
-- `service.externalTrafficPolicy` – `Cluster` or `Local`.
-- `service.kafkaNodePort` / `service.metricsNodePort` – Optional NodePort overrides.
+- `advertisedHost` / `advertisedPort`: Address Kafka clients should connect to.
+- `service.type`: `ClusterIP`, `LoadBalancer`, or `NodePort`.
+- `service.annotations`: Cloud provider LB annotations.
+- `service.loadBalancerIP` / `service.loadBalancerSourceRanges`: Static IP + CIDR allowlist.
+- `service.externalTrafficPolicy`: `Cluster` or `Local`.
+- `service.kafkaNodePort` / `service.metricsNodePort`: Optional NodePort overrides.
 
 Example (GKE/AWS/Azure load balancer):
 
@@ -1055,7 +1069,7 @@ spec:
     kind: ClusterIssuer
 ```
 
-## Upgrades & Rollbacks
+## Upgrades & rollbacks
 
 - Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.
 - Helm installs CRDs on the first installation but does not upgrade CRDs from
@@ -1076,7 +1090,7 @@ spec:
 - Upgrading to a version with the consumer group index needs no manual step. Brokers on the old and new versions can run side by side: a group created or deleted by an old broker is fixed up by the next full scan, at most an hour later, and until then it is only swept late. Rolling back leaves the `/kafscale/consumer-groups/` keys in place, and older brokers ignore them.
 - Rollbacks can be performed with `helm rollback kafscale <REVISION>` which restores the previous deployment and service versions.  Brokers are stateless so the recovery window is short.
 
-## S3 Cost Estimation (Example)
+## S3 cost estimation (example)
 
 Assumptions:
 
@@ -1095,11 +1109,11 @@ Monthly costs (US-East-1):
 | Data transfer (in-region) | Free | $0 |
 | **Total S3** | | **~$21/month** |
 
-## Multi-Region S3 (CRR) for Global Reads
+## Multi-region S3 (CRR) for global reads
 
 Kafscale writes to a primary bucket and can optionally read from a replica bucket in the broker region. With S3 Cross-Region Replication (CRR), objects written to the primary are asynchronously copied to replica buckets in other regions. Brokers attempt reads from their local replica and fall back to the primary if the replica is missing an object (for example, due to CRR lag).
 
-### CRR Setup (AWS)
+### CRR setup (AWS)
 
 1. **Create buckets in each region**:
    - Primary: `kafscale-prod-us-east-1`
@@ -1114,7 +1128,7 @@ Kafscale writes to a primary bucket and can optionally read from a replica bucke
 
 4. **Optional**: Enable encryption (SSE-KMS) on all buckets with compatible keys.
 
-### Kafscale Configuration (Per Region)
+### KafScale configuration (per region)
 
 Primary region (writers and primary readers):
 ```yaml
@@ -1147,13 +1161,13 @@ spec:
     credentialsSecretRef: kafscale-s3-creds
 ```
 
-### How Reads and Writes Work
+### How reads and writes work
 
 - **Writes** always go to the primary bucket.
 - **Reads** go to the local `readBucket` first; on miss or error, the broker retries against the primary bucket.
 - **List/restore** operations use the primary bucket to avoid missing newly written segments.
 
-### Latency and Consistency Impact
+### Latency and consistency impact
 
 - **Lower read latency** for consumers in EU/Asia when objects are already replicated.
 - **CRR lag** means the newest segments may not appear immediately in the replica; the broker will fall back to the primary for those reads.
@@ -1201,7 +1215,7 @@ with `python3 hack/update_affinity_schema.py` (requires Go and PyYAML).
 `python3 hack/update_affinity_schema.py --check` checks for drift while preserving
 the other manually maintained CRD fields.
 
-### Produce deadlines and topic generations
+## Produce deadlines and topic generations
 
 A positive Produce `TimeoutMillis` bounds broker processing, including partition
 lease acquisition, log restoration and the acknowledged S3 flush. An expired

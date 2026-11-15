@@ -246,6 +246,7 @@ PVC so kubelet can exercise ownership migration.
 
 The optional LFS proxy defaults to the shipped combined `kafscale-proxy` image
 with its LFS module enabled. Core listener, etcd, backend, and health settings
-are emitted as `KAFSCALE_PROXY_*`; the previous `KAFSCALE_LFS_PROXY_*` names are
-retained for custom legacy images. LFS-specific settings keep their existing
+are emitted under the proxy names, such as `KAFSCALE_PROXY_ADDR`. The previous
+LFS proxy names, such as `KAFSCALE_LFS_PROXY_ADDR`, are retained for custom
+legacy images. LFS-specific settings keep their existing
 names. Set `spec.lfsProxy.advertisedHost` to an address reachable by clients.

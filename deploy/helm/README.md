@@ -32,8 +32,8 @@ This chart deploys the Kafscale operator (which in turn manages broker pods) and
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
-  --set operator.image.tag=v0.1.0 \
-  --set console.image.tag=v0.1.0
+  --set operator.image.tag=v1.6.3 \
+  --set console.image.tag=v1.6.3
 ```
 
 For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always`).
@@ -46,7 +46,7 @@ After the chart is running you can create a cluster by applying a `KafscaleClust
 `proxy.advertisedHost` to the address external clients should use. The proxy is
 the single Kafka entrypoint and supports broker scaling without client
 reconfiguration. For production, use `proxy.service.type=LoadBalancer`. For
-local clusters (kind), pin `proxy.service.nodePort` — see
+local clusters (kind), pin `proxy.service.nodePort`. See
 `deploy/helm/kafscale/README.md`.
 
 **Optional:** broker Services are created by the operator. To expose brokers
@@ -63,7 +63,7 @@ The MCP service is optional and disabled by default. Enable it with `mcp.enabled
 
 | Key | Description | Default |
 |-----|-------------|---------|
-| `operator.replicaCount` | Number of operator replicas (each performs leader election via etcd). | `2` |
+| `operator.replicaCount` | Number of operator replicas. Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. | `1` |
 | `operator.leaderKey` | Kubernetes leader election lock name. | `kafscale-operator` |
 | `operator.etcdEndpoints` | List of etcd endpoints the operator will connect to. | `["http://etcd:2379"]` |
 | `console.service.type` | Kubernetes service type for the console. | `ClusterIP` |

@@ -29,7 +29,10 @@ limitations under the License.
   - Tested with the Java `KafkaAvroSerializer` and `KafkaAvroDeserializer` 8.4.0, confluent-kafka-python 2.16.1 and franz-go `pkg/sr` 1.8.0, and with data written through Confluent Schema Registry 8.4.0 and imported with its ids.
   - See `docs/schema-registry.md`, which also covers using an existing registry instead (#154).
 
-- A registry run from a main build between #277 and this release stored two kinds of schema in an older form: double defaults below about 2.2e-308, such as `5e-324`, and, with `normalize=true`, a nested type with `"namespace":""`. Lookups and registers in the same subject still find them and keep their ids and versions. Registering such a schema in another subject gives it a new id, and its `guid` stays the one computed from the stored text. Schemas written by such a build are compared through the slower path on every lookup or register in their subject that does not match the stored hash; schemas written by this release record the form they were stored in and skip it.
+- A registry run from a main build between #277 and this release stored two kinds of schema in an older form: double defaults below about 2.2e-308, such as `5e-324`, and, with `normalize=true`, a nested type with `"namespace":""`.
+  - Lookups and registers in the same subject still find them and keep their ids and versions.
+  - Registering such a schema in another subject gives it a new id, and its `guid` stays the one computed from the stored text.
+  - Schemas written by such a build are compared through the slower path on every lookup or register in their subject that does not match the stored hash. Schemas written by this release record the form they were stored in and skip it.
 
 - The built in schema registry supports JSON Schema with references, all seven compatibility levels, normalization and CLI import. JSON schemas share the existing etcd and S3 storage across replicas. Cross-type registrations can no longer overwrite another schema's GUID (#288).
 - Equivalent Protobuf text and base64 descriptors with references reuse the same schema id across subjects. Descriptor aliases preserve existing text hashes, imported ids and S3 markers (#287).
@@ -163,11 +166,11 @@ limitations under the License.
   - It read only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys of `spec.s3.credentialsSecretRef`, so a secret with `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` kept its pods in `CreateContainerConfigError`.
   - It now accepts either pair, and the `AWS_` pair keeps priority when both are present, so existing secrets work unchanged.
   - A secret without either pair no longer blocks the pod; the proxy then uses the default AWS credential chain.
-  - The operator already set the `KAFSCALE_PROXY_` env names the proxy reads; the note in `docs/operations.md` that said otherwise is corrected.
+  - The operator already set the env names the proxy reads, such as `KAFSCALE_PROXY_ADDR`; the note in `docs/operations.md` that said otherwise is corrected.
   - `make lfs-demo` now uses `spec.lfsProxy` instead of its own proxy deployment, with `spec.lfsProxy.backends` set to the broker service because the demo brokers advertise a host port forward address.
   - The proxy is `kafscale-lfs-proxy`, its objects go to the `kafscale-snapshots` bucket, and `lfs-demo-run` is an alias for `lfs-demo-up`.
   - `lfs-demo-up` no longer reads the kubeconfig before the cluster exists (#304).
-- The operator-managed LFS proxy now forwards `AWS_SESSION_TOKEN` with the AWS key pair, so temporary AWS credentials work when that pair takes priority over `KAFSCALE_S3_*`. The KafScale fallback keeps its own session token, and permanent AWS keys do not borrow it. Startup logs show a boolean `session_token` flag for static keys without logging the token; the default chain resolves credentials later and omits the flag (#307).
+- The operator-managed LFS proxy now forwards `AWS_SESSION_TOKEN` with the AWS key pair, so temporary AWS credentials work when that pair takes priority over `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`. The KafScale fallback keeps its own session token, and permanent AWS keys do not borrow it. Startup logs show a boolean `session_token` flag for static keys without logging the token; the default chain resolves credentials later and omits the flag (#307).
 - The LFS proxy HTTP API (`/lfs/produce` and `/lfs/uploads`) now works without `spec.lfsProxy.backends`.
   - It only used that static list, so without it every produce returned 503 "no backends available".
   - It now uses the brokers registered in etcd, as the Kafka listener of the proxy already did.
@@ -202,7 +205,7 @@ limitations under the License.
 - The operator sets an `S3Credentials` condition on each KafscaleCluster.
   - It is `False`, with a warning in the operator log once per change, when `spec.s3.credentialsSecretRef` names a secret that is missing, cannot be read or holds neither the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair nor the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair.
   - The message says what that means: no static keys from the secret and the default AWS credential chain if one is available; for a secret with only part of a pair, the keys found and that the etcd snapshot jobs can fail instead of falling back; for a secret the operator cannot read, only that it could not be verified.
-  - It is also `False`, with reason `SecretKeysMixed`, when the secret holds the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair plus `KAFSCALE_S3_*` keys with values that do not form a complete pair, which every workload ignores (#312), and when it holds the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair and `AWS_SESSION_TOKEN` but no `KAFSCALE_S3_SESSION_TOKEN`, because the etcd snapshot jobs then use a token from the other pair.
+  - It is also `False`, with reason `SecretKeysMixed`, when the secret holds the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair plus `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` values that do not form a complete pair, which every workload ignores (#312), and when it holds the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair and `AWS_SESSION_TOKEN` but no `KAFSCALE_S3_SESSION_TOKEN`, because the etcd snapshot jobs then use a token from the other pair.
   - Nothing else changes: pods still start, the fallback stays, and a missing secret still fails the managed etcd snapshot check as before.
   - A change to that secret now triggers a reconcile.
   - When reconciling the Kafka NetworkPolicy, the managed etcd, or the broker, service, LFS proxy or HPA objects fails, the operator now still writes the cluster status, so the `S3Credentials` condition and any etcd snapshot conditions from that reconcile are kept.
@@ -219,7 +222,7 @@ limitations under the License.
   - This is a behavior change: in earlier releases a failed snapshot check held back all broker and LFS proxy workload updates, so pods also kept old, possibly revoked keys.
   - For a new cluster, the cluster controller still creates no brokers or LFS proxy and publishes no metadata until the check passes, but the topic controller still publishes the cluster metadata, topics included, for each KafscaleTopic that references it.
   - `Ready` becomes `True` only after the check passes.
-  - The operator's managed etcd snapshot check now uses `KAFSCALE_S3_SESSION_TOKEN` with the `KAFSCALE_S3_*` pair whenever the secret holds that key, even with an empty value, as the snapshot jobs do.
+  - The operator's managed etcd snapshot check now uses `KAFSCALE_S3_SESSION_TOKEN` with the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair whenever the secret holds that key, even with an empty value, as the snapshot jobs do.
   - Before, it fell back to `AWS_SESSION_TOKEN` and could sign the `KAFSCALE_S3_ACCESS_KEY` pair with the other pair's token.
   - The LFS proxy logs at startup whether it uses static keys or the default AWS credential chain, without the values (#307).
 - S3 key values that are empty or only whitespace now count as unset in every component, and other values are trimmed.
@@ -227,9 +230,9 @@ limitations under the License.
   - Unicode spaces such as U+00A0 are kept as part of the value.
   - This applies to: the operator `S3Credentials` condition and snapshot check, the brokers, the LFS proxy, the schema registry and the etcd snapshot upload and restore containers.
   - Before, the brokers, the LFS proxy fallback keys, the schema registry and the snapshot containers used the raw values.
-  - The schema registry and the brokers then signed with a blank or padded key instead of using the default AWS credential chain, and a blank `KAFSCALE_S3_*` key next to a valid `AWS_*` pair gave the snapshot containers an empty key while the condition said they used the `AWS_*` pair.
-  - The snapshot containers now pick the pair in their script: the `KAFSCALE_S3_*` pair when both keys are set, with `KAFSCALE_S3_SESSION_TOKEN` when the secret holds it (a blank value means no token) and `AWS_SESSION_TOKEN` otherwise, or else the `AWS_*` pair with `AWS_SESSION_TOKEN`.
-  - A `KAFSCALE_S3_*` key that does not complete the pair next to an `AWS_*` pair is now ignored by every workload instead of giving the snapshot containers a mismatched pair; the condition still reports it as `SecretKeysMixed`.
+  - The schema registry and the brokers then signed with a blank or padded key instead of using the default AWS credential chain, and a blank `KAFSCALE_S3_ACCESS_KEY` or `KAFSCALE_S3_SECRET_KEY` next to a valid `AWS_*` pair gave the snapshot containers an empty key while the condition said they used the `AWS_*` pair.
+  - The snapshot containers now pick the pair in their script: the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair when both keys are set, with `KAFSCALE_S3_SESSION_TOKEN` when the secret holds it (a blank value means no token) and `AWS_SESSION_TOKEN` otherwise, or else the `AWS_*` pair with `AWS_SESSION_TOKEN`.
+  - A `KAFSCALE_S3_ACCESS_KEY` or `KAFSCALE_S3_SECRET_KEY` that does not complete the pair next to an `AWS_*` pair is now ignored by every workload instead of giving the snapshot containers a mismatched pair; the condition still reports it as `SecretKeysMixed`.
   - A `spec.s3.credentialsSecretRef` that is only whitespace no longer gives the broker and LFS proxy pods a secret reference.
   - The `S3Credentials` messages quote the secret name and key names.
   - Secrets with valid keys keep working as before.
@@ -261,11 +264,21 @@ limitations under the License.
 ### CI, tests and demos
 
 - Broker and console tests use isolated random-port etcd fixtures. Test setup no longer terminates arbitrary processes listening on fixed ports.
-- `make lfs-demo` no longer loses LFS tracker events. The demo brokers advertised the host port forward address `127.0.0.1:39092`, which the LFS proxy pod cannot reach, so the tracker could not create `__lfs_ops_state` or deliver events and the proxy logged a warning. The brokers now advertise `kafscale-broker.kafscale-demo.svc.cluster.local:9092`. The LFS proxy advertises `127.0.0.1:39092`, and `lfs-client-sdk` `pf-start` forwards that port to the proxy instead of the broker, so host clients connect through the proxy. The proxy no longer logs warnings in this stack (#308).
+- `make lfs-demo` no longer loses LFS tracker events (#308).
+  - The demo brokers advertised the host port forward address `127.0.0.1:39092`, which the LFS proxy pod cannot reach. The tracker could not create `__lfs_ops_state` or deliver events, and the proxy logged a warning.
+  - The brokers now advertise `kafscale-broker.kafscale-demo.svc.cluster.local:9092`.
+  - The LFS proxy advertises `127.0.0.1:39092`, and `lfs-client-sdk` `pf-start` forwards that port to the proxy instead of the broker, so host clients connect through the proxy. The proxy no longer logs warnings in this stack.
 - CI now runs the browser, Python and Java LFS SDK unit tests as well as the Node ones, and fails when they fail. The Java `LfsProducerIntegrationTest` is excluded in CI because it needs Docker images that CI does not build (#306).
 - The CI librdkafka compatibility test retries the apt install of `kcat` and, if apt still fails, runs `kcat` from a pinned container image instead, so an unreachable Ubuntu mirror no longer fails the job (#307).
-- The CI librdkafka compatibility test gives its two apt calls one shared 90 second limit, so the `kcat` fallback starts in about a minute and a half instead of about ten minutes when the Ubuntu mirror is down. It uses the apt `kcat` only when `kcat -V` runs, so a missing or half-installed `kcat`, for example after the limit stops an install, also starts the fallback instead of failing the job. The fallback image is now `ueisele/kcat:1.7.1-librdkafka2.11.1`, pinned by digest, so a fallback run still tests a librdkafka 2.x client (2.11.1, where the apt package has 2.3.0), and the step logs the kcat and librdkafka versions and where kcat came from (#313, #314, #317).
-- `make lfs-demo` now exists. The LFS SDK kind helpers in `lfs-client-sdk/Makefile` (`run-all`, `lfs-demo-up`) called it, but the root Makefile had no such target. It starts the kind demo stack with one broker, MinIO and the operator managed LFS proxy described in the #304 entry below. `KAFSCALE_KIND_KUBE_PROXY_MODE=nftables` creates the kind cluster with the nftables kube-proxy mode, for hosts without iptables support; leave it unset for the kind default. `lfs-client-sdk/Makefile` now creates one kubeconfig file per run and passes it to the make calls it starts; before, every use made a new empty file, so `pf-start` and `wait-http` could not reach the cluster (#302).
+- The CI librdkafka compatibility test gives its two apt calls one shared 90 second limit (#313, #314, #317).
+  - The `kcat` fallback starts in about a minute and a half instead of about ten minutes when the Ubuntu mirror is down.
+  - It uses the apt `kcat` only when `kcat -V` runs. A missing or half-installed `kcat`, for example after the limit stops an install, also starts the fallback instead of failing the job.
+  - The fallback image is now `ueisele/kcat:1.7.1-librdkafka2.11.1`, pinned by digest, so a fallback run still tests a librdkafka 2.x client (2.11.1, where the apt package has 2.3.0). The step logs the kcat and librdkafka versions and where kcat came from.
+- `make lfs-demo` now exists (#302).
+  - The LFS SDK kind helpers in `lfs-client-sdk/Makefile` (`run-all`, `lfs-demo-up`) called it, but the root Makefile had no such target.
+  - It starts the kind demo stack with one broker, MinIO and the operator managed LFS proxy described in the #304 entry below.
+  - `KAFSCALE_KIND_KUBE_PROXY_MODE=nftables` creates the kind cluster with the nftables kube-proxy mode, for hosts without iptables support. Leave it unset for the kind default.
+  - `lfs-client-sdk/Makefile` now creates one kubeconfig file per run and passes it to the make calls it starts. Before, every use made a new empty file, so `pf-start` and `wait-http` could not reach the cluster.
 
 ## Upgrade notes
 
@@ -278,16 +291,20 @@ ones most likely to affect you.
 
 - **Proxy stops past the etcd TTL.** When etcd cannot be read for longer than
   `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`, set with
-  `spec.lfsProxy.backendCacheTTLSeconds`), the proxy goes NotReady, answers Kafka
+  `spec.lfsProxy.backendCacheTTLSeconds` or the chart value
+  `proxy.backendCacheTTLSeconds`), the proxy goes NotReady, answers Kafka
   requests with `REQUEST_TIMED_OUT`, closes client connections and keeps
   answering ApiVersions. The LFS HTTP API returns 503 `metadata_unavailable` as
   soon as etcd cannot be read. Before this release the proxy kept routing on
   stale metadata with no time limit. See
   [Proxy behavior when etcd is down](../operations.md#proxy-behavior-when-etcd-is-down).
-- **LFS produce returns 503 instead of 502.** When no broker accepts an LFS
-  produce, `/lfs/produce` and multipart completion return 503
-  `backend_unavailable` and delete the uploaded object. Clients that treat 502
-  as final should also retry on 503 (#318).
+- **LFS produce returns 503 instead of 502.** `/lfs/produce` and multipart
+  completion return 503 `backend_unavailable` and delete the uploaded object when
+  no broker can be reached, when the etcd TTL has passed, or when every broker
+  tried answers that it does not lead the partition.
+  - Any other broker rejection still returns 502 (403 for authorization errors),
+    and the object is kept as an orphan.
+  - Clients that treat 502 as final should also retry on 503 (#318).
 - **Segment uploads are create-only.** Brokers write segments with `PutObject`
   and `If-None-Match: *`, so a broker that lost its partition lease cannot
   overwrite data written by the new owner (#324). The S3 backend must support
@@ -302,10 +319,11 @@ ones most likely to affect you.
   Use `CoordinatorOptions` with `NewGroupCoordinatorWithOptions`. Both old APIs
   still work in this release and no removal version is set. See
   [Go API migration](../upgrade-compatibility.md#go-api-migration).
-- The operator environment variables `KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE`
-  and `KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED` remain as aliases of
+- `KAFSCALE_OPERATOR_ETCD_DEFRAG_SCHEDULE` and
+  `KAFSCALE_OPERATOR_ETCD_DEFRAG_ENABLED` remain deprecated aliases of
   `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_SCHEDULE` and
-  `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED`.
+  `KAFSCALE_OPERATOR_ETCD_MAINTENANCE_ENABLED`. They are not new in this
+  release.
 
 No exported Go API was removed or changed incompatibly since v1.6.3.
 No release version is selected yet.

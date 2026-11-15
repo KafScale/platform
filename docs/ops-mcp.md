@@ -76,7 +76,7 @@ mcp:
     create: true
   image:
     repository: ghcr.io/kafscale/kafscale-mcp
-    tag: v0.1.0
+    tag: v1.6.3
   auth:
     token: "<bearer-token>"
   etcdEndpoints:

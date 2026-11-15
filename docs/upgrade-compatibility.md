@@ -162,7 +162,10 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
 
 - Topics that already exist with names outside the allowed characters, such as names with `@` or `/`, keep loading and accept Produce and Fetch as before. Only new creates are rejected. A topic named `<name>@<N>` shares an S3 prefix with generation N of `<name>`, so do not delete and re-create `<name>` while it exists. Move its data to a topic with a valid name and delete it first.
 
-- Schema registry rollback: rolling back to a main build from between #277 and #282 registers duplicate versions for 5 of the 54 edge schemas in our upgrade test. These are the Avro schemas with the `5e-324` and `1e-323` double defaults, registered with and without `normalize=true`, and the schema with an empty nested namespace registered with `normalize=true`. Those builds do not match the hashes that #282 stores, so re-registering one of these schemas creates a new version and id. The #282 review build `035b209` passed that 54-schema regression; this does not establish general rollback safety.
+- Schema registry rollback: rolling back to a main build from between #277 and #282 registers duplicate versions for 5 of the 54 edge schemas in our upgrade test.
+  - These are the Avro schemas with the `5e-324` and `1e-323` double defaults, registered with and without `normalize=true`, and the schema with an empty nested namespace registered with `normalize=true`.
+  - Those builds do not match the hashes that #282 stores, so re-registering one of these schemas creates a new version and id.
+  - The #282 review build `035b209` passed that 54-schema regression. This does not establish general rollback safety.
 
 - The proxy no longer keeps serving through an etcd outage without a time limit. Earlier builds kept using the last broker list with no limit.
   - Within `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`) of the last successful etcd read, the Kafka listener keeps using its last metadata. Produces still wait, because brokers do not ack while etcd is down.
@@ -212,10 +215,10 @@ When `spec.s3.credentialsSecretRef` is set, the broker and LFS proxy pods roll o
 
 S3 key values in the secret that are empty or only whitespace now count as unset everywhere, and other values are trimmed before use.
 
-- Before, the operator condition, the operator snapshot check and the LFS proxy static keys trimmed them, but the brokers, the LFS proxy fallback keys and the AWS CLI in the etcd snapshot containers used the raw values, so a blank `KAFSCALE_S3_*` key next to a valid `AWS_*` pair gave the snapshot containers an empty or blank key, and a padded value failed to sign.
-- The snapshot containers now select the pair in their script instead of through `secretKeyRef` environment variables: the `KAFSCALE_S3_*` pair when both keys are set, otherwise the `AWS_*` pair with `AWS_SESSION_TOKEN`.
+- Before, the operator condition, the operator snapshot check and the LFS proxy static keys trimmed them, but the brokers, the LFS proxy fallback keys and the AWS CLI in the etcd snapshot containers used the raw values, so a blank `KAFSCALE_S3_ACCESS_KEY` or `KAFSCALE_S3_SECRET_KEY` next to a valid `AWS_*` pair gave the snapshot containers an empty or blank key, and a padded value failed to sign.
+- The snapshot containers now select the pair in their script instead of through `secretKeyRef` environment variables: the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair when both keys are set, otherwise the `AWS_*` pair with `AWS_SESSION_TOKEN`.
 - Secrets with valid keys keep working with the same pair and token as before.
-- A secret with the `AWS_*` pair and blank `KAFSCALE_S3_*` keys now reports `S3Credentials` as `True` with `SecretKeysFound`.
+- A secret with the `AWS_*` pair and blank `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` keys now reports `S3Credentials` as `True` with `SecretKeysFound`.
 - This changes the managed etcd pod template, which the earlier change in this release already does, so an upgrade from the last release still restarts the managed etcd pods once.
 
 Whitespace here means space, tab, newline, carriage return, vertical tab and
