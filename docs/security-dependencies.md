@@ -62,3 +62,14 @@ findings remain in the Go vulnerability scan and are not dismissed or claimed
 fixed by this PR. A migration must preserve registry schema identity and Iceberg
 manifest compatibility and enforce decoder allocation limits; the maintained
 fork's map-allocation fix requires explicit configuration.
+
+## PostgreSQL upstream decoder containment
+
+[GO-2026-4518](https://pkg.go.dev/vuln/GO-2026-4518) has no patched
+`pgproto3/v2` release. Its upstream `DataRow` decoder can panic on a negative
+field length. The SQL proxy now contains panics at that external decoder call,
+returns an error, stops relaying and closes the connections. Regression tests
+send both `-2` and the minimum signed 32-bit field length. Valid relay traffic
+and ordinary read errors retain their existing behavior. The module still
+appears in the static vulnerability scan; the runtime panic is contained.
+A migration to the maintained pgx codec remains separate compatibility work.

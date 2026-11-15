@@ -26,18 +26,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http/httptest"
-	"net/url"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
-	"go.etcd.io/etcd/server/v3/embed"
 
 	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/broker"
@@ -1294,15 +1289,16 @@ func TestBrokerCacheSizeFallback(t *testing.T) {
 }
 
 func TestBuildStoreUsesEtcdEnv(t *testing.T) {
-	etcd, endpoints := startEmbeddedEtcd(t)
-	defer etcd.Close()
+	endpoints := testutil.StartEmbeddedEtcd(t)
 
 	t.Setenv("KAFSCALE_ETCD_ENDPOINTS", strings.Join(endpoints, ","))
 	t.Setenv("KAFSCALE_ETCD_USERNAME", "user")
 	t.Setenv("KAFSCALE_ETCD_PASSWORD", "pass")
 
 	store := buildStore(context.Background(), buildBrokerInfo(), testLogger())
-	if _, ok := store.(*metadata.EtcdStore); !ok {
+	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
+		defer etcdStore.Close()
+	} else {
 		t.Fatalf("expected etcd store when KAFSCALE_ETCD_ENDPOINTS is set")
 	}
 }
@@ -1578,97 +1574,6 @@ func TestEnvOrDefaultAddresses(t *testing.T) {
 	if got := envOrDefault("KAFSCALE_BROKER_ADDR", ":9092"); got != "127.0.0.1:3333" {
 		t.Fatalf("expected broker addr override, got %q", got)
 	}
-}
-
-func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
-	t.Helper()
-	if err := ensureEtcdPortsFree(); err != nil {
-		t.Skipf("skipping embedded etcd test: %v", err)
-	}
-	cfg := embed.NewConfig()
-	cfg.Dir = t.TempDir()
-	cfg.LogLevel = "error"
-	cfg.Logger = "zap"
-	setEtcdPorts(t, cfg, "12379", "12380")
-
-	e, err := embed.StartEtcd(cfg)
-	if err != nil {
-		if strings.Contains(err.Error(), "operation not permitted") {
-			t.Skipf("skipping embedded etcd test: %v", err)
-		}
-		t.Fatalf("start embedded etcd: %v", err)
-	}
-	select {
-	case <-e.Server.ReadyNotify():
-	case <-time.After(10 * time.Second):
-		e.Server.Stop()
-		t.Fatalf("etcd server took too long to start")
-	}
-	clientURL := e.Clients[0].Addr().String()
-	return e, []string{fmt.Sprintf("http://%s", clientURL)}
-}
-
-func ensureEtcdPortsFree() error {
-	if err := killProcessesOnPort("12379"); err != nil {
-		return err
-	}
-	if err := killProcessesOnPort("12380"); err != nil {
-		return err
-	}
-	if err := portAvailable("127.0.0.1:12379"); err != nil {
-		return err
-	}
-	if err := portAvailable("127.0.0.1:12380"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func setEtcdPorts(t *testing.T, cfg *embed.Config, clientPort, peerPort string) {
-	t.Helper()
-	clientURL, err := url.Parse("http://127.0.0.1:" + clientPort)
-	if err != nil {
-		t.Fatalf("parse client url: %v", err)
-	}
-	peerURL, err := url.Parse("http://127.0.0.1:" + peerPort)
-	if err != nil {
-		t.Fatalf("parse peer url: %v", err)
-	}
-	cfg.ListenClientUrls = []url.URL{*clientURL}
-	cfg.AdvertiseClientUrls = []url.URL{*clientURL}
-	cfg.ListenPeerUrls = []url.URL{*peerURL}
-	cfg.AdvertisePeerUrls = []url.URL{*peerURL}
-	cfg.Name = "default"
-	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
-}
-
-func killProcessesOnPort(port string) error {
-	out, err := exec.Command("lsof", "-nP", "-iTCP:"+port, "-sTCP:LISTEN", "-t").Output()
-	if err != nil {
-		return nil
-	}
-	pids := strings.Fields(string(out))
-	for _, pidStr := range pids {
-		pid, convErr := strconv.Atoi(strings.TrimSpace(pidStr))
-		if convErr != nil {
-			continue
-		}
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-		time.Sleep(100 * time.Millisecond)
-		if alive := syscall.Kill(pid, 0); alive == nil {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
-		}
-	}
-	return nil
-}
-
-func portAvailable(addr string) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("port %s already in use", addr)
-	}
-	_ = ln.Close()
-	return nil
 }
 
 func TestBrokerApiVersionsNegotiation(t *testing.T) {
