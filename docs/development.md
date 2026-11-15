@@ -114,7 +114,7 @@ brew install buf      # or equivalent
 make proto            # runs `buf generate`
 ```
 
-The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit generated files manually—re-run `make proto` whenever the `.proto` sources change.
+The generated Go code goes into `pkg/gen/{metadata,control}`. Do not edit generated files manually. Re-run `make proto` whenever the `.proto` sources change.
 
 ## Release Workflow
 
@@ -156,7 +156,7 @@ Default MinIO settings (used when `KAFSCALE_USE_MEMORY_S3=1` is not set):
 | Region | `us-east-1` |
 | Addressing | Path-style |
 
-To point at a different S3-compatible endpoint, set the `KAFSCALE_S3_*` variables listed under Environment Variables. To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
+To point at a different S3-compatible endpoint, set `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` (listed under Environment Variables). To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
 
 Related targets:
 - `make test-produce-consume` runs the MinIO-backed produce/consume suite plus a Kafka CLI producer smoke test (configure `KAFSCALE_KAFKA_CLI_IMAGE` / `KAFSCALE_KAFKA_CLI_CMD` if needed).
@@ -192,17 +192,17 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 
 ### Test and E2E
 
-- `KAFSCALE_E2E` – Enable e2e tests.
-- `KAFSCALE_E2E_KIND` – Enable kind-based e2e.
-- `KAFSCALE_KIND_CLUSTER` – Kind cluster name.
-- `KAFSCALE_KIND_RECREATE` – Force kind cluster recreation.
+- `KAFSCALE_E2E`: Enable e2e tests.
+- `KAFSCALE_E2E_KIND`: Enable kind-based e2e.
+- `KAFSCALE_KIND_CLUSTER`: Kind cluster name.
+- `KAFSCALE_KIND_RECREATE`: Force kind cluster recreation.
 - `KAFSCALE_KIND_KUBE_PROXY_MODE` set to `nftables` creates the kind cluster with `networking.kubeProxyMode: nftables`. Leave it unset to keep kind's default. Any other value fails the test.
-- `KAFSCALE_E2E_DEMO` – Run demo stack test.
-- `KAFSCALE_E2E_OPEN_UI` – Open UI during demo test.
-- `KAFSCALE_E2E_DEBUG` – Enable debug output in e2e tests.
-- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE` – Image overrides for kind e2e.
-- `KAFSCALE_MINIO_IMAGE` – MinIO image for kind e2e and the Java LFS integration test (default `kafscale-minio:local`, built by `make docker-build-minio`).
-- `KAFSCALE_LOCAL_FRANZ` – Use local franz-go build in tests.
+- `KAFSCALE_E2E_DEMO`: Run demo stack test.
+- `KAFSCALE_E2E_OPEN_UI`: Open UI during demo test.
+- `KAFSCALE_E2E_DEBUG`: Enable debug output in e2e tests.
+- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE`: Image overrides for kind e2e.
+- `KAFSCALE_MINIO_IMAGE`: MinIO image for kind e2e and the Java LFS integration test (default `kafscale-minio:local`, built by `make docker-build-minio`).
+- `KAFSCALE_LOCAL_FRANZ`: Use local franz-go build in tests.
 
 ### Demo workload tuning
 
@@ -293,7 +293,7 @@ We revisit this table each milestone. Anything marked 🔜 or ❌ has a pointer 
 - Keep all new code documented in `kafscale-spec.md` or cross-link back to the spec
 - Favor context-rich structured logging (zerolog) and Prometheus metrics
 - Protobufs should remain backward compatible; prefer adding optional fields over rewriting existing ones
-- No stream processing primitives in the broker—hand those workloads off to Flink/Wayang or equivalent engines
+- No stream processing primitives in the broker. Hand those workloads off to Flink/Wayang or equivalent engines
 - Every change must land with unit tests, smoke/integration coverage, and regression tests where appropriate; skipping tests requires an explicit TODO anchored to a tracking issue.
 - Secrets live only in Kubernetes; never write S3 or etcd credentials into source control or etcd. Reference them via `credentialsSecretRef` and let the operator project them at runtime.
 - When testing against etcd locally, set `KAFSCALE_ETCD_ENDPOINTS` (comma-separated), plus `KAFSCALE_ETCD_USERNAME` / `KAFSCALE_ETCD_PASSWORD` if auth is enabled. The broker will fall back to the in-memory store when those vars are absent.

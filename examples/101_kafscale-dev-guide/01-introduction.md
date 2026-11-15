@@ -19,16 +19,14 @@ limitations under the License.
 
 KafScale is a **Kafka-protocol compatible streaming platform** that separates compute from storage. Unlike traditional Kafka, KafScale uses **stateless brokers** and stores all data in **S3-compatible object storage**, making it simpler to operate and more cost-effective for many use cases.
 
-KafScale is Kafka protocol compatible for producers and consumers  
-(see claim: **KS-COMP-001**).
+KafScale is Kafka protocol compatible for producers and consumers.
 
-Note: Kafka transactions are not supported  
-(see claim: **KS-LIMIT-001**).
+Note: Kafka transactions are not supported.
 
 ## Key Characteristics
 
-- **Kafka-Compatible**: Uses the standard Kafka wire protocol, so your existing Kafka clients work without modification (see claim: **KS-COMP-001**)
-- **Stateless Brokers**: Brokers are ephemeral and can be scaled up or down without data movement (see claim: **KS-ARCH-001**)
+- **Kafka-Compatible**: Uses the standard Kafka wire protocol, so your existing Kafka clients work without modification
+- **Stateless Brokers**: Brokers are ephemeral and can be scaled up or down without data movement
 - **S3-Backed Storage**: All log segments are stored in S3 (or S3-compatible storage like MinIO)
 - **etcd Metadata**: Topic configuration and consumer offsets are stored in etcd
 - **Cloud-Native**: Designed for Kubernetes, but can run anywhere with Docker
@@ -56,7 +54,7 @@ Note: Kafka transactions are not supported
 
 ### ❌ Not Suitable For
 
-- **Transactional Workloads**: KafScale does not support exactly-once semantics or transactions (see claim: **KS-LIMIT-001**)
+- **Transactional Workloads**: KafScale does not support exactly-once semantics or transactions
 - **Log Compaction**: Compacted topics are not supported
 - **Ultra-Low Latency**: S3 storage adds latency compared to local disks (estimated 10-50ms additional overhead based on network and S3 response times)
 - **High-Throughput Single Partition**: Traditional Kafka may be faster for very high throughput on a single partition
@@ -129,7 +127,7 @@ KafScale is compatible with standard Kafka clients, but stricter schema validati
 - **Transactions**: Config `isolation.level=read_uncommitted` (default) as transactions are not supported.
 
 **Not supported** (by design):
-- ❌ Transactions and exactly-once semantics (see claim: **KS-LIMIT-001**)
+- ❌ Transactions and exactly-once semantics
 - ❌ Log compaction
 - ❌ Kafka Streams applications that rely on transactions or exactly-once semantics (stateless Streams processing without these features may work)
 - ❌ Flexible versions in some RPCs (may cause `recordErrors` serialization issues in newer clients)

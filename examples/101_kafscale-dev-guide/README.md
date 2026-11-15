@@ -82,8 +82,6 @@ docker ps
 
 **Learn More**: See the [KafScale Documentation](https://kafscale.io/docs/) for comprehensive guides on [Architecture](https://kafscale.io/architecture/), [Configuration](https://kafscale.io/configuration/), [Protocol](https://kafscale.io/protocol/), and [Operations](https://kafscale.io/operations/).
 
-**Claims Registry**: Technical claims throughout this tutorial reference verified statements in [examples/claims/](../claims/README.md). This ensures accuracy and traceability of all architectural and compatibility statements.
-
 ## Guide Structure
 
 **Core Tutorial** (Required):
@@ -114,4 +112,4 @@ Ready to begin? Head over to the [Introduction](01-introduction.md) to learn abo
 
 ---
 
-> **Note:** This guide focuses on local development and testing using the Makefile demos. For production deployments, see the [Next Steps](06-next-steps.md) section and the main [KafScale documentation](../quickstart.md).
+> **Note:** This guide focuses on local development and testing using the Makefile demos. For production deployments, see the [Next Steps](06-next-steps.md) section and the main [KafScale documentation](../../docs/quickstart.md).

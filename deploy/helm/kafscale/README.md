@@ -139,7 +139,7 @@ proxy:
 
 Large File Support (LFS) uses the claim-check pattern: blobs land in S3 and Kafka
 carries a pointer. The operator deploys an LFS proxy Deployment when you enable
-`spec.lfsProxy` on your `KafscaleCluster` (not via Helm `lfsProxy.*` values —
+`spec.lfsProxy` on your `KafscaleCluster` (not through Helm `lfsProxy.*` values;
 that chart surface was removed in v1.6).
 
 ```
@@ -282,7 +282,7 @@ helm uninstall kafscale -n kafscale-system
 
 ## Documentation
 
-- [Operations Guide](../../../docs/operations.md) — external access, proxy, TLS
+- [Operations Guide](../../../docs/operations.md): external access, proxy, TLS
 - [Docker Compose (local LFS)](../../docker-compose/README.md)
 - [OpenAPI spec](../../../api/lfs-proxy/openapi.yaml)
 

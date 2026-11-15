@@ -154,7 +154,7 @@ Proxy tracker:
 Console LFS dashboard:
 - `KAFSCALE_CONSOLE_LFS_ENABLED=true`
 - `KAFSCALE_CONSOLE_KAFKA_BROKERS=broker:9092`
-- `KAFSCALE_CONSOLE_LFS_S3_*` set to MinIO credentials
+- `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT`, `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY` and `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY` set to the MinIO endpoint, bucket and credentials
 
 ### Kafka (via kcat)
 

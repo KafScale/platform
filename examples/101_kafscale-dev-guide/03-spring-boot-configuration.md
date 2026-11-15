@@ -74,8 +74,6 @@ spring.kafka.listener.concurrency=3
 spring.kafka.admin.properties.bootstrap.servers=localhost:39092
 ```
 
-> **Tip:** The complete configuration file is available in [`examples/application.properties`](examples/application.properties).
-
 ### application.yml
 
 If you prefer YAML configuration:
@@ -113,7 +111,7 @@ spring:
         bootstrap.servers: localhost:39092
 ```
 
-> **Tip:** The complete YAML configuration is available in [`examples/application.yml`](examples/application.yml).
+> **Tip:** For a working configuration in a complete app, see [`application.yml`](../E20_spring-boot-kafscale-demo/src/main/resources/application.yml) in the Spring Boot demo.
 
 ## Migrating from Existing Kafka Configuration
 

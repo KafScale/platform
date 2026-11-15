@@ -39,9 +39,27 @@ Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_
 ### What it supports
 
 - Schema types: Avro, JSON Schema and Protobuf. `GET /schemas/types` returns `["AVRO", "JSON", "PROTOBUF"]`. A schema without `schemaType` is Avro.
-- Protobuf schemas are `.proto` text in proto2 or proto3 syntax. Imports are resolved through references, where the reference `name` is the import path, and the well known types under `google/protobuf/` are always available. Compatibility follows the Confluent Schema Registry 8.4.0 Protobuf rules for all seven levels, including changes inside referenced schemas. Two schemas that differ only in comments and whitespace get the same id. With `normalize=true`, they also match when they differ in the order of imports, fields, enum values or options, in proto2 `syntax`, or in written versus fully qualified type names, as in Confluent. `GET /schemas/ids/{id}?format=serialized` and `GET /subjects/{subject}/versions/{version}?format=serialized` return a Protobuf schema as a base64 `FileDescriptorProto`, which confluent-kafka-python requests when it decodes. Register and lookup also accept a schema given as a base64 `FileDescriptorProto`, which confluent-kafka-python sends. It is stored as `.proto` text, as in Confluent. Text and base64 registrations with the same references reuse the same id across subjects. Existing ids, stored text and S3 id markers are preserved.
-- JSON Schema uses `schemaType: "JSON"`, with draft 7 as the default. References use the URI in `$ref` as their `name` and resolve only from registered subjects and versions; the registry never fetches URLs or files. Local references and recursive schemas are supported. Compatibility follows the Confluent 8.4.0 structural rules, including open and closed content models, defaults, numeric and string constraints, arrays and combined schemas. These rules differ from a general proof that every old JSON instance satisfies a new schema. Object key order is preserved by default; `normalize=true` sorts object keys while preserving array order and numeric scale. The existing CLI import command preserves JSON Schema ids, versions and references.
-- Compatibility levels: `NONE`, `BACKWARD` (the default), `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL` and `FULL_TRANSITIVE`, as in Confluent Schema Registry 8.4.0. `BACKWARD` means the new schema can read data written with the old one, `FORWARD` means the old schema can read data written with the new one, and `FULL` means both. The plain levels check against the latest live version of the subject, the `_TRANSITIVE` levels against every live version. Soft deleted versions are not checked. `PUT /config` accepts the level in any case and returns it in upper case. Other values are rejected with 42203.
+- Protobuf schemas are `.proto` text in proto2 or proto3 syntax.
+  - Imports are resolved through references, where the reference `name` is the import path, and the well known types under `google/protobuf/` are always available.
+  - Compatibility follows the Confluent Schema Registry 8.4.0 Protobuf rules for all seven levels, including changes inside referenced schemas.
+  - Two schemas that differ only in comments and whitespace get the same id.
+  - With `normalize=true`, they also match when they differ in the order of imports, fields, enum values or options, in proto2 `syntax`, or in written versus fully qualified type names, as in Confluent.
+  - `GET /schemas/ids/{id}?format=serialized` and `GET /subjects/{subject}/versions/{version}?format=serialized` return a Protobuf schema as a base64 `FileDescriptorProto`, which confluent-kafka-python requests when it decodes.
+  - Register and lookup also accept a schema given as a base64 `FileDescriptorProto`, which confluent-kafka-python sends.
+  - It is stored as `.proto` text, as in Confluent.
+  - Text and base64 registrations with the same references reuse the same id across subjects.
+  - Existing ids, stored text and S3 id markers are preserved.
+- JSON Schema uses `schemaType: "JSON"`, with draft 7 as the default.
+  - References use the URI in `$ref` as their `name` and resolve only from registered subjects and versions; the registry never fetches URLs or files.
+  - Local references and recursive schemas are supported.
+  - Compatibility follows the Confluent 8.4.0 structural rules, including open and closed content models, defaults, numeric and string constraints, arrays and combined schemas.
+  - These rules differ from a general proof that every old JSON instance satisfies a new schema.
+  - Object key order is preserved by default; `normalize=true` sorts object keys while preserving array order and numeric scale.
+  - The existing CLI import command preserves JSON Schema ids, versions and references.
+- Compatibility levels: `NONE`, `BACKWARD` (the default), `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL` and `FULL_TRANSITIVE`, as in Confluent Schema Registry 8.4.0.
+  - `BACKWARD` means the new schema can read data written with the old one, `FORWARD` means the old schema can read data written with the new one, and `FULL` means both.
+  - The plain levels check against the latest live version of the subject, the `_TRANSITIVE` levels against every live version. Soft deleted versions are not checked.
+  - `PUT /config` accepts the level in any case and returns it in upper case. Other values are rejected with 42203.
 - Modes: `READWRITE` (the default), `READONLY` and `IMPORT`.
 - Schema references, resolved by subject and version, nested up to 32 levels.
 - Soft and hard deletes of subjects and versions.
@@ -74,11 +92,33 @@ Endpoints:
 | POST | `/compatibility/subjects/{subject}/versions`, `/compatibility/subjects/{subject}/versions/{version}` | `verbose` |
 | GET | `/healthz`, `/readyz`, `/metrics` | |
 
-`{version}` accepts a number or `latest`. Register, lookup, `GET /schemas/ids/{id}` and `GET /subjects/{subject}/versions/{version}` responses carry a `guid`, computed like Confluent Schema Registry 8.4.0: the MD5 of the stored schema text followed by the name, subject and version (four byte big endian) of each reference, written as a UUID. Clients that put the schema guid in the `__value_schema_id` or `__key_schema_id` record header, such as the `header_schema_id_serializer` in confluent-kafka-python and the Java `HeaderSchemaIdSerializer`, resolve it with `GET /schemas/guids/{guid}`. It returns `guid`, `schemaType`, `references`, `schema` and `deleted`, which is true when only soft deleted versions use the schema. An unknown guid returns 40403. Schema text above 1 MiB is rejected with 42209, and a request body above 2 MiB with 400. `/contexts` always returns `["."]`. `POST /compatibility/subjects/{subject}/versions` without a version checks the schema the way a register would under the subject's level. With a version or `latest`, it checks against that one version only, in the direction the level sets. Compatibility against a subject that does not exist returns `is_compatible: true` for `latest` or no version, and 40402 for a numbered version. `DELETE /config/{subject}` and `DELETE /mode/{subject}` return 40401 when the subject has no setting. `DELETE /config` returns the previous global level and resets it to `BACKWARD`. Errors use the Confluent body `{"error_code": ..., "message": ...}` and codes: 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set, 40901 incompatible schema (HTTP 409), 400 malformed request body, 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 42209 schema too large, 50001 store error, 50002 operation timed out.
+`{version}` accepts a number or `latest`.
+
+- Register, lookup, `GET /schemas/ids/{id}` and `GET /subjects/{subject}/versions/{version}` responses carry a `guid`, computed like Confluent Schema Registry 8.4.0: the MD5 of the stored schema text followed by the name, subject and version (four byte big endian) of each reference, written as a UUID.
+- Clients that put the schema guid in the `__value_schema_id` or `__key_schema_id` record header, such as the `header_schema_id_serializer` in confluent-kafka-python and the Java `HeaderSchemaIdSerializer`, resolve it with `GET /schemas/guids/{guid}`.
+- It returns `guid`, `schemaType`, `references`, `schema` and `deleted`, which is true when only soft deleted versions use the schema. An unknown guid returns 40403.
+- Schema text above 1 MiB is rejected with 42209, and a request body above 2 MiB with 400. `/contexts` always returns `["."]`.
+- `POST /compatibility/subjects/{subject}/versions` without a version checks the schema the way a register would under the subject's level.
+- With a version or `latest`, it checks against that one version only, in the direction the level sets.
+- Compatibility against a subject that does not exist returns `is_compatible: true` for `latest` or no version, and 40402 for a numbered version.
+- `DELETE /config/{subject}` and `DELETE /mode/{subject}` return 40401 when the subject has no setting.
+- `DELETE /config` returns the previous global level and resets it to `BACKWARD`.
+- Errors use the Confluent body `{"error_code": ..., "message": ...}` and these codes:
+  - 40401 subject not found, 40402 version not found, 40403 schema not found, 40404 subject soft deleted, 40405 subject not soft deleted, 40406 version soft deleted, 40407 version not soft deleted, 40408 subject compatibility not set, 40409 subject mode not set.
+  - 40901 incompatible schema (HTTP 409), 400 malformed request body.
+  - 42201 invalid schema, 42202 invalid version, 42203 invalid compatibility level, 42204 invalid mode, 42205 operation not permitted, 42206 reference exists, 42209 schema too large.
+  - 50001 store error, 50002 operation timed out.
 
 ### Ids and versions
 
-Schema ids are global, unique and increase with every new schema. Ids can have gaps. The registry stores each schema in the form Confluent Schema Registry stores it: the Avro schema printed by the Java Avro library, with whitespace removed, names written relative to the enclosing namespace, and default values and properties kept. Registering a schema whose stored form, type and references already exist anywhere in the registry returns the existing id. Under one subject, a schema that differs from an existing version only in the order of properties or aliases returns that version, the highest one if several match. Doubles in default values are printed as Java's `Double.toString` prints them, for example `1.0E-5` and `4.9E-324`. With `normalize=true`, properties and aliases are sorted, `error` is stored as `record`, and an empty `namespace` counts as no namespace, so the type takes the enclosing namespace, before the id is chosen. A schema whose normalized form is not a valid schema is rejected with 42201.
+Schema ids are global, unique and increase with every new schema. Ids can have gaps.
+
+- The registry stores each schema in the form Confluent Schema Registry stores it: the Avro schema printed by the Java Avro library, with whitespace removed, names written relative to the enclosing namespace, and default values and properties kept.
+- Registering a schema whose stored form, type and references already exist anywhere in the registry returns the existing id.
+- Under one subject, a schema that differs from an existing version only in the order of properties or aliases returns that version, the highest one if several match.
+- Doubles in default values are printed as Java's `Double.toString` prints them, for example `1.0E-5` and `4.9E-324`.
+- With `normalize=true`, properties and aliases are sorted, `error` is stored as `record`, and an empty `namespace` counts as no namespace, so the type takes the enclosing namespace, before the id is chosen.
+- A schema whose normalized form is not a valid schema is rejected with 42201.
 
 A new version number is one above the highest version the subject has, live or soft deleted. A version removed with a hard delete is no longer counted, so its number can be given again. Registering a schema that only exists as a soft deleted version of the subject creates a new version and removes the soft deleted one.
 
@@ -99,9 +139,28 @@ kafscale-cli schema import --from https://source-registry:8081 --to http://kafsc
   [--auth user:password | --auth bearer:<token>] [--to-auth ...] [--subjects '<regex>'] [--dry-run] [--force]
 ```
 
-It reads `/subjects?deleted=true` and every version of each subject, including soft deleted ones, and imports them in ascending id order, with every referenced subject version before the schemas that reference it. A referenced subject version that `--subjects` does not match is imported too, but its config and mode are not copied. Before the first write it switches the target to `IMPORT` mode, which needs `--force` when the target already holds schemas. Each version keeps its id and version number. Versions that are soft deleted in the source are soft deleted in the target. Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. The global mode of the target stays `IMPORT`. `--auth` and `--to-auth` can also be set with `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`, and `--to` with `KAFSCALE_SCHEMA_REGISTRY_URL`.
+It reads `/subjects?deleted=true` and every version of each subject, including soft deleted ones, and imports them in ascending id order, with every referenced subject version before the schemas that reference it.
 
-The import can be run again at any time, for example to copy schemas registered in the source since the last run or after a run stopped halfway. A version that the target already holds with the same id and the same schema is skipped; schemas are compared in their stored form, so formatting differences in the source do not count. When the target holds that subject version with a different id or schema, or holds the id with a different schema, the import reports both schemas as a conflict, imports the rest, prints the counts of imported, skipped and soft deleted versions, changed settings and conflicts, and exits with an error. Two source versions that carry the same id with different schemas are reported as a conflict too, also with `--dry-run`. Any other error, for example a 422 from the target, stops the run. The CLI then still prints the counts and, when the target is in `IMPORT` mode, says so; run the same command again to resume. KafScale has only the default schema context. Source subjects in another Confluent context, named `:.<context>:<subject>`, are not imported: the CLI names each one, counts them as skipped contexts and exits with an error, also with `--dry-run`. A subject named `:.:<subject>` is in the default context and is imported under that name. A subject whose mode in the target is not `IMPORT` is switched to `IMPORT` while its new versions are imported and set back afterwards. `--dry-run` prints what would change and writes nothing.
+- A referenced subject version that `--subjects` does not match is imported too, but its config and mode are not copied.
+- Before the first write it switches the target to `IMPORT` mode, which needs `--force` when the target already holds schemas.
+- Each version keeps its id and version number.
+- Versions that are soft deleted in the source are soft deleted in the target.
+- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own.
+- The global mode of the target stays `IMPORT`.
+- `--auth` and `--to-auth` can also be set with `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`, and `--to` with `KAFSCALE_SCHEMA_REGISTRY_URL`.
+
+The import can be run again at any time, for example to copy schemas registered in the source since the last run or after a run stopped halfway.
+
+- A version that the target already holds with the same id and the same schema is skipped; schemas are compared in their stored form, so formatting differences in the source do not count.
+- When the target holds that subject version with a different id or schema, or holds the id with a different schema, the import reports both schemas as a conflict, imports the rest, prints the counts of imported, skipped and soft deleted versions, changed settings and conflicts, and exits with an error.
+- Two source versions that carry the same id with different schemas are reported as a conflict too, also with `--dry-run`.
+- Any other error, for example a 422 from the target, stops the run.
+- The CLI then still prints the counts and, when the target is in `IMPORT` mode, says so; run the same command again to resume.
+- KafScale has only the default schema context.
+- Source subjects in another Confluent context, named `:.<context>:<subject>`, are not imported: the CLI names each one, counts them as skipped contexts and exits with an error, also with `--dry-run`.
+- A subject named `:.:<subject>` is in the default context and is imported under that name.
+- A subject whose mode in the target is not `IMPORT` is switched to `IMPORT` while its new versions are imported and set back afterwards.
+- `--dry-run` prints what would change and writes nothing.
 
 When the last run is done, switch the target to `READWRITE` with `PUT /mode` and `{"mode": "READWRITE"}`, and point clients at it. Hard deleted versions are not in the source anymore and are not copied.
 
@@ -115,20 +174,81 @@ In `READONLY` and `IMPORT` mode, registering a schema that the subject already h
 
 ### Storage
 
-All state lives in etcd under `/kafscale/schemas/`. Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201. The object key is the hash of the text, so retries and identical schemas write the same object once per request. When a write uploads the text and then fails in etcd, the object stays in S3 without an etcd key pointing to it. Such objects are not removed today. To find them, list `<namespace>/@schemas/sha256/` and compare it with the `s3Key` values under `/kafscale/schemas/ids/`.
+All state lives in etcd under `/kafscale/schemas/`.
+
+- Schema text larger than `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` (64 KiB by default) is written to S3 at `<namespace>/@schemas/sha256/<sha256 of the text>`, and etcd keeps only the key. Without `KAFSCALE_S3_BUCKET`, such schemas are rejected with 42201.
+- The object key is the hash of the text, so retries and identical schemas write the same object once per request.
+- When a write uploads the text and then fails in etcd, the object stays in S3 without an etcd key pointing to it. Such objects are not removed today.
+- To find them, list `<namespace>/@schemas/sha256/` and compare it with the `s3Key` values under `/kafscale/schemas/ids/`.
 
 Each instance caches schemas by id, up to 32 MiB of schema text, and drops entries when the cache is full. It drops the whole cache when etcd reports a lower revision, a different cluster id, a lower raft term or a lower id counter than it has seen.
 
-With `KAFSCALE_S3_BUCKET` set, every id the registry gives out is also recorded in S3 as `<namespace>/@schemas/ids/<id, 20 digits>` holding the hash of the schema. The registry writes it after the request has passed validation, the compatibility check and the version checks, right before the etcd write, so a rejected register or import records nothing. The registry writes this object with `PutObject` and `If-None-Match: *`, so only one writer can create it. When the write returns 412 PreconditionFailed, the id is taken and the registry tries a higher id. When it returns 409 ConditionalRequestConflict, another write to the same key was in progress and this write did not happen; the registry retries the same id up to 3 times and then tries a higher id. The registry never removes these objects. It changes one only when an import with an explicit id takes over an object that records a different schema while etcd has no schema with that id, as described below, and then only with `If-Match` on the object's ETag. Registrations without an id never change them, so an etcd restored from an older backup does not make a registration hand out an id that existing data already carries, and two instances that both see the same free id never record it for two schemas. When S3 cannot be written, registering a new schema fails with 50001 and nothing is written to etcd. Without `KAFSCALE_S3_BUCKET` the registry has only etcd, and after a restore it gives out again the ids issued after the backup was taken. Each pod caches schemas by id and must drop that cache when etcd is restored from a snapshot. Each pod watches the registry keys in etcd. A restore with `etcdutl snapshot restore --bump-revision <n> --mark-compacted` marks every revision up to the new one as compacted, so the watch fails with a compacted error, and the pod clears its cache, reads the id counter again and starts a new watch. This works while the pod is idle and keeps running, without a restart. The KafScale operator restores with `--bump-revision 1000000000 --mark-compacted`, so restores it runs are handled automatically. For a manual restore, use the same two flags, with a bump larger than the number of writes since the snapshot was taken. Otherwise restart every registry pod after the restore. Without the flags a pod catches the restore only when etcd answers with a different cluster id, or with a lower revision or raft term than the pod saw before the request started. A restore with the same cluster token and peer URLs keeps the cluster id. The revision goes back to the one in the snapshot, but once other pods write, it climbs past what an idle pod saw. The raft term starts again at 1, so it is only lower when the old term was higher. A pod that misses the restore keeps serving the schemas it had cached. With S3 configured, registrations never give out an id twice, so those cached schemas are still right unless an import took over an id as described below. Without S3, an id given out again after the restore can be served from the cache with the schema it had before the restore.
+With `KAFSCALE_S3_BUCKET` set, every id the registry gives out is also recorded in S3 as `<namespace>/@schemas/ids/<id, 20 digits>` holding the hash of the schema.
 
-At startup, with `KAFSCALE_S3_BUCKET` set, the registry writes the key `<namespace>/@schemas/probe/<random>` twice with `If-None-Match: *`, then reads it back, writes it with `If-Match` and a wrong ETag, writes it with `If-Match` and its ETag, and deletes it. If the second `If-None-Match` write or the wrong `If-Match` write does not fail with 412, the read returns no ETag, the matching write fails, or S3 cannot be reached, the registry exits with an error instead of serving, because a backend that ignores the conditions would let two instances record the same id for different schemas. The registry needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `<namespace>/@schemas/`. `DeleteObject` is used only to remove the probe key. When that delete fails, the registry logs a warning that names the key and keeps running, and the probe key stays in the bucket. Backends:
+- The registry writes it after the request has passed validation, the compatibility check and the version checks, right before the etcd write, so a rejected register or import records nothing.
+- The registry writes this object with `PutObject` and `If-None-Match: *`, so only one writer can create it.
+- When the write returns 412 PreconditionFailed, the id is taken and the registry tries a higher id.
+- When it returns 409 ConditionalRequestConflict, another write to the same key was in progress and this write did not happen; the registry retries the same id up to 3 times and then tries a higher id. The registry never removes these objects.
+- It changes one only when an import with an explicit id takes over an object that records a different schema while etcd has no schema with that id, as described below, and then only with `If-Match` on the object's ETag.
+- Registrations without an id never change them, so an etcd restored from an older backup does not make a registration hand out an id that existing data already carries, and two instances that both see the same free id never record it for two schemas.
+- When S3 cannot be written, registering a new schema fails with 50001 and nothing is written to etcd.
+- Without `KAFSCALE_S3_BUCKET` the registry has only etcd, and after a restore it gives out again the ids issued after the backup was taken.
+- Each pod caches schemas by id and must drop that cache when etcd is restored from a snapshot. Each pod watches the registry keys in etcd.
+- A restore with `etcdutl snapshot restore --bump-revision <n> --mark-compacted` marks every revision up to the new one as compacted, so the watch fails with a compacted error, and the pod clears its cache, reads the id counter again and starts a new watch.
+- This works while the pod is idle and keeps running, without a restart.
+- The KafScale operator restores with `--bump-revision 1000000000 --mark-compacted`, so restores it runs are handled automatically.
+- For a manual restore, use the same two flags, with a bump larger than the number of writes since the snapshot was taken.
+- Otherwise restart every registry pod after the restore.
+- Without the flags a pod catches the restore only when etcd answers with a different cluster id, or with a lower revision or raft term than the pod saw before the request started.
+- A restore with the same cluster token and peer URLs keeps the cluster id.
+- The revision goes back to the one in the snapshot, but once other pods write, it climbs past what an idle pod saw.
+- The raft term starts again at 1, so it is only lower when the old term was higher.
+- A pod that misses the restore keeps serving the schemas it had cached.
+- With S3 configured, registrations never give out an id twice, so those cached schemas are still right unless an import took over an id as described below.
+- Without S3, an id given out again after the restore can be served from the cache with the schema it had before the restore.
+
+At startup, with `KAFSCALE_S3_BUCKET` set, the registry writes the key `<namespace>/@schemas/probe/<random>` twice with `If-None-Match: *`, then reads it back, writes it with `If-Match` and a wrong ETag, writes it with `If-Match` and its ETag, and deletes it.
+
+- If the second `If-None-Match` write or the wrong `If-Match` write does not fail with 412, the read returns no ETag, the matching write fails, or S3 cannot be reached, the registry exits with an error instead of serving, because a backend that ignores the conditions would let two instances record the same id for different schemas.
+- The registry needs `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` on `<namespace>/@schemas/`.
+- `DeleteObject` is used only to remove the probe key.
+- When that delete fails, the registry logs a warning that names the key and keeps running, and the probe key stays in the bucket.
+
+Backends:
 
 - AWS S3 and MinIO support the condition. MinIO was checked with the image built from `test/e2e/minio.Dockerfile`.
 - Cloudflare R2 documents atomic `If-None-Match: *` on `PutObject`. Ceph RGW is reported to support it. Neither was tested here.
 - Backblaze B2 does not support conditional writes, and the Google Cloud Storage XML API supports `If-None-Match` only on reads. The registry does not start against them with `KAFSCALE_S3_BUCKET` set.
 - For any other provider in [supported.md](supported.md), the startup check decides.
 
-A write can claim an id in S3 and then fail in etcd, for example when another instance registered first. That id stays recorded in S3 without a schema in etcd. New registrations skip it. When the etcd write fails because another write changed the state it read, the registry retries with the id it already recorded as long as no schema in etcd has that id and the id counter has not passed it. Within one instance, registrations of new schemas run one at a time, so concurrent registrations on one instance leave no such ids. A registration first checks without waiting whether the schema is already the latest version of the subject, and if it is, it returns that id and version, so these registrations and lookups are not held up by a slow write. A registration that waits for another write on the same instance and reaches its deadline fails with 50002. This limits new schemas to the rate one instance can write them one after another. With MinIO and a 3 node etcd on one machine, 1000 new schemas were registered at 180 per second with 1 writer, 250 with 16 and 261 with 64 writers. Registrations that race on different instances can leave one for each lost race, because ids stay increasing and a later id may already be given out. An import with an explicit id that S3 records for the same schema is accepted. An import with an explicit id that S3 records for a different schema is accepted when etcd has no schema with that id. The registry first reads the S3 object with its ETag. It then makes sure the id counter in etcd is at least that id, raising it in an etcd transaction that also checks that no schema has the id. After that, a register that recorded the id in S3 and has not written etcd yet can no longer write it, because its etcd write requires the counter it read, so it picks a new id. The registry then replaces the object with `PutObject` and `If-Match: <ETag>`. Only the import that then writes etcd logs that it reclaimed the object, with the object key, which contains the id. When another write changed the object in between, the replace fails with 412 and the import is refused with 42205. When two imports of the same id with different schemas run at once, etcd accepts only one. The one that wrote etcd rewrites the S3 object with its own hash if another import replaced it before then. An import that replaced the object and then finds that etcd holds a different schema for the id rewrites the object to the hash etcd holds, with `If-Match`, before it returns 42205. If a registry pod stops between replacing the object and that rewrite, or its request fails before it, the object keeps the losing schema's hash. The id stays blocked for registrations, and an import of the schema etcd holds for that id is still accepted, but the object no longer names that schema. No clock is used, so clock skew between pods and S3 does not matter. An id that data carries but etcd lost in a restore looks the same to S3, so before importing an id over an old object, check that no topic data uses that id with the schema whose hash the S3 object holds. To resolve a refused import by hand, check that no topic data uses that id with the schema whose hash the S3 object holds, for example in the source registry or in backups taken before the restore. If none does, delete the object named in the message and retry the import. If data does use it, import the schema under a different id.
+A write can claim an id in S3 and then fail in etcd, for example when another instance registered first.
+
+- That id stays recorded in S3 without a schema in etcd. New registrations skip it.
+- When the etcd write fails because another write changed the state it read, the registry retries with the id it already recorded as long as no schema in etcd has that id and the id counter has not passed it.
+- Within one instance, registrations of new schemas run one at a time, so concurrent registrations on one instance leave no such ids.
+- A registration first checks without waiting whether the schema is already the latest version of the subject, and if it is, it returns that id and version, so these registrations and lookups are not held up by a slow write.
+- A registration that waits for another write on the same instance and reaches its deadline fails with 50002.
+- This limits new schemas to the rate one instance can write them one after another.
+- With MinIO and a 3 node etcd on one machine, 1000 new schemas were registered at 180 per second with 1 writer, 250 with 16 and 261 with 64 writers.
+- Registrations that race on different instances can leave one for each lost race, because ids stay increasing and a later id may already be given out.
+- An import with an explicit id that S3 records for the same schema is accepted.
+- An import with an explicit id that S3 records for a different schema is accepted when etcd has no schema with that id.
+- The registry first reads the S3 object with its ETag.
+- It then makes sure the id counter in etcd is at least that id, raising it in an etcd transaction that also checks that no schema has the id.
+- After that, a register that recorded the id in S3 and has not written etcd yet can no longer write it, because its etcd write requires the counter it read, so it picks a new id.
+- The registry then replaces the object with `PutObject` and `If-Match: <ETag>`.
+- Only the import that then writes etcd logs that it reclaimed the object, with the object key, which contains the id.
+- When another write changed the object in between, the replace fails with 412 and the import is refused with 42205.
+- When two imports of the same id with different schemas run at once, etcd accepts only one.
+- The one that wrote etcd rewrites the S3 object with its own hash if another import replaced it before then.
+- An import that replaced the object and then finds that etcd holds a different schema for the id rewrites the object to the hash etcd holds, with `If-Match`, before it returns 42205.
+- If a registry pod stops between replacing the object and that rewrite, or its request fails before it, the object keeps the losing schema's hash.
+- The id stays blocked for registrations, and an import of the schema etcd holds for that id is still accepted, but the object no longer names that schema.
+- No clock is used, so clock skew between pods and S3 does not matter.
+- An id that data carries but etcd lost in a restore looks the same to S3, so before importing an id over an old object, check that no topic data uses that id with the schema whose hash the S3 object holds.
+- To resolve a refused import by hand, check that no topic data uses that id with the schema whose hash the S3 object holds, for example in the source registry or in backups taken before the restore.
+- If none does, delete the object named in the message and retry the import.
+- If data does use it, import the schema under a different id.
 
 ### Differences from Confluent Schema Registry
 

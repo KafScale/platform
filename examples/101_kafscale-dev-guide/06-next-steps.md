@@ -39,7 +39,7 @@ The local and kind demos are great for development and testing, but for producti
 
 ### Kubernetes Deployment
 
-KafScale is designed to run on Kubernetes with the KafScale Operator. See the main [Quickstart Guide](../quickstart.md) for Kubernetes deployment instructions.
+KafScale is designed to run on Kubernetes with the KafScale Operator. See the main [Quickstart Guide](../../docs/quickstart.md) for Kubernetes deployment instructions.
 
 **Key differences from Docker setup**:
 - **etcd cluster**: 3+ nodes for high availability
@@ -80,7 +80,7 @@ spec:
     replicas: 3
 ```
 
-See [Operations Guide](../operations.md) for detailed production setup.
+See [Operations Guide](../../docs/operations.md) for detailed production setup.
 
 ## Monitoring and Observability
 
@@ -100,7 +100,7 @@ curl http://localhost:9093/metrics
 
 ### Grafana Dashboards
 
-KafScale includes pre-built Grafana dashboards. See [docs/grafana/](../grafana/) for dashboard JSON files.
+KafScale includes pre-built Grafana dashboards. See [docs/grafana/](../../docs/grafana/) for dashboard JSON files.
 
 ### Logging
 
@@ -122,7 +122,7 @@ For production, enable authentication:
 2. **SASL**: Authenticate clients (SASL/PLAIN, SASL/SCRAM)
 3. **mTLS**: Mutual TLS for broker-to-etcd communication
 
-See [Security Guide](../security.md) for configuration details.
+See [Security Guide](../../docs/security.md) for configuration details.
 
 ### S3 Bucket Security
 
@@ -175,7 +175,7 @@ For global deployments:
 2. **Read replicas**: Configure brokers in other regions to read from replicated bucket
 3. **Cross-region replication**: Use S3 CRR to replicate data
 
-See [Architecture Guide](../architecture.md) for details.
+See [Architecture Guide](../../docs/architecture.md) for details.
 
 ### Custom Metrics and Monitoring
 
@@ -220,10 +220,10 @@ spring.kafka.listener.concurrency=10
 
 ### Documentation
 
-- [Architecture Overview](../architecture.md) - Deep dive into KafScale design
-- [User Guide](../user-guide.md) - Runtime behavior and configuration
-- [Operations Guide](../operations.md) - Production deployment and maintenance
-- [Protocol Implementation](../protocol.md) - Kafka protocol compatibility
+- [Architecture Overview](../../docs/architecture.md) - Deep dive into KafScale design
+- [User Guide](../../docs/user-guide.md) - Runtime behavior and configuration
+- [Operations Guide](../../docs/operations.md) - Production deployment and maintenance
+- [Protocol Implementation](../../docs/protocol.md) - Kafka protocol compatibility
 - [Technical Specification](../../kafscale-spec.md) - Data formats and wire protocol
 
 ### Community
