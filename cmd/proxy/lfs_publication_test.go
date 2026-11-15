@@ -40,6 +40,7 @@ func TestLFSListenerTracksUnconfirmedUploads(t *testing.T) {
 		{"connect", 1, "connect", 3},
 		{"connect_no_acks", 0, "connect", 3},
 		{"lost_ack", 1, "lost_ack", 3},
+		{"wrong_correlation", 1, "wrong_correlation", 3},
 		{"rejected_partition", 1, "reject", 1},
 		{"missing_partition", 1, "missing", 1},
 		{"success", 1, "", 0},
@@ -112,7 +113,11 @@ func TestLFSListenerTracksUnconfirmedUploads(t *testing.T) {
 					}
 					received <- nil
 					if tc.acks != 0 && tc.failure != "lost_ack" {
-						_ = protocol.WriteFrame(conn, protocol.EncodeResponse(h.CorrelationID, 9, response))
+						correlationID := h.CorrelationID
+						if tc.failure == "wrong_correlation" {
+							correlationID++
+						}
+						_ = protocol.WriteFrame(conn, protocol.EncodeResponse(correlationID, 9, response))
 					}
 				}()
 			}
@@ -140,6 +145,19 @@ func TestLFSListenerTracksUnconfirmedUploads(t *testing.T) {
 			}
 			if tc.acks == 0 && response != nil {
 				t.Fatal("acks=0 returned a response")
+			}
+			if tc.failure == "wrong_correlation" {
+				result, err := parseProduceResponse(response, 9)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, topic := range result.Topics {
+					for _, part := range topic.Partitions {
+						if part.ErrorCode != protocol.REQUEST_TIMED_OUT {
+							t.Fatal("unrelated response accepted as an acknowledgement")
+						}
+					}
+				}
 			}
 			if tc.failure != "connect" {
 				select {

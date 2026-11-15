@@ -38,6 +38,7 @@ limitations under the License.
 ## Bug fixes
 
 - The proxy tracks LFS uploads whose Kafka publication fails, including broker connection failures returned as per-partition errors. Tracking follows the final result for each topic and partition, so successful records in a mixed request are excluded. Objects with uncertain acknowledgements are retained because Kafka may already reference them (#322).
+- The Kafka listener rejects Produce responses with a mismatched correlation ID instead of accepting an unrelated acknowledgement.
 - Kafka LFS produces with `acks=0` forward the rewritten envelope instead of an empty frame and track uploads after connection or write failures.
 - The LFS HTTP API waits for the broker's full 15-second Produce timeout plus the configured I/O budget (5 seconds by default) after sending the request. The previous shared 5-second write/read deadline could fail a request before the broker's timeout. Earlier caller deadlines and cancellation still stop the exchange.
 

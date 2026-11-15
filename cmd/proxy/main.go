@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1182,6 +1183,9 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 				return
 			}
 			subResp, parseErr := parseProduceResponse(respBytes, header.APIVersion)
+			if parseErr == nil && int32(binary.BigEndian.Uint32(respBytes)) != header.CorrelationID {
+				parseErr = errors.New("produce response correlation mismatch")
+			}
 			if parseErr != nil {
 				w.conn.Close()
 				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: parseErr}
