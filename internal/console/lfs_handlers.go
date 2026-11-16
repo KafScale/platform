@@ -173,10 +173,14 @@ func (h *LFSHandlers) updateTopicStats(stats *LFSTopicStats, size int64, timesta
 	}
 }
 
-// HandleStatus handles GET /ui/api/lfs/status
+// HandleStatus handles GET /ui/api/lfs/status. A nil handler reports LFS disabled.
 func (h *LFSHandlers) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h == nil {
+		writeJSON(w, LFSStatusResponse{Enabled: false})
 		return
 	}
 

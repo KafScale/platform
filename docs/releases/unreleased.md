@@ -272,6 +272,10 @@ limitations under the License.
 
 ### Console
 
+- Transient cluster-status and LFS-status failures no longer return the authenticated console to the login screen. Only HTTP 401 ends the UI session; HTTP 503 displays the service failure and preserves existing streams (#339).
+
+- The LFS status endpoint remains available when LFS is disabled. The console shows the disabled state without starting LFS data requests or event streams, and closes streams on tab changes and logout. A bundled favicon is served at both `/favicon.ico` and `/ui/favicon.ico` (#339).
+
 - Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
 ### CI, tests and demos

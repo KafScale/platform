@@ -11,6 +11,8 @@ let brokersExpanded = false;
 let lfsEventsSource = null;
 let lfsCurrentPath = '';
 let lfsTopicsCache = [];
+let lfsEnabled = false;
+let lfsGeneration = 0;
 
 const loginScreen = document.getElementById('login-screen');
 const appScreen = document.getElementById('app');
@@ -24,7 +26,7 @@ async function fetchStatus() {
   const summary = document.getElementById('cluster-summary');
   try {
     const resp = await fetch('/ui/api/status');
-    if (resp.status === 401 || resp.status === 503) {
+    if (resp.status === 401) {
       showLogin('Session expired. Please sign in again.');
       return;
     }
@@ -369,6 +371,7 @@ function renderTopicDetail(topic) {
 
 function showLogin(message) {
   consoleStarted = false;
+  stopLfsConsole();
   clearLoginAlerts();
   loginScreen.classList.add('screen-active');
   appScreen.classList.remove('screen-active');
@@ -431,6 +434,9 @@ async function startConsole() {
   fetchStatus();
   startMetricsStream();
   statusInterval = setInterval(fetchStatus, 10000);
+  if (document.getElementById('tab-lfs')?.classList.contains('active')) {
+    await startLfsConsole();
+  }
 }
 
 async function initAuth() {
@@ -547,21 +553,35 @@ function formatRelativeTime(timestamp) {
   return date.toLocaleDateString();
 }
 
-async function fetchLfsStatus() {
+async function fetchLfsStatus(generation = lfsGeneration) {
   try {
     const resp = await fetch('/ui/api/lfs/status');
+    if (generation !== lfsGeneration) return false;
     if (resp.status === 401) {
-      return;
+      showLogin('Session expired. Please sign in again.');
+      return false;
     }
     if (!resp.ok) {
       updateLfsStatusIndicator(false, 'LFS unavailable');
-      return;
+      return false;
     }
     const data = await resp.json();
+    if (generation !== lfsGeneration) return false;
     renderLfsStatus(data);
+    return data.enabled === true;
   } catch (err) {
-    updateLfsStatusIndicator(false, `Error: ${err.message}`);
+    if (generation === lfsGeneration) {
+      updateLfsStatusIndicator(false, `Error: ${err.message}`);
+    }
+    return false;
   }
+}
+
+function setLfsEnabled(enabled) {
+  lfsEnabled = enabled;
+  document.querySelectorAll('.lfs-enabled-content').forEach(element => {
+    element.hidden = !enabled;
+  });
 }
 
 function updateLfsStatusIndicator(enabled, message) {
@@ -628,6 +648,7 @@ function renderLfsStatus(data) {
 }
 
 async function fetchLfsTopics() {
+  if (!lfsEnabled) return;
   try {
     const resp = await fetch('/ui/api/lfs/topics');
     if (!resp.ok) return;
@@ -668,6 +689,7 @@ function renderLfsTopics(topics) {
 }
 
 async function fetchLfsObjects(topic = '') {
+  if (!lfsEnabled) return;
   const status = document.getElementById('lfs-objects-status');
   if (status) status.textContent = 'Loading objects...';
 
@@ -742,6 +764,7 @@ function renderLfsObjects(objects, totalCount) {
 }
 
 function startLfsEventsStream(filter = '') {
+  if (!lfsEnabled) return;
   const status = document.getElementById('lfs-events-status');
 
   if (lfsEventsSource) {
@@ -749,24 +772,29 @@ function startLfsEventsStream(filter = '') {
   }
 
   const url = filter ? `/ui/api/lfs/events?types=${encodeURIComponent(filter)}` : '/ui/api/lfs/events';
-  lfsEventsSource = new EventSource(url);
+  const source = new EventSource(url);
+  lfsEventsSource = source;
 
-  lfsEventsSource.onopen = () => {
+  source.onopen = () => {
+    if (lfsEventsSource !== source) return;
     if (status) status.textContent = 'Connected to event stream';
   };
 
-  lfsEventsSource.onmessage = event => {
+  source.onmessage = event => {
+    if (lfsEventsSource !== source) return;
     try {
       const data = JSON.parse(event.data);
       addLfsEvent(data);
     } catch (err) {
-      // Ignore parse errors for keepalive messages
+      // Ignore parse errors for keepalive messages.
     }
   };
 
-  lfsEventsSource.onerror = () => {
+  source.onerror = () => {
+    if (lfsEventsSource !== source) return;
     if (status) status.textContent = 'Event stream disconnected';
-    lfsEventsSource.close();
+    source.close();
+    lfsEventsSource = null;
   };
 }
 
@@ -810,6 +838,7 @@ function clearLfsEvents() {
 }
 
 async function fetchLfsOrphans() {
+  if (!lfsEnabled) return;
   try {
     const resp = await fetch('/ui/api/lfs/orphans');
     if (!resp.ok) return;
@@ -854,6 +883,7 @@ function renderLfsOrphans(orphans, totalSize) {
 }
 
 async function fetchLfsS3Browse(prefix = '') {
+  if (!lfsEnabled) return;
   const status = document.getElementById('lfs-s3-status');
   const pathEl = document.getElementById('lfs-s3-path');
 
@@ -1001,8 +1031,14 @@ function initLfsTab() {
   }
 }
 
-function startLfsConsole() {
-  fetchLfsStatus();
+async function startLfsConsole() {
+  stopLfsConsole();
+  const generation = lfsGeneration;
+  updateLfsStatusIndicator(false, 'Checking status...');
+  const enabled = await fetchLfsStatus(generation);
+  if (generation !== lfsGeneration) return;
+  setLfsEnabled(enabled);
+  if (!enabled) return;
   fetchLfsTopics();
   fetchLfsObjects();
   fetchLfsOrphans();
@@ -1011,6 +1047,8 @@ function startLfsConsole() {
 }
 
 function stopLfsConsole() {
+  lfsGeneration++;
+  setLfsEnabled(false);
   if (lfsEventsSource) {
     lfsEventsSource.close();
     lfsEventsSource = null;

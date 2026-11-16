@@ -128,6 +128,9 @@ func TestProcessEventDownloadCompleted(t *testing.T) {
 
 func TestHandleStatusHTTP(t *testing.T) {
 	handlers := NewLFSHandlers(LFSConfig{Enabled: true, S3Bucket: "my-bucket", TrackerTopic: "__lfs"}, nil)
+	consumer := &LFSConsumer{}
+	consumer.setPollSuccess()
+	handlers.SetConsumer(consumer)
 	handlers.ProcessEvent(LFSEvent{
 		EventType: "upload_completed",
 		Topic:     "t1",
@@ -147,6 +150,9 @@ func TestHandleStatusHTTP(t *testing.T) {
 	}
 	if !resp.Enabled {
 		t.Fatal("expected enabled")
+	}
+	if !resp.ConsumerStatus.Connected {
+		t.Fatal("expected the configured consumer's connection status")
 	}
 	if resp.S3Bucket != "my-bucket" {
 		t.Fatalf("bucket: %q", resp.S3Bucket)

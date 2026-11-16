@@ -16,7 +16,9 @@
 package console
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -856,4 +858,66 @@ func loginForTest(t *testing.T, client *http.Client, baseURL, username, password
 	}
 	t.Fatalf("missing session cookie")
 	return nil
+}
+
+func TestLFSStatusAlwaysAvailable(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		handlers *LFSHandlers
+		enabled  bool
+	}{
+		{"absent", nil, false},
+		{"disabled", NewLFSHandlers(LFSConfig{}, nil), false},
+		{"enabled", NewLFSHandlers(LFSConfig{Enabled: true}, nil), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux, err := NewMux(ServerOptions{Auth: AuthConfig{Username: "u", Password: "p"}, LFSHandlers: tc.handlers})
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := newIPv4Server(t, mux)
+			defer srv.Close()
+			resp, err := srv.Client().Get(srv.URL + "/ui/api/lfs/status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("unauthenticated status=%d", resp.StatusCode)
+			}
+			cookie := loginForTest(t, srv.Client(), srv.URL, "u", "p")
+			for _, method := range []string{http.MethodGet, http.MethodPost} {
+				req, _ := http.NewRequest(method, srv.URL+"/ui/api/lfs/status", nil)
+				req.AddCookie(cookie)
+				resp, err := srv.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if method == http.MethodGet {
+					var status LFSStatusResponse
+					err := json.NewDecoder(resp.Body).Decode(&status)
+					if err != nil || resp.StatusCode != http.StatusOK || status.Enabled != tc.enabled {
+						t.Fatalf("status=%d enabled=%t decode=%v", resp.StatusCode, status.Enabled, err)
+					}
+				} else if resp.StatusCode != http.StatusMethodNotAllowed {
+					t.Fatalf("POST status=%d", resp.StatusCode)
+				}
+				resp.Body.Close()
+			}
+		})
+	}
+}
+
+func TestConsoleFavicon(t *testing.T) {
+	mux, err := NewMux(ServerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/favicon.ico", "/ui/favicon.ico"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !bytes.HasPrefix(rec.Body.Bytes(), []byte{0, 0, 1, 0}) {
+			t.Fatalf("%s: status=%d, not an ICO asset", path, rec.Code)
+		}
+	}
 }
