@@ -406,7 +406,7 @@ func (s *EtcdStore) FetchTopicConfig(ctx context.Context, topic string) (*metada
 	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != 0 {
 		return nil, ErrUnknownTopic
 	}
-	return defaultTopicConfigFromTopic(&meta.Topics[0], int16(len(meta.Topics[0].Partitions))), nil
+	return defaultTopicConfigFromTopic(&meta.Topics[0], 0), nil
 }
 
 // UpdateTopicConfig persists topic configuration into etcd.
@@ -465,8 +465,9 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 			}
 			observedGeneration = &generation
 			current := int32(len(meta.Topics[0].Partitions))
-			// Each conditional initialization uses a nested txn plus its put.
-			next := min(partitionCount, current+(maxTxnOps-1)/2)
+			// Reserve writes for the snapshot and an existing config; each
+			// conditional partition initialization uses a nested txn plus its put.
+			next := min(partitionCount, current+(maxTxnOps-2)/2)
 			if err := candidate.CreatePartitions(ctx, topic, next); err != nil {
 				return nil, nil, err
 			}
@@ -489,8 +490,28 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 					[]clientv3.Op{clientv3.OpPut(key, string(payload))}, nil,
 				))
 			}
+			configKey := TopicConfigKey(topic)
+			config, err := s.client.Get(ctx, configKey, clientv3.WithRev(revision))
+			s.recordEtcdResult(err)
+			if err != nil {
+				return nil, nil, err
+			}
+			var configRevision int64
+			if len(config.Kvs) > 0 {
+				configRevision = config.Kvs[0].ModRevision
+				cfg, err := DecodeTopicConfig(config.Kvs[0].Value)
+				if err != nil {
+					return nil, nil, err
+				}
+				cfg.Partitions = next
+				payload, err := EncodeTopicConfig(cfg)
+				if err != nil {
+					return nil, nil, err
+				}
+				ops = append(ops, clientv3.OpPut(configKey, string(payload)))
+			}
 			complete = next == partitionCount
-			return nil, ops, nil
+			return []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(configKey), "=", configRevision)}, ops, nil
 		})
 		if err != nil || complete {
 			return err

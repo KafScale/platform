@@ -381,7 +381,7 @@ func (s *InMemoryStore) FetchTopicConfig(ctx context.Context, topic string) (*me
 		if cfg, ok := s.topicConfigs[topic]; ok {
 			return cloneTopicConfig(cfg), nil
 		}
-		return defaultTopicConfigFromTopic(&entry, int16(len(entry.Partitions))), nil
+		return defaultTopicConfigFromTopic(&entry, 0), nil
 	}
 	return nil, ErrUnknownTopic
 }
@@ -452,7 +452,7 @@ func (s *InMemoryStore) CreatePartitions(ctx context.Context, topic string, part
 	}
 	cfg, ok := s.topicConfigs[topic]
 	if !ok {
-		cfg = defaultTopicConfigFromTopic(target, int16(len(target.Partitions)))
+		cfg = defaultTopicConfigFromTopic(target, 0)
 	}
 	cfg.Partitions = partitionCount
 	s.topicConfigs[topic] = cloneTopicConfig(cfg)
@@ -644,6 +644,9 @@ func defaultTopicConfigFromTopic(topic *protocol.MetadataTopic, replicationFacto
 	}
 	if replicationFactor <= 0 && len(topic.Partitions) > 0 {
 		replicationFactor = int16(len(topic.Partitions[0].Replicas))
+	}
+	if replicationFactor <= 0 {
+		replicationFactor = 1
 	}
 	return &metadatapb.TopicConfig{
 		Name:              *topic.Topic,

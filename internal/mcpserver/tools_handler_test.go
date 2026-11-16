@@ -500,3 +500,20 @@ func TestCopyInt32SliceEmpty(t *testing.T) {
 		t.Fatalf("expected empty non-nil slice for empty input, got %v", out2)
 	}
 }
+
+func TestDescribeConfigsFallbackReplication(t *testing.T) {
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}, {NodeID: 2}},
+		Topics: []protocol.MetadataTopic{{Topic: kmsg.StringPtr("orders"), Partitions: []protocol.MetadataPartition{
+			{Partition: 0, Replicas: []int32{1}}, {Partition: 1, Replicas: []int32{1}},
+			{Partition: 2, Replicas: []int32{1}}, {Partition: 3, Replicas: []int32{1}},
+		}}},
+	})
+	_, got, err := describeConfigsHandler(Options{Store: store})(context.Background(), nil, TopicConfigInput{Topics: []string{"orders"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Configs) != 1 || got.Configs[0].Partitions != 4 || got.Configs[0].ReplicationFactor != 1 {
+		t.Fatalf("MCP topic config: %+v", got.Configs)
+	}
+}

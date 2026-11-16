@@ -220,6 +220,14 @@ func TestSnapshotExpansionBatchesAtomically(t *testing.T) {
 	ctx := context.Background()
 	s := newTestEtcdStore(t, ctx, snapshotFixture(), endpoints)
 	writeSnapshotFixture(t, s.client, snapshotFixture())
+	cfg, err := s.FetchTopicConfig(ctx, "existing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RetentionMs = 120000
+	if err := s.UpdateTopicConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.CreatePartitions(ctx, "existing", 260); err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +237,9 @@ func TestSnapshotExpansionBatchesAtomically(t *testing.T) {
 	}
 	if len(saved.Topics[0].Partitions) != 260 {
 		t.Fatal("large expansion incomplete")
+	}
+	if cfg, err := s.FetchTopicConfig(ctx, "existing"); err != nil || cfg.Partitions != 260 || cfg.RetentionMs != 120000 {
+		t.Fatalf("large expansion left a stale or overwritten config: %+v, %v", cfg, err)
 	}
 	for _, part := range []int32{4, 130, 259} {
 		resp, err := s.client.Get(ctx, PartitionStateKey("existing", part))
