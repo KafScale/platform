@@ -122,7 +122,7 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test").For(&kafscalev1alpha1.KafscaleCluster{}).WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
+	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test-"+string(stored.UID)).For(&kafscalev1alpha1.KafscaleCluster{}).WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
 		var cluster kafscalev1alpha1.KafscaleCluster
 		if err := c.Get(ctx, req.NamespacedName, &cluster); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -132,6 +132,13 @@ func TestKafkaSecurityAPI(t *testing.T) {
 		}
 		return ctrl.Result{}, r.reconcileLfsProxyDeployment(ctx, &cluster, nil)
 	})); err != nil {
+		t.Fatal(err)
+	}
+	// Register the metadata informer before starting the manager. Otherwise the
+	// sync barrier can finish before the controller's sources create any informers.
+	metadata := &metav1.PartialObjectMetadata{}
+	metadata.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+	if _, err := manager.GetCache().GetInformer(ctx, metadata); err != nil {
 		t.Fatal(err)
 	}
 	watchCtx, cancelWatch := context.WithCancel(context.Background())
@@ -159,8 +166,6 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	if err := manager.GetCache().Get(ctx, client.ObjectKeyFromObject(secret), &corev1.Secret{}); !errors.As(err, &notCached) {
 		t.Fatalf("full Secret unexpectedly cached: %v", err)
 	}
-	metadata := &metav1.PartialObjectMetadata{}
-	metadata.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
 	if err := manager.GetCache().Get(ctx, client.ObjectKeyFromObject(secret), metadata); err != nil {
 		t.Fatal(err)
 	}

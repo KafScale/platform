@@ -145,6 +145,7 @@ type GroupDetails struct {
 	GenerationID       int32           `json:"generation_id"`
 	RebalanceTimeoutMS int32           `json:"rebalance_timeout_ms"`
 	Members            []MemberDetails `json:"members"`
+	Offsets            []OffsetDetails `json:"offsets"`
 }
 
 type MemberDetails struct {
@@ -218,7 +219,7 @@ func registerTools(server *mcp.Server, opts Options) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        toolDescribeGroup,
-		Description: "Describe a consumer group",
+		Description: "Describe a consumer group and its committed offsets",
 	}, describeGroupHandler(opts))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -371,10 +372,31 @@ func describeGroupHandler(opts Options) mcp.ToolHandlerFor[GroupInput, GroupDeta
 		if err != nil {
 			return nil, GroupDetails{}, err
 		}
-		if group == nil {
-			return nil, GroupDetails{}, fmt.Errorf("consumer group %q not found", input.GroupID)
+		offsets, err := metadata.ListGroupConsumerOffsets(ctx, store, input.GroupID)
+		if err != nil {
+			return nil, GroupDetails{}, err
 		}
-		return nil, toGroupDetails(group), nil
+		if group == nil {
+			if len(offsets) == 0 {
+				return nil, GroupDetails{}, fmt.Errorf("consumer group %q not found", input.GroupID)
+			}
+			// Match ListConsumerGroups without creating metadata for a simple consumer.
+			group = &metadatapb.ConsumerGroup{GroupId: input.GroupID, State: "empty", ProtocolType: "consumer"}
+		}
+		out := toGroupDetails(group)
+		out.Offsets = make([]OffsetDetails, 0, len(offsets))
+		for _, offset := range offsets {
+			out.Offsets = append(out.Offsets, OffsetDetails{
+				Topic: offset.Topic, Partition: offset.Partition, Offset: offset.Offset, Metadata: offset.Metadata,
+			})
+		}
+		sort.Slice(out.Offsets, func(i, j int) bool {
+			if out.Offsets[i].Topic == out.Offsets[j].Topic {
+				return out.Offsets[i].Partition < out.Offsets[j].Partition
+			}
+			return out.Offsets[i].Topic < out.Offsets[j].Topic
+		})
+		return nil, out, nil
 	}
 }
 
