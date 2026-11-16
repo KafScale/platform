@@ -71,6 +71,8 @@ limitations under the License.
 
 ### Broker produce, storage and topics
 
+- Brokers check S3 conditional PUT support before opening listeners. A second write to a unique probe key must return `412 Precondition Failed`; backends that ignore or reject the condition fail startup with a clear error. Startup probes are cleaned up after successful and failed attempts (#336).
+
 - Conditional S3 write conflicts (412 precondition failed and 409 conditional conflict) no longer count as S3 health errors and block produces across the broker. The conflicting partition remains fenced; S3 latency and other failures still drive backpressure (#335).
 
 - Produce requests targeting a partition that does not exist now finish promptly.
@@ -262,6 +264,10 @@ limitations under the License.
 ### Go API compatibility
 
 - Restore the exact published v1.6.3 `broker.CoordinatorConfig` shape and comparability. The legacy constructor remains supported and deprecated; use `CoordinatorOptions` and `NewGroupCoordinatorWithOptions` for retention and lease hooks. `metadata.Store` retains its original method set; group offset listing is an optional `GroupConsumerOffsetLister` capability with a filtering adapter (#298).
+
+### Console
+
+- Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
 ### CI, tests and demos
 

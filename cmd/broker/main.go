@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -2514,19 +2515,39 @@ func (h *handler) verifyS3(ctx context.Context) error {
 
 	for {
 		// A lost response may leave the previous immutable probe object behind.
-		probeKey := fmt.Sprintf("__health/startup_probe_%d", time.Now().UnixNano())
+		probeKey := "__health/startup_probe_" + rand.Text()
 		start := time.Now()
 		err := h.s3.UploadSegment(ctx, probeKey, payload)
 		h.recordS3Op("startup_probe", time.Since(start), err)
 		if err == nil {
+			defer h.cleanupS3Probe(ctx, probeKey)
+			start = time.Now()
+			err = h.s3.UploadSegment(ctx, probeKey, payload)
+			h.recordS3Op("startup_probe", time.Since(start), err)
+			if err == nil {
+				return fmt.Errorf("s3 readiness check failed: backend ignores If-None-Match: * on PutObject at %s; partition segments cannot be fenced", probeKey)
+			}
+			if !errors.Is(err, storage.ErrPreconditionFailed) {
+				return fmt.Errorf("s3 readiness check failed: second PutObject with If-None-Match: * at %s returned %w; want 412 PreconditionFailed", probeKey, err)
+			}
 			return nil
 		}
+		// A failed request may still have persisted the object.
+		h.cleanupS3Probe(ctx, probeKey)
 		h.logger.Warn("startup S3 probe failed, retrying", "error", err, "key", probeKey)
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("s3 readiness check failed: %w", err)
+			return fmt.Errorf("s3 readiness check failed: PutObject with If-None-Match: *: %w", errors.Join(err, ctx.Err()))
 		case <-time.After(backoff):
 		}
+	}
+}
+
+func (h *handler) cleanupS3Probe(ctx context.Context, key string) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := h.s3.DeleteSegment(cleanupCtx, key); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		h.logger.Warn("failed to delete startup S3 probe; s3:DeleteObject is needed on __health/", "error", err, "key", key)
 	}
 }
 

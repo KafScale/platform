@@ -60,8 +60,11 @@ Precondition Failed`.
   that ignores the header turns off this protection without an error. A backend
   that rejects the header makes every produce fail.
 
-The schema registry checks this at startup and refuses to start when the
-condition is not honored. Brokers do not run that check.
+The broker and schema registry check this at startup and refuse to start when
+the condition is not honored. The broker writes the same unique probe key twice
+and requires the second write to return `412 Precondition Failed`. Probe objects
+use the `__health/` prefix and are deleted after each attempt; allow
+`s3:DeleteObject` on this prefix to avoid leaving probe objects behind.
 
 ---
 

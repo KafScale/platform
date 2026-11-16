@@ -248,14 +248,16 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	// Send the initial snapshot immediately so clients can establish the stream
+	// without waiting for the periodic refresh interval.
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			sample := map[string]any{"timestamp": time.Now().UnixMilli()}
 			metrics := map[string]any{}
 			if h.metrics != nil {
@@ -292,6 +294,7 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 			_, _ = w.Write(b)
 			_, _ = w.Write([]byte("\n\n"))
 			flusher.Flush()
+			timer.Reset(2 * time.Second)
 		}
 	}
 }

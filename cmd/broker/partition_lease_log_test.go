@@ -289,6 +289,9 @@ func TestStartupProbeRecoversFromLostUploadResponse(t *testing.T) {
 	if got := s3.attempts.Load(); got != 2 {
 		t.Fatalf("successful probe PUTs=%d", got)
 	}
+	if objects, err := s3.ListSegments(ctx, "__health/"); err != nil || len(objects) != 0 {
+		t.Fatalf("lost response left probe objects behind: %+v, %v", objects, err)
+	}
 }
 
 // Some S3 implementations return 409 for competing conditional writes rather
