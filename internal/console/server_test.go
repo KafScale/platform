@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -918,6 +919,33 @@ func TestConsoleFavicon(t *testing.T) {
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if rec.Code != http.StatusOK || !bytes.HasPrefix(rec.Body.Bytes(), []byte{0, 0, 1, 0}) {
 			t.Fatalf("%s: status=%d, not an ICO asset", path, rec.Code)
+		}
+	}
+}
+
+type readinessTestStore struct {
+	metadata.Store
+	err error
+}
+
+func (s readinessTestStore) CheckReadiness(context.Context) error { return s.err }
+
+func TestConsoleProbeRoutes(t *testing.T) {
+	for _, failure := range []error{nil, errors.New("etcd unavailable")} {
+		mux, err := NewMux(ServerOptions{Store: readinessTestStore{err: failure}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{"/healthz", "/readyz"} {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			want := http.StatusOK
+			if path == "/readyz" && failure != nil {
+				want = http.StatusServiceUnavailable
+			}
+			if rec.Code != want {
+				t.Fatalf("%s status=%d, want %d", path, rec.Code, want)
+			}
 		}
 	}
 }

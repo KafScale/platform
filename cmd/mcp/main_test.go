@@ -16,8 +16,15 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/KafScale/platform/internal/mcpserver"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 func TestEnvOrDefault(t *testing.T) {
@@ -69,5 +76,42 @@ func TestBuildMetricsProvider(t *testing.T) {
 	t.Setenv("KAFSCALE_MCP_BROKER_METRICS_URL", "http://127.0.0.1:9093/metrics")
 	if got := buildMetricsProvider(); got == nil {
 		t.Fatalf("expected metrics provider when env set")
+	}
+}
+
+type readinessTestStore struct {
+	metadata.Store
+	err error
+}
+
+func (s readinessTestStore) CheckReadiness(context.Context) error { return s.err }
+
+func TestMCPProbeRoutes(t *testing.T) {
+	handler := mcpserver.RequireBearerToken("test-token", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	for _, failure := range []error{nil, errors.New("etcd unavailable")} {
+		mux := newHTTPMux(readinessTestStore{err: failure}, handler)
+		for _, path := range []string{"/healthz", "/readyz", "/mcp", "/mcp/"} {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			want := http.StatusOK
+			if path == "/readyz" && failure != nil {
+				want = http.StatusServiceUnavailable
+			}
+			if path == "/mcp" || path == "/mcp/" {
+				want = http.StatusUnauthorized
+			}
+			if rec.Code != want {
+				t.Fatalf("%s status=%d, want %d", path, rec.Code, want)
+			}
+		}
+		for _, path := range []string{"/mcp", "/mcp/"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Authorization", "Bearer test-token")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatal(path, rec.Code)
+			}
+		}
 	}
 }

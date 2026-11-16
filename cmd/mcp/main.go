@@ -27,6 +27,7 @@ import (
 	"time"
 
 	console "github.com/KafScale/platform/internal/console"
+	"github.com/KafScale/platform/internal/health"
 	"github.com/KafScale/platform/internal/mcpserver"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -78,12 +79,7 @@ func main() {
 		log.Printf("warning: KAFSCALE_MCP_AUTH_TOKEN not set; MCP server is unauthenticated")
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
-	mux.Handle("/mcp/", handler)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	mux := newHTTPMux(store, handler)
 
 	srv := &http.Server{Addr: addr, Handler: mux}
 	go func() {
@@ -98,6 +94,14 @@ func main() {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	log.Println("kafscale mcp shutting down")
+}
+
+func newHTTPMux(store metadata.Store, handler http.Handler) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", handler)
+	mux.Handle("/mcp/", handler)
+	health.Register(mux, store)
+	return mux
 }
 
 func envOrDefault(key, fallback string) string {

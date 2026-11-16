@@ -1,0 +1,31 @@
+// Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package metadata
+
+import (
+	"context"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
+)
+
+// CheckReadiness checks live etcd access with a linearizable read. It does not
+// rely on cached metadata or require maintenance permissions. The caller must
+// supply a deadline; an absent snapshot is valid for an uninitialized cluster.
+func (s *EtcdStore) CheckReadiness(ctx context.Context) error {
+	_, err := s.client.Get(ctx, snapshotKey(), clientv3.WithKeysOnly())
+	s.recordEtcdResult(err)
+	return err
+}

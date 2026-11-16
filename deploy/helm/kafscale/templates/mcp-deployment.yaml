@@ -88,8 +88,9 @@ spec:
               protocol: TCP
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: http
+            timeoutSeconds: 2
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:

@@ -238,5 +238,5 @@ endpoint and add any other MCP observability servers you rely on:
 - The MCP service is read-only by default.
 - Use `KAFSCALE_MCP_AUTH_TOKEN` and network policies for all deployments.
 - Do not expose the MCP endpoint publicly without auth.
-- `/healthz` is intentionally unauthenticated.
+- `/healthz` and `/readyz` are intentionally unauthenticated. `/healthz` checks process liveness; `/readyz` checks live access to configured etcd with a one-second deadline and returns HTTP 503 on failure. Neither response exposes backend details. Metrics-only mode without a metadata store remains ready.
 - Align with the security roadmap in `docs/security.md`.
