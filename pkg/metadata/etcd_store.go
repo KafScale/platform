@@ -406,35 +406,49 @@ func (s *EtcdStore) FetchTopicConfig(ctx context.Context, topic string) (*metada
 	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != 0 {
 		return nil, ErrUnknownTopic
 	}
-	return defaultTopicConfigFromTopic(&meta.Topics[0], int16(len(meta.Topics[0].Partitions))), nil
+	return defaultTopicConfigFromTopic(&meta.Topics[0], 0), nil
 }
 
-// UpdateTopicConfig persists topic configuration into etcd.
+// UpdateTopicConfig commits settings against the same snapshot revision used by
+// expansion. A delayed writer retries with the current partition count.
 func (s *EtcdStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.TopicConfig) error {
 	if cfg == nil || cfg.Name == "" {
 		return ErrInvalidTopic
 	}
-	meta, err := s.metadata.Metadata(ctx, []string{cfg.Name})
-	if err != nil {
-		return err
-	}
-	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != 0 {
-		return ErrUnknownTopic
-	}
-	if cfg.Partitions == 0 {
-		cfg.Partitions = int32(len(meta.Topics[0].Partitions))
-	}
-	if err := s.metadata.UpdateTopicConfig(ctx, cfg); err != nil {
-		return err
-	}
-	payload, err := EncodeTopicConfig(cfg)
-	if err != nil {
-		return err
-	}
+	requested := cloneTopicConfig(cfg)
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, err = s.client.Put(ctx, TopicConfigKey(cfg.Name), string(payload))
-	s.recordEtcdResult(err)
+	var observedGeneration *int64
+	var committed *metadatapb.TopicConfig
+	_, err := s.mutateSnapshot(ctx, func(candidate *InMemoryStore, revision int64) ([]clientv3.Cmp, []clientv3.Op, error) {
+		if err := candidate.UpdateTopicConfig(ctx, requested); err != nil {
+			return nil, nil, err
+		}
+		generation, err := s.topicGenerationAt(ctx, requested.Name, revision)
+		if err != nil {
+			return nil, nil, err
+		}
+		if observedGeneration != nil && *observedGeneration != generation {
+			return nil, nil, ErrTopicGenerationChanged
+		}
+		observedGeneration = &generation
+		updated, err := candidate.FetchTopicConfig(ctx, requested.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload, err := EncodeTopicConfig(updated)
+		if err != nil {
+			return nil, nil, err
+		}
+		committed = updated
+		return nil, []clientv3.Op{clientv3.OpPut(TopicConfigKey(requested.Name), string(payload))}, nil
+	})
+	if err == nil {
+		// The transaction is durable even if its request context just expired.
+		return s.metadata.UpdateTopicConfig(context.WithoutCancel(ctx), committed)
+	}
 	return err
 }
 
@@ -465,8 +479,9 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 			}
 			observedGeneration = &generation
 			current := int32(len(meta.Topics[0].Partitions))
-			// Each conditional initialization uses a nested txn plus its put.
-			next := min(partitionCount, current+(maxTxnOps-1)/2)
+			// Reserve writes for the snapshot and an existing config; each
+			// conditional partition initialization uses a nested txn plus its put.
+			next := min(partitionCount, current+(maxTxnOps-2)/2)
 			if err := candidate.CreatePartitions(ctx, topic, next); err != nil {
 				return nil, nil, err
 			}
@@ -489,8 +504,28 @@ func (s *EtcdStore) CreatePartitions(ctx context.Context, topic string, partitio
 					[]clientv3.Op{clientv3.OpPut(key, string(payload))}, nil,
 				))
 			}
+			configKey := TopicConfigKey(topic)
+			config, err := s.client.Get(ctx, configKey, clientv3.WithRev(revision))
+			s.recordEtcdResult(err)
+			if err != nil {
+				return nil, nil, err
+			}
+			var configRevision int64
+			if len(config.Kvs) > 0 {
+				configRevision = config.Kvs[0].ModRevision
+				cfg, err := DecodeTopicConfig(config.Kvs[0].Value)
+				if err != nil {
+					return nil, nil, err
+				}
+				cfg.Partitions = next
+				payload, err := EncodeTopicConfig(cfg)
+				if err != nil {
+					return nil, nil, err
+				}
+				ops = append(ops, clientv3.OpPut(configKey, string(payload)))
+			}
 			complete = next == partitionCount
-			return nil, ops, nil
+			return []clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(configKey), "=", configRevision)}, ops, nil
 		})
 		if err != nil || complete {
 			return err

@@ -381,7 +381,7 @@ func (s *InMemoryStore) FetchTopicConfig(ctx context.Context, topic string) (*me
 		if cfg, ok := s.topicConfigs[topic]; ok {
 			return cloneTopicConfig(cfg), nil
 		}
-		return defaultTopicConfigFromTopic(&entry, int16(len(entry.Partitions))), nil
+		return defaultTopicConfigFromTopic(&entry, 0), nil
 	}
 	return nil, ErrUnknownTopic
 }
@@ -408,10 +408,11 @@ func (s *InMemoryStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.T
 	if topic == nil {
 		return ErrUnknownTopic
 	}
-	if cfg.Partitions == 0 {
-		cfg.Partitions = int32(len(topic.Partitions))
-	}
-	s.topicConfigs[cfg.Name] = cloneTopicConfig(cfg)
+	// Partition count is topology, not a configurable setting. A config fetched
+	// before expansion must not restore its old count when settings are updated.
+	updated := cloneTopicConfig(cfg)
+	updated.Partitions = int32(len(topic.Partitions))
+	s.topicConfigs[cfg.Name] = updated
 	return nil
 }
 
@@ -452,7 +453,7 @@ func (s *InMemoryStore) CreatePartitions(ctx context.Context, topic string, part
 	}
 	cfg, ok := s.topicConfigs[topic]
 	if !ok {
-		cfg = defaultTopicConfigFromTopic(target, int16(len(target.Partitions)))
+		cfg = defaultTopicConfigFromTopic(target, 0)
 	}
 	cfg.Partitions = partitionCount
 	s.topicConfigs[topic] = cloneTopicConfig(cfg)
@@ -645,6 +646,9 @@ func defaultTopicConfigFromTopic(topic *protocol.MetadataTopic, replicationFacto
 	if replicationFactor <= 0 && len(topic.Partitions) > 0 {
 		replicationFactor = int16(len(topic.Partitions[0].Replicas))
 	}
+	if replicationFactor <= 0 {
+		replicationFactor = 1
+	}
 	return &metadatapb.TopicConfig{
 		Name:              *topic.Topic,
 		Partitions:        int32(len(topic.Partitions)),
@@ -661,18 +665,9 @@ func cloneTopicConfig(cfg *metadatapb.TopicConfig) *metadatapb.TopicConfig {
 	if cfg == nil {
 		return nil
 	}
-	out := &metadatapb.TopicConfig{
-		Name:              cfg.Name,
-		Partitions:        cfg.Partitions,
-		ReplicationFactor: cfg.ReplicationFactor,
-		RetentionMs:       cfg.RetentionMs,
-		RetentionBytes:    cfg.RetentionBytes,
-		SegmentBytes:      cfg.SegmentBytes,
-		CreatedAt:         cfg.CreatedAt,
-		Config:            make(map[string]string, len(cfg.Config)),
-	}
-	for key, val := range cfg.Config {
-		out.Config[key] = val
+	out := proto.Clone(cfg).(*metadatapb.TopicConfig)
+	if out.Config == nil {
+		out.Config = make(map[string]string)
 	}
 	return out
 }

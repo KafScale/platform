@@ -71,6 +71,9 @@ limitations under the License.
 
 ### Broker produce, storage and topics
 
+- Missing topic configs derive the replication factor from partition replicas, defaulting to 1 when replica metadata is absent. They no longer use the partition count, which made CLI restores fail when partitions exceeded brokers and made MCP `describe_configs` report an incorrect factor. Partition expansion uses the same fallback and atomically updates existing stored configs to keep their partition counts current without overwriting concurrent config edits (#338).
+- Topic config updates participate in expansion's snapshot revision checks and derive partition counts from the current topology. Delayed config creation or updates retry after expansion instead of restoring an old count, reject a topic recreated during the operation, and publish local config state only after a successful commit. CLI restore uses the same guarded update path (#338).
+
 - Brokers check S3 conditional PUT support before opening listeners. A second write to a unique probe key must return `412 Precondition Failed`; backends that ignore or reject the condition fail startup with a clear error. Startup probes are cleaned up after successful and failed attempts (#336).
 
 - Conditional S3 write conflicts (412 precondition failed and 409 conditional conflict) no longer count as S3 health errors and block produces across the broker. The conflicting partition remains fenced; S3 latency and other failures still drive backpressure (#335).

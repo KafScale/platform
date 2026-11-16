@@ -648,3 +648,53 @@ func TestExecuteRestoreRejectsInvalidTargetName(t *testing.T) {
 		t.Fatalf("target topic was created: %+v", meta.Topics)
 	}
 }
+
+func TestExecuteRestoreMorePartitionsThanBrokers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 1}, {NodeID: 2}}, ControllerID: 1,
+	}, testutil.StartEmbeddedEtcd(t))
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{Name: "orders", NumPartitions: 4, ReplicationFactor: 1}); err != nil {
+		t.Fatal(err)
+	}
+	storedConfig, err := store.EtcdClient().Get(ctx, metadata.TopicConfigKey("orders"))
+	if err != nil || len(storedConfig.Kvs) != 0 {
+		t.Fatalf("test requires the missing-config fallback: %+v, %v", storedConfig, err)
+	}
+	s3 := storage.NewMemoryS3Client()
+	when := time.Now().UTC()
+	expected := make(map[int32][]byte)
+	for partition := range int32(4) {
+		log := storage.NewPartitionLog("default", "orders", partition, 0, s3, nil, storage.PartitionLogConfig{}, nil, nil, nil)
+		batch := makeStorageRecoveryBatch(0, when.UnixMilli(), []int64{0, int64(partition) + 1})
+		if _, err := log.AppendBatches(ctx, []storage.RecordBatch{batch}, true); err != nil {
+			t.Fatal(err)
+		}
+		expected[partition], err = log.Read(ctx, 0, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic: "orders", SourceNamespace: "default", TargetTopic: "restored", TargetNamespace: "default", RestoreTo: when.Add(time.Minute),
+	}, s3, store); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := store.FetchTopicConfig(ctx, "restored")
+	if err != nil || cfg.Partitions != 4 || cfg.ReplicationFactor != 1 {
+		t.Fatalf("restored config: %+v, %v", cfg, err)
+	}
+	for partition, want := range expected {
+		log := storage.NewPartitionLog("default", "restored", partition, 0, s3, nil, storage.PartitionLogConfig{}, nil, nil, nil)
+		if last, err := log.RestoreFromS3(ctx); err != nil || last != 1 {
+			t.Fatalf("partition %d restore: last=%d err=%v", partition, last, err)
+		}
+		if got, err := log.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("partition %d records changed: %v", partition, err)
+		}
+		if next, err := store.NextOffset(ctx, "restored", partition); err != nil || next != 2 {
+			t.Fatalf("partition %d durable next offset=%d, err=%v", partition, next, err)
+		}
+	}
+}
