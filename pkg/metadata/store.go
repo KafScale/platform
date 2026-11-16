@@ -408,10 +408,11 @@ func (s *InMemoryStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.T
 	if topic == nil {
 		return ErrUnknownTopic
 	}
-	if cfg.Partitions == 0 {
-		cfg.Partitions = int32(len(topic.Partitions))
-	}
-	s.topicConfigs[cfg.Name] = cloneTopicConfig(cfg)
+	// Partition count is topology, not a configurable setting. A config fetched
+	// before expansion must not restore its old count when settings are updated.
+	updated := cloneTopicConfig(cfg)
+	updated.Partitions = int32(len(topic.Partitions))
+	s.topicConfigs[cfg.Name] = updated
 	return nil
 }
 
@@ -664,18 +665,9 @@ func cloneTopicConfig(cfg *metadatapb.TopicConfig) *metadatapb.TopicConfig {
 	if cfg == nil {
 		return nil
 	}
-	out := &metadatapb.TopicConfig{
-		Name:              cfg.Name,
-		Partitions:        cfg.Partitions,
-		ReplicationFactor: cfg.ReplicationFactor,
-		RetentionMs:       cfg.RetentionMs,
-		RetentionBytes:    cfg.RetentionBytes,
-		SegmentBytes:      cfg.SegmentBytes,
-		CreatedAt:         cfg.CreatedAt,
-		Config:            make(map[string]string, len(cfg.Config)),
-	}
-	for key, val := range cfg.Config {
-		out.Config[key] = val
+	out := proto.Clone(cfg).(*metadatapb.TopicConfig)
+	if out.Config == nil {
+		out.Config = make(map[string]string)
 	}
 	return out
 }

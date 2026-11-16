@@ -409,32 +409,46 @@ func (s *EtcdStore) FetchTopicConfig(ctx context.Context, topic string) (*metada
 	return defaultTopicConfigFromTopic(&meta.Topics[0], 0), nil
 }
 
-// UpdateTopicConfig persists topic configuration into etcd.
+// UpdateTopicConfig commits settings against the same snapshot revision used by
+// expansion. A delayed writer retries with the current partition count.
 func (s *EtcdStore) UpdateTopicConfig(ctx context.Context, cfg *metadatapb.TopicConfig) error {
 	if cfg == nil || cfg.Name == "" {
 		return ErrInvalidTopic
 	}
-	meta, err := s.metadata.Metadata(ctx, []string{cfg.Name})
-	if err != nil {
-		return err
-	}
-	if len(meta.Topics) == 0 || meta.Topics[0].ErrorCode != 0 {
-		return ErrUnknownTopic
-	}
-	if cfg.Partitions == 0 {
-		cfg.Partitions = int32(len(meta.Topics[0].Partitions))
-	}
-	if err := s.metadata.UpdateTopicConfig(ctx, cfg); err != nil {
-		return err
-	}
-	payload, err := EncodeTopicConfig(cfg)
-	if err != nil {
-		return err
-	}
+	requested := cloneTopicConfig(cfg)
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, err = s.client.Put(ctx, TopicConfigKey(cfg.Name), string(payload))
-	s.recordEtcdResult(err)
+	var observedGeneration *int64
+	var committed *metadatapb.TopicConfig
+	_, err := s.mutateSnapshot(ctx, func(candidate *InMemoryStore, revision int64) ([]clientv3.Cmp, []clientv3.Op, error) {
+		if err := candidate.UpdateTopicConfig(ctx, requested); err != nil {
+			return nil, nil, err
+		}
+		generation, err := s.topicGenerationAt(ctx, requested.Name, revision)
+		if err != nil {
+			return nil, nil, err
+		}
+		if observedGeneration != nil && *observedGeneration != generation {
+			return nil, nil, ErrTopicGenerationChanged
+		}
+		observedGeneration = &generation
+		updated, err := candidate.FetchTopicConfig(ctx, requested.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		payload, err := EncodeTopicConfig(updated)
+		if err != nil {
+			return nil, nil, err
+		}
+		committed = updated
+		return nil, []clientv3.Op{clientv3.OpPut(TopicConfigKey(requested.Name), string(payload))}, nil
+	})
+	if err == nil {
+		// The transaction is durable even if its request context just expired.
+		return s.metadata.UpdateTopicConfig(context.WithoutCancel(ctx), committed)
+	}
 	return err
 }
 
