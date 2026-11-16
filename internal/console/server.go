@@ -100,6 +100,7 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
 	mux.Handle("/ui/", http.StripPrefix("/ui/", staticHandler))
+	mux.Handle("/favicon.ico", staticHandler)
 
 	handlers := &consoleHandlers{store: opts.Store, metrics: opts.Metrics}
 	mux.HandleFunc("/ui/api/auth/config", auth.handleConfig)
@@ -112,9 +113,9 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 	mux.HandleFunc("/ui/api/metrics", auth.requireAuth(handlers.handleMetrics))
 
 	// LFS Admin API routes
+	mux.HandleFunc("/ui/api/lfs/status", auth.requireAuth(opts.LFSHandlers.HandleStatus))
 	if opts.LFSHandlers != nil {
 		lfs := opts.LFSHandlers
-		mux.HandleFunc("/ui/api/lfs/status", auth.requireAuth(lfs.HandleStatus))
 		mux.HandleFunc("/ui/api/lfs/objects", auth.requireAuth(lfs.HandleObjects))
 		mux.HandleFunc("/ui/api/lfs/topics", auth.requireAuth(lfs.HandleTopics))
 		mux.HandleFunc("/ui/api/lfs/topics/", auth.requireAuth(lfs.HandleTopicDetail))

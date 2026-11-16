@@ -50,6 +50,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
       - name: Install repository Node version
         run: bash scripts/ensure_local_node.sh
+      - name: Console UI lifecycle tests
+        run: .tools/node/bin/node --test ui/app_test.cjs
       - name: Check resolver integrity regressions
         run: |
           export PATH="$PWD/.tools/node/bin:$PATH"

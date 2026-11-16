@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Kafscale Console</title>
+  <link rel="icon" href="favicon.ico" type="image/vnd.microsoft.icon" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -153,11 +154,11 @@
             <span class="status-dot"></span>
             <span id="lfs-status-text">Checking status...</span>
           </div>
-          <div id="lfs-consumer-indicator" class="lfs-status-indicator">
+          <div id="lfs-consumer-indicator" class="lfs-status-indicator lfs-enabled-content" hidden>
             <span class="status-dot"></span>
             <span id="lfs-consumer-text">LFS connection status…</span>
           </div>
-          <div id="lfs-stats-cards" class="cards metrics">
+          <div id="lfs-stats-cards" class="cards metrics lfs-enabled-content" hidden>
             <div class="card metric">
               <h3>Total Objects</h3>
               <strong id="lfs-total-objects">0</strong>
@@ -183,18 +184,18 @@
               <strong id="lfs-orphans-count">0</strong>
             </div>
           </div>
-          <div class="lfs-config-info">
+          <div class="lfs-config-info lfs-enabled-content" hidden>
             <p><strong>S3 Bucket:</strong> <span id="lfs-s3-bucket">-</span></p>
             <p><strong>Tracker Topic:</strong> <span id="lfs-tracker-topic">-</span></p>
           </div>
         </section>
 
-        <section class="lfs-topics-section">
+        <section class="lfs-topics-section lfs-enabled-content" hidden>
           <h2>Topics with LFS</h2>
           <div id="lfs-topics-grid" class="lfs-topics-grid"></div>
         </section>
 
-        <section class="lfs-objects-section">
+        <section class="lfs-objects-section lfs-enabled-content" hidden>
           <h2>Recent Objects</h2>
           <div class="lfs-objects-toolbar">
             <select id="lfs-objects-topic-filter">
@@ -219,7 +220,7 @@
           <p id="lfs-objects-status" class="muted">Loading objects...</p>
         </section>
 
-        <section class="lfs-events-section">
+        <section class="lfs-events-section lfs-enabled-content" hidden>
           <h2>Live Events</h2>
           <div class="lfs-events-toolbar">
             <label>
@@ -237,7 +238,7 @@
           <p id="lfs-events-status" class="muted">Connecting to event stream...</p>
         </section>
 
-        <section class="lfs-s3-browser-section">
+        <section class="lfs-s3-browser-section lfs-enabled-content" hidden>
           <h2>S3 Browser</h2>
           <div class="lfs-s3-toolbar">
             <div class="lfs-s3-breadcrumb">
@@ -263,7 +264,7 @@
           <p id="lfs-s3-status" class="muted">Enter a path to browse S3...</p>
         </section>
 
-        <section class="lfs-orphans-section">
+        <section class="lfs-orphans-section lfs-enabled-content" hidden>
           <h2>Orphaned Objects</h2>
           <div id="lfs-orphans-summary" class="lfs-orphans-summary">
             <p>No orphaned objects detected.</p>
