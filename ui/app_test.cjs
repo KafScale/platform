@@ -26,7 +26,7 @@ function element() {
   };
 }
 
-function app(statusResponse) {
+function app(statusResponse, clusterResponse = () => ({ ok: true, json: async () => ({}) })) {
   const elements = new Map();
   const get = id => {
     if (!elements.has(id)) elements.set(id, element());
@@ -49,6 +49,7 @@ function app(statusResponse) {
       if (url === '/ui/api/auth/config') return new Promise(() => {});
       requests.push(url);
       if (url === '/ui/api/lfs/status') return statusResponse();
+      if (url === '/ui/api/status') return clusterResponse();
       return { ok: true, json: async () => ({}) };
     },
     EventSource: class {
@@ -209,3 +210,34 @@ test('stream filters replace the stream and ignore stale callbacks', async () =>
   assert.equal(received.length, 1);
   assert.equal(received[0].event_type, 'upload_completed');
 });
+
+
+for (const source of ['lfs', 'cluster']) {
+  for (const code of [401, 503]) {
+    test(`${source} status ${code} distinguishes service failure from authentication`, async () => {
+      const response = () => ({ ok: false, status: code });
+      const page = app(source === 'lfs' ? response : () => status(true), response);
+      page.context.showApp();
+      page.context.startMetricsStream();
+      if (source === 'cluster') {
+        await page.context.startLfsConsole();
+        await page.context.fetchStatus();
+      } else {
+        await page.context.startLfsConsole();
+      }
+      const expired = code === 401;
+      assert.equal(page.get('app').classList.contains('screen-active'), !expired);
+      assert.equal(page.get('login-screen').classList.contains('screen-active'), expired);
+      assert.ok(page.streams.every(stream => stream.closed === expired));
+      if (!expired) {
+        if (source === 'lfs') {
+          assert.equal(page.get('lfs-status-text').textContent, 'LFS unavailable');
+          assert.deepEqual(page.requests, ['/ui/api/lfs/status']);
+          assert.ok(page.content.every(item => item.hidden));
+        } else {
+          assert.equal(page.get('cluster-summary').textContent, 'Failed to load status: status 503');
+        }
+      }
+    });
+  }
+}

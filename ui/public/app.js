@@ -26,7 +26,7 @@ async function fetchStatus() {
   const summary = document.getElementById('cluster-summary');
   try {
     const resp = await fetch('/ui/api/status');
-    if (resp.status === 401 || resp.status === 503) {
+    if (resp.status === 401) {
       showLogin('Session expired. Please sign in again.');
       return;
     }
@@ -557,7 +557,7 @@ async function fetchLfsStatus(generation = lfsGeneration) {
   try {
     const resp = await fetch('/ui/api/lfs/status');
     if (generation !== lfsGeneration) return false;
-    if (resp.status === 401 || resp.status === 503) {
+    if (resp.status === 401) {
       showLogin('Session expired. Please sign in again.');
       return false;
     }
