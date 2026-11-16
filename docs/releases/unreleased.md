@@ -106,6 +106,8 @@ limitations under the License.
 
 ### Consumer groups
 
+- MCP `describe_group` recognizes groups that have committed offsets without joining, matching `list_groups` instead of reporting them as missing. Group descriptions include committed offsets and their metadata, sorted by topic and partition (#337).
+
 - Broker shutdown closes idle Kafka connections and closes active connections after their in-flight response. Clients rediscover their consumer group coordinator instead of continuing to use sockets whose broker has released its coordination leases (#285).
 - Concurrent heartbeats on one broker no longer starve offset commits for the same consumer group. Group writes queue independently, and waiting requests respect their deadlines; etcd comparisons still protect against membership changes from other brokers.
 - The consumer group retention sweep no longer reads every offset key name to list groups.

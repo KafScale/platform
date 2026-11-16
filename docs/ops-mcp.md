@@ -61,6 +61,7 @@ Some tools return wrapper objects (not raw arrays):
 Field notes:
 
 - `cluster_status` includes `cluster_name` when available; clients can use it as the primary label and fall back to `cluster_id`.
+- `describe_group` includes an `offsets` array sorted by topic and partition, with `topic`, `partition`, `offset` and `metadata` for each committed offset. A group with commits but no group metadata is returned with state `empty`, protocol type `consumer` and no members, matching `list_groups`. A group with neither metadata nor offsets is reported as not found.
 
 ## Deployment and Configuration
 
