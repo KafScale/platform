@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/pkg/broker"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/KafScale/platform/pkg/storage"
@@ -287,5 +288,100 @@ func TestStartupProbeRecoversFromLostUploadResponse(t *testing.T) {
 	}
 	if got := s3.attempts.Load(); got != 2 {
 		t.Fatalf("successful probe PUTs=%d", got)
+	}
+}
+
+// Some S3 implementations return 409 for competing conditional writes rather
+// than 412. Keep the real immutable-object collision while exercising both.
+type conditionalConflictS3 struct {
+	*storage.MemoryS3Client
+	conflict error
+}
+
+func (s *conditionalConflictS3) UploadSegment(ctx context.Context, key string, body []byte) error {
+	err := s.MemoryS3Client.UploadSegment(ctx, key, body)
+	if errors.Is(err, storage.ErrPreconditionFailed) {
+		return fmt.Errorf("conditional segment PUT: %w", s.conflict)
+	}
+	return err
+}
+
+func TestProduceFencingConflictDoesNotBlockOtherPartitions(t *testing.T) {
+	for _, conflict := range []error{storage.ErrPreconditionFailed, storage.ErrConditionalConflict} {
+		t.Run(conflict.Error(), func(t *testing.T) {
+			endpoints := testutil.StartEmbeddedEtcd(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			meta := defaultMetadata()
+			other := meta.Topics[0].Partitions[0]
+			other.Partition = 1
+			meta.Topics[0].Partitions = append(meta.Topics[0].Partitions, other)
+			store, err := metadata.NewEtcdStore(ctx, meta, metadata.EtcdStoreConfig{Endpoints: endpoints})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			s3 := &conditionalConflictS3{MemoryS3Client: storage.NewMemoryS3Client(), conflict: conflict}
+			h := newHandler(store, s3, meta.Brokers[0], testLogger())
+			defer h.coordinator.Stop()
+			defer h.leaseManager.ReleaseAll()
+			h.flushOnAck = true
+			log, err := h.getPartitionLog(ctx, "orders", 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			storageName, err := h.topicStorageName(ctx, "orders")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Another writer claims the key after A restores its empty partition.
+			winner := storage.NewPartitionLog(h.s3Namespace, storageName, 0, 0, s3, nil, h.logConfig, nil, nil, nil)
+			batch, err := storage.NewRecordBatchFromBytes(testBatchBytes(0, 1, 2))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := winner.AppendBatches(ctx, []storage.RecordBatch{batch}, true); err != nil {
+				t.Fatal(err)
+			}
+			produce := func(partitions ...int32) []kmsg.ProduceResponseTopicPartition {
+				t.Helper()
+				req := kmsg.NewPtrProduceRequest()
+				req.Acks, req.TimeoutMillis = -1, 1000
+				topic := kmsg.ProduceRequestTopic{Topic: "orders"}
+				for _, partition := range partitions {
+					topic.Partitions = append(topic.Partitions, kmsg.ProduceRequestTopicPartition{Partition: partition, Records: testBatchBytes(0, 0, 1)})
+				}
+				req.Topics = []kmsg.ProduceRequestTopic{topic}
+				raw, err := h.handleProduce(ctx, &protocol.RequestHeader{APIVersion: 9}, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return decodeKmsgResponse(t, 9, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions
+			}
+			// A collision must not reject a healthy partition in the same request.
+			response := produce(0, 1)
+			if response[0].ErrorCode == protocol.NONE || response[1].ErrorCode != protocol.NONE || response[1].BaseOffset != 0 {
+				t.Fatalf("conflict leaked to another partition: %+v", response)
+			}
+			// Nor may it poison subsequent requests while the same lease is held.
+			if p := produce(1)[0]; p.ErrorCode != protocol.NONE || p.BaseOffset != 1 {
+				t.Fatalf("subsequent produce rejected: %+v", p)
+			}
+			if _, err := log.AppendBatches(ctx, []storage.RecordBatch{batch}, true); !errors.Is(err, conflict) {
+				t.Fatalf("conflicting log no longer fenced: %v", err)
+			}
+			if !h.leaseManager.Owns("orders", 0) {
+				t.Fatal("test lost the conflicting partition's lease")
+			}
+			if next, err := store.NextOffset(ctx, "orders", 0); err != nil || next != 0 {
+				t.Fatalf("conflict advanced offsets: %d, %v", next, err)
+			}
+			if snap := h.s3Health.Snapshot(); snap.State != broker.S3StateHealthy || snap.ErrorRate != 0 {
+				t.Fatalf("conflict degraded S3: %+v", snap)
+			}
+			if data, err := winner.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(data, batch.Bytes) {
+				t.Fatalf("conflict changed winner's records: %x, %v", data, err)
+			}
+		})
 	}
 }

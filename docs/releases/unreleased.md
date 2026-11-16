@@ -71,6 +71,8 @@ limitations under the License.
 
 ### Broker produce, storage and topics
 
+- Conditional S3 write conflicts (412 precondition failed and 409 conditional conflict) no longer count as S3 health errors and block produces across the broker. The conflicting partition remains fenced; S3 latency and other failures still drive backpressure (#335).
+
 - Produce requests targeting a partition that does not exist now finish promptly.
   - Auto-creation makes at most one attempt per partition-log lookup instead of spinning when the topic already exists.
   - Requests requiring a response receive `UNKNOWN_TOPIC_OR_PARTITION`, including when another broker holds a lease for that nonexistent partition; valid partitions still receive normal leader redirection.
