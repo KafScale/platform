@@ -149,7 +149,7 @@ operator:
     proxyProtocol: true
 ```
 - **Health / metrics**: Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
-- **Startup gating**: Broker pods exit immediately if they cannot read metadata or write a probe object to S3 during startup, so Kubernetes restarts them rather than leaving a stuck listener in place.
+- **Startup gating**: Before opening listeners, brokers check metadata access and S3 conditional writes. They write a unique `__health/` probe key twice and require the second `PutObject` with `If-None-Match: *` to return `412 Precondition Failed`; ignored or rejected conditions fail startup with an error. Initial S3 write failures retry until `KAFSCALE_STARTUP_TIMEOUT_SEC` expires. Probe objects are deleted after each attempt with a bounded cleanup request; cleanup failures are logged and need `s3:DeleteObject` on `__health/`.
 - **Leader IDs**: Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
 ### Proxy TLS via LoadBalancer
