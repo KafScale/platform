@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/KafScale/platform/internal/health"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/ui"
 )
@@ -125,9 +126,7 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 		mux.HandleFunc("/ui/api/lfs/s3/presign", auth.requireAuth(lfs.HandleS3Presign))
 	}
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	health.Register(mux, opts.Store)
 	return mux, nil
 }
 

@@ -272,6 +272,8 @@ limitations under the License.
 
 ### Console
 
+- Console and MCP readiness now checks configured etcd with a live read and a one-second deadline. Helm probes use `/readyz`, so an unreachable endpoint produces HTTP 503 even with cached metadata; `/healthz` remains a process liveness check (#340).
+
 - Transient cluster-status and LFS-status failures no longer return the authenticated console to the login screen. Only HTTP 401 ends the UI session; HTTP 503 displays the service failure and preserves existing streams (#339).
 
 - The LFS status endpoint remains available when LFS is disabled. The console shows the disabled state without starting LFS data requests or event streams, and closes streams on tab changes and logout. A bundled favicon is served at both `/favicon.ico` and `/ui/favicon.ico` (#339).

@@ -48,7 +48,7 @@ For an ops-focused guide and integration examples, see `docs/ops-mcp.md`.
 ## Service Shape
 
 - HTTP endpoint: `/mcp` using MCP streamable HTTP transport (SSE).
-- Health check: `/healthz`.
+- Liveness: `/healthz`. Readiness: `/readyz`, which checks configured etcd with a live read and a one-second deadline. It returns HTTP 503 when etcd is unavailable. Metrics-only mode without a metadata store remains ready.
 - Read-only tools only; mutation tools are not registered.
 
 Environment variables:

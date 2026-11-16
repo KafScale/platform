@@ -77,6 +77,8 @@ the override returns that cluster to the operator default.
 2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
 3. Expose the console UI (optional) by enabling ingress in `values.yaml` or by creating a LoadBalancer service.
 
+Console and MCP use `/healthz` for liveness. Their Helm readiness probes use `/readyz`, which performs a live etcd read with a one-second deadline and returns HTTP 503 when configured etcd is unreachable, even if metadata is cached. The next successful probe restores readiness without restarting the process. The Kubernetes probe timeout is two seconds. Standalone or metrics-only mode without a metadata store remains ready.
+
 ## Broker partition restore
 
 On first access after a broker restart, a partition rebuilds its in-memory segment
