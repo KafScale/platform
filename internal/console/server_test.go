@@ -627,6 +627,36 @@ type testMetricsProvider struct {
 	err  error
 }
 
+type cancelOnFlushRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (w *cancelOnFlushRecorder) Flush() {
+	w.ResponseRecorder.Flush()
+	w.cancel()
+}
+
+func TestHandleMetricsInitialEvent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	w := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	h := &consoleHandlers{metrics: &testMetricsProvider{snap: &MetricsSnapshot{ProduceRPS: 123}}}
+	h.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil).WithContext(ctx))
+	if !w.Flushed || !strings.Contains(w.Body.String(), `"produce_rps":123`) {
+		t.Fatalf("stream did not send an initial snapshot before its refresh interval: %s", w.Body.String())
+	}
+}
+
+func TestHandleMetricsRequiresFlusher(t *testing.T) {
+	w := httptest.NewRecorder()
+	h := &consoleHandlers{}
+	h.handleMetrics(struct{ http.ResponseWriter }{w}, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "streaming unsupported") {
+		t.Fatalf("non-streaming writer: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func (m *testMetricsProvider) Snapshot(_ context.Context) (*MetricsSnapshot, error) {
 	return m.snap, m.err
 }

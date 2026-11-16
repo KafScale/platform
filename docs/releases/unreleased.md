@@ -265,6 +265,10 @@ limitations under the License.
 
 - Restore the exact published v1.6.3 `broker.CoordinatorConfig` shape and comparability. The legacy constructor remains supported and deprecated; use `CoordinatorOptions` and `NewGroupCoordinatorWithOptions` for retention and lease hooks. `metadata.Store` retains its original method set; group offset listing is an optional `GroupConsumerOffsetLister` capability with a filtering adapter (#298).
 
+### Console
+
+- Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
+
 ### CI, tests and demos
 
 - Broker and console tests use isolated random-port etcd fixtures. Test setup no longer terminates arbitrary processes listening on fixed ports.
