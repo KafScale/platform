@@ -16,8 +16,11 @@
 package broker
 
 import (
+	"errors"
 	"sync"
 	"time"
+
+	"github.com/KafScale/platform/pkg/storage"
 )
 
 // S3HealthState models the broker's view of S3 availability.
@@ -99,7 +102,8 @@ func (m *S3HealthMonitor) RecordUpload(latency time.Duration, err error) {
 	m.RecordOperation("upload", latency, err)
 }
 
-// RecordOperation records an arbitrary S3 operation outcome.
+// RecordOperation records an arbitrary S3 operation outcome. Conditional write
+// conflicts fence a writer, not S3 availability; their latency still counts.
 func (m *S3HealthMonitor) RecordOperation(op string, latency time.Duration, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -108,7 +112,7 @@ func (m *S3HealthMonitor) RecordOperation(op string, latency time.Duration, err 
 		ts:      now,
 		op:      op,
 		latency: latency,
-		err:     err != nil,
+		err:     err != nil && !errors.Is(err, storage.ErrPreconditionFailed) && !errors.Is(err, storage.ErrConditionalConflict),
 	})
 	if len(m.samples) > m.cfg.MaxSamples {
 		m.samples = m.samples[len(m.samples)-m.cfg.MaxSamples:]

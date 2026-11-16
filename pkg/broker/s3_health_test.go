@@ -17,8 +17,11 @@ package broker
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/KafScale/platform/pkg/storage"
 )
 
 func TestS3HealthStateTransitions(t *testing.T) {
@@ -112,5 +115,62 @@ func TestS3HealthTruncation(t *testing.T) {
 	snap := monitor.Snapshot()
 	if snap.State != S3StateHealthy {
 		t.Fatalf("expected healthy, got %s", snap.State)
+	}
+}
+
+func TestS3HealthConditionalOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantRate float64
+	}{
+		{"success", nil, 0},
+		{"precondition", storage.ErrPreconditionFailed, 0},
+		{"conflict", storage.ErrConditionalConflict, 0},
+		{"wrapped-precondition", fmt.Errorf("upload: %w", storage.ErrPreconditionFailed), 0},
+		{"wrapped-conflict", fmt.Errorf("upload: %w", storage.ErrConditionalConflict), 0},
+		{"storage-failure", errors.New("S3 unavailable"), 1},
+		{"similar-message", errors.New(storage.ErrPreconditionFailed.Error()), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			monitor := NewS3HealthMonitor(S3HealthConfig{})
+			monitor.RecordOperation("upload_segment", time.Millisecond, tc.err)
+			snap := monitor.Snapshot()
+			wantState := S3StateHealthy
+			if tc.wantRate != 0 {
+				wantState = S3StateUnavailable
+			}
+			if snap.ErrorRate != tc.wantRate || snap.State != wantState || snap.AvgLatency != time.Millisecond {
+				t.Fatalf("snapshot=%+v, want rate=%v state=%s latency=%s", snap, tc.wantRate, wantState, time.Millisecond)
+			}
+		})
+	}
+}
+
+func TestS3HealthSlowConflictRetainsLatency(t *testing.T) {
+	monitor := NewS3HealthMonitor(S3HealthConfig{})
+	monitor.RecordUpload(monitor.cfg.LatencyCrit, storage.ErrConditionalConflict)
+	snap := monitor.Snapshot()
+	if snap.ErrorRate != 0 || snap.AvgLatency != monitor.cfg.LatencyCrit || snap.State != S3StateUnavailable {
+		t.Fatalf("slow conditional response lost latency signal: %+v", snap)
+	}
+}
+
+func TestS3HealthWindowExpiry(t *testing.T) {
+	monitor := NewS3HealthMonitor(S3HealthConfig{})
+	monitor.RecordUpload(time.Millisecond, errors.New("outage"))
+	monitor.RecordUpload(time.Millisecond, nil)
+	// Age samples directly so expiry does not depend on sleeps or scheduler timing.
+	monitor.mu.Lock()
+	monitor.samples[0].ts = time.Now().Add(-2 * monitor.cfg.Window)
+	monitor.mu.Unlock()
+	if snap := monitor.Snapshot(); snap.ErrorRate != 0 || snap.State != S3StateHealthy {
+		t.Fatalf("expired error retained: %+v", snap)
+	}
+	monitor.mu.Lock()
+	monitor.samples[0].ts = time.Now().Add(-2 * monitor.cfg.Window)
+	monitor.mu.Unlock()
+	if snap := monitor.Snapshot(); snap.ErrorRate != 0 || snap.AvgLatency != 0 || snap.State != S3StateHealthy {
+		t.Fatalf("expired window retained: %+v", snap)
 	}
 }
