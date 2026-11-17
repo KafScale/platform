@@ -100,24 +100,12 @@ func TestDescribeGroupMissingGroupIDError(t *testing.T) {
 	client := connectMCPClient(t, ctx, Options{Store: testStore()})
 	defer client.Close()
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: toolDescribeGroup, Arguments: map[string]any{}})
-	msg := ""
-	if err != nil {
-		msg = err.Error()
-	} else if result != nil && result.IsError {
-		raw, _ := json.Marshal(result.Content)
-		msg = string(raw)
-		for _, c := range result.Content {
-			if text, ok := c.(*mcp.TextContent); ok {
-				msg = text.Text
-				break
-			}
-		}
-	} else {
+	if err == nil {
 		t.Fatalf("describe_group without group_id succeeded: %+v", result)
 	}
 	want := `invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`
-	if !strings.Contains(msg, want) {
-		t.Fatalf("describe_group without group_id error %q does not contain %q", msg, want)
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("describe_group without group_id error %q does not contain %q", err, want)
 	}
 }
 
