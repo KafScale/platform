@@ -296,3 +296,15 @@ Client settings, using the in cluster Service `<fullname>-schema-registry` on po
 - Java: `schema.registry.url=http://<fullname>-schema-registry:8081`
 - confluent-kafka-python: `SchemaRegistryClient({"url": "http://<fullname>-schema-registry:8081"})`
 - franz-go: `sr.NewClient(sr.URLs("http://<fullname>-schema-registry:8081"))`
+
+The chart passes only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys of the Secret named by `schemaRegistry.s3.credentialsSecret` to the registry, and no session token, so temporary credentials from that Secret are not supported. The registry reads the keys once at startup. When those keys in the Secret change, the registry does not roll and keeps using the old keys. Pointing `schemaRegistry.s3.credentialsSecret` at a different Secret changes the pod template, so `helm upgrade` rolls the registry. Once the old keys are revoked, deleted or expire, every request that has to read or write S3 fails with HTTP 500 and error code 50001, as described in [S3 credentials secret](operations.md#s3-credentials-secret).
+
+Rotate in this order. The order matters. Update the keys in the Secret, restart the registry, check the rollout, and only then revoke the old keys:
+
+```bash
+DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
+kubectl rollout restart "$DEPLOY" -n <namespace>
+kubectl rollout status "$DEPLOY" -n <namespace>
+```
+
+`<namespace>` is the namespace of the Helm release and `<release>` is the release name.

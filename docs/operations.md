@@ -252,6 +252,61 @@ keys present in the secret. When one of those keys changes, those pods roll,
 also while the etcd snapshot check fails. Other keys in the secret do not roll
 them.
 
+The Helm chart passes only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
+keys of the Secret named by `schemaRegistry.s3.credentialsSecret` to the schema
+registry, as environment variables. It passes no session token, so temporary
+credentials from that Secret are not supported. The registry reads the keys
+once at startup.
+
+When the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys in that Secret
+change, the registry does not roll. Pointing `schemaRegistry.s3.credentialsSecret`
+at a different Secret changes the pod template, so `helm upgrade` rolls the
+registry without a manual restart.
+
+Until the restart the registry keeps using the old keys. Once those keys are
+revoked, deleted or expire, every request that has to read or write S3 fails
+with HTTP 500, error code 50001 and `Error in the backend data store: <S3 error>`.
+The S3 error depends on the provider and on how the key was retired, for example
+`InvalidAccessKeyId` or `SignatureDoesNotMatch`. Requests that fail include:
+
+- Registering a schema that gets a new id. The registry writes an id marker to
+  S3 for every new id, and the schema text too when it is above
+  `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`.
+- Reading a schema above `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` when the
+  pod does not have it in its cache, because its text is stored in S3.
+- Schema lookup (`POST /subjects/{subject}`) and compatibility checks
+  (`POST /compatibility/subjects/{subject}/versions` and
+  `POST /compatibility/subjects/{subject}/versions/{version}`). They load the
+  existing versions of the subject and fail when one of those versions is stored
+  in S3 and not cached.
+- Loading a schema stored inline in etcd when one of its references is stored in
+  S3 and not cached.
+
+Requests that need no S3 read or write keep working, such as reads of schemas
+whose text and references are inline in etcd or in the pod cache, and
+registering such a schema again when it is the latest version of the subject.
+
+Rotate the keys in this order. The order matters.
+
+1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the Secret.
+2. Find the registry Deployment by its labels and restart it:
+
+   ```bash
+   DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
+   kubectl rollout restart "$DEPLOY" -n <namespace>
+   ```
+
+3. Check that the rollout finished:
+
+   ```bash
+   kubectl rollout status "$DEPLOY" -n <namespace>
+   ```
+
+4. Only then revoke the old keys.
+
+`<namespace>` is the namespace of the Helm release and `<release>` is the
+release name. The labels do not depend on `nameOverride` or `fullnameOverride`.
+
 **The `S3Credentials` condition**
 
 The operator reports the secret state on the KafscaleCluster:
