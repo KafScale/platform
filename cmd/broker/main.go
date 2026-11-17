@@ -2592,9 +2592,10 @@ func main() {
 		logger.Error("broker server error", "error", err)
 		os.Exit(1)
 	}
-	// Release partition leases immediately on shutdown signal so other brokers
-	// can take over while this broker drains in-flight requests. In-flight
-	// requests already hold partition logs and don't need the etcd lease.
+	// Release partition leases on shutdown so other brokers can take over while
+	// this broker drains. Clearing ownership tokens fences in-flight appends,
+	// even on cached logs. Fenced produces return NOT_LEADER_OR_FOLLOWER so
+	// clients retry on the new owner.
 	if handler.leaseManager != nil {
 		handler.leaseManager.ReleaseAll()
 	}
