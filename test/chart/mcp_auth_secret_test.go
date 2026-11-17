@@ -17,6 +17,7 @@ package chart
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -193,4 +194,79 @@ func mustMarshalDeployment(t *testing.T, d appsv1.Deployment) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestMCPAuthNoToken(t *testing.T) {
+	chart := mcpAuthChart(t)
+	data := helmTemplateMCP(t, chart)
+	dep, secrets := mcpDeploymentAndSecrets(t, data)
+	for _, c := range dep.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == "KAFSCALE_MCP_AUTH_TOKEN" {
+				t.Fatal("KAFSCALE_MCP_AUTH_TOKEN is set when no auth is configured")
+			}
+		}
+	}
+	for _, s := range secrets {
+		if strings.HasSuffix(s.Name, "-mcp-auth") || strings.Contains(s.Name, "mcp-auth") {
+			t.Fatalf("chart rendered MCP auth Secret %q when no auth is configured", s.Name)
+		}
+	}
+}
+
+func TestMCPAuthExistingSecretKeyRequiresSecret(t *testing.T) {
+	chart := mcpAuthChart(t)
+	args := []string{"template", "mcpauth", chart, "--set", "mcp.enabled=true", "--set", "mcp.auth.existingSecretKey=mcp-token"}
+	data, err := exec.Command("helm", args...).CombinedOutput()
+	if err == nil {
+		t.Fatalf("helm template succeeded with existingSecretKey and no existingSecret:\n%s", data)
+	}
+	if !strings.Contains(string(data), "mcp.auth.existingSecretKey requires mcp.auth.existingSecret") {
+		t.Fatalf("helm template error does not mention existingSecret:\n%s", data)
+	}
+}
+
+func TestMCPAuthExistingSecretChecksumChangesWithNameAndKey(t *testing.T) {
+	chart := mcpAuthChart(t)
+	data := helmTemplateMCP(t, chart, "--set", "mcp.auth.existingSecret=my-mcp-token")
+	dep, _ := mcpDeploymentAndSecrets(t, data)
+	sum := dep.Spec.Template.Annotations["kafscale.io/mcp-auth-checksum"]
+	if sum == "" {
+		t.Fatal("pod template has no kafscale.io/mcp-auth-checksum when existingSecret is set")
+	}
+	dataName := helmTemplateMCP(t, chart, "--set", "mcp.auth.existingSecret=other-mcp-token")
+	depName, _ := mcpDeploymentAndSecrets(t, dataName)
+	if depName.Spec.Template.Annotations["kafscale.io/mcp-auth-checksum"] == sum {
+		t.Fatal("checksum did not change when existingSecret name changed")
+	}
+	dataKey := helmTemplateMCP(t, chart, "--set", "mcp.auth.existingSecret=my-mcp-token", "--set", "mcp.auth.existingSecretKey=mcp-token")
+	depKey, _ := mcpDeploymentAndSecrets(t, dataKey)
+	if depKey.Spec.Template.Annotations["kafscale.io/mcp-auth-checksum"] == sum {
+		t.Fatal("checksum did not change when existingSecretKey changed")
+	}
+}
+
+func TestMCPAuthKeepsPodAnnotationsAndChecksum(t *testing.T) {
+	chart := mcpAuthChart(t)
+	values := filepath.Join(t.TempDir(), "values.yaml")
+	body := []byte(`mcp:
+  auth:
+    token: supersecret-mcp-token
+  podAnnotations:
+    custom: kept
+    kafscale.io/mcp-auth-checksum: user-override
+`)
+	if err := os.WriteFile(values, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data := helmTemplateMCP(t, chart, "-f", values)
+	dep, _ := mcpDeploymentAndSecrets(t, data)
+	ann := dep.Spec.Template.Annotations
+	if ann["custom"] != "kept" {
+		t.Fatalf("pod annotation custom=%q, want kept", ann["custom"])
+	}
+	sum := ann["kafscale.io/mcp-auth-checksum"]
+	if sum == "" || sum == "user-override" {
+		t.Fatalf("checksum annotation %q, want the chart checksum rather than a user override", sum)
+	}
 }

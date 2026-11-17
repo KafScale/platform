@@ -69,7 +69,7 @@ limitations under the License.
 - Bound proxy advertised ports and address-derived fallbacks to `1..65535` before narrowing to Kafka's `int32` port field. The two CodeQL conversion warnings exposed a configuration-validation defect, not a confirmed vulnerability (#298).
 - Protobuf descriptor printing uses `jhump/protoreflect/v2`, removing the v1 dependency. Map-entry repair rejects references to entries in the wrong scope instead of silently rewriting them (#284).
 
-- The Helm chart stores `mcp.auth.token` in a Secret and sets `KAFSCALE_MCP_AUTH_TOKEN` from it through a secretKeyRef. Before, the token was a plaintext env value on the Deployment. `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey` use an existing Secret instead. Changing the chart-managed token, or the existing Secret name or key, rolls the MCP pod. See `docs/ops-mcp.md`.
+- The Helm chart stores `mcp.auth.token` in a Secret and sets `KAFSCALE_MCP_AUTH_TOKEN` from it through a secretKeyRef. Before, the token was a plaintext env value on the Deployment. `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey` use an existing Secret instead. Changing the chart-managed token, or the existing Secret name or key, rolls the MCP pod. Changing the token inside an existing Secret does not; restart it with `kubectl -n kafscale-mcp rollout restart deployment/<release>-kafscale-mcp` (`kafscale-mcp` for release `kafscale`). With `mcp.auth.token` the token also stays in the Helm release values (`helm get values`); `mcp.auth.existingSecret` keeps it out. See `docs/ops-mcp.md`.
 
 ### Broker produce, storage and topics
 
@@ -351,7 +351,7 @@ ones most likely to affect you.
   and restarts. The orphan sweep needs `s3:ListBucketMultipartUploads` and
   `s3:AbortMultipartUpload` (#321).
 
-- If `mcp.auth.token` is set, upgrading the chart moves the token from a plaintext Deployment env value into a chart-managed Secret and rolls the MCP pod once. The env var name is unchanged. To keep using your own Secret, set `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey`.
+- If `mcp.auth.token` is set, upgrading the chart moves the token from a plaintext Deployment env value into a chart-managed Secret and rolls the MCP pod once. The env var name is unchanged. The token stays in the Helm release values (`helm get values`). To keep the token out of the release values, set `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey`.
 
 ### Deprecations
 

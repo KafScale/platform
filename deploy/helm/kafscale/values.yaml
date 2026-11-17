@@ -290,7 +290,7 @@ mcp:
   auth:
     token: ""
     existingSecret: ""  # Name of an existing Secret; when set, token is ignored
-    existingSecretKey: token
+    existingSecretKey: ""  # Key in existingSecret; defaults to token when existingSecret is set
   etcdEndpoints: []
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
