@@ -34,8 +34,8 @@ func TestConsoleLoginDocumented(t *testing.T) {
 		"kafscale-console",
 		"8080:80",
 		"invalid credentials",
-		"429",
-		"503",
+		"return `429`",
+		"`503`. A wrong password",
 		"console.replicaCount",
 	} {
 		if !strings.Contains(text, want) {
@@ -71,7 +71,7 @@ func TestEtcdSnapshotJobDocumented(t *testing.T) {
 		"etcd-snapshots/",
 		"EtcdSnapshot",
 		"SnapshotNotManaged",
-		"operator-managed",
+		"only when etcd is operator-managed",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/operations.md does not contain %q", want)
@@ -105,7 +105,6 @@ func TestBrokerScalingDocumented(t *testing.T) {
 	if !strings.Contains(ops, "sets the StatefulSet replicas to the new value") {
 		t.Error("docs/operations.md does not say the operator sets the StatefulSet replicas to the new value")
 	}
-	// Leave HPA product-bug assertions (STS reset vs HPA min) for later.
 }
 
 func readOpsDoc(t *testing.T, rel string) string {

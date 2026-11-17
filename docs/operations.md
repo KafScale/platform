@@ -429,7 +429,7 @@ kubectl -n <namespace> create job --from=cronjob/<cluster>-etcd-snapshot snapsho
 kubectl -n <namespace> wait --for=condition=complete --timeout=5m job/snapshot-now
 ```
 
-A successful run sets the `KafscaleCluster` condition `EtcdSnapshot=True` with reason `SnapshotHealthy`. The snapshot bucket always has a default (`kafscale-etcd-<namespace>-<cluster>`). The CronJob is created only when etcd is operator-managed. External etcd gets `EtcdSnapshot=False` with reason `SnapshotNotManaged`. The condition is set on the next reconcile.
+A successful run sets the `KafscaleCluster` condition `EtcdSnapshot=True` with reason `SnapshotHealthy`. The snapshot bucket always has a default (`kafscale-etcd-<namespace>-<cluster>`). The CronJob is created only when etcd is operator-managed. External etcd gets `EtcdSnapshot=False` with reason `SnapshotNotManaged`. With operator-managed etcd, the operator rechecks at least once a minute and also when the CronJob status changes, so the condition updates within about a minute of the Job finishing. With external etcd, the condition is set on the next reconcile.
 
 Override schedules and thresholds via the operator etcd env vars listed below.
 
@@ -456,11 +456,10 @@ Kafscale uses a snapshot-based metadata schema today: the operator publishes a f
 Each in-use partition is owned by one broker through an etcd lease. The key is
 `/kafscale/partition-leases/<topic>/<partition>` and the value is the broker
 id, as a decimal string (the broker NodeID). The keys share one etcd session
-on the owning broker. The default lease TTL is 10 seconds, and the owning
-broker refreshes it while it holds the partition. The keys stay while that
-broker runs. They go away when the broker shuts down (`ReleaseAll` at
-shutdown), or 10 seconds after it stops refreshing the lease. To see who owns
-the partitions of a topic:
+on the owning broker. The default lease TTL is 10 seconds. The broker refreshes
+that session lease while it runs, so its keys, including keys for a deleted
+topic, stay until it shuts down, or 10 seconds after it stops refreshing. To
+see who owns the partitions of a topic:
 
 ```bash
 kubectl -n kafscale exec demo-etcd-0 -c etcd -- etcdctl get --prefix /kafscale/partition-leases/orders/
@@ -888,10 +887,13 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY`: S3 credentials for the console.
 - `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL`: Presigned URL lifetime in seconds (default `300`).
 
-These topic endpoints require a console session cookie, not HTTP basic auth. A request with basic auth, or with no session, returns `401` `unauthorized`. The Helm release name `kafscale` creates the console Service `kafscale-console` on port 80. Forward it and sign in with `POST /ui/api/auth/login`:
+These topic endpoints require a console session cookie, not HTTP basic auth. A request with basic auth, or with no session, returns `401` `unauthorized`. The Helm release name `kafscale` creates the console Service `kafscale-console` on port 80. In a second terminal, forward that Service, then sign in with `POST /ui/api/auth/login`:
 
 ```bash
 kubectl -n kafscale port-forward svc/kafscale-console 8080:80
+```
+
+```bash
 curl -c cookies.txt -X POST http://127.0.0.1:8080/ui/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"<user>","password":"<password>"}'
