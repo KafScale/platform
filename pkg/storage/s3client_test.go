@@ -475,15 +475,23 @@ func TestAWSConditionalPutUnsupported(t *testing.T) {
 	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
 	for _, code := range []string{"NotImplemented", "InvalidArgument", "InvalidRequest"} {
 		api.putErr = &fakeAPIError{code: code}
-		if err := client.UploadSegment(context.Background(), "k", []byte("v")); !errors.Is(err, ErrConditionUnsupported) {
+		err := client.UploadSegment(context.Background(), "k", []byte("v"))
+		if !errors.Is(err, ErrConditionUnsupported) {
 			t.Fatalf("%s gave %v", code, err)
 		}
-		if err := client.UploadIndex(context.Background(), "k", []byte("v")); err == nil || errors.Is(err, ErrConditionUnsupported) {
+		if code == "NotImplemented" {
+			if errors.Is(err, ErrConditionRejected) {
+				t.Fatalf("%s also mapped to ErrConditionRejected: %v", code, err)
+			}
+		} else if !errors.Is(err, ErrConditionRejected) {
+			t.Fatalf("%s gave %v, want ErrConditionRejected", code, err)
+		}
+		if err := client.UploadIndex(context.Background(), "k", []byte("v")); err == nil || errors.Is(err, ErrConditionUnsupported) || errors.Is(err, ErrConditionRejected) {
 			t.Fatalf("unconditional put with %s gave %v", code, err)
 		}
 	}
 	api.putErr = &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusNotImplemented}}, Err: errors.New("status")}}
-	if err := client.UploadSegment(context.Background(), "k", []byte("v")); !errors.Is(err, ErrConditionUnsupported) {
+	if err := client.UploadSegment(context.Background(), "k", []byte("v")); !errors.Is(err, ErrConditionUnsupported) || errors.Is(err, ErrConditionRejected) {
 		t.Fatalf("status 501 gave %v", err)
 	}
 	api.putErr = &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}}, Err: errors.New("status")}}

@@ -2541,6 +2541,9 @@ func (h *handler) verifyS3(ctx context.Context) error {
 		// A failed request may still have persisted the object.
 		h.cleanupS3Probe(ctx, probeKey)
 		if errors.Is(err, storage.ErrConditionUnsupported) {
+			if errors.Is(err, storage.ErrConditionRejected) {
+				return fmt.Errorf("s3 readiness check failed: backend rejected the conditional PutObject (If-None-Match: *) at %s; partition segments cannot be fenced: %w", probeKey, err)
+			}
 			return fmt.Errorf("s3 readiness check failed: backend rejects If-None-Match: * on PutObject at %s; partition segments cannot be fenced: %w", probeKey, err)
 		}
 		h.logger.Warn("startup S3 probe failed, retrying", "error", err, "key", probeKey)

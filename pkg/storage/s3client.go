@@ -30,6 +30,18 @@ var ErrConditionalConflict = errors.New("conditional request conflict")
 
 var ErrConditionUnsupported = errors.New("conditional request not supported")
 
+type conditionRejectedError struct{}
+
+func (conditionRejectedError) Error() string {
+	return "conditional request rejected"
+}
+
+func (conditionRejectedError) Is(target error) bool {
+	return target == ErrConditionUnsupported
+}
+
+var ErrConditionRejected = conditionRejectedError{}
+
 type ConditionalIndexWriter interface {
 	UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error
 }
