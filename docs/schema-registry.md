@@ -132,7 +132,7 @@ A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it,
 
 ### Moving schemas into the built in registry
 
-To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API:
+To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API, including Apicurio Registry's Confluent compatible API:
 
 ```
 kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081 \
@@ -145,7 +145,7 @@ It reads `/subjects?deleted=true` and every version of each subject, including s
 - Before the first write it switches the target to `IMPORT` mode, which needs `--force` when the target already holds schemas.
 - Each version keeps its id and version number.
 - Versions that are soft deleted in the source are soft deleted in the target.
-- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own.
+- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. A source that has no `/mode/{subject}` endpoint, such as Apicurio Registry, returns HTTP 404 for that request. The import treats that as no subject mode and continues. Compatibility levels are still copied.
 - The global mode of the target stays `IMPORT`.
 - `--auth` and `--to-auth` can also be set with `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`, and `--to` with `KAFSCALE_SCHEMA_REGISTRY_URL`.
 

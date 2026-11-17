@@ -79,6 +79,11 @@ func isSRCode(err error, codes ...int) bool {
 	return errors.As(err, &e) && slices.Contains(codes, e.Code)
 }
 
+func isSRStatus(err error, status int) bool {
+	var e *srError
+	return errors.As(err, &e) && e.Status == status
+}
+
 type srClient struct {
 	base string
 	auth string
@@ -604,7 +609,7 @@ func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet 
 		}
 		var body modeBody
 		err := c.call(ctx, http.MethodGet, path, nil, &body)
-		if isSRCode(err, notSet) {
+		if isSRCode(err, notSet) || isSRStatus(err, http.StatusNotFound) {
 			return "", nil
 		}
 		return body.Mode, err

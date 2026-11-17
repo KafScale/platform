@@ -538,3 +538,44 @@ func TestSchemaImportFailedPlanPrintsSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaImportSkipsMissingSourceModeEndpoint(t *testing.T) {
+	var blockMode atomic.Bool
+	src := seedSource(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if blockMode.Load() && strings.HasPrefix(r.URL.Path, "/mode") {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte("RESTEASY003210: Could not find resource for full path: " + r.URL.String()))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	blockMode.Store(true)
+
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url, "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run against a source that 404s on /mode: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "would set mode of") {
+		t.Fatalf("dry-run should not copy subject modes when /mode 404s\n%s", out)
+	}
+
+	out, err = runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("import against a source that 404s on /mode: %v\n%s", err, out)
+	}
+	if status, data := dst.call("GET", "/subjects/user/versions/1", nil); status != http.StatusOK {
+		t.Fatalf("imported schema missing: %d %s", status, data)
+	}
+	if status, data := dst.call("GET", "/config/user?defaultToGlobal=false", nil); status != http.StatusOK || !strings.Contains(string(data), "FULL_TRANSITIVE") {
+		t.Fatalf("subject config not copied: %d %s", status, data)
+	}
+	if status, data := dst.call("GET", "/mode/addr?defaultToGlobal=false", nil); status != http.StatusNotFound {
+		t.Fatalf("subject mode should be unset when the source has no mode endpoint: %d %s", status, data)
+	}
+	if strings.Contains(out, "set mode of") {
+		t.Fatalf("import should not copy subject modes when /mode 404s\n%s", out)
+	}
+}
