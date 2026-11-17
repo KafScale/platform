@@ -790,7 +790,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 						continue
 					default:
 					}
-					p.logger.Warn("partition owner routing failed", "api_key", header.APIKey, "error", err)
+					p.logger.Warn("partition owner routing failed", "error", err)
 					p.respondBackendError(writeResponse, header, body)
 					return
 				}

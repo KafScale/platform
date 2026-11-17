@@ -118,7 +118,7 @@ func (p *proxy) forwardByPartitionOwner(ctx context.Context, header *protocol.Re
 		var failed []topicPartition
 		for _, r := range p.fanOutByPartitionOwner(ctx, header, req, groups, pool) {
 			if r.err != nil {
-				p.logger.Warn("partition owner forward failed", "api_key", header.APIKey, "target", r.target, "error", r.err)
+				p.logger.Warn("partition owner forward failed", "target", r.target, "error", r.err)
 				for tp := range r.include {
 					if lastAttempt {
 						answered[tp] = partitionReply{errorCode: protocol.REQUEST_TIMED_OUT}
@@ -143,7 +143,7 @@ func (p *proxy) forwardByPartitionOwner(ctx context.Context, header *protocol.Re
 		if len(failed) == 0 {
 			break
 		}
-		p.logger.Debug("retrying partitions on their owner", "api_key", header.APIKey, "attempt", attempt+1, "partitions", len(failed))
+		p.logger.Debug("retrying partitions on their owner", "attempt", attempt+1, "partitions", len(failed))
 		groups = p.groupByPartitionOwner(ctx, failed)
 	}
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, mergeReplies(req, answered, throttle)), nil
