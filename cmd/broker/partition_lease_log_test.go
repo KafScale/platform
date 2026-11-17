@@ -310,8 +310,15 @@ func (s *conditionalConflictS3) UploadSegment(ctx context.Context, key string, b
 }
 
 func TestProduceFencingConflictDoesNotBlockOtherPartitions(t *testing.T) {
-	for _, conflict := range []error{storage.ErrPreconditionFailed, storage.ErrConditionalConflict} {
-		t.Run(conflict.Error(), func(t *testing.T) {
+	for _, tc := range []struct {
+		conflict error
+		index    string
+	}{
+		{storage.ErrPreconditionFailed, "valid"}, {storage.ErrPreconditionFailed, "missing"}, {storage.ErrPreconditionFailed, "corrupt"},
+		{storage.ErrConditionalConflict, "valid"}, {storage.ErrConditionalConflict, "missing"}, {storage.ErrConditionalConflict, "corrupt"},
+	} {
+		conflict := tc.conflict
+		t.Run(conflict.Error()+"/"+tc.index, func(t *testing.T) {
 			endpoints := testutil.StartEmbeddedEtcd(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -346,6 +353,23 @@ func TestProduceFencingConflictDoesNotBlockOtherPartitions(t *testing.T) {
 			if _, err := winner.AppendBatches(ctx, []storage.RecordBatch{batch}, true); err != nil {
 				t.Fatal(err)
 			}
+			indexKey := fmt.Sprintf("%s/%s/0/segment-%020d.index", h.s3Namespace, storageName, 0)
+			if tc.index == "missing" {
+				if err := s3.DeleteIndex(ctx, indexKey); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.index == "corrupt" {
+				if err := s3.UploadIndex(ctx, indexKey, []byte("corrupt")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			winnerIndex, indexErr := s3.DownloadIndex(ctx, indexKey)
+			winnerSegment, err := s3.DownloadSegment(ctx, fmt.Sprintf("%s/%s/0/segment-%020d.kfs", h.s3Namespace, storageName, 0), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			token := h.leaseManager.OwnershipToken("orders", 0)
 			produce := func(partitions ...int32) []kmsg.ProduceResponseTopicPartition {
 				t.Helper()
 				req := kmsg.NewPtrProduceRequest()
@@ -385,6 +409,36 @@ func TestProduceFencingConflictDoesNotBlockOtherPartitions(t *testing.T) {
 			if data, err := winner.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(data, batch.Bytes) {
 				t.Fatalf("conflict changed winner's records: %x, %v", data, err)
 			}
+			// Recover on the next request while retaining this exact lease.
+			if p := produce(0)[0]; p.ErrorCode != protocol.NONE || p.BaseOffset != 2 {
+				t.Fatalf("same-lease recovery failed: %+v", p)
+			}
+			if h.leaseManager.OwnershipToken("orders", 0) != token {
+				t.Fatal("recovery changed the lease")
+			}
+			recovered, err := h.getPartitionLog(ctx, "orders", 0)
+			if err != nil || recovered == log {
+				t.Fatalf("conflicted log was reused: %v", err)
+			}
+			if data, err := recovered.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(data, batch.Bytes) {
+				t.Fatalf("winner became unreadable: %x %v", data, err)
+			}
+			h.dropConflictingPartitionLog("orders", 0, log)
+			if got := h.cachedPartitionLog("orders", 0, token); got != recovered {
+				t.Fatal("stale failure evicted the replacement")
+			}
+			if next, err := store.NextOffset(ctx, "orders", 0); err != nil || next != 3 {
+				t.Fatalf("recovered watermark: %d %v", next, err)
+			}
+			gotIndex, gotErr := s3.DownloadIndex(ctx, indexKey)
+			if !bytes.Equal(gotIndex, winnerIndex) || errors.Is(gotErr, storage.ErrNotFound) != errors.Is(indexErr, storage.ErrNotFound) {
+				t.Fatal("recovery rewrote the winning index")
+			}
+			gotSegment, err := s3.DownloadSegment(ctx, fmt.Sprintf("%s/%s/0/segment-%020d.kfs", h.s3Namespace, storageName, 0), nil)
+			if err != nil || !bytes.Equal(gotSegment, winnerSegment) {
+				t.Fatal("recovery rewrote the winning segment")
+			}
+
 		})
 	}
 }

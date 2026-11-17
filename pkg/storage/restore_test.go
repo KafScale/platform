@@ -60,18 +60,14 @@ func (s *restoreProbeS3) enter(ctx context.Context, operation, key string) error
 
 func (s *restoreProbeS3) DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error) {
 	defer s.active.Add(-1)
-	if err := s.enter(ctx, "footer", key); err != nil {
+	operation := "footer"
+	if rng == nil {
+		operation = "segment"
+	}
+	if err := s.enter(ctx, operation, key); err != nil {
 		return nil, err
 	}
 	return s.MemoryS3Client.DownloadSegment(ctx, key, rng)
-}
-
-func (s *restoreProbeS3) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
-	defer s.active.Add(-1)
-	if err := s.enter(ctx, "index", key); err != nil {
-		return nil, err
-	}
-	return s.MemoryS3Client.DownloadIndex(ctx, key)
 }
 
 type restoreLogWriter chan string
@@ -212,7 +208,7 @@ func TestRestoreBoundedConcurrencyAndProgress(t *testing.T) {
 }
 
 func TestRestoreFailureCancelsWorkersAndLeavesStateUnchanged(t *testing.T) {
-	for _, operation := range []string{"footer", "index", "cancel"} {
+	for _, operation := range []string{"footer", "segment", "cancel"} {
 		t.Run(operation, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -280,7 +276,7 @@ func TestRestoreFailureCancelsWorkersAndLeavesStateUnchanged(t *testing.T) {
 	}
 }
 
-func TestRestoreInvalidIndexesPreserveCommitBoundary(t *testing.T) {
+func TestRestoreInvalidIndexesRebuildFromSegment(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		for _, committed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("corrupt_%t_committed_%t", corrupt, committed), func(t *testing.T) {
@@ -297,18 +293,13 @@ func TestRestoreInvalidIndexesPreserveCommitBoundary(t *testing.T) {
 				}
 				log := NewPartitionLog("default", "orders", 0, next, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 				last, err := log.RestoreFromS3(context.Background())
-				if committed {
-					if err == nil || len(log.segments) != 0 || log.nextOffset != next {
-						t.Fatalf("committed invalid index: last=%d err=%v", last, err)
-					}
-					return
+				if err != nil || last != 19 || len(log.segments) != 20 {
+					t.Fatalf("index recovery: last=%d segments=%d err=%v", last, len(log.segments), err)
 				}
-				if err != nil || last != 19 || len(log.segments) != 19 {
-					t.Fatalf("orphan handling: last=%d segments=%d err=%v", last, len(log.segments), err)
+				if len(log.indexEntries[5]) == 0 {
+					t.Fatal("missing rebuilt index")
 				}
-				if _, exists := log.indexEntries[5]; exists {
-					t.Fatal("orphan index retained")
-				}
+
 				batch := buildRecoveryBatch(0, 1000, []int64{0})
 				result, err := log.AppendBatch(context.Background(), batch)
 				if err != nil || result.BaseOffset != 20 {

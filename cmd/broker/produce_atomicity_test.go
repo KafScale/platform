@@ -93,6 +93,31 @@ func TestProduceRecordSetAtomicity(t *testing.T) {
 					if next, err := store.NextOffset(ctx, "orders", 0); err != nil || next != 0 {
 						t.Fatalf("failed request advanced durable offset: %d, %v", next, err)
 					}
+					if tc.failIndex {
+						if plog != nil {
+							t.Fatal("terminal upload failure retained its cached log")
+						}
+						recovered, err := h.getPartitionLog(ctx, "orders", 0)
+						if err != nil || recovered.BufferedHighWatermark() != 5 {
+							t.Fatalf("whole record set was not recovered: %v", err)
+						}
+						data, err := recovered.Read(ctx, 0, 1<<20)
+						if err != nil || len(data) != len(records) || binary.BigEndian.Uint64(data[:8]) != 0 || binary.BigEndian.Uint64(data[70:78]) != 2 {
+							t.Fatalf("partial record set recovered: %x %v", data, err)
+						}
+						s3.failIndex = false
+						h.s3Health = broker.NewS3HealthMonitor(broker.S3HealthConfig{})
+						// Without producer idempotency, an ambiguous retry may
+						// append the complete record set again, never a prefix.
+						retried := produce()
+						if retried.ErrorCode != protocol.NONE || retried.BaseOffset != 5 {
+							t.Fatalf("retry reused occupied offsets: %+v", retried)
+						}
+						if next, err := store.NextOffset(ctx, "orders", 0); err != nil || next != 10 {
+							t.Fatalf("retry watermark=%d err=%v", next, err)
+						}
+						return
+					}
 					if next := plog.BufferedHighWatermark(); next != 0 {
 						t.Fatalf("failed request reserved offsets: %d", next)
 					}
