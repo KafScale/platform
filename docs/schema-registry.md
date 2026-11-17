@@ -288,7 +288,7 @@ schemaRegistry:
     region: us-east-1
     endpoint: http://minio.kafscale.svc.cluster.local:9000  # set for MinIO or any non-AWS endpoint
     credentialsSecret: kafscale-s3  # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
-    namespace: kafscale  # must match the KafscaleCluster namespace; the chart default is default
+    namespace: kafscale  # set it to the KafscaleCluster namespace (the chart default is default)
 ```
 
 Use the full `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379` name

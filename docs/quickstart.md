@@ -150,36 +150,30 @@ EOF
 
 ## 6) Produce and Consume
 
-A laptop cannot use `kubectl port-forward` to `svc/demo-broker` once there is
-more than one broker, or when `spec.brokers.advertisedHost` is unset. Metadata
-then advertises each broker as
+The cluster in step 4 has `spec.brokers.replicas: 3`. Metadata advertises each
+broker as
 `<cluster>-broker-<n>.<cluster>-broker-headless.<namespace>.svc.cluster.local:9092`,
 which is only reachable from inside the cluster. For the quickstart cluster
 `demo` in namespace `kafscale`, that is
 `demo-broker-0.demo-broker-headless.kafscale.svc.cluster.local:9092`.
+`kubectl port-forward` to `svc/demo-broker` cannot work with this cluster.
 
-Run the client in the cluster, or enable the Kafka proxy (`proxy.enabled=true`)
-and set `proxy.advertisedHost` / `proxy.advertisedPort` to an address the
-client can reach. For local clusters, pin `proxy.service.nodePort` (see
+Run a client in the cluster:
+
+```bash
+kubectl -n kafscale run kcat --rm -it --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -L
+```
+
+Or enable the Kafka proxy (`proxy.enabled=true`) and set
+`proxy.advertisedHost` / `proxy.advertisedPort` to an address the client can
+reach. For local clusters, pin `proxy.service.nodePort` (see
 `docs/operations.md`).
 
-Port-forward to `svc/<cluster>-broker` only works with a single broker and
-with `spec.brokers.advertisedHost` set to an address the client can reach, for
-example `127.0.0.1`:
-
-```bash
-kubectl -n kafscale port-forward svc/demo-broker 9092:9092
-```
-
-```bash
-kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders --producer-property enable.idempotence=false
-kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning
-```
+Port-forward to `svc/<cluster>-broker` only works when `spec.brokers.replicas`
+is `1` and `spec.brokers.advertisedHost` is set to an address the client can
+reach, for example `127.0.0.1`.
 
 Note: Kafka clients that default to idempotent producers or transactions must disable them explicitly.
-
-Direct broker exposure via `spec.brokers.service` is optional when you
-intentionally bypass the proxy.
 
 Service names for a `KafscaleCluster` named `<cluster>` in namespace
 `<namespace>` are documented in [Service names](operations.md#service-names).
@@ -195,11 +189,11 @@ The operator does not call `DeleteTopics` and does not write a
 `/kafscale/deleted-topics` record, so the topic stays in Kafka metadata and
 its S3 data is not recorded for `kafscale-cli prune`.
 
-To delete a topic, use the Kafka `DeleteTopics` API from a client that can
-reach the brokers, or the console `DELETE /ui/api/status/topics/<topic>`
-endpoint after signing in (see [Console](operations.md#console)). If you
-created the topic with a `KafscaleTopic`, delete that resource as well, so
-the operator does not publish the topic back into the cluster snapshot.
+If you created the topic with a `KafscaleTopic`, delete that resource first.
+Then use the Kafka `DeleteTopics` API from a client that can reach the
+brokers, or the console `DELETE /ui/api/status/topics/<topic>` endpoint after
+signing in (see [Console](operations.md#console)). If the CR still exists, the
+operator publish brings the topic back (Publish plus mergeSnapshots).
 
 ## Next Steps
 

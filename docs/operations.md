@@ -48,9 +48,10 @@ By default, image tags follow the chart `appVersion`. Every image key below uses
 - `proxy.image`
 - `schemaRegistry.image`
 - `mcp.image`
-- `lfsDemos.e72Browser.image` (only when the LFS browser demo is enabled)
 
 Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v1.6.3`). For a dev/latest install, set `useLatest=true` on every image the install actually runs, not only the operator, broker and console. The current chart `appVersion` may be older than the branch you are following.
+
+The operator-managed LFS proxy image comes from `spec.lfsProxy.image`, which defaults to `ghcr.io/kafscale/kafscale-proxy:dev`, not from a chart image key.
 
 ### Per-cluster broker image
 

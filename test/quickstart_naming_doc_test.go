@@ -37,10 +37,13 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 	text := readRepoDoc(t, "docs/quickstart.md")
 	for _, want := range []string{
 		"does not delete the Kafka topic",
+		"delete that resource first",
 		"DeleteTopics",
 		"/ui/api/status/topics/",
 		"spec.brokers.advertisedHost",
+		"spec.brokers.replicas",
 		"proxy.advertisedHost",
+		"edenhill/kcat:1.7.1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/quickstart.md does not contain %q", want)
@@ -51,17 +54,20 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 func TestImageTagKeysDocumented(t *testing.T) {
 	keys := chartUseLatestKeys(t)
 	if len(keys) == 0 {
-		t.Fatal("no useLatest keys found in deploy/helm/kafscale/values.yaml")
+		t.Fatal("no useLatest keys found in deploy/helm/kafscale/templates")
 	}
 	ops := readRepoDoc(t, "docs/operations.md")
 	quick := readRepoDoc(t, "docs/quickstart.md")
 	for _, key := range keys {
-		if !strings.Contains(ops, key+".useLatest") && !strings.Contains(ops, "`"+key+"`") {
+		if !strings.Contains(ops, "`"+key+"`") {
 			t.Errorf("docs/operations.md does not document image key %s", key)
 		}
 	}
-	if !strings.Contains(quick, "docs/operations.md") || !strings.Contains(strings.ToLower(quick), "appversion") {
-		t.Error("docs/quickstart.md does not point at operations.md for the full image tag list or mention appVersion")
+	if strings.Contains(ops, "lfsDemos.e72Browser.image") {
+		t.Error("docs/operations.md documents lfsDemos.e72Browser.image, which no chart template reads")
+	}
+	if !strings.Contains(quick, "operations.md#installing-with-helm") || !strings.Contains(strings.ToLower(quick), "appversion") {
+		t.Error("docs/quickstart.md does not point at operations.md#installing-with-helm or mention appVersion")
 	}
 }
 
@@ -97,59 +103,39 @@ func TestServiceNamePatternDocumented(t *testing.T) {
 	}
 
 	sr := readRepoDoc(t, "docs/schema-registry.md")
-	for _, want := range []string{"s3.endpoint", "credentialsSecret", "namespace:"} {
+	for _, want := range []string{"credentialsSecret: kafscale-s3", "namespace: kafscale"} {
 		if !strings.Contains(sr, want) {
 			t.Errorf("docs/schema-registry.md Helm example is missing %q", want)
 		}
 	}
-	if strings.Contains(sr, "namespace: default") && !strings.Contains(sr, "namespace: kafscale") {
-		t.Error("docs/schema-registry.md Helm example still leaves s3.namespace at default")
-	}
-}
-
-func readRepoDoc(t *testing.T, rel string) string {
-	t.Helper()
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(body)
 }
 
 func chartUseLatestKeys(t *testing.T) []string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy/helm/kafscale/values.yaml"))
+	root := filepath.Join(repoRoot(t), "deploy/helm/kafscale/templates")
+	re := regexp.MustCompile(`\.Values\.([\w.]+)\.useLatest`)
+	seen := map[string]struct{}{}
+	var keys []string
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`(?m)^(\s*)([A-Za-z0-9_]+):`)
-	var path []struct {
-		indent int
-		key    string
-	}
-	var keys []string
-	for _, line := range strings.Split(string(body), "\n") {
-		m := re.FindStringSubmatch(line)
-		if m == nil {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
 		}
-		indent := len(m[1])
-		key := m[2]
-		for len(path) > 0 && path[len(path)-1].indent >= indent {
-			path = path[:len(path)-1]
+		body, err := os.ReadFile(filepath.Join(root, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
 		}
-		path = append(path, struct {
-			indent int
-			key    string
-		}{indent, key})
-		if key != "useLatest" {
-			continue
+		for _, match := range re.FindAllStringSubmatch(string(body), -1) {
+			key := match[1]
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
 		}
-		parts := make([]string, 0, len(path)-1)
-		for _, p := range path[:len(path)-1] {
-			parts = append(parts, p.key)
-		}
-		keys = append(keys, strings.Join(parts, "."))
 	}
 	return keys
 }
