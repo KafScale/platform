@@ -65,7 +65,7 @@ the override returns that cluster to the operator default.
 
 | Value | Purpose |
 |-------|---------|
-| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. |
+| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges; the console keeps the last values it read from the leader when a scrape reaches a standby replica. |
 | `operator.leaderKey` | Kubernetes leader election lock name. Use a DNS-1123 compatible name. |
 | `console.service.*` | Type/port used to expose the UI. Combine with `.console.ingress` to publish via an ingress controller. |
 | `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
