@@ -54,6 +54,7 @@ type proxy struct {
 	dialTimeout          time.Duration
 	responseWriteTimeout time.Duration
 	ready                uint32
+	started              uint32
 	lastHealthy          int64
 	cacheTTL             time.Duration
 	cacheMu              sync.RWMutex
@@ -100,16 +101,6 @@ func main() {
 	if security != nil {
 		security.warnSharedIP(logger)
 	}
-	store, err := buildMetadataStore(ctx)
-	if err != nil {
-		logger.Error("metadata store init failed", "error", err)
-		os.Exit(1)
-	}
-	if store == nil {
-		logger.Error("KAFSCALE_PROXY_ETCD_ENDPOINTS not set; proxy cannot build metadata responses")
-		os.Exit(1)
-	}
-
 	if advertisedHost == "" {
 		logger.Warn("KAFSCALE_PROXY_ADVERTISED_HOST not set; clients may not resolve the proxy address")
 	}
@@ -127,7 +118,6 @@ func main() {
 		addr:                 addr,
 		advertisedHost:       advertisedHost,
 		advertisedPort:       advertisedPort,
-		store:                store,
 		backends:             backends,
 		logger:               logger,
 		dialTimeout:          5 * time.Second,
@@ -143,6 +133,21 @@ func main() {
 		// "a backend exists" check.
 		readyzFetchProbe: envBoolDefault("KAFSCALE_PROXY_READYZ_FETCH_PROBE", true),
 	}
+
+	if healthAddr != "" {
+		p.startHealthServer(ctx, healthAddr)
+	}
+
+	store, err := buildMetadataStore(ctx)
+	if err != nil {
+		logger.Error("metadata store init failed", "error", err)
+		os.Exit(1)
+	}
+	if store == nil {
+		logger.Error("KAFSCALE_PROXY_ETCD_ENDPOINTS not set; proxy cannot build metadata responses")
+		os.Exit(1)
+	}
+	p.store = store
 
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
 		router, err := metadata.NewPartitionRouter(ctx, etcdStore.EtcdClient(), logger)
@@ -196,9 +201,6 @@ func main() {
 		}
 	}
 
-	if healthAddr != "" {
-		p.startHealthServer(ctx, healthAddr)
-	}
 	if err := p.listenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("proxy server error", "error", err)
 		os.Exit(1)
@@ -334,6 +336,7 @@ func (p *proxy) listenAndServe(ctx context.Context) error {
 		return err
 	}
 	p.logger.Info("proxy listening", "addr", ln.Addr().String())
+	atomic.StoreUint32(&p.started, 1)
 
 	go func() {
 		<-ctx.Done()
@@ -600,6 +603,10 @@ func (p *proxy) startHealthServer(ctx context.Context, addr string) {
 		mux.Handle("/metrics", p.security.metricsHandler())
 	}
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if atomic.LoadUint32(&p.started) == 0 {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+			return
+		}
 		if p.checkReady(r.Context()) {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ready\n"))
