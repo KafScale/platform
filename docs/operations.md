@@ -580,6 +580,8 @@ successful read.
 - Clients still get metadata and reach a broker, but their produces wait. Brokers
   reject produces with `REQUEST_TIMED_OUT` while etcd is down, and clients keep
   retrying, so the TTL does not keep produces working.
+- `/readyz` stays Ready, even if the Fetch probe cannot reach a broker. The probe
+  still has to succeed when etcd is reachable.
 - The LFS HTTP API already fails. `/lfs/produce` and `/lfs/uploads` read the
   topic generation from etcd on every request, so they return 503
   `metadata_unavailable` as soon as etcd cannot be read.

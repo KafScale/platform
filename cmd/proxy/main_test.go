@@ -1270,6 +1270,49 @@ func TestCheckReadyWithStaticBackends(t *testing.T) {
 	}
 }
 
+func TestCheckReadyFetchProbeFailureWithinTTLStaysReady(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	putProxyTestSnapshot(t, endpoints, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "127.0.0.1", Port: 1},
+		},
+		ControllerID: 0,
+	})
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	p := &proxy{
+		store:            store,
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL:         60 * time.Second,
+		readyzFetchProbe: true,
+		dialTimeout:      200 * time.Millisecond,
+		backendRetries:   1,
+		backendBackoff:   time.Millisecond,
+		brokerAddrs:      map[string]string{},
+		topicNames:       map[[16]byte]string{},
+	}
+	p.refreshMetadataCache(ctx)
+	if !p.haveBackend(ctx) || !p.cacheFresh() {
+		t.Fatal("expected a fresh cached backend before the outage")
+	}
+	if p.checkReady(ctx) {
+		t.Fatal("expected NotReady when etcd is up and the fetch probe cannot reach a broker")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !p.checkReady(ctx) {
+		t.Fatal("expected Ready during an etcd outage within the TTL even when the fetch probe fails")
+	}
+	ageBackendCache(p)
+	if p.checkReady(ctx) {
+		t.Fatal("expected NotReady once the backend cache TTL has expired")
+	}
+}
+
 func putProxyTestSnapshot(t *testing.T, endpoints []string, snap metadata.ClusterMetadata) {
 	t.Helper()
 	cli, err := clientv3.New(clientv3.Config{
