@@ -485,7 +485,7 @@ kafscale-cli restore \
 Operational semantics:
 
 - Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
-- If no segments are found under `<namespace>/<topic>/`, restore exits with a non-zero status, names the prefix it searched, and does not create the target topic. Set `--namespace` or `KAFSCALE_NAMESPACE` to the cluster namespace that holds the topic data.
+- If no segments are found under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, restore exits with a non-zero status, names the prefix it searched, and does not create the target topic. Set `--namespace` or `KAFSCALE_NAMESPACE` to the cluster namespace that holds the topic data.
 - The target topic must be new. KafScale refuses to restore over an existing persisted topic.
 - Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
 - If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
