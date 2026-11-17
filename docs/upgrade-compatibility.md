@@ -183,8 +183,8 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
 - With brokers found in etcd, the LFS HTTP API now sends `/lfs/produce` and multipart completion to the broker that owns the partition.
   - A broker that does not lead the partition used to make these requests fail with HTTP 502 and leave the uploaded object in S3 as an orphan.
   - The proxy now tries the current owner, and when no broker accepts the produce the request gets 503 `backend_unavailable` and the object is deleted.
-  - This also applies to static backends (`spec.lfsProxy.backends`): a non-owner answer now gives 503 with the object deleted instead of 502 with an orphan, after another listed broker was tried if there is one.
-  - With only one address, for example a broker Service, there is no other broker to try.
+  - This also applies to static backends (`spec.lfsProxy.backends`): the produce goes to the owner from the etcd routes when it is known, and the listed brokers are used when it is not known or cannot be dialed. A non-owner answer gives 503 with the object deleted instead of 502 with an orphan, after the owner or another listed broker was tried.
+  - With only one address, for example a broker Service, and no reachable owner, there is no other broker to try.
   - Clients that treat 502 from these endpoints as final should also retry on 503 (#318).
 
 ## LFS proxy S3 credential keys

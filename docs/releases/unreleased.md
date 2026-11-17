@@ -197,8 +197,8 @@ limitations under the License.
   - When the owner is not known yet, they pick one of the listed brokers.
   - When a broker answers that it does not lead the partition (`NOT_LEADER_OR_FOLLOWER`, `LEADER_NOT_AVAILABLE`, `FENCED_LEADER_EPOCH` or `UNKNOWN_LEADER_EPOCH`), the proxy sends the produce to the current owner, to at most 3 brokers in total, and checks the backend cache TTL before each new attempt.
   - If no broker accepts it, the object is deleted and the request gets 503 `backend_unavailable`; before, the first broker's rejection gave 502 and left the object as an orphan.
-  - With static backends the proxy picks a broker as before, and when that broker answers that it does not lead the partition, it tries another listed broker if there is one.
-  - With only one address, for example a broker Service, there is no other broker to try, so a non-owner answer gives 503 `backend_unavailable` and the object is deleted.
+  - With static backends (`spec.lfsProxy.backends` or `KAFSCALE_PROXY_BACKENDS`) the produce also goes to the partition owner from the etcd routes when it is known. The listed brokers are used when the owner is not known yet or its address cannot be dialed, for example when brokers advertise a host port forward. An owner address that fails to dial is skipped for 30 seconds. Before, setting static backends turned owner routing off, so with a broker Service as the only address about half of the produces got 503 (#356).
+  - With only one address, for example a broker Service, and no reachable owner, there is no other broker to try, so a non-owner answer gives 503 `backend_unavailable` and the object is deleted.
   - When the produce request was already sent and then fails for another reason, the object is still kept and counted as an orphan, because the broker may have written the record.
   - A multipart upload (`/lfs/uploads`) without a reachable broker now fails at the start instead of at completion, so no multipart upload is left open in S3 (#318).
 - The Node, browser, Python and Java LFS resolvers honor `checksum_alg`. Valid md5 and crc32 objects resolve instead of failing with a checksum mismatch; they are validated against the envelope `sha256` field, so corrupt objects are still rejected. An unknown `checksum_alg` fails resolution when validation is enabled (#297).
@@ -282,6 +282,8 @@ limitations under the License.
 - Transient cluster-status and LFS-status failures no longer return the authenticated console to the login screen. Only HTTP 401 ends the UI session; HTTP 503 displays the service failure and preserves existing streams (#339).
 
 - The LFS status endpoint remains available when LFS is disabled. The console shows the disabled state without starting LFS data requests or event streams, and closes streams on tab changes and logout. A bundled favicon is served at both `/favicon.ico` and `/ui/favicon.ico` (#339).
+
+- The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358).
 
 - Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
