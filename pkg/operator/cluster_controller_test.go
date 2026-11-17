@@ -23,6 +23,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
@@ -291,5 +292,36 @@ func TestServiceParsingHelpers(t *testing.T) {
 	}
 	if got := parseExternalTrafficPolicy("unknown"); got != "" {
 		t.Fatalf("expected empty external traffic policy, got %q", got)
+	}
+}
+
+func TestReconcileBrokerReadiness(t *testing.T) {
+	ctx := context.Background()
+	cluster := &kafscalev1alpha1.KafscaleCluster{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: "default"}}
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	r := &ClusterReconciler{Client: c, Scheme: scheme}
+	for _, upgrading := range []bool{false, true} {
+		if err := r.reconcileBrokerDeployment(ctx, cluster, []string{"http://etcd:2379"}); err != nil {
+			t.Fatal(err)
+		}
+		var sts appsv1.StatefulSet
+		if err := c.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: "ready-broker"}, &sts); err != nil {
+			t.Fatal(err)
+		}
+		container := sts.Spec.Template.Spec.Containers[0]
+		probe := container.ReadinessProbe
+		if probe == nil || probe.HTTPGet == nil || probe.HTTPGet.Path != "/readyz" || probe.HTTPGet.Port.StrVal != "metrics" || probe.TimeoutSeconds != 2 || probe.PeriodSeconds != 5 || probe.FailureThreshold != 3 {
+			t.Fatalf("upgrade=%v readiness=%+v", upgrading, probe)
+		}
+		if container.LivenessProbe != nil {
+			t.Fatal("dependency failure must not restart the broker")
+		}
+		if !upgrading {
+			sts.Spec.Template.Spec.Containers[0].ReadinessProbe = nil
+			if err := c.Update(ctx, &sts); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }

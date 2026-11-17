@@ -36,9 +36,7 @@ func Register(mux *http.ServeMux, store metadata.Store) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
-		defer cancel()
-		if err := checkMetadata(ctx, store); err != nil {
+		if err := CheckMetadata(r.Context(), store); err != nil {
 			http.Error(w, "not ready: metadata unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -46,10 +44,14 @@ func Register(mux *http.ServeMux, store metadata.Store) {
 	})
 }
 
-func checkMetadata(ctx context.Context, store metadata.Store) error {
+// CheckMetadata checks live metadata access with a one-second deadline. Stores
+// without a live readiness capability use their normal metadata read.
+func CheckMetadata(ctx context.Context, store metadata.Store) error {
 	if store == nil {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, readinessTimeout)
+	defer cancel()
 	if checker, ok := store.(readinessChecker); ok {
 		return checker.CheckReadiness(ctx)
 	}

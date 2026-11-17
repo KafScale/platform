@@ -23,7 +23,7 @@ LOCAL_NODE_BIN := $(LOCAL_NODE_DIR)/bin
 LOCAL_NODE := $(LOCAL_NODE_BIN)/node
 LOCAL_NPM := $(LOCAL_NODE_BIN)/npm
 
-.PHONY: docker-build-schema-registry test-schema-registry proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-acl demo demo-platform demo-platform-bootstrap lfs-demo iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
+.PHONY: docker-build-schema-registry test-schema-registry proto build test test-nested-modules test-lfs-sdk-unit tidy lint generate build-sdk docker-build docker-build-e2e-client docker-build-etcd-tools docker-build-minio docker-clean ensure-minio start-minio stop-containers release-broker-ports test-produce-consume test-produce-consume-debug test-consumer-group test-ops-api test-mcp test-multi-segment-durability test-full test-operator test-operator-envtest test-operator-kind test-acl demo demo-platform demo-platform-bootstrap lfs-demo iceberg-demo kafsql-demo platform-demo help clean-kind-all ensure-local-node check vet race fmt fmt-check test-fuzz code-ql code-ql-summary code-ql-gate commit-check test-chart-proxy-nodeport test-chart-psa test-chart-antiaffinity
 
 REGISTRY ?= ghcr.io/kafscale
 STAMP_DIR ?= .build
@@ -283,7 +283,7 @@ $(STAMP_DIR)/operator.image: $(OPERATOR_SRCS)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(OPERATOR_IMAGE) -f deploy/docker/operator.Dockerfile .
 	@touch $(STAMP_DIR)/operator.image
 
-CONSOLE_SRCS := $(shell find cmd/console internal/console ui go.mod go.sum)
+CONSOLE_SRCS := $(shell find cmd/console internal pkg ui go.mod go.sum)
 docker-build-console: $(STAMP_DIR)/console.image ## Build console container image
 $(STAMP_DIR)/console.image: $(CONSOLE_SRCS)
 	@mkdir -p $(STAMP_DIR)
@@ -297,7 +297,7 @@ $(STAMP_DIR)/proxy.image: $(PROXY_SRCS)
 	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) -t $(PROXY_IMAGE) -f deploy/docker/proxy.Dockerfile .
 	@touch $(STAMP_DIR)/proxy.image
 
-MCP_SRCS := $(shell find cmd/mcp internal/mcpserver go.mod go.sum)
+MCP_SRCS := $(shell find cmd/mcp internal pkg ui go.mod go.sum)
 docker-build-mcp: $(STAMP_DIR)/mcp.image ## Build MCP container image
 $(STAMP_DIR)/mcp.image: $(MCP_SRCS)
 	@mkdir -p $(STAMP_DIR)
@@ -458,38 +458,54 @@ test-full: ## Run unit tests plus local + MinIO-backed e2e suites.
 	$(MAKE) test-multi-segment-durability
 	$(MAKE) test-produce-consume
 
-test-operator: docker-build $(MINIO_BUILD) ## Run operator envtest + kind snapshot e2e (requires kind/kubectl/helm for kind).
-	@$(MAKE) clean-kind-e2e
-	@SETUP_ENVTEST=$$(command -v setup-envtest || true); \
-	if [ -z "$$SETUP_ENVTEST" ]; then \
-		GOBIN=$$(go env GOBIN); \
-		GOPATH=$$(go env GOPATH); \
-		if [ -n "$$GOBIN" ] && [ -x "$$GOBIN/setup-envtest" ]; then \
-			SETUP_ENVTEST="$$GOBIN/setup-envtest"; \
-		elif [ -x "$$GOPATH/bin/setup-envtest" ]; then \
-			SETUP_ENVTEST="$$GOPATH/bin/setup-envtest"; \
-		else \
-			echo "setup-envtest not found; attempting install"; \
-			go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest; \
-			if [ -n "$$GOBIN" ]; then \
+test-operator: test-operator-envtest test-operator-kind ## Run operator envtest and kind snapshot e2e.
+
+test-operator-envtest: ## Run operator reconciliation tests against a real Kubernetes API (no Docker).
+	@set -e; \
+	if [ -z "$$KUBEBUILDER_ASSETS" ]; then \
+		SETUP_ENVTEST=$$(command -v setup-envtest || true); \
+		if [ -z "$$SETUP_ENVTEST" ]; then \
+			GOBIN=$$(go env GOBIN); \
+			GOPATH=$$(go env GOPATH); \
+			if [ -n "$$GOBIN" ] && [ -x "$$GOBIN/setup-envtest" ]; then \
 				SETUP_ENVTEST="$$GOBIN/setup-envtest"; \
-			else \
+			elif [ -x "$$GOPATH/bin/setup-envtest" ]; then \
 				SETUP_ENVTEST="$$GOPATH/bin/setup-envtest"; \
+			else \
+				echo "setup-envtest not found; attempting install"; \
+				go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20260126174550-f52bbb8bb1a2; \
+				if [ -n "$$GOBIN" ]; then \
+					SETUP_ENVTEST="$$GOBIN/setup-envtest"; \
+				else \
+					SETUP_ENVTEST="$$GOPATH/bin/setup-envtest"; \
+				fi; \
 			fi; \
 		fi; \
+		if [ ! -x "$$SETUP_ENVTEST" ]; then \
+			echo "setup-envtest not available on PATH or GOPATH/bin; please add it to PATH"; \
+			exit 1; \
+		fi; \
+		KUBEBUILDER_ASSETS="$$( "$$SETUP_ENVTEST" use -p path 1.35.0 )"; \
 	fi; \
-	if [ ! -x "$$SETUP_ENVTEST" ]; then \
-		echo "setup-envtest not available on PATH or GOPATH/bin; please add it to PATH"; \
+	if [ ! -x "$$KUBEBUILDER_ASSETS/etcd" ] || [ ! -x "$$KUBEBUILDER_ASSETS/kube-apiserver" ]; then \
+		echo "envtest assets missing or not executable: $$KUBEBUILDER_ASSETS" >&2; \
 		exit 1; \
 	fi; \
-	export KUBEBUILDER_ASSETS="$$( "$$SETUP_ENVTEST" use -p path 1.29.x )"; \
+	export KUBEBUILDER_ASSETS; \
 	KAFSCALE_E2E=1 \
-	go test -tags=e2e ./test/e2e -run 'TestOperator(ManagedEtcdResources|BrokerExternalAccessConfig)' -v
+	go test -race -tags=e2e ./test/e2e -run '^TestOperator(ManagedEtcdResources|BrokerExternalAccessConfig)$$' -v -count=1 -timeout=3m
+
+test-operator-kind: docker-build-broker docker-build-operator docker-build-console docker-build-e2e-client docker-build-etcd-tools $(MINIO_BUILD) ## Run the operator kind snapshot, restore and HA e2e.
 	KAFSCALE_E2E=1 \
 	KAFSCALE_E2E_KIND=1 \
 	KAFSCALE_KIND_RECREATE=1 \
 	KAFSCALE_MINIO_IMAGE=$(MINIO_IMAGE) \
-	go test -tags=e2e ./test/e2e -run TestOperatorEtcdSnapshotKindE2E -v -timeout=20m
+	KAFSCALE_BROKER_IMAGE=$(BROKER_IMAGE) \
+	KAFSCALE_OPERATOR_IMAGE=$(OPERATOR_IMAGE) \
+	KAFSCALE_CONSOLE_IMAGE=$(CONSOLE_IMAGE) \
+	KAFSCALE_E2E_CLIENT_IMAGE=$(E2E_CLIENT_IMAGE) \
+	KAFSCALE_ETCD_TOOLS_IMAGE=$(ETCD_TOOLS_IMAGE) \
+	go test -tags=e2e ./test/e2e -run '^TestOperatorEtcdSnapshotKindE2E$$' -v -count=1 -timeout=20m
 
 demo-platform-bootstrap: docker-build $(MINIO_BUILD) ## Bootstrap a full platform demo on kind (operator HA + managed etcd + console).
 	@command -v docker >/dev/null 2>&1 || { echo "docker is required"; exit 1; }

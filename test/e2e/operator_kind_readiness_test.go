@@ -1,0 +1,176 @@
+// Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//go:build e2e
+
+package e2e
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestOperatorBackendChecks(t *testing.T) {
+	failure := errors.New("not healthy")
+	for _, tc := range []struct {
+		name             string
+		replicas, failAt int
+		pods, want       string
+	}{
+		{name: "all members and brokers", replicas: 3, pods: "demo-broker-0 demo-broker-1"},
+		{name: "no etcd members", want: "no expected etcd members"},
+		{name: "unhealthy etcd member", replicas: 3, failAt: 1, want: "etcd member health"},
+		{name: "cannot list brokers", replicas: 3, failAt: 2, want: "list brokers"},
+		{name: "no brokers", replicas: 3, want: "no broker pods"},
+		{name: "second broker unready", replicas: 3, pods: "demo-broker-0 demo-broker-1", failAt: 4, want: "broker demo-broker-1 readiness"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				calls++
+				if name != "kubectl" {
+					t.Fatal(name)
+				}
+				if calls == 1 {
+					want := []string{"-n", "test-ns", "exec", "statefulset/demo-etcd", "--", "etcdctl",
+						"--endpoints=http://demo-etcd-0.demo-etcd.test-ns.svc.cluster.local:2379,http://demo-etcd-1.demo-etcd.test-ns.svc.cluster.local:2379,http://demo-etcd-2.demo-etcd.test-ns.svc.cluster.local:2379",
+						"--dial-timeout=3s", "--command-timeout=5s", "endpoint", "health"}
+					if !reflect.DeepEqual(args, want) {
+						t.Fatalf("etcd health command: %v", args)
+					}
+				} else if calls == 2 {
+					if !strings.Contains(strings.Join(args, " "), "app=kafscale-broker,cluster=demo") {
+						t.Fatal(args)
+					}
+				} else {
+					pod := "demo-broker-0"
+					if calls == 4 {
+						pod = "demo-broker-1"
+					}
+					want := []string{"get", "--raw=/api/v1/namespaces/test-ns/pods/" + pod + ":9093/proxy/readyz", "--request-timeout=5s"}
+					if !reflect.DeepEqual(args, want) {
+						t.Fatalf("broker readiness command: %v", args)
+					}
+				}
+				if calls == tc.failAt {
+					return []byte("dependency detail"), failure
+				}
+				if calls == 2 {
+					return []byte(tc.pods), nil
+				}
+				return nil, nil
+			}
+			err := checkOperatorBackends(context.Background(), run, "test-ns", "demo", tc.replicas)
+			if tc.want == "" {
+				if err != nil || calls != 4 {
+					t.Fatalf("calls=%d err=%v", calls, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+			if tc.failAt > 0 && (!errors.Is(err, failure) || !strings.Contains(err.Error(), "dependency detail")) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestWaitForOperatorBackends(t *testing.T) {
+	t.Run("recovers", func(t *testing.T) {
+		calls := 0
+		run := func(context.Context, string, ...string) ([]byte, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("member joining")
+			}
+			return []byte("demo-broker-0"), nil
+		}
+		if err := waitForOperatorBackends(context.Background(), run, "ns", "demo", 3, 5*time.Second); err != nil || calls != 4 {
+			t.Fatalf("calls=%d err=%v", calls, err)
+		}
+	})
+	t.Run("bounded and canceled", func(t *testing.T) {
+		for _, cancelEarly := range []bool{false, true} {
+			ctx, cancel := context.WithCancel(context.Background())
+			run := func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("no probe deadline")
+				}
+				if cancelEarly {
+					cancel()
+				}
+				return nil, errors.New("still forming")
+			}
+			err := waitForOperatorBackends(ctx, run, "ns", "demo", 3, 20*time.Millisecond)
+			cancel()
+			if err == nil || !strings.Contains(err.Error(), "still forming") {
+				t.Fatal(err)
+			}
+			if cancelEarly && !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+			if !cancelEarly && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal(err)
+			}
+		}
+	})
+}
+
+func TestProduceAfterReadiness(t *testing.T) {
+	failure := errors.New("unavailable")
+	for _, tc := range []struct {
+		name                                                 string
+		readyFailAt, produceFailures, wantReady, wantProduce int
+		wantError                                            bool
+	}{
+		{name: "success", wantReady: 1, wantProduce: 1},
+		{name: "not ready", readyFailAt: 1, wantReady: 1, wantError: true},
+		{name: "retry succeeds", produceFailures: 1, wantReady: 2, wantProduce: 2},
+		{name: "readiness lost", readyFailAt: 2, produceFailures: 1, wantReady: 2, wantProduce: 1, wantError: true},
+		{name: "only one retry", produceFailures: 2, wantReady: 2, wantProduce: 2, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readyCalls, produceCalls := 0, 0
+			ready := func(context.Context) error {
+				readyCalls++
+				if readyCalls == tc.readyFailAt {
+					return failure
+				}
+				return nil
+			}
+			produce := func(context.Context) error {
+				produceCalls++
+				if readyCalls != produceCalls {
+					t.Fatal("produce before readiness")
+				}
+				if produceCalls <= tc.produceFailures {
+					return failure
+				}
+				return nil
+			}
+			err := produceAfterReadiness(context.Background(), ready, produce)
+			if readyCalls != tc.wantReady || produceCalls != tc.wantProduce || (err != nil) != tc.wantError {
+				t.Fatalf("ready=%d produce=%d err=%v", readyCalls, produceCalls, err)
+			}
+			if err != nil && !errors.Is(err, failure) {
+				t.Fatal(err)
+			}
+		})
+	}
+}

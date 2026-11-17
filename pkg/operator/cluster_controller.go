@@ -434,6 +434,13 @@ func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCl
 			{Name: "kafka", ContainerPort: 9092},
 			{Name: "metrics", ContainerPort: 9093},
 		},
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler:        corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/readyz", Port: intstr.FromString("metrics")}},
+			InitialDelaySeconds: 2,
+			PeriodSeconds:       5,
+			TimeoutSeconds:      2,
+			FailureThreshold:    3,
+		},
 		Env:       env,
 		EnvFrom:   envFrom,
 		Resources: resources,

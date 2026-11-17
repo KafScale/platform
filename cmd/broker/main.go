@@ -2912,15 +2912,7 @@ func startMetricsServer(ctx context.Context, addr string, h *handler, logger *sl
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		fmt.Fprintf(w, "ok state=%s\n", h.s3Health.State())
 	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if ready, state := h.readiness(); !ready {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "not ready state=%s\n", state)
-		} else {
-			fmt.Fprintf(w, "ready state=%s\n", state)
-		}
-	})
+	mux.HandleFunc("/readyz", h.readinessHandler)
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -3004,11 +2996,6 @@ func (s *controlServer) TriggerFlush(ctx context.Context, req *controlpb.Trigger
 
 func (s *controlServer) StreamMetrics(stream grpc.ClientStreamingServer[controlpb.MetricsSample, controlpb.Ack]) error {
 	return status.Error(codes.Unimplemented, "StreamMetrics not implemented")
-}
-
-func (h *handler) readiness() (bool, string) {
-	snap := h.s3Health.Snapshot()
-	return snap.State != broker.S3StateUnavailable, string(snap.State)
 }
 
 func newLogger() *slog.Logger {
