@@ -274,7 +274,9 @@ func TestStartupProbeBackendRejectsConditionFailsFast(t *testing.T) {
 					}
 					w.Header().Set("Content-Type", "application/xml")
 					w.WriteHeader(tc.status)
-					if tc.code != "" {
+					if tc.status == http.StatusBadRequest {
+						fmt.Fprintf(w, "<Error><Code>%s</Code><Message>invalid argument</Message></Error>", tc.code)
+					} else if tc.code != "" {
 						fmt.Fprintf(w, "<Error><Code>%s</Code><Message>If-None-Match is not supported</Message></Error>", tc.code)
 					}
 				case http.MethodDelete:
@@ -304,8 +306,14 @@ func TestStartupProbeBackendRejectsConditionFailsFast(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), wantMessage) || !strings.Contains(err.Error(), "cannot be fenced") {
 				t.Fatalf("startup error=%v, want %q", err, wantMessage)
 			}
-			if tc.status == http.StatusBadRequest && strings.Contains(err.Error(), "backend rejects If-None-Match") {
-				t.Fatalf("400 startup error blamed If-None-Match support: %v", err)
+			if tc.status == http.StatusBadRequest {
+				msg := err.Error()
+				if strings.Contains(msg, "backend rejects If-None-Match") {
+					t.Fatalf("400 startup error blamed If-None-Match support: %v", err)
+				}
+				if strings.Contains(msg, "not supported") || strings.Contains(msg, "\n") {
+					t.Fatalf("400 startup error still leaked unsupported wording or a joined error: %q", msg)
+				}
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("startup waited for the timeout instead of failing fast after %s: %v", elapsed, err)

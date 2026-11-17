@@ -286,7 +286,7 @@ func conditionalErr(err error) error {
 		case "NotImplemented":
 			return ErrConditionUnsupported
 		case "InvalidArgument", "InvalidRequest":
-			return errors.Join(ErrConditionUnsupported, ErrConditionRejected)
+			return ErrConditionRejected
 		}
 	}
 	var respErr *awshttp.ResponseError

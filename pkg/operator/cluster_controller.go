@@ -680,7 +680,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 			Message:            "No successful etcd snapshots recorded yet.",
 			LastTransitionTime: metav1.NewTime(now),
 		})
-		return 0
+		return time.Minute
 	}
 
 	lastSuccess := cron.Status.LastSuccessfulTime.Time
@@ -700,7 +700,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 			Message:            fmt.Sprintf("Last snapshot %s ago (threshold %s).", age.Round(time.Second), staleAfter),
 			LastTransitionTime: metav1.NewTime(now),
 		})
-		return 0
+		return time.Minute
 	}
 
 	operatorEtcdSnapshotStale.WithLabelValues(clusterKey).Set(0)
