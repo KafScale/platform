@@ -16,43 +16,140 @@
 package mcpserver
 
 import (
+	"context"
+	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestToolInputSchemasRequiredFields(t *testing.T) {
-	cases := []struct {
-		name     string
-		schema   *jsonschema.Schema
-		required []string
-	}{
-		{"describe_topics", mustSchema[TopicNameInput](t), nil},
-		{"describe_configs", mustSchema[TopicConfigInput](t), nil},
-		{"fetch_offsets", mustSchema[FetchOffsetsInput](t), []string{"group_id"}},
-		{"describe_group", mustSchema[GroupInput](t), []string{"group_id"}},
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := connectMCPClient(t, ctx, Options{Store: testStore()})
+	defer client.Close()
+	listed, err := client.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		got := tc.schema.Required
-		if got == nil {
-			got = []string{}
+	wantRequired := map[string][]string{
+		"describe_topics":  {},
+		"describe_configs": {},
+		"fetch_offsets":    {"group_id"},
+		"describe_group":   {"group_id"},
+	}
+	seen := map[string]bool{}
+	for _, tool := range listed.Tools {
+		want, ok := wantRequired[tool.Name]
+		if !ok {
+			continue
 		}
-		want := tc.required
-		if want == nil {
-			want = []string{}
-		}
+		seen[tool.Name] = true
+		got := schemaRequired(t, tool.InputSchema)
 		if !slices.Equal(got, want) {
-			t.Errorf("%s required = %v, want %v", tc.name, got, want)
+			t.Errorf("%s required = %v, want %v", tool.Name, got, want)
+		}
+	}
+	for name := range wantRequired {
+		if !seen[name] {
+			t.Errorf("ListTools did not return %s", name)
 		}
 	}
 }
 
-func mustSchema[T any](t *testing.T) *jsonschema.Schema {
-	t.Helper()
-	s, err := jsonschema.For[T](nil)
+func TestDescribeTopicsThroughMCPListsEveryTopic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := connectMCPClient(t, ctx, Options{Store: testStore()})
+	defer client.Close()
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: toolDescribeTopics, Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s
+	if result.IsError {
+		t.Fatalf("MCP returned tool error: %+v", result)
+	}
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got TopicDetailList
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, topic := range got.Topics {
+		names[topic.Name] = true
+	}
+	for _, want := range []string{"orders", "events"} {
+		if !names[want] {
+			t.Errorf("describe_topics without names omitted %s: %s", want, raw)
+		}
+	}
+	if len(got.Topics) != 2 {
+		t.Errorf("describe_topics without names returned %d topics, want 2: %s", len(got.Topics), raw)
+	}
+}
+
+func TestDescribeGroupMissingGroupIDError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := connectMCPClient(t, ctx, Options{Store: testStore()})
+	defer client.Close()
+	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: toolDescribeGroup, Arguments: map[string]any{}})
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	} else if result != nil && result.IsError {
+		raw, _ := json.Marshal(result.Content)
+		msg = string(raw)
+		for _, c := range result.Content {
+			if text, ok := c.(*mcp.TextContent); ok {
+				msg = text.Text
+				break
+			}
+		}
+	} else {
+		t.Fatalf("describe_group without group_id succeeded: %+v", result)
+	}
+	want := `invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`
+	if !strings.Contains(msg, want) {
+		t.Fatalf("describe_group without group_id error %q does not contain %q", msg, want)
+	}
+}
+
+func connectMCPClient(t *testing.T, ctx context.Context, opts Options) *mcp.ClientSession {
+	t.Helper()
+	st, ct := mcp.NewInMemoryTransports()
+	server, err := NewServer(opts).Connect(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	client, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func schemaRequired(t *testing.T, schema any) []string {
+	t.Helper()
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Required == nil {
+		return []string{}
+	}
+	return parsed.Required
 }

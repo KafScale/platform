@@ -70,9 +70,9 @@ Read-only tools (default):
 - `list_topics`: no arguments. `describe_topics`: optional `names`, an array of topic names. Omit `names` to describe every topic.
 - `list_groups`: no arguments. `describe_group`: required `group_id`.
 - `fetch_offsets` (consumer group offsets): required `group_id`, optional `topics` (an array of topic names). Omit `topics` to fetch offsets for every topic in the group.
-- `describe_configs` (topic configs): optional `topics`, an array of topic names. Omit it to describe every topic.
+- `describe_configs`: optional `topics`, an array of topic names. Omit it to describe every topic.
 
-A call that omits a required argument returns `invalid params` with `missing properties`.
+A call that omits a required argument returns the validator error, for example `describe_group` without `group_id` returns `invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`. `cluster_metrics` without a metrics URL returns `metrics provider not configured`.
 
 Not implemented. MCP has no mutation tools such as:
 

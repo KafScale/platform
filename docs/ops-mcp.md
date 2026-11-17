@@ -49,7 +49,7 @@ Read-only tools exposed by the MCP service:
 - `fetch_offsets`: required `group_id`, optional `topics` (an array of topic names). Omit `topics` to fetch offsets for every topic in the group.
 - `describe_configs`: optional `topics`, an array of topic names. Omit it to describe every topic.
 
-A call that omits a required argument returns `invalid params` with `missing properties`. The input schemas mark `names` and `topics` as optional, and `group_id` as required.
+A call that omits a required argument returns the validator error, for example `describe_group` without `group_id` returns `invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`. `cluster_metrics` without a metrics URL returns `metrics provider not configured`.
 
 ### Response shapes
 
@@ -144,16 +144,13 @@ kubectl -n kafscale-mcp port-forward svc/<mcp-service> 8090:80
 
 You can then connect an MCP client to `http://127.0.0.1:8090/mcp`.
 
-The docs examples for Claude Desktop and IDE clients are below. From a
-shell, the MCP Inspector CLI talks to the same endpoint:
+Claude Desktop and IDE examples follow. From a shell, the MCP Inspector
+CLI talks to the same endpoint:
 
 ```bash
-npx @modelcontextprotocol/inspector --cli --help
+npx -y @modelcontextprotocol/inspector --cli http://127.0.0.1:8090/mcp --header "Authorization: Bearer <token>" --method tools/list
+npx -y @modelcontextprotocol/inspector --cli http://127.0.0.1:8090/mcp --header "Authorization: Bearer <token>" --method tools/call --tool-name describe_group --tool-arg group_id=<group>
 ```
-
-Point it at `http://127.0.0.1:8090/mcp`. If `mcp.auth.token` is set, send
-`Authorization: Bearer <token>` the same way as in the Claude Desktop
-example.
 
 ### Local run (no Helm)
 

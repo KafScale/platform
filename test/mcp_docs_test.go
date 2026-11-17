@@ -26,13 +26,12 @@ func TestMCPToolArgumentsDocumented(t *testing.T) {
 	for _, doc := range []string{"docs/ops-mcp.md", "docs/mcp.md"} {
 		text := readMCPDoc(t, doc)
 		for _, want := range []string{
-			"describe_topics",
-			"names",
-			"describe_group",
-			"group_id",
-			"fetch_offsets",
-			"describe_configs",
-			"topics",
+			"`describe_topics`: optional `names`",
+			"`describe_group`: required `group_id`",
+			"required `group_id`, optional `topics`",
+			"`describe_configs`: optional `topics`",
+			`invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`,
+			"metrics provider not configured",
 		} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s does not document %q", doc, want)
@@ -49,10 +48,17 @@ func TestMCPOperatorEndpointsDocumented(t *testing.T) {
 		"demo-etcd-client",
 		"demo-broker",
 		"@modelcontextprotocol/inspector",
+		"--method tools/list",
+		"--method tools/call",
+		"--tool-name describe_group",
+		"Claude Desktop and IDE examples follow",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/ops-mcp.md does not contain %q", want)
 		}
+	}
+	if strings.Contains(text, "the same way as in the Claude Desktop") {
+		t.Error("docs/ops-mcp.md still says Inspector auth works the same way as the Claude Desktop example")
 	}
 }
 
