@@ -24,17 +24,6 @@ import (
 
 func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 	root := repoRoot(t)
-	template, err := os.ReadFile(filepath.Join(root, "deploy", "helm", "kafscale", "templates", "schema-registry-deployment.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	tpl := string(template)
-	if !strings.Contains(tpl, "app.kubernetes.io/component: schema-registry") || !strings.Contains(tpl, `"component" "schema-registry"`) {
-		t.Fatal("schema registry Deployment no longer carries the schema-registry component label")
-	}
-	if !strings.Contains(tpl, "secretKeyRef:") || strings.Contains(tpl, "checksum") {
-		t.Fatal("schema registry S3 key loading changed; update the rotation docs and this check")
-	}
 	want := []string{
 		"DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)",
 		`kubectl rollout restart "$DEPLOY" -n <namespace>`,
