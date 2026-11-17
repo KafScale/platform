@@ -221,6 +221,8 @@ func (h *consoleHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusFromMetadata(meta, metrics))
 }
 
+const maxCreateTopicPartitions = 10000
+
 type createTopicRequest struct {
 	Name              string `json:"name"`
 	Partitions        int32  `json:"partitions"`
@@ -242,6 +244,10 @@ func (h *consoleHandlers) handleCreateTopic(w http.ResponseWriter, r *http.Reque
 	var req createTopicRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Partitions < 1 || req.Partitions > maxCreateTopicPartitions {
+		http.Error(w, fmt.Sprintf("partitions must be between 1 and %d", maxCreateTopicPartitions), http.StatusBadRequest)
 		return
 	}
 	topic, err := h.store.CreateTopic(r.Context(), metadata.TopicSpec{

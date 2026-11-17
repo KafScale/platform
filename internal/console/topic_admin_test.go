@@ -158,6 +158,7 @@ func TestConsoleTopicAdminErrors(t *testing.T) {
 		{name: "create existing", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"existing","partitions":1}`, want: http.StatusConflict},
 		{name: "create invalid name", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"bad name","partitions":1}`, want: http.StatusBadRequest},
 		{name: "create without partitions", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"fresh"}`, want: http.StatusBadRequest},
+		{name: "create with too many partitions", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"fresh","partitions":10001}`, want: http.StatusBadRequest},
 		{name: "create with too many replicas", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"fresh","partitions":1,"replication_factor":3}`, want: http.StatusBadRequest},
 		{name: "create malformed body", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":`, want: http.StatusBadRequest},
 		{name: "delete unknown", method: http.MethodDelete, path: "/ui/api/status/topics/missing", want: http.StatusNotFound},

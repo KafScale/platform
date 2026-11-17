@@ -792,9 +792,9 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 
 The console serves these authenticated topic endpoints when `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` is set. They use the same etcd metadata path as the broker Kafka `CreateTopics` and `DeleteTopics` APIs.
 
-- `POST /ui/api/status/topics` creates a topic. The JSON body is `{"name":"<topic>","partitions":<count>,"replication_factor":<count>}`. `partitions` must be at least 1. `replication_factor` is optional and defaults to 1. It returns `201` with `{"name","partitions","state"}`.
+- `POST /ui/api/status/topics` creates a topic. The JSON body is `{"name":"<topic>","partitions":<count>,"replication_factor":<count>}`. `partitions` must be between 1 and 10000. `replication_factor` is optional and defaults to 1. It returns `201` with `{"name","partitions","state"}`.
 - `DELETE /ui/api/status/topics/<topic>` deletes a topic the same way the broker does. It returns `200` with `{"name":"<topic>"}`.
-- Errors: `400` for a malformed body, an invalid topic name, a partition count below 1 or a replication factor above the broker count, `404` for an unknown topic, `409` for a topic that already exists or changed during the delete, and `503` when no etcd endpoints are configured or etcd is unavailable.
+- Errors: `400` for a malformed body, an invalid topic name, a partition count outside 1 to 10000 or a replication factor above the broker count, `404` for an unknown topic, `409` for a topic that already exists or changed during the delete, and `503` when no etcd endpoints are configured or etcd is unavailable.
 
 When LFS is enabled, the console serves these authenticated endpoints: `/ui/api/lfs/status`, `/ui/api/lfs/objects`, `/ui/api/lfs/topics`, `/ui/api/lfs/topics/{topic}`, `/ui/api/lfs/events`, `/ui/api/lfs/orphans`, `/ui/api/lfs/s3/browse` and `/ui/api/lfs/s3/presign`.
 
