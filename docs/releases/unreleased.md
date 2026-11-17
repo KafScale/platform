@@ -268,10 +268,9 @@ limitations under the License.
 ### Schema registry
 
 - Schema registry pods now notice an etcd snapshot restore and clear their schema cache without a restart. Each pod watches its etcd keys and resets when the watch reports a compaction. The operator now restores etcd snapshots with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, which triggers this. Manual restores should use the same flags or restart the registry pods. See `docs/schema-registry.md` and `docs/operations.md`.
-
-- The schema registry now shuts down gracefully, so that the rollout restart S3 key rotation needs does not drop requests. Before, it stopped accepting connections at once on SIGTERM while the Service could still send it traffic, which gave refused connections and client timeouts during a restart.
+- The schema registry now shuts down gracefully, so a rollout restart, such as the one S3 key rotation needs, no longer drops requests. Before, it stopped accepting connections at once on SIGTERM while the Service could still send it traffic, which gave refused connections and client timeouts during a restart.
   - On SIGTERM or SIGINT `/readyz` returns 503 at once, the registry keeps serving for `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), then waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`, before it was a fixed 5s) for in-flight requests.
-  - New chart values: `schemaRegistry.shutdownDrain`, `schemaRegistry.shutdownTimeout`, `schemaRegistry.preStopSleepSeconds` (default `0`, no hook) and `schemaRegistry.terminationGracePeriodSeconds` (default `30`, the Kubernetes default). Upgrading the chart changes the pod template, so the registry rolls once.
+  - New chart values: `schemaRegistry.shutdownDrain`, `schemaRegistry.shutdownTimeout`, `schemaRegistry.preStopSleepSeconds` (default `0`, no hook) and `schemaRegistry.terminationGracePeriodSeconds` (default `30`, the Kubernetes default). With the defaults the chart adds no env var and no hook, and the grace period equals the default Kubernetes already stores, so upgrading does not roll the registry. Setting any of the new values rolls it once.
   - See `docs/schema-registry.md#shutdown`.
 
 ### Processors

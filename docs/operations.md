@@ -304,9 +304,9 @@ Rotate the keys in this order. The order matters.
 
 4. Only then revoke the old keys.
 
-During the restart each old pod fails readiness and keeps serving for a short
-drain period before it stops listening, so the Service can stop sending it
-traffic first. See [Shutdown](schema-registry.md#shutdown).
+During the restart each old pod leaves the Service endpoints when its deletion
+starts, and keeps serving for a short drain period while kube-proxy and load
+balancers catch up, before it stops listening. See [Shutdown](schema-registry.md#shutdown).
 
 `<namespace>` is the namespace of the Helm release and `<release>` is the
 release name. The labels do not depend on `nameOverride` or `fullnameOverride`.
@@ -822,7 +822,7 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Required.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_USERNAME`, `KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD`: Etcd auth for the registry.
 - `KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT`: Time limit for one request as a Go duration (default `10s`). A write that is still retrying when it runs out fails with error code 50002.
-- `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN`: How long the registry keeps serving after SIGTERM or SIGINT, with `/readyz` failing, before it stops accepting connections, as a Go duration (default `5s`, `0s` turns it off). See [Shutdown](schema-registry.md#shutdown).
+- `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN`: How long the registry keeps serving after SIGTERM or SIGINT, with `/readyz` failing, before it stops accepting connections, as a Go duration (default `5s`, `0` or `0s` turns it off). See [Shutdown](schema-registry.md#shutdown).
 - `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT`: How long in-flight requests get to finish after the drain period, as a Go duration (default `10s`). Requests still running then are cut off and the registry exits with an error.
 - `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`: Schema text above this size is stored in S3 instead of etcd (default `65536`).
 - `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker.

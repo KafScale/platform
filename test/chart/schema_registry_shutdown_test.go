@@ -83,6 +83,21 @@ func TestSchemaRegistryShutdownValues(t *testing.T) {
 		t.Fatalf("shutdown env %v", env)
 	}
 
+	d = render("schemaRegistry.shutdownDrain=0", "schemaRegistry.shutdownTimeout=0", "schemaRegistry.terminationGracePeriodSeconds=0")
+	env = envOf(d)
+	if v, ok := env["KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN"]; !ok || v != "0" {
+		t.Fatalf("numeric 0 shutdownDrain rendered %q %v, want \"0\"", v, ok)
+	}
+	if v, ok := env["KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT"]; !ok || v != "0" {
+		t.Fatalf("numeric 0 shutdownTimeout rendered %q %v, want \"0\"", v, ok)
+	}
+	if g := d.Spec.Template.Spec.TerminationGracePeriodSeconds; g == nil || *g != 0 {
+		t.Fatalf("terminationGracePeriodSeconds 0 rendered %v", g)
+	}
+	if d := render("schemaRegistry.shutdownDrain=0s"); envOf(d)["KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN"] != "0s" {
+		t.Fatalf("shutdownDrain 0s env %v", envOf(d))
+	}
+
 	d = render("schemaRegistry.terminationGracePeriodSeconds=null", "schemaRegistry.preStopSleepSeconds=null")
 	if g := d.Spec.Template.Spec.TerminationGracePeriodSeconds; g != nil {
 		t.Fatalf("unset terminationGracePeriodSeconds rendered %d", *g)

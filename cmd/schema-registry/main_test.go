@@ -75,6 +75,10 @@ func TestLoadSettingsOverrides(t *testing.T) {
 	if err != nil || !s.s3.ForcePathStyle {
 		t.Fatalf("path style follows the endpoint: %+v %v", s.s3, err)
 	}
+	s, err = loadSettings(env(map[string]string{"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e:2379", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN": "0"}))
+	if err != nil || s.drain != 0 {
+		t.Fatalf("a bare 0 drain must turn the drain off: %v %v", s.drain, err)
+	}
 }
 
 func TestLoadSettingsTrimsS3Keys(t *testing.T) {
@@ -110,13 +114,15 @@ func TestLoadSettingsTrimsS3Keys(t *testing.T) {
 
 func TestLoadSettingsErrors(t *testing.T) {
 	for name, values := range map[string]map[string]string{
-		"no endpoints": {},
-		"bad timeout":  {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT": "soon"},
-		"zero timeout": {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT": "0s"},
-		"bad drain":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN": "-1s"},
-		"bad shutdown": {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT": "0s"},
-		"bad limit":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES": "-1"},
-		"bad style":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_S3_BUCKET": "b", "KAFSCALE_S3_PATH_STYLE": "maybe"},
+		"no endpoints":    {},
+		"bad timeout":     {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT": "soon"},
+		"zero timeout":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT": "0s"},
+		"bad drain":       {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN": "-1s"},
+		"bad shutdown":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT": "0s"},
+		"bare 0 shutdown": {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT": "0"},
+		"drain no unit":   {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN": "5"},
+		"bad limit":       {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES": "-1"},
+		"bad style":       {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_S3_BUCKET": "b", "KAFSCALE_S3_PATH_STYLE": "maybe"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadSettings(env(values)); err == nil {

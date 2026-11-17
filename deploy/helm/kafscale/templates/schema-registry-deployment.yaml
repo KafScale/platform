@@ -44,8 +44,8 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
-{{- with .Values.schemaRegistry.terminationGracePeriodSeconds }}
-      terminationGracePeriodSeconds: {{ int . }}
+{{- if not (kindIs "invalid" .Values.schemaRegistry.terminationGracePeriodSeconds) }}
+      terminationGracePeriodSeconds: {{ int .Values.schemaRegistry.terminationGracePeriodSeconds }}
 {{- end }}
 {{- with .Values.schemaRegistry.podSecurityContext }}
       securityContext:
@@ -80,11 +80,11 @@ spec:
             - name: KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT
               value: "{{ .Values.schemaRegistry.requestTimeout }}"
 {{- end }}
-{{- if .Values.schemaRegistry.shutdownDrain }}
+{{- if ne (toString .Values.schemaRegistry.shutdownDrain) "" }}
             - name: KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN
               value: "{{ .Values.schemaRegistry.shutdownDrain }}"
 {{- end }}
-{{- if .Values.schemaRegistry.shutdownTimeout }}
+{{- if ne (toString .Values.schemaRegistry.shutdownTimeout) "" }}
             - name: KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT
               value: "{{ .Values.schemaRegistry.shutdownTimeout }}"
 {{- end }}
