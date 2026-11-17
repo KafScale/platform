@@ -80,11 +80,11 @@ spec:
             - name: KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT
               value: "{{ .Values.schemaRegistry.requestTimeout }}"
 {{- end }}
-{{- if ne (toString .Values.schemaRegistry.shutdownDrain) "" }}
+{{- if and (not (kindIs "invalid" .Values.schemaRegistry.shutdownDrain)) (ne (toString .Values.schemaRegistry.shutdownDrain) "") }}
             - name: KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN
               value: "{{ .Values.schemaRegistry.shutdownDrain }}"
 {{- end }}
-{{- if ne (toString .Values.schemaRegistry.shutdownTimeout) "" }}
+{{- if and (not (kindIs "invalid" .Values.schemaRegistry.shutdownTimeout)) (ne (toString .Values.schemaRegistry.shutdownTimeout) "") }}
             - name: KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT
               value: "{{ .Values.schemaRegistry.shutdownTimeout }}"
 {{- end }}
