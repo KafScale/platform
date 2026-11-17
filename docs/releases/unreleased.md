@@ -69,6 +69,8 @@ limitations under the License.
 - Bound proxy advertised ports and address-derived fallbacks to `1..65535` before narrowing to Kafka's `int32` port field. The two CodeQL conversion warnings exposed a configuration-validation defect, not a confirmed vulnerability (#298).
 - Protobuf descriptor printing uses `jhump/protoreflect/v2`, removing the v1 dependency. Map-entry repair rejects references to entries in the wrong scope instead of silently rewriting them (#284).
 
+- The Helm chart stores `mcp.auth.token` in a Secret and sets `KAFSCALE_MCP_AUTH_TOKEN` from it through a secretKeyRef. Before, the token was a plaintext env value on the Deployment. `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey` use an existing Secret instead. Changing the chart-managed token, or the existing Secret name or key, rolls the MCP pod. See `docs/ops-mcp.md`.
+
 ### Broker produce, storage and topics
 
 - Conditional segment conflicts evict only the failed cached log, allowing the next request to adopt the immutable winner and continue under the same lease. Retained handles remain fenced for reads and writes. Restore rebuilds all read indexes from validated segment bytes instead of trusting sidecar offset/position pairs, and rejects overlapping segment ranges. This adds full-segment reads during restore within the existing concurrency limits. Failed index uploads also fence the handle without deleting an immutable claim another owner may have adopted. Winning S3 objects remain unchanged; producer retries can still duplicate records because idempotent producers are unsupported (#343).
@@ -348,6 +350,8 @@ ones most likely to affect you.
 - **LFS multipart sessions live in etcd.** Uploads work across proxy replicas
   and restarts. The orphan sweep needs `s3:ListBucketMultipartUploads` and
   `s3:AbortMultipartUpload` (#321).
+
+- If `mcp.auth.token` is set, upgrading the chart moves the token from a plaintext Deployment env value into a chart-managed Secret and rolls the MCP pod once. The env var name is unchanged. To keep using your own Secret, set `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey`.
 
 ### Deprecations
 

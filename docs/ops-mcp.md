@@ -115,12 +115,21 @@ Example (base64, 32 bytes):
 openssl rand -base64 32
 ```
 
-Then set the value in Helm:
+Then set the value in Helm. The chart stores it in a Secret named after the MCP Deployment plus `-auth` and sets `KAFSCALE_MCP_AUTH_TOKEN` from that Secret. Changing `mcp.auth.token` rolls the MCP pod.
 
 ```yaml
 mcp:
   auth:
     token: "<generated-token>"
+```
+
+To use a Secret you already created, set `mcp.auth.existingSecret` to its name and `mcp.auth.existingSecretKey` to the key (default `token`). The chart does not create a Secret in that case, and `mcp.auth.token` is ignored.
+
+```yaml
+mcp:
+  auth:
+    existingSecret: my-mcp-token
+    existingSecretKey: mcp-token
 ```
 
 Or export it for local runs:
