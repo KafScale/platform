@@ -71,7 +71,7 @@ limitations under the License.
 
 ### Broker produce, storage and topics
 
-- Conditional segment conflicts evict only the failed cached log, allowing the next request to adopt the immutable winner and continue under the same lease. Retained handles remain fenced for reads and writes. Restore rebuilds missing or corrupt indexes locally after validating segment checksums and batch offsets, and rejects overlapping segment ranges. Failed index uploads also fence the handle without deleting an immutable claim another owner may have adopted. Winning S3 objects remain unchanged; producer retries can still duplicate records because idempotent producers are unsupported (#343).
+- Conditional segment conflicts evict only the failed cached log, allowing the next request to adopt the immutable winner and continue under the same lease. Retained handles remain fenced for reads and writes. Restore rebuilds all read indexes from validated segment bytes instead of trusting sidecar offset/position pairs, and rejects overlapping segment ranges. This adds full-segment reads during restore within the existing concurrency limits. Failed index uploads also fence the handle without deleting an immutable claim another owner may have adopted. Winning S3 objects remain unchanged; producer retries can still duplicate records because idempotent producers are unsupported (#343).
 
 - Fetch returns `REQUEST_TIMED_OUT` when the metadata offset read times out, is canceled, or fails while etcd is unavailable, instead of interpreting a failed read as watermark zero and triggering `OFFSET_OUT_OF_RANGE`. Unknown watermarks are reported as -1. Other offset-read failures return `UNKNOWN_SERVER_ERROR`; unknown-topic and ownership fencing responses retain their existing meanings (#342).
 

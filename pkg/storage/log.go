@@ -273,34 +273,12 @@ func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object) (*resto
 	if err != nil {
 		return nil, err
 	}
-	indexKey := l.indexKey(base)
-	if err := l.acquireS3(ctx); err != nil {
-		return nil, err
-	}
-	started = time.Now()
-	indexBytes, err := l.s3.DownloadIndex(ctx, indexKey)
-	l.releaseS3()
-	if l.onS3Op != nil {
-		l.onS3Op("download_index", time.Since(started), err)
-	}
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, err
-	}
-	var entries []*IndexEntry
-	if err == nil {
-		entries, err = ParseIndex(indexBytes)
-		if err == nil && !indexMatchesSegment(entries, base, lastOffset, obj.Size) {
-			err = fmt.Errorf("index entries do not match segment bounds")
-		}
-	}
+	// Sidecars are untrusted hints: bounds and ordering cannot prove that an
+	// offset/position pair identifies the batch containing that offset.
+	// Derive every read index from validated immutable segment bytes.
+	entries, err := l.restoreSegmentIndex(ctx, obj, base, lastOffset)
 	if err != nil {
-		// The immutable segment occupies these offsets even if its writer
-		// has not uploaded the sidecar yet. Rebuild only our in-memory index;
-		// never replace or delete another writer's S3 objects.
-		entries, err = l.restoreSegmentIndex(ctx, obj, base, lastOffset)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	return &restoredSegment{segment: segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size}, entries: entries}, nil
 }

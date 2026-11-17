@@ -60,18 +60,14 @@ func (s *restoreProbeS3) enter(ctx context.Context, operation, key string) error
 
 func (s *restoreProbeS3) DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error) {
 	defer s.active.Add(-1)
-	if err := s.enter(ctx, "footer", key); err != nil {
+	operation := "footer"
+	if rng == nil {
+		operation = "segment"
+	}
+	if err := s.enter(ctx, operation, key); err != nil {
 		return nil, err
 	}
 	return s.MemoryS3Client.DownloadSegment(ctx, key, rng)
-}
-
-func (s *restoreProbeS3) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
-	defer s.active.Add(-1)
-	if err := s.enter(ctx, "index", key); err != nil {
-		return nil, err
-	}
-	return s.MemoryS3Client.DownloadIndex(ctx, key)
 }
 
 type restoreLogWriter chan string
@@ -212,7 +208,7 @@ func TestRestoreBoundedConcurrencyAndProgress(t *testing.T) {
 }
 
 func TestRestoreFailureCancelsWorkersAndLeavesStateUnchanged(t *testing.T) {
-	for _, operation := range []string{"footer", "index", "cancel"} {
+	for _, operation := range []string{"footer", "segment", "cancel"} {
 		t.Run(operation, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

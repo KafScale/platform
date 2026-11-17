@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/pkg/cache"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -188,74 +189,88 @@ func TestRestoreRejectsOverlappingSegments(t *testing.T) {
 	}
 }
 
-func TestIndexMatchesSegment(t *testing.T) {
-	artifact := indexRepairFixture(t)
+func TestRestoreRebuildsMisleadingIndexEntries(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		entries []*IndexEntry
-		want    bool
 	}{
-		{name: "empty full read", want: true},
-		{name: "valid sparse index", entries: []*IndexEntry{{Offset: 5, Position: 32}, {Offset: 7, Position: 102}}, want: true},
-		{name: "before base", entries: []*IndexEntry{{Offset: 4, Position: 32}}},
-		{name: "after last", entries: []*IndexEntry{{Offset: 8, Position: 32}}},
-		{name: "inside header", entries: []*IndexEntry{{Offset: 5, Position: 31}}},
-		{name: "inside footer", entries: []*IndexEntry{{Offset: 5, Position: int32(len(artifact.SegmentBytes) - segmentFooterLen)}}},
-		{name: "missing first batch offset", entries: []*IndexEntry{{Offset: 6, Position: 32}}},
-		{name: "missing first batch position", entries: []*IndexEntry{{Offset: 5, Position: 33}}},
-		{name: "repeated offset", entries: []*IndexEntry{{Offset: 5, Position: 32}, {Offset: 5, Position: 102}}},
-		{name: "repeated position", entries: []*IndexEntry{{Offset: 5, Position: 32}, {Offset: 7, Position: 32}}},
+		{"valid", []*IndexEntry{{Offset: 5, Position: 32}, {Offset: 7, Position: 102}}},
+		{"invalid first entry", []*IndexEntry{{Offset: 6, Position: 33}}},
+		{"wrong secondary offset", []*IndexEntry{{Offset: 5, Position: 32}, {Offset: 6, Position: 102}}},
+		{"wrong secondary position", []*IndexEntry{{Offset: 5, Position: 32}, {Offset: 7, Position: 103}}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := indexMatchesSegment(tc.entries, 5, 7, int64(len(artifact.SegmentBytes))); got != tc.want {
-				t.Fatalf("got %v, want %v", got, tc.want)
+		for _, cached := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/cached=%v", tc.name, cached), func(t *testing.T) {
+				ctx := context.Background()
+				s3 := NewMemoryS3Client()
+				artifact := indexRepairFixture(t)
+				key := segmentObjectKey("default", "orders", 0, 5)
+				if err := s3.UploadSegment(ctx, key, artifact.SegmentBytes); err != nil {
+					t.Fatal(err)
+				}
+				index := NewIndexBuilder(1)
+				for _, entry := range tc.entries {
+					index.MaybeAdd(entry.Offset, entry.Position, 1)
+				}
+				body, err := index.BuildBytes()
+				if err != nil {
+					t.Fatal(err)
+				}
+				indexKey := segmentIndexKey("default", "orders", 0, 5)
+				if err := s3.UploadIndex(ctx, indexKey, body); err != nil {
+					t.Fatal(err)
+				}
+				c := cache.NewSegmentCache(1 << 20)
+				log := NewPartitionLog("default", "orders", 0, 5, s3, c, PartitionLogConfig{CacheEnabled: cached}, nil, nil, nil)
+				if last, err := log.RestoreFromS3(ctx); err != nil || last != 7 {
+					t.Fatalf("last=%d err=%v", last, err)
+				}
+				if cached {
+					c.SetSegment(log.cacheTopicKey(), 0, 5, artifact.SegmentBytes)
+				}
+				for _, offset := range []int64{5, 6, 7} {
+					data, err := log.Read(ctx, offset, 0)
+					want := int64(5)
+					if offset == 7 {
+						want = 7
+					}
+					if err != nil || len(data) < recordBatchHeaderMinSize || int64(binary.BigEndian.Uint64(data[:8])) != want {
+						t.Fatalf("offset %d skipped containing batch: %x err=%v", offset, data, err)
+					}
+				}
+				got, err := s3.DownloadIndex(ctx, indexKey)
+				if err != nil || !bytes.Equal(got, body) {
+					t.Fatal("recovery rewrote the sidecar")
+				}
+			})
+		}
+	}
+}
+
+func TestRestoreRejectsInvalidSegmentData(t *testing.T) {
+	for _, indexed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("indexed=%v", indexed), func(t *testing.T) {
+			ctx := context.Background()
+			s3 := NewMemoryS3Client()
+			artifact := indexRepairFixture(t)
+			data := bytes.Clone(artifact.SegmentBytes)
+			data[segmentHeaderLen+12] ^= 1
+			if err := s3.UploadSegment(ctx, segmentObjectKey("default", "orders", 0, 5), data); err != nil {
+				t.Fatal(err)
+			}
+			if indexed {
+				if err := s3.UploadIndex(ctx, segmentIndexKey("default", "orders", 0, 5), artifact.IndexBytes); err != nil {
+					t.Fatal(err)
+				}
+			}
+			log := NewPartitionLog("default", "orders", 0, 5, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+			if _, err := log.RestoreFromS3(ctx); err == nil || !strings.Contains(err.Error(), "checksum") {
+				t.Fatal(err)
+			}
+			if log.nextOffset != 5 || len(log.segments) != 0 {
+				t.Fatal("invalid segment was published")
 			}
 		})
-	}
-}
-
-func TestRestoreRebuildsMisleadingIndexEntries(t *testing.T) {
-	ctx := context.Background()
-	s3 := NewMemoryS3Client()
-	artifact := indexRepairFixture(t)
-	key := segmentObjectKey("default", "orders", 0, 5)
-	if err := s3.UploadSegment(ctx, key, artifact.SegmentBytes); err != nil {
-		t.Fatal(err)
-	}
-	index := NewIndexBuilder(1)
-	index.MaybeAdd(6, segmentHeaderLen+1, 1)
-	body, err := index.BuildBytes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s3.UploadIndex(ctx, segmentIndexKey("default", "orders", 0, 5), body); err != nil {
-		t.Fatal(err)
-	}
-	log := NewPartitionLog("default", "orders", 0, 5, s3, nil, PartitionLogConfig{}, nil, nil, nil)
-	if last, err := log.RestoreFromS3(ctx); err != nil || last != 7 {
-		t.Fatalf("last=%d err=%v", last, err)
-	}
-	data, err := log.Read(ctx, 5, 1<<20)
-	if err != nil || !bytes.Equal(data, segmentBody(artifact.SegmentBytes)) {
-		t.Fatalf("index skipped records: %x %v", data, err)
-	}
-}
-
-func TestRestoreRejectsInvalidUnindexedData(t *testing.T) {
-	ctx := context.Background()
-	s3 := NewMemoryS3Client()
-	artifact := indexRepairFixture(t)
-	data := bytes.Clone(artifact.SegmentBytes)
-	data[segmentHeaderLen+12] ^= 1
-	if err := s3.UploadSegment(ctx, segmentObjectKey("default", "orders", 0, 5), data); err != nil {
-		t.Fatal(err)
-	}
-	log := NewPartitionLog("default", "orders", 0, 5, s3, nil, PartitionLogConfig{}, nil, nil, nil)
-	if _, err := log.RestoreFromS3(ctx); err == nil || !strings.Contains(err.Error(), "checksum") {
-		t.Fatal(err)
-	}
-	if log.nextOffset != 5 || len(log.segments) != 0 {
-		t.Fatal("invalid orphan was published")
 	}
 }
 
@@ -288,5 +303,35 @@ func TestCheckOwnershipPreservesLeasePriority(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+type unreadableIndexS3 struct {
+	*MemoryS3Client
+	indexReads int
+}
+
+func (s *unreadableIndexS3) DownloadIndex(context.Context, string) ([]byte, error) {
+	s.indexReads++
+	return nil, errors.New("sidecar read forbidden")
+}
+
+func TestRestoreDoesNotRequireSidecarAccess(t *testing.T) {
+	ctx := context.Background()
+	s3 := &unreadableIndexS3{MemoryS3Client: NewMemoryS3Client()}
+	artifact := indexRepairFixture(t)
+	if err := s3.UploadSegment(ctx, segmentObjectKey("default", "orders", 0, 5), artifact.SegmentBytes); err != nil {
+		t.Fatal(err)
+	}
+	log := NewPartitionLog("default", "orders", 0, 5, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := log.RestoreFromS3(ctx); err != nil || last != 7 {
+		t.Fatalf("last=%d err=%v", last, err)
+	}
+	if s3.indexReads != 0 {
+		t.Fatal("restore still reads an untrusted sidecar")
+	}
+	data, err := log.Read(ctx, 6, 0)
+	if err != nil || len(data) < 8 || binary.BigEndian.Uint64(data[:8]) != 5 {
+		t.Fatalf("offset 6 skipped its containing batch: %x %v", data, err)
 	}
 }

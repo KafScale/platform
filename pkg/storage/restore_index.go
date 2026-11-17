@@ -91,21 +91,3 @@ func rebuildSegmentIndex(data []byte, base, last int64, interval int32) ([]*Inde
 	}
 	return index.Entries(), nil
 }
-
-// An empty index uses full-segment reads. A sparse index must start at the first
-// batch and keep strictly increasing offsets and positions inside the body.
-func indexMatchesSegment(entries []*IndexEntry, base, last, size int64) bool {
-	for i, entry := range entries {
-		if entry.Offset < base || entry.Offset > last || int64(entry.Position) < segmentHeaderLen || int64(entry.Position) >= size-segmentFooterLen {
-			return false
-		}
-		if i == 0 {
-			if entry.Offset != base || entry.Position != segmentHeaderLen {
-				return false
-			}
-		} else if entry.Offset <= entries[i-1].Offset || entry.Position <= entries[i-1].Position {
-			return false
-		}
-	}
-	return true
-}

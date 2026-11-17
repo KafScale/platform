@@ -489,9 +489,7 @@ func TestPartitionLogRestoreFromS3RecoversUnindexedSegment(t *testing.T) {
 }
 
 func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
-	// A transient S3 error (not ErrNotFound) during DownloadIndex must
-	// propagate as a hard error even for uncommitted segments, because we
-	// cannot distinguish "orphaned .kfs" from "S3 is temporarily down."
+	// A failed full-segment read must fail restore without publishing offsets.
 	s3 := NewMemoryS3Client()
 	c := cache.NewSegmentCache(1024)
 	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
@@ -515,11 +513,8 @@ func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	transientS3 := &transientIndexErrorS3{MemoryS3Client: s3}
+	transientS3 := &transientRestoreSegmentErrorS3{MemoryS3Client: s3}
 
-	// The segment's baseOffset (0) >= nextOffset (0), so the offset condition
-	// for orphan-skip is satisfied. But the error is not ErrNotFound, so the
-	// skip must not trigger — we can't tell if .index is missing or S3 is down.
 	recovered := NewPartitionLog("default", "orders", 0, 0, transientS3, c, PartitionLogConfig{
 		Buffer: WriteBufferConfig{
 			MaxBytes:      1,
@@ -531,7 +526,7 @@ func TestPartitionLogRestoreFromS3TransientErrorPropagates(t *testing.T) {
 	}, nil, nil, nil)
 	_, err := recovered.RestoreFromS3(context.Background())
 	if err == nil {
-		t.Fatalf("RestoreFromS3 should fail on transient DownloadIndex error")
+		t.Fatalf("RestoreFromS3 should fail on transient segment download error")
 	}
 	if err.Error() == "" || errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected transient error, not ErrNotFound, got: %v", err)
@@ -608,12 +603,15 @@ func TestPartitionLogReadSkipsGap(t *testing.T) {
 	}
 }
 
-type transientIndexErrorS3 struct {
+type transientRestoreSegmentErrorS3 struct {
 	*MemoryS3Client
 }
 
-func (t *transientIndexErrorS3) DownloadIndex(ctx context.Context, key string) ([]byte, error) {
-	return nil, fmt.Errorf("connection reset by peer")
+func (t *transientRestoreSegmentErrorS3) DownloadSegment(ctx context.Context, key string, rng *ByteRange) ([]byte, error) {
+	if rng == nil {
+		return nil, fmt.Errorf("connection reset by peer")
+	}
+	return t.MemoryS3Client.DownloadSegment(ctx, key, rng)
 }
 
 func TestPartitionLogReadNoCacheNoIndex(t *testing.T) {
