@@ -18,6 +18,9 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -52,6 +55,13 @@ func TestEtcdResolverSnapshot(t *testing.T) {
 	embedCfg.LogLevel = "error"
 	embedCfg.Logger = "zap"
 	embedCfg.LogOutputs = []string{filepath.Join(embedCfg.Dir, "etcd.log")}
+	clientURL := mustLocalURL(t, freeLocalPort(t))
+	peerURL := mustLocalURL(t, freeLocalPort(t))
+	embedCfg.ListenClientUrls = []url.URL{clientURL}
+	embedCfg.AdvertiseClientUrls = []url.URL{clientURL}
+	embedCfg.ListenPeerUrls = []url.URL{peerURL}
+	embedCfg.AdvertisePeerUrls = []url.URL{peerURL}
+	embedCfg.InitialCluster = embedCfg.InitialClusterFromName(embedCfg.Name)
 	e, err := embed.StartEtcd(embedCfg)
 	if err != nil {
 		t.Fatalf("start etcd: %v", err)
@@ -142,4 +152,23 @@ func (s *stubResolver) Topics(ctx context.Context) ([]string, error) {
 func (s *stubResolver) Partitions(ctx context.Context, topic string) ([]int32, error) {
 	s.calls++
 	return s.partitions[topic], nil
+}
+
+func freeLocalPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func mustLocalURL(t *testing.T, port int) url.URL {
+	t.Helper()
+	parsed, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	return *parsed
 }
