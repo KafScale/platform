@@ -599,6 +599,10 @@ advertised address.
   owner from the etcd routes when the owner is known. The listed brokers are
   used when the owner is not known yet, or when the owner address cannot be
   dialed.
+- LFS produce goes to the broker's advertised address when it is reachable, and
+  only falls back to the list otherwise. An advertised address that fails to
+  dial is skipped for 30 seconds, so the proxy does not wait for the dial
+  timeout on every produce.
 - When a listed broker answers that it does not lead the partition, the proxy
   tries the current owner, or another listed broker if the owner is not known.
 - With only one address, for example a broker Service, and no reachable owner,

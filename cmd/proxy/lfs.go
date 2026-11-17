@@ -125,6 +125,9 @@ type lfsModule struct {
 	// forgetPartitionOwner drops a cached partition route that a broker
 	// rejected.
 	forgetPartitionOwner func(topic string, partition int32)
+	unreachableMu        sync.Mutex
+	unreachableOwners    map[string]time.Time
+	now                  func() time.Time
 }
 
 var blockedBucketNames = []string{
@@ -626,7 +629,8 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 // connectPartitionBackend connects to the broker that owns topic/partition
 // when the owner is known, and otherwise to one of the listed brokers. Brokers
 // in tried are skipped. With static backends, an owner that cannot be dialed
-// is added to tried and a listed broker is used instead.
+// is added to tried and a listed broker is used instead, and is skipped for
+// lfsUnreachableOwnerTTL.
 func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, partition int32, tried map[string]bool) (net.Conn, string, error) {
 	attempts := m.backendRetries
 	if attempts < 1 {
@@ -665,13 +669,18 @@ func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, p
 		} else {
 			conn, dialErr = dialer.DialContext(ctx, "tcp", addr)
 		}
+		unlistedOwner := len(m.backends) > 0 && !slices.Contains(m.backends, addr)
 		if dialErr != nil {
 			lastErr = dialErr
-			if len(m.backends) > 0 && !slices.Contains(m.backends, addr) {
+			if unlistedOwner {
+				m.markOwnerUnreachable(addr)
 				tried[addr] = true
 				attempt--
 			}
 			continue
+		}
+		if unlistedOwner {
+			m.clearOwnerUnreachable(addr)
 		}
 		wrapped, err := m.wrapBackendTLS(ctx, conn, addr)
 		if err != nil {

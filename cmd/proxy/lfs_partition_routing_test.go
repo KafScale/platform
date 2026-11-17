@@ -333,3 +333,36 @@ func TestLFSHTTPProduceWithStaticBackendsFallsBackWhenOwnerIsUnreachable(t *test
 		t.Fatalf("listed broker acked %d produce(s), want 1", f.brokers[0].produced.Load())
 	}
 }
+
+func TestLFSHTTPProduceWithStaticBackendsSkipsRecentlyUnreachableOwner(t *testing.T) {
+	f := newPartitionRoutingFixture(t, 1, 0)
+	f.m.backends = []string{f.brokers[0].addr}
+	owner := closedBackendAddr(t)
+	f.p.updateBrokerAddrs([]protocol.MetadataBroker{brokerAt(t, 0, f.brokers[0].addr), brokerAt(t, 1, owner)})
+	var ownerDials int
+	dial := f.m.identityDial
+	f.m.identityDial = func(ctx context.Context, addr string) (net.Conn, error) {
+		if addr == owner {
+			ownerDials++
+		}
+		return dial(ctx, addr)
+	}
+	clock := time.Unix(1700000000, 0)
+	f.m.now = func() time.Time { return clock }
+	for i, step := range []struct {
+		advance time.Duration
+		dials   int
+	}{{0, 1}, {29 * time.Second, 1}, {2 * time.Second, 2}} {
+		clock = clock.Add(step.advance)
+		rr := f.produce(t, nil)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("produce %d: got %d %s", i, rr.Code, rr.Body.String())
+		}
+		if ownerDials != step.dials {
+			t.Fatalf("produce %d: owner dialed %d time(s), want %d", i, ownerDials, step.dials)
+		}
+	}
+	if f.brokers[0].produced.Load() != 3 {
+		t.Fatalf("listed broker acked %d produce(s), want 3", f.brokers[0].produced.Load())
+	}
+}

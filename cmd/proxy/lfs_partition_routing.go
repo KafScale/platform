@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 )
@@ -26,6 +27,8 @@ import (
 // lfsProduceAttempts bounds how many brokers an LFS HTTP produce is sent to
 // when brokers answer that they do not lead the partition.
 const lfsProduceAttempts = 3
+
+const lfsUnreachableOwnerTTL = 30 * time.Second
 
 // errLFSProduceNotWritten marks a produce that no broker wrote, so the
 // uploaded object can be deleted instead of kept as an orphan.
@@ -53,7 +56,7 @@ func (m *lfsModule) ownerAddr(ctx context.Context, topic string, partition int32
 // owner when it is known and not tried yet, otherwise every listed broker not
 // tried yet.
 func (m *lfsModule) partitionCandidates(ctx context.Context, backends []string, topic string, partition int32, tried map[string]bool) []string {
-	if owner := m.ownerAddr(ctx, topic, partition); owner != "" && !tried[owner] {
+	if owner := m.ownerAddr(ctx, topic, partition); owner != "" && !tried[owner] && (len(m.backends) == 0 || !m.ownerRecentlyUnreachable(owner)) {
 		return []string{owner}
 	}
 	if len(tried) == 0 {
@@ -100,4 +103,40 @@ func (m *lfsModule) produceToPartitionOwner(ctx context.Context, conn net.Conn, 
 		}
 		conn, addr = next, nextAddr
 	}
+}
+
+func (m *lfsModule) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+func (m *lfsModule) ownerRecentlyUnreachable(addr string) bool {
+	m.unreachableMu.Lock()
+	defer m.unreachableMu.Unlock()
+	since, ok := m.unreachableOwners[addr]
+	if !ok {
+		return false
+	}
+	if m.clock().Sub(since) < lfsUnreachableOwnerTTL {
+		return true
+	}
+	delete(m.unreachableOwners, addr)
+	return false
+}
+
+func (m *lfsModule) markOwnerUnreachable(addr string) {
+	m.unreachableMu.Lock()
+	defer m.unreachableMu.Unlock()
+	if m.unreachableOwners == nil {
+		m.unreachableOwners = make(map[string]time.Time)
+	}
+	m.unreachableOwners[addr] = m.clock()
+}
+
+func (m *lfsModule) clearOwnerUnreachable(addr string) {
+	m.unreachableMu.Lock()
+	defer m.unreachableMu.Unlock()
+	delete(m.unreachableOwners, addr)
 }
