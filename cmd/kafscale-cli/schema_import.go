@@ -217,6 +217,12 @@ type schemaImport struct {
 	planned   map[int64]*srVersion
 
 	imported, skipped, deleted, settings, conflicts int
+
+	modeMissingNoted       bool
+	defaultToGlobalKnown   bool
+	defaultToGlobalIgnored bool
+	sourceGlobalKnown      bool
+	sourceGlobal           string
 }
 
 func itemKey(subject string, version int) string {
@@ -432,6 +438,22 @@ func sameSchema(a, b *srVersion) bool {
 	return a.Schema == b.Schema || (a.GUID != "" && a.GUID == b.GUID)
 }
 
+func (im *schemaImport) sameOnTarget(ctx context.Context, v *srVersion) bool {
+	body := map[string]any{"schema": v.Schema}
+	if v.SchemaType != "" {
+		body["schemaType"] = v.SchemaType
+	}
+	if len(v.References) > 0 {
+		body["references"] = v.References
+	}
+	var out struct {
+		ID      int64 `json:"id"`
+		Version int   `json:"version"`
+	}
+	err := im.dst.call(ctx, http.MethodPost, subjectPath(v.Subject)+"?deleted=true", body, &out)
+	return err == nil && out.ID == v.ID && out.Version == v.Version
+}
+
 func (im *schemaImport) conflict(format string, args ...any) {
 	im.conflicts++
 	_, _ = fmt.Fprintf(im.out, "conflict: "+format+"\n", args...)
@@ -447,7 +469,7 @@ func (im *schemaImport) importVersion(ctx context.Context, v *srVersion) error {
 		if existing.SchemaType == "" {
 			existing.SchemaType = "AVRO"
 		}
-		if !sameSchema(v, existing) {
+		if !sameSchema(v, existing) && !(existing.ID == v.ID && im.sameOnTarget(ctx, v)) {
 			im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
 			return nil
 		}
@@ -593,6 +615,63 @@ type configBody struct {
 	CompatibilityLevel string `json:"compatibilityLevel,omitempty"`
 }
 
+func (im *schemaImport) noteMissingSourceMode() {
+	if im.modeMissingNoted {
+		return
+	}
+	im.modeMissingNoted = true
+	_, _ = fmt.Fprintln(im.out, "source has no /mode/{subject} endpoint; subject modes not copied")
+}
+
+func (im *schemaImport) sourceGlobalConfig(ctx context.Context) (string, error) {
+	if im.sourceGlobalKnown {
+		return im.sourceGlobal, nil
+	}
+	var body configBody
+	err := im.src.call(ctx, http.MethodGet, "/config", nil, &body)
+	if isSRCode(err, 40408) {
+		im.sourceGlobalKnown = true
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	im.sourceGlobal = body.CompatibilityLevel
+	im.sourceGlobalKnown = true
+	return im.sourceGlobal, nil
+}
+
+func (im *schemaImport) detectDefaultToGlobal(ctx context.Context, subjects []string) {
+	if im.defaultToGlobalKnown {
+		return
+	}
+	im.defaultToGlobalKnown = true
+	sawValue := false
+	for _, s := range subjects {
+		var body configBody
+		err := im.src.call(ctx, http.MethodGet, "/config/"+url.PathEscape(s)+"?defaultToGlobal=false", nil, &body)
+		if isSRCode(err, 40408) {
+			im.defaultToGlobalIgnored = false
+			return
+		}
+		if err == nil {
+			sawValue = true
+		}
+	}
+	im.defaultToGlobalIgnored = sawValue
+}
+
+func (im *schemaImport) skipInheritedSourceConfig(ctx context.Context, want string) bool {
+	if !im.defaultToGlobalIgnored {
+		return false
+	}
+	global, err := im.sourceGlobalConfig(ctx)
+	if err != nil || global == "" {
+		return false
+	}
+	return strings.EqualFold(want, global)
+}
+
 func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet int) error {
 	read := func(c *srClient) (string, error) {
 		path := "/" + kind
@@ -609,7 +688,7 @@ func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet 
 		}
 		var body modeBody
 		err := c.call(ctx, http.MethodGet, path, nil, &body)
-		if isSRCode(err, notSet) || isSRStatus(err, http.StatusNotFound) {
+		if isSRCode(err, notSet) {
 			return "", nil
 		}
 		return body.Mode, err
@@ -619,10 +698,17 @@ func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet 
 		name = kind + " of " + scope
 	}
 	want, err := read(im.src)
+	if kind == "mode" && isSRStatus(err, http.StatusNotFound) {
+		im.noteMissingSourceMode()
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read source %s: %w", name, err)
 	}
 	if want == "" {
+		return nil
+	}
+	if kind == "config" && scope != "" && im.skipInheritedSourceConfig(ctx, want) {
 		return nil
 	}
 	have, err := read(im.dst)
@@ -657,6 +743,7 @@ func (im *schemaImport) syncSettings(ctx context.Context, subjects []string) err
 	if err := im.setting(ctx, "config", "", 40408); err != nil {
 		return err
 	}
+	im.detectDefaultToGlobal(ctx, subjects)
 	for _, s := range subjects {
 		if err := im.setting(ctx, "config", s, 40408); err != nil {
 			return err

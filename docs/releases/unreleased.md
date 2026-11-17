@@ -269,7 +269,7 @@ limitations under the License.
 
 - Schema registry pods now notice an etcd snapshot restore and clear their schema cache without a restart. Each pod watches its etcd keys and resets when the watch reports a compaction. The operator now restores etcd snapshots with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, which triggers this. Manual restores should use the same flags or restart the registry pods. See `docs/schema-registry.md` and `docs/operations.md`.
 
-- `kafscale-cli schema import` no longer fails when the source has no subject mode endpoint. A GET `/mode/{subject}` that returns HTTP 404, as Apicurio Registry 2.6 and 3.0 do, is treated as no subject mode, and the run continues. Compatibility levels and schemas are still imported. See `docs/schema-registry.md`.
+- `kafscale-cli schema import` no longer fails when the source returns HTTP 404 for `GET /mode/{subject}`, as Apicurio Registry 2.6.5 and 3.0.6 do; that is treated as no subject mode, and the run continues. A second import no longer reports a false conflict when the target has already normalized the source schema, and subject compatibility levels that equal the source global level are not copied when the source ignores `defaultToGlobal=false`. See `docs/schema-registry.md`.
 
 ### Processors
 

@@ -558,6 +558,9 @@ func TestSchemaImportSkipsMissingSourceModeEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run against a source that 404s on /mode: %v\n%s", err, out)
 	}
+	if strings.Count(out, "source has no /mode/{subject} endpoint; subject modes not copied") != 1 {
+		t.Fatalf("dry-run should print the missing mode notice once\n%s", out)
+	}
 	if strings.Contains(out, "would set mode of") {
 		t.Fatalf("dry-run should not copy subject modes when /mode 404s\n%s", out)
 	}
@@ -565,6 +568,9 @@ func TestSchemaImportSkipsMissingSourceModeEndpoint(t *testing.T) {
 	out, err = runImport(t, "--from", src.url, "--to", dst.url)
 	if err != nil {
 		t.Fatalf("import against a source that 404s on /mode: %v\n%s", err, out)
+	}
+	if strings.Count(out, "source has no /mode/{subject} endpoint; subject modes not copied") != 1 {
+		t.Fatalf("import should print the missing mode notice once\n%s", out)
 	}
 	if status, data := dst.call("GET", "/subjects/user/versions/1", nil); status != http.StatusOK {
 		t.Fatalf("imported schema missing: %d %s", status, data)
@@ -578,4 +584,184 @@ func TestSchemaImportSkipsMissingSourceModeEndpoint(t *testing.T) {
 	if strings.Contains(out, "set mode of") {
 		t.Fatalf("import should not copy subject modes when /mode 404s\n%s", out)
 	}
+}
+
+func TestSchemaImportRerunAcceptsNormalizedTargetSchema(t *testing.T) {
+	address := `{
+  "type": "record",
+  "name": "Address",
+  "namespace": "example",
+  "fields": [
+    {"name": "city", "type": "string"}
+  ]
+}`
+	person := `{
+  "type": "record",
+  "name": "Person",
+  "namespace": "example",
+  "fields": [
+    {"name": "home", "type": "example.Address"}
+  ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"addr": {{ID: 1, Version: 1, Schema: address}},
+		"person": {{
+			ID:      2,
+			Version: 1,
+			Schema:  person,
+			Refs:    []srReference{{Name: "example.Address", Subject: "addr", Version: 1}},
+		}},
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("first import: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("first import reported a conflict\n%s", out)
+	}
+	out, err = runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("second import: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("second import reported a false conflict\n%s", out)
+	}
+	if !strings.Contains(out, "imported 0, skipped 2") {
+		t.Fatalf("expected second import to skip both versions\n%s", out)
+	}
+}
+
+func TestSchemaImportSkipsSubjectConfigWhenSourceIgnoresDefaultToGlobal(t *testing.T) {
+	src := seedSource(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/config") {
+				w.Header().Set("Content-Type", srContentType)
+				_, _ = w.Write([]byte(`{"compatibilityLevel":"NONE"}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "set config of") || strings.Contains(out, "would set config of") {
+		t.Fatalf("subject configs equal to the source global should not be pinned\n%s", out)
+	}
+	if status, data := dst.call("GET", "/config", nil); status != http.StatusOK || !strings.Contains(string(data), "NONE") {
+		t.Fatalf("global config not copied: %d %s", status, data)
+	}
+	if status, data := dst.call("GET", "/config/user?defaultToGlobal=false", nil); status != http.StatusNotFound {
+		t.Fatalf("subject user should not be pinned to NONE: %d %s", status, data)
+	}
+}
+
+func TestSchemaImportCopiesExplicitSubjectConfigEqualToGlobal(t *testing.T) {
+	src := startTestRegistry(t, nil)
+	src.must("PUT", "/mode", map[string]string{"mode": "IMPORT"})
+	src.put("user", 1, 1, impUser1)
+	src.put("addr", 2, 1, impAddress)
+	src.must("PUT", "/mode", map[string]string{"mode": "READWRITE"})
+	src.must("PUT", "/config", map[string]string{"compatibility": "FORWARD"})
+	src.must("PUT", "/config/user", map[string]string{"compatibility": "FORWARD"})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	if status, data := dst.call("GET", "/config/user?defaultToGlobal=false", nil); status != http.StatusOK || !strings.Contains(string(data), "FORWARD") {
+		t.Fatalf("explicit subject pin equal to global should be copied: %d %s", status, data)
+	}
+	if status, data := dst.call("GET", "/config/addr?defaultToGlobal=false", nil); status != http.StatusNotFound {
+		t.Fatalf("unset subject config should stay unset: %d %s", status, data)
+	}
+}
+
+func TestSchemaImportTargetModeHTTP404IsError(t *testing.T) {
+	src := seedSource(t)
+	dst := startTestRegistry(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/mode/") {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte("no mode endpoint"))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "read target mode") {
+		t.Fatalf("expected a target mode read error, got %v\n%s", err, out)
+	}
+}
+
+type rawSchemaVersion struct {
+	ID      int64
+	Version int
+	Schema  string
+	Refs    []srReference
+}
+
+func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) *testRegistry {
+	t.Helper()
+	names := make([]string, 0, len(subjects))
+	bySubject := map[string]map[int]rawSchemaVersion{}
+	for name, versions := range subjects {
+		names = append(names, name)
+		bySubject[name] = map[int]rawSchemaVersion{}
+		for _, v := range versions {
+			bySubject[name][v.Version] = v
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", srContentType)
+		switch {
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/subjects/") && strings.Contains(r.URL.Path, "/versions/"):
+			parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+			if len(parts) < 4 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			subject, ver := parts[1], 0
+			if _, err := fmt.Sscanf(parts[3], "%d", &ver); err != nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			v, ok := bySubject[subject][ver]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error_code":40402,"message":"version not found"}`))
+				return
+			}
+			body := map[string]any{"subject": subject, "version": v.Version, "id": v.ID, "schemaType": "AVRO", "schema": v.Schema}
+			if len(v.Refs) > 0 {
+				body["references"] = v.Refs
+			}
+			_ = json.NewEncoder(w).Encode(body)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/subjects/") && strings.HasSuffix(r.URL.Path, "/versions"):
+			subject := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/subjects/"), "/versions")
+			versions := bySubject[subject]
+			nums := make([]int, 0, len(versions))
+			for n := range versions {
+				nums = append(nums, n)
+			}
+			_ = json.NewEncoder(w).Encode(nums)
+		case r.Method == http.MethodGet && (r.URL.Path == "/subjects" || r.URL.Path == "/subjects/"):
+			_ = json.NewEncoder(w).Encode(names)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/config"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error_code":40408,"message":"subject compatibility not found"}`))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/mode"):
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error_code":40409,"message":"subject mode not found"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error_code":40400,"message":"not found"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return &testRegistry{t: t, url: srv.URL, srv: srv}
 }

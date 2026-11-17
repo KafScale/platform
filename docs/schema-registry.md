@@ -145,13 +145,13 @@ It reads `/subjects?deleted=true` and every version of each subject, including s
 - Before the first write it switches the target to `IMPORT` mode, which needs `--force` when the target already holds schemas.
 - Each version keeps its id and version number.
 - Versions that are soft deleted in the source are soft deleted in the target.
-- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. A source that has no `/mode/{subject}` endpoint, such as Apicurio Registry, returns HTTP 404 for that request. The import treats that as no subject mode and continues. Compatibility levels are still copied.
+- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. A source that returns HTTP 404 for `GET /mode/{subject}` is treated as having no subject mode, and the import continues. Compatibility levels are still copied. When the source ignores `defaultToGlobal=false` and returns the global compatibility level for every subject, those subject levels are not copied, so they are not pinned to the global level.
 - The global mode of the target stays `IMPORT`.
 - `--auth` and `--to-auth` can also be set with `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`, and `--to` with `KAFSCALE_SCHEMA_REGISTRY_URL`.
 
 The import can be run again at any time, for example to copy schemas registered in the source since the last run or after a run stopped halfway.
 
-- A version that the target already holds with the same id and the same schema is skipped; schemas are compared in their stored form, so formatting differences in the source do not count.
+- A version that the target already holds with the same id and the same schema is skipped. When the stored text differs, the import posts the source schema to `POST /subjects/{subject}` on the target and treats a matching id and version as the same schema, so formatting and namespace-qualified names that the target normalizes do not count as a conflict.
 - When the target holds that subject version with a different id or schema, or holds the id with a different schema, the import reports both schemas as a conflict, imports the rest, prints the counts of imported, skipped and soft deleted versions, changed settings and conflicts, and exits with an error.
 - Two source versions that carry the same id with different schemas are reported as a conflict too, also with `--dry-run`.
 - Any other error, for example a 422 from the target, stops the run.
