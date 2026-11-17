@@ -71,6 +71,8 @@ limitations under the License.
 
 ### Broker produce, storage and topics
 
+- Fetch returns `REQUEST_TIMED_OUT` when the metadata offset read times out, is canceled, or fails while etcd is unavailable, instead of interpreting a failed read as watermark zero and triggering `OFFSET_OUT_OF_RANGE`. Unknown watermarks are reported as -1. Other offset-read failures return `UNKNOWN_SERVER_ERROR`; unknown-topic and ownership fencing responses retain their existing meanings (#342).
+
 - Missing topic configs derive the replication factor from partition replicas, defaulting to 1 when replica metadata is absent. They no longer use the partition count, which made CLI restores fail when partitions exceeded brokers and made MCP `describe_configs` report an incorrect factor. Partition expansion uses the same fallback and atomically updates existing stored configs to keep their partition counts current without overwriting concurrent config edits (#338).
 - Topic config updates participate in expansion's snapshot revision checks and derive partition counts from the current topology. Delayed config creation or updates retry after expansion instead of restoring an old count, reject a topic recreated during the operation, and publish local config state only after a successful commit. CLI restore uses the same guarded update path (#338).
 
