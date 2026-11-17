@@ -79,6 +79,7 @@ limitations under the License.
 - Topic config updates participate in expansion's snapshot revision checks and derive partition counts from the current topology. Delayed config creation or updates retry after expansion instead of restoring an old count, reject a topic recreated during the operation, and publish local config state only after a successful commit. CLI restore uses the same guarded update path (#338).
 
 - Brokers check S3 conditional PUT support before opening listeners. A second write to a unique probe key must return `412 Precondition Failed`; backends that ignore or reject the condition fail startup with a clear error. Startup probes are cleaned up after successful and failed attempts (#336).
+- A broker whose S3 backend rejects the first `PutObject` with `If-None-Match: *` (HTTP `501`, or the error code `NotImplemented`, `InvalidArgument` or `InvalidRequest`) now exits at once with `backend rejects If-None-Match: * ... partition segments cannot be fenced`. Before, it retried the probe until `KAFSCALE_STARTUP_TIMEOUT_SEC` expired, and the pod restarted and did the same again. Other startup S3 errors still retry until the timeout (#360).
 
 - Conditional S3 write conflicts (412 precondition failed and 409 conditional conflict) no longer count as S3 health errors and block produces across the broker. The conflicting partition remains fenced; S3 latency and other failures still drive backpressure (#335).
 
@@ -285,6 +286,8 @@ limitations under the License.
 - The LFS status endpoint remains available when LFS is disabled. The console shows the disabled state without starting LFS data requests or event streams, and closes streams on tab changes and logout. A bundled favicon is served at both `/favicon.ico` and `/ui/favicon.ico` (#339).
 
 - The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358).
+
+- The operator `EtcdSnapshot` condition and the `kafscale_operator_etcd_snapshot_*` gauges no longer freeze between reconciles. The operator watches the snapshot CronJob and reconciles when its status changes, and reconciles again when the last successful snapshot passes `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, so `kafscale_operator_etcd_snapshot_stale` and the `KafscaleSnapshotStale` alert fire when snapshots stop (#357).
 
 - The console `POST /ui/api/status/topics` and `DELETE /ui/api/status/topics/<topic>` endpoints create and delete topics in etcd through the same metadata path as the broker. They returned `202` and changed nothing. Create takes `{"name","partitions","replication_factor"}` and returns `201`, delete returns `200`, and errors return `400`, `404`, `409` or `503`. The console needs write access to etcd for these calls. Set `KAFSCALE_S3_NAMESPACE`, or `console.s3Namespace` in the Helm chart, to the broker namespace so that deleted topic records point at the right S3 prefix (#362).
 

@@ -283,6 +283,8 @@ func conditionalErr(err error) error {
 			return ErrPreconditionFailed
 		case "ConditionalRequestConflict":
 			return ErrConditionalConflict
+		case "NotImplemented", "InvalidArgument", "InvalidRequest":
+			return ErrConditionUnsupported
 		}
 	}
 	var respErr *awshttp.ResponseError
@@ -292,6 +294,8 @@ func conditionalErr(err error) error {
 			return ErrPreconditionFailed
 		case http.StatusConflict:
 			return ErrConditionalConflict
+		case http.StatusNotImplemented:
+			return ErrConditionUnsupported
 		}
 	}
 	return nil

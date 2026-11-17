@@ -109,7 +109,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		_ = r.updateStatus(ctx, &cluster, metav1.ConditionFalse, "SnapshotAccessFailed", snapshotErr.Error())
 		return ctrl.Result{}, err
 	}
-	r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
+	snapshotRecheck := r.populateEtcdSnapshotStatus(ctx, &cluster, etcdResolution)
 	r.pollManagedEtcdHealth(ctx, &cluster, etcdResolution)
 	r.populateEtcdMaintenanceStatus(ctx, &cluster, etcdResolution)
 	if err := r.reconcileClusterWorkloads(ctx, &cluster, etcdResolution.Endpoints); err != nil {
@@ -139,7 +139,7 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := r.updateStatus(ctx, &cluster, metav1.ConditionTrue, "Ready", "Reconciled"); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: snapshotRecheck}, nil
 }
 
 func (r *ClusterReconciler) reconcileClusterSetup(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (EtcdResolution, error) {
@@ -216,6 +216,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
+		Owns(&batchv1.CronJob{}).
 		WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).
 		Owns(&autoscalingv2.HorizontalPodAutoscaler{}).
 		Complete(r)
@@ -627,7 +628,7 @@ func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *kafscalev
 	return nil
 }
 
-func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
+func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) time.Duration {
 	clusterKey := cluster.Namespace + "/" + cluster.Name
 	now := time.Now()
 	if !resolution.Managed {
@@ -643,7 +644,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 			Message:            "Etcd snapshots are managed externally.",
 			LastTransitionTime: metav1.NewTime(now),
 		})
-		return
+		return 0
 	}
 
 	cron := &batchv1.CronJob{}
@@ -656,7 +657,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 			Message:            "Etcd snapshot CronJob is missing.",
 			LastTransitionTime: metav1.NewTime(now),
 		})
-		return
+		return 0
 	}
 
 	var lastSchedule time.Time
@@ -679,7 +680,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 			Message:            "No successful etcd snapshots recorded yet.",
 			LastTransitionTime: metav1.NewTime(now),
 		})
-		return
+		return 0
 	}
 
 	lastSuccess := cron.Status.LastSuccessfulTime.Time
@@ -699,7 +700,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 			Message:            fmt.Sprintf("Last snapshot %s ago (threshold %s).", age.Round(time.Second), staleAfter),
 			LastTransitionTime: metav1.NewTime(now),
 		})
-		return
+		return 0
 	}
 
 	operatorEtcdSnapshotStale.WithLabelValues(clusterKey).Set(0)
@@ -714,6 +715,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 		Message:            message,
 		LastTransitionTime: metav1.NewTime(now),
 	})
+	return staleAfter - age + time.Second
 }
 
 func (r *ClusterReconciler) populateEtcdMaintenanceStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
