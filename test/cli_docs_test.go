@@ -46,11 +46,14 @@ func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
 	if !strings.Contains(ops, "If either is unset") {
 		t.Error("docs/operations.md does not say the default chain is used if either static key is unset")
 	}
-	if !strings.Contains(ops, "listing the source segments") {
-		t.Error("docs/operations.md does not say a restore without credentials fails while listing source segments")
+	if !strings.Contains(ops, "listing the source segments") || !strings.Contains(ops, "list objects <prefix>:") || !strings.Contains(ops, "get credentials") {
+		t.Error("docs/operations.md does not say a restore without credentials fails while listing source segments with list objects <prefix>: including get credentials")
 	}
 	if !strings.Contains(ops, "with no objects, or only those copied before the failure") {
 		t.Error("docs/operations.md does not describe a rolled-back restore prefix accurately")
+	}
+	if !strings.Contains(ops, "`prune --topic <target> --force` removes the record, and every other deleted incarnation of that name.") {
+		t.Error("docs/operations.md does not say prune --topic <target> --force removes every deleted incarnation of that name")
 	}
 	sr := readDoc(t, "docs/schema-registry.md")
 	if !strings.Contains(sr, "go build -o bin/kafscale-cli ./cmd/kafscale-cli") && !strings.Contains(sr, "operations.md#installing-kafscale-cli") {
