@@ -297,8 +297,15 @@ func TestStartupProbeBackendRejectsConditionFailsFast(t *testing.T) {
 			start := time.Now()
 			err = h.runStartupChecks(context.Background())
 			elapsed := time.Since(start)
-			if err == nil || !strings.Contains(err.Error(), "backend rejects If-None-Match: *") || !strings.Contains(err.Error(), "cannot be fenced") {
-				t.Fatalf("startup error=%v, want a rejected If-None-Match error", err)
+			wantMessage := "backend rejects If-None-Match: *"
+			if tc.status == http.StatusBadRequest {
+				wantMessage = "backend rejected the conditional PutObject (If-None-Match: *)"
+			}
+			if err == nil || !strings.Contains(err.Error(), wantMessage) || !strings.Contains(err.Error(), "cannot be fenced") {
+				t.Fatalf("startup error=%v, want %q", err, wantMessage)
+			}
+			if tc.status == http.StatusBadRequest && strings.Contains(err.Error(), "backend rejects If-None-Match") {
+				t.Fatalf("400 startup error blamed If-None-Match support: %v", err)
 			}
 			if errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("startup waited for the timeout instead of failing fast after %s: %v", elapsed, err)

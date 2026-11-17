@@ -30,6 +30,8 @@ var ErrConditionalConflict = errors.New("conditional request conflict")
 
 var ErrConditionUnsupported = errors.New("conditional request not supported")
 
+var ErrConditionRejected = errors.New("conditional request rejected")
+
 type ConditionalIndexWriter interface {
 	UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error
 }

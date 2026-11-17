@@ -81,11 +81,11 @@ func TestEtcdSnapshotStatusRechecksAtStaleDeadline(t *testing.T) {
 	if cond == nil || cond.Reason != "SnapshotHealthy" {
 		t.Fatalf("EtcdSnapshot condition = %+v, want SnapshotHealthy", cond)
 	}
-	if recheck <= 490*time.Second || recheck > 501*time.Second {
-		t.Fatalf("recheck = %s, want the stale deadline about 500s after the last success check", recheck)
+	if recheck <= 0 || recheck > time.Minute {
+		t.Fatalf("recheck = %s, want at most 1m so the age metric stays current", recheck)
 	}
 
-	passed := metav1.NewTime(lastSuccess.Add(-recheck))
+	passed := metav1.NewTime(time.Now().Add(-601 * time.Second))
 	cluster, recheck = snapshotStatusFor(t, snapshotCron(&passed), true)
 	cond = meta.FindStatusCondition(cluster.Status.Conditions, "EtcdSnapshot")
 	if cond == nil || cond.Reason != "SnapshotStale" || cond.Status != metav1.ConditionFalse {
@@ -121,5 +121,25 @@ func TestEtcdSnapshotStatusNoRecheckWithoutDeadline(t *testing.T) {
 				t.Fatalf("recheck = %s, want 0", recheck)
 			}
 		})
+	}
+}
+
+func TestEtcdSnapshotStatusRefreshesAgeWhileHealthy(t *testing.T) {
+	t.Setenv(operatorEtcdSnapshotStaleAfterEnv, "600")
+
+	lastSuccess := metav1.NewTime(time.Now().Add(-100 * time.Second))
+	_, recheck := snapshotStatusFor(t, snapshotCron(&lastSuccess), true)
+	if recheck <= 0 || recheck > time.Minute {
+		t.Fatalf("recheck = %s, want at most 1m while the snapshot is healthy", recheck)
+	}
+	age := snapshotGauge(t, "kafscale_operator_etcd_snapshot_age_seconds", "default/requeue")
+	if age < 99 || age > 110 {
+		t.Fatalf("age = %v, want about 100s", age)
+	}
+
+	nearDeadline := metav1.NewTime(time.Now().Add(-570 * time.Second))
+	_, recheck = snapshotStatusFor(t, snapshotCron(&nearDeadline), true)
+	if recheck <= 20*time.Second || recheck > 32*time.Second {
+		t.Fatalf("recheck = %s, want the remaining time to the stale deadline, about 31s", recheck)
 	}
 }

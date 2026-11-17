@@ -87,7 +87,7 @@ Operator metrics are exported by the controller runtime metrics server.
 | `kafscale_operator_etcd_db_size_high` | Gauge | `cluster` | 1 when any member exceeds the maintenance size threshold. |
 | `kafscale_operator_etcd_nospace_alarm` | Gauge | `cluster` | 1 when managed etcd has an active NOSPACE alarm. |
 
-The operator updates the `kafscale_operator_etcd_snapshot_*` gauges and the `EtcdSnapshot` condition when the snapshot CronJob status changes, and again when the last successful snapshot becomes older than `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Between updates, `kafscale_operator_etcd_snapshot_age_seconds` holds the age from the last update.
+The operator updates the `kafscale_operator_etcd_snapshot_*` gauges and the `EtcdSnapshot` condition when the snapshot CronJob status changes, when the last successful snapshot becomes older than `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, and at least once a minute while a managed snapshot stays healthy.
 
 The `cluster` label uses `namespace/name`.
 

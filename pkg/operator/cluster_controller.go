@@ -715,7 +715,11 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 		Message:            message,
 		LastTransitionTime: metav1.NewTime(now),
 	})
-	return staleAfter - age + time.Second
+	recheck := staleAfter - age + time.Second
+	if recheck > time.Minute {
+		return time.Minute
+	}
+	return recheck
 }
 
 func (r *ClusterReconciler) populateEtcdMaintenanceStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
