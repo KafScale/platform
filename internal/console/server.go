@@ -20,11 +20,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/KafScale/platform/internal/health"
 	"github.com/KafScale/platform/pkg/metadata"
@@ -231,6 +236,12 @@ type createTopicRequest struct {
 	ReplicationFactor int16  `json:"replication_factor"`
 }
 
+type createTopicResponse struct {
+	Name       string `json:"name"`
+	Partitions int    `json:"partitions"`
+	State      string `json:"state"`
+}
+
 type deleteTopicResponse struct {
 	Name string `json:"name"`
 }
@@ -244,8 +255,13 @@ func (h *consoleHandlers) handleCreateTopic(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req createTopicRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	if err := decoder.Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body: trailing data after the JSON object", http.StatusBadRequest)
 		return
 	}
 	if req.Partitions < 1 || req.Partitions > maxCreateTopicPartitions {
@@ -263,7 +279,7 @@ func (h *consoleHandlers) handleCreateTopic(w http.ResponseWriter, r *http.Reque
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(topicInfo{Name: *topic.Topic, Partitions: len(topic.Partitions), State: "ready"})
+	_ = json.NewEncoder(w).Encode(createTopicResponse{Name: *topic.Topic, Partitions: len(topic.Partitions), State: "ready"})
 }
 
 func (h *consoleHandlers) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
@@ -302,6 +318,15 @@ func (h *consoleHandlers) topicStoreReady(w http.ResponseWriter) bool {
 	return true
 }
 
+func etcdUnavailable(err error) bool {
+	var etcdErr rpctypes.EtcdError
+	if errors.As(err, &etcdErr) && (etcdErr.Code() == codes.Unavailable || etcdErr.Code() == codes.DeadlineExceeded) {
+		return true
+	}
+	code := grpcstatus.Code(err)
+	return errors.Is(err, context.DeadlineExceeded) || code == codes.Unavailable || code == codes.DeadlineExceeded
+}
+
 func writeTopicAdminError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
@@ -311,6 +336,8 @@ func writeTopicAdminError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, metadata.ErrTopicExists), errors.Is(err, metadata.ErrTopicGenerationChanged):
 		status = http.StatusConflict
+	case etcdUnavailable(err):
+		status = http.StatusServiceUnavailable
 	}
 	http.Error(w, err.Error(), status)
 }

@@ -18,6 +18,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,7 +27,10 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
@@ -129,9 +133,8 @@ func TestConsoleTopicCreateAndDeleteReachEtcd(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d %q, want 201", status, body)
 	}
-	var created topicInfo
-	if err := json.Unmarshal([]byte(body), &created); err != nil || created.Name != "orders" || created.Partitions != 3 {
-		t.Fatalf("create body = %q (%v), want name orders with 3 partitions", body, err)
+	if body != "{\"name\":\"orders\",\"partitions\":3,\"state\":\"ready\"}\n" {
+		t.Fatalf("create body = %q, want exactly {\"name\":\"orders\",\"partitions\":3,\"state\":\"ready\"}", body)
 	}
 
 	status, body = c.do(http.MethodDelete, "/ui/api/status/topics/orders", "")
@@ -168,6 +171,8 @@ func TestConsoleTopicAdminErrors(t *testing.T) {
 		{name: "create without partitions", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"fresh"}`, want: http.StatusBadRequest},
 		{name: "create with too many partitions", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"fresh","partitions":10001}`, want: http.StatusBadRequest},
 		{name: "create with too many replicas", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"fresh","partitions":1,"replication_factor":3}`, want: http.StatusBadRequest},
+		{name: "create with trailing data", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"orders","partitions":1} garbage`, want: http.StatusBadRequest},
+		{name: "create with a second object", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":"orders","partitions":1}{"name":"other","partitions":1}`, want: http.StatusBadRequest},
 		{name: "create malformed body", method: http.MethodPost, path: "/ui/api/status/topics", body: `{"name":`, want: http.StatusBadRequest},
 		{name: "delete unknown", method: http.MethodDelete, path: "/ui/api/status/topics/missing", want: http.StatusNotFound},
 		{name: "delete empty name", method: http.MethodDelete, path: "/ui/api/status/topics/", want: http.StatusBadRequest},
@@ -249,6 +254,47 @@ func TestConsoleTopicDeleteRefusesWithoutS3Namespace(t *testing.T) {
 			}
 			if len(deleted.Kvs) != 0 {
 				t.Fatalf("deleted topic records = %v, want none", deleted.Kvs)
+			}
+		})
+	}
+}
+
+type failingTopicStore struct {
+	*metadata.InMemoryStore
+	err error
+}
+
+func (s failingTopicStore) CreateTopic(context.Context, metadata.TopicSpec) (*protocol.MetadataTopic, error) {
+	return nil, s.err
+}
+
+func (s failingTopicStore) DeleteTopic(context.Context, string) error {
+	return s.err
+}
+
+func TestConsoleTopicAdminMapsEtcdFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "context deadline from the etcd client", err: context.DeadlineExceeded, want: http.StatusServiceUnavailable},
+		{name: "wrapped context deadline", err: fmt.Errorf("read snapshot: %w", context.DeadlineExceeded), want: http.StatusServiceUnavailable},
+		{name: "grpc unavailable", err: grpcstatus.Error(codes.Unavailable, "connection refused"), want: http.StatusServiceUnavailable},
+		{name: "grpc deadline", err: grpcstatus.Error(codes.DeadlineExceeded, "deadline"), want: http.StatusServiceUnavailable},
+		{name: "etcd request timeout", err: rpctypes.ErrTimeout, want: http.StatusServiceUnavailable},
+		{name: "etcd no leader", err: rpctypes.ErrNoLeader, want: http.StatusServiceUnavailable},
+		{name: "other failure", err: errors.New("snapshot is corrupt"), want: http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := failingTopicStore{InMemoryStore: metadata.NewInMemoryStore(metadata.ClusterMetadata{}), err: tc.err}
+			c := newTopicAdminClient(t, store, "team-a")
+			if status, body := c.do(http.MethodPost, "/ui/api/status/topics", `{"name":"orders","partitions":1}`); status != tc.want {
+				t.Fatalf("create status = %d %q, want %d", status, body, tc.want)
+			}
+			if status, body := c.do(http.MethodDelete, "/ui/api/status/topics/orders", ""); status != tc.want {
+				t.Fatalf("delete status = %d %q, want %d", status, body, tc.want)
 			}
 		})
 	}
