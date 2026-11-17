@@ -470,6 +470,28 @@ func TestAWSUploadIndexIfAbsent(t *testing.T) {
 	}
 }
 
+func TestAWSConditionalPutUnsupported(t *testing.T) {
+	api := &fakeS3{}
+	client := newAWSClientWithAPI("test-bucket", "us-east-1", "", api)
+	for _, code := range []string{"NotImplemented", "InvalidArgument", "InvalidRequest"} {
+		api.putErr = &fakeAPIError{code: code}
+		if err := client.UploadSegment(context.Background(), "k", []byte("v")); !errors.Is(err, ErrConditionUnsupported) {
+			t.Fatalf("%s gave %v", code, err)
+		}
+		if err := client.UploadIndex(context.Background(), "k", []byte("v")); err == nil || errors.Is(err, ErrConditionUnsupported) {
+			t.Fatalf("unconditional put with %s gave %v", code, err)
+		}
+	}
+	api.putErr = &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusNotImplemented}}, Err: errors.New("status")}}
+	if err := client.UploadSegment(context.Background(), "k", []byte("v")); !errors.Is(err, ErrConditionUnsupported) {
+		t.Fatalf("status 501 gave %v", err)
+	}
+	api.putErr = &awshttp.ResponseError{ResponseError: &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusServiceUnavailable}}, Err: errors.New("status")}}
+	if err := client.UploadSegment(context.Background(), "k", []byte("v")); err == nil || errors.Is(err, ErrConditionUnsupported) {
+		t.Fatalf("status 503 gave %v", err)
+	}
+}
+
 func TestMemoryUploadIndexIfAbsent(t *testing.T) {
 	m := NewMemoryS3Client()
 	ctx := context.Background()

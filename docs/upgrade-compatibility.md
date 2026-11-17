@@ -177,7 +177,7 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
 - Brokers now upload segments with `PutObject` and `If-None-Match: *` (#324, #327).
   - A broker that lost its partition lease can no longer overwrite segments written by the new owner.
   - The S3 backend must honor the condition. AWS S3 and MinIO do. Backblaze B2 and the Google Cloud Storage XML API do not.
-  - Brokers check this at startup and refuse to start if a second write to the same probe key does not return `412 Precondition Failed` (#336). A backend that rejects the first conditional write fails startup when the startup timeout expires. Allow `s3:DeleteObject` on `__health/` for probe cleanup. See [Conditional writes](supported.md#conditional-writes).
+  - Brokers check this at startup and refuse to start if a second write to the same probe key does not return `412 Precondition Failed` (#336). A backend that rejects the first conditional write with `501`, or with the error code `NotImplemented`, `InvalidArgument` or `InvalidRequest`, fails startup at once with `backend rejects If-None-Match: *`. Allow `s3:DeleteObject` on `__health/` for probe cleanup. See [Conditional writes](supported.md#conditional-writes).
   - Code that implements `storage.S3Client` itself must make `UploadSegment` fail with `storage.ErrPreconditionFailed` when the key already exists.
 
 - With brokers found in etcd, the LFS HTTP API now sends `/lfs/produce` and multipart completion to the broker that owns the partition.
