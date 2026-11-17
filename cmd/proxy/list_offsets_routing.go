@@ -93,14 +93,25 @@ func (p *proxy) forwardListOffsets(ctx context.Context, header *protocol.Request
 			}
 			failed[topic][partition] = true
 		}
+		answer := func(topic string, part kmsg.ListOffsetsResponseTopicPartition) {
+			if answered[topic] == nil {
+				answered[topic] = make(map[int32]kmsg.ListOffsetsResponseTopicPartition)
+			}
+			answered[topic][part.Partition] = part
+		}
 		for _, r := range p.fanOutListOffsets(ctx, header, groups, pool) {
 			if r.err != nil {
 				p.logger.Warn("list offsets forward failed", "target", r.target, "error", r.err)
-				if !lastAttempt {
-					for _, topic := range r.subReq.Topics {
-						for _, part := range topic.Partitions {
+				for _, topic := range r.subReq.Topics {
+					for _, part := range topic.Partitions {
+						if !lastAttempt {
 							markFailed(topic.Topic, part.Partition)
+							continue
 						}
+						timedOut := kmsg.NewListOffsetsResponseTopicPartition()
+						timedOut.Partition = part.Partition
+						timedOut.ErrorCode = protocol.REQUEST_TIMED_OUT
+						answer(topic.Topic, timedOut)
 					}
 				}
 				continue
@@ -114,10 +125,7 @@ func (p *proxy) forwardListOffsets(ctx context.Context, header *protocol.Request
 						markFailed(topic.Topic, part.Partition)
 						continue
 					}
-					if answered[topic.Topic] == nil {
-						answered[topic.Topic] = make(map[int32]kmsg.ListOffsetsResponseTopicPartition)
-					}
-					answered[topic.Topic][part.Partition] = part
+					answer(topic.Topic, part)
 				}
 			}
 		}
@@ -134,15 +142,13 @@ func (p *proxy) forwardListOffsets(ctx context.Context, header *protocol.Request
 		rt := kmsg.NewListOffsetsResponseTopic()
 		rt.Topic = topic.Topic
 		for _, part := range topic.Partitions {
-			rp, ok := answered[topic.Topic][part.Partition]
-			if !ok {
-				rp = kmsg.NewListOffsetsResponseTopicPartition()
-				rp.Partition = part.Partition
-				rp.ErrorCode = protocol.REQUEST_TIMED_OUT
+			if rp, ok := answered[topic.Topic][part.Partition]; ok {
+				rt.Partitions = append(rt.Partitions, rp)
 			}
-			rt.Partitions = append(rt.Partitions, rp)
 		}
-		merged.Topics = append(merged.Topics, rt)
+		if len(rt.Partitions) > 0 {
+			merged.Topics = append(merged.Topics, rt)
+		}
 	}
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
 }
