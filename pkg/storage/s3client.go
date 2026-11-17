@@ -28,6 +28,8 @@ var ErrPreconditionFailed = errors.New("precondition failed")
 
 var ErrConditionalConflict = errors.New("conditional request conflict")
 
+var ErrConditionUnsupported = errors.New("conditional request not supported")
+
 type ConditionalIndexWriter interface {
 	UploadIndexIfAbsent(ctx context.Context, key string, body []byte) error
 }

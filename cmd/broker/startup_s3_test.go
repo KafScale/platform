@@ -247,3 +247,67 @@ func TestStartupProbeAWSConditionalPUT(t *testing.T) {
 		})
 	}
 }
+
+func TestStartupProbeBackendRejectsConditionFailsFast(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		code   string
+	}{
+		{name: "501-not-implemented", status: http.StatusNotImplemented, code: "NotImplemented"},
+		{name: "501-no-code", status: http.StatusNotImplemented},
+		{name: "400-invalid-argument", status: http.StatusBadRequest, code: "InvalidArgument"},
+		{name: "400-invalid-request", status: http.StatusBadRequest, code: "InvalidRequest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("KAFSCALE_STARTUP_TIMEOUT_SEC", "10")
+			var mu sync.Mutex
+			puts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				defer mu.Unlock()
+				switch r.Method {
+				case http.MethodPut:
+					puts++
+					if r.Header.Get("If-None-Match") != "*" {
+						t.Errorf("conditional header=%q", r.Header.Get("If-None-Match"))
+					}
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(tc.status)
+					if tc.code != "" {
+						fmt.Fprintf(w, "<Error><Code>%s</Code><Message>If-None-Match is not supported</Message></Error>", tc.code)
+					}
+				case http.MethodDelete:
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Errorf("unexpected S3 request: %s %s", r.Method, r.URL)
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			s3, err := storage.NewS3Client(context.Background(), storage.S3Config{
+				Bucket: "startup-test", Region: "us-east-1", Endpoint: server.URL,
+				ForcePathStyle: true, AccessKeyID: "test", SecretAccessKey: "test",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := newHandler(metadata.NewInMemoryStore(defaultMetadata()), s3, protocol.MetadataBroker{}, testLogger())
+			t.Cleanup(h.coordinator.Stop)
+			start := time.Now()
+			err = h.runStartupChecks(context.Background())
+			elapsed := time.Since(start)
+			if err == nil || !strings.Contains(err.Error(), "backend rejects If-None-Match: *") || !strings.Contains(err.Error(), "cannot be fenced") {
+				t.Fatalf("startup error=%v, want a rejected If-None-Match error", err)
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("startup waited for the timeout instead of failing fast after %s: %v", elapsed, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if puts != 1 {
+				t.Fatalf("PUTs=%d, want 1 with no retry", puts)
+			}
+		})
+	}
+}
