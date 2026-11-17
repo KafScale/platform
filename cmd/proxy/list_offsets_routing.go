@@ -20,147 +20,143 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-type listOffsetsResult struct {
-	subReq  *kmsg.ListOffsetsRequest
-	subResp *kmsg.ListOffsetsResponse
+type topicPartition struct {
+	topic     string
+	partition int32
+}
+
+type partitionReply struct {
+	errorCode int16
+	body      any
+}
+
+type ownerResult struct {
+	include map[topicPartition]bool
+	resp    kmsg.Response
 	conn    net.Conn
 	target  string
 	err     error
 }
 
-func (p *proxy) routeListOffsets(ctx context.Context, payload []byte) (*kmsg.ListOffsetsRequest, map[string]*kmsg.ListOffsetsRequest) {
-	_, parsed, err := protocol.ParseRequest(payload)
+func (p *proxy) routeByPartitionOwner(ctx context.Context, payload []byte) (kmsg.Request, map[string]map[topicPartition]bool) {
+	_, req, err := protocol.ParseRequest(payload)
 	if err != nil {
 		return nil, nil
 	}
-	req, ok := parsed.(*kmsg.ListOffsetsRequest)
-	if !ok {
-		return nil, nil
-	}
-	groups := p.groupListOffsetsByBroker(ctx, req, nil)
+	groups := p.groupByPartitionOwner(ctx, requestPartitions(req))
 	if _, unknown := groups[""]; len(groups) == 0 || (len(groups) == 1 && unknown) {
 		return nil, nil
 	}
 	return req, groups
 }
 
-func (p *proxy) groupListOffsetsByBroker(ctx context.Context, req *kmsg.ListOffsetsRequest, include map[string]map[int32]bool) map[string]*kmsg.ListOffsetsRequest {
-	groups := make(map[string]*kmsg.ListOffsetsRequest)
-	for _, topic := range req.Topics {
-		for _, part := range topic.Partitions {
-			if include != nil && !include[topic.Topic][part.Partition] {
-				continue
+func requestPartitions(req kmsg.Request) []topicPartition {
+	var parts []topicPartition
+	switch req := req.(type) {
+	case *kmsg.ListOffsetsRequest:
+		for _, topic := range req.Topics {
+			for _, part := range topic.Partitions {
+				parts = append(parts, topicPartition{topic.Topic, part.Partition})
 			}
-			addr := p.partitionOwnerAddr(ctx, topic.Topic, part.Partition)
-			sub := groups[addr]
-			if sub == nil {
-				copied := *req
-				copied.Topics = nil
-				sub = &copied
-				groups[addr] = sub
-			}
-			if n := len(sub.Topics); n == 0 || sub.Topics[n-1].Topic != topic.Topic {
-				sub.Topics = append(sub.Topics, kmsg.ListOffsetsRequestTopic{Topic: topic.Topic})
-			}
-			last := &sub.Topics[len(sub.Topics)-1]
-			last.Partitions = append(last.Partitions, part)
 		}
+	case *kmsg.OffsetForLeaderEpochRequest:
+		for _, topic := range req.Topics {
+			for _, part := range topic.Partitions {
+				parts = append(parts, topicPartition{topic.Topic, part.Partition})
+			}
+		}
+	}
+	return parts
+}
+
+func (p *proxy) groupByPartitionOwner(ctx context.Context, parts []topicPartition) map[string]map[topicPartition]bool {
+	groups := make(map[string]map[topicPartition]bool)
+	for _, tp := range parts {
+		addr := p.partitionOwnerAddr(ctx, tp.topic, tp.partition)
+		if groups[addr] == nil {
+			groups[addr] = make(map[topicPartition]bool)
+		}
+		groups[addr][tp] = true
 	}
 	return groups
 }
 
-func (p *proxy) forwardListOffsets(ctx context.Context, header *protocol.RequestHeader, req *kmsg.ListOffsetsRequest, groups map[string]*kmsg.ListOffsetsRequest, pool *connPool) ([]byte, error) {
+func (p *proxy) refreshPartitionRoute(ctx context.Context, tp topicPartition, refusedBy string) {
+	if p.router == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := p.router.Refresh(ctx, tp.topic, tp.partition); err != nil {
+		p.logger.Warn("partition route refresh failed", "topic", tp.topic, "partition", tp.partition, "error", err)
+		p.forgetPartitionRoute(tp.topic, tp.partition)
+		return
+	}
+	if p.partitionOwnerAddr(ctx, tp.topic, tp.partition) == refusedBy {
+		p.forgetPartitionRoute(tp.topic, tp.partition)
+	}
+}
+
+func (p *proxy) forwardByPartitionOwner(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request, groups map[string]map[topicPartition]bool, pool *connPool) ([]byte, error) {
 	ctx, stopWaiting := protocol.ContextUntilClientGone(ctx)
 	defer stopWaiting()
 
 	const maxRetries = 3
-	answered := make(map[string]map[int32]kmsg.ListOffsetsResponseTopicPartition)
+	answered := make(map[topicPartition]partitionReply)
 	var throttle int32
 	for attempt := 0; attempt < maxRetries && len(groups) > 0; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		lastAttempt := attempt == maxRetries-1
-		failed := make(map[string]map[int32]bool)
-		markFailed := func(topic string, partition int32) {
-			if failed[topic] == nil {
-				failed[topic] = make(map[int32]bool)
-			}
-			failed[topic][partition] = true
-		}
-		answer := func(topic string, part kmsg.ListOffsetsResponseTopicPartition) {
-			if answered[topic] == nil {
-				answered[topic] = make(map[int32]kmsg.ListOffsetsResponseTopicPartition)
-			}
-			answered[topic][part.Partition] = part
-		}
-		for _, r := range p.fanOutListOffsets(ctx, header, groups, pool) {
+		var failed []topicPartition
+		for _, r := range p.fanOutByPartitionOwner(ctx, header, req, groups, pool) {
 			if r.err != nil {
-				p.logger.Warn("list offsets forward failed", "target", r.target, "error", r.err)
-				for _, topic := range r.subReq.Topics {
-					for _, part := range topic.Partitions {
-						if !lastAttempt {
-							markFailed(topic.Topic, part.Partition)
-							continue
-						}
-						timedOut := kmsg.NewListOffsetsResponseTopicPartition()
-						timedOut.Partition = part.Partition
-						timedOut.ErrorCode = protocol.REQUEST_TIMED_OUT
-						answer(topic.Topic, timedOut)
+				p.logger.Warn("partition owner forward failed", "api_key", header.APIKey, "target", r.target, "error", r.err)
+				for tp := range r.include {
+					if lastAttempt {
+						answered[tp] = partitionReply{errorCode: protocol.REQUEST_TIMED_OUT}
+						continue
 					}
+					failed = append(failed, tp)
 				}
 				continue
 			}
 			pool.Return(r.target, r.conn)
-			throttle = max(throttle, r.subResp.ThrottleMillis)
-			for _, topic := range r.subResp.Topics {
-				for _, part := range topic.Partitions {
-					if part.ErrorCode == protocol.NOT_LEADER_OR_FOLLOWER && !lastAttempt {
-						p.forgetPartitionRoute(topic.Topic, part.Partition)
-						markFailed(topic.Topic, part.Partition)
-						continue
-					}
-					answer(topic.Topic, part)
+			replyThrottle, replies := responseReplies(r.resp)
+			throttle = max(throttle, replyThrottle)
+			for tp, reply := range replies {
+				if reply.errorCode == protocol.NOT_LEADER_OR_FOLLOWER && !lastAttempt {
+					p.refreshPartitionRoute(ctx, tp, r.target)
+					failed = append(failed, tp)
+					continue
 				}
+				answered[tp] = reply
 			}
 		}
 		if len(failed) == 0 {
 			break
 		}
-		p.logger.Debug("retrying list offsets partitions", "attempt", attempt+1, "topics", len(failed))
-		groups = p.groupListOffsetsByBroker(ctx, req, failed)
+		p.logger.Debug("retrying partitions on their owner", "api_key", header.APIKey, "attempt", attempt+1, "partitions", len(failed))
+		groups = p.groupByPartitionOwner(ctx, failed)
 	}
-
-	merged := kmsg.NewPtrListOffsetsResponse()
-	merged.ThrottleMillis = throttle
-	for _, topic := range req.Topics {
-		rt := kmsg.NewListOffsetsResponseTopic()
-		rt.Topic = topic.Topic
-		for _, part := range topic.Partitions {
-			if rp, ok := answered[topic.Topic][part.Partition]; ok {
-				rt.Partitions = append(rt.Partitions, rp)
-			}
-		}
-		if len(rt.Partitions) > 0 {
-			merged.Topics = append(merged.Topics, rt)
-		}
-	}
-	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
+	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, mergeReplies(req, answered, throttle)), nil
 }
 
-func (p *proxy) fanOutListOffsets(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.ListOffsetsRequest, pool *connPool) []listOffsetsResult {
-	results := make([]listOffsetsResult, 0, len(groups))
-	for addr, subReq := range groups {
+func (p *proxy) fanOutByPartitionOwner(ctx context.Context, header *protocol.RequestHeader, req kmsg.Request, groups map[string]map[topicPartition]bool, pool *connPool) []ownerResult {
+	results := make([]ownerResult, 0, len(groups))
+	for addr, include := range groups {
 		conn, target, err := p.connectForAddr(ctx, addr, nil, pool)
 		if err != nil {
 			target = addr
 		}
-		results = append(results, listOffsetsResult{subReq: subReq, conn: conn, target: target, err: err})
+		results = append(results, ownerResult{include: include, conn: conn, target: target, err: err})
 	}
 	var wg sync.WaitGroup
 	for i := range results {
@@ -171,7 +167,7 @@ func (p *proxy) fanOutListOffsets(ctx context.Context, header *protocol.RequestH
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			r.subResp, r.err = p.sendListOffsets(ctx, header, r.conn, r.target, r.subReq)
+			r.resp, r.err = p.sendToOwner(ctx, header, r.conn, r.target, subRequest(req, r.include))
 			if r.err != nil {
 				r.conn.Close()
 			}
@@ -181,21 +177,134 @@ func (p *proxy) fanOutListOffsets(ctx context.Context, header *protocol.RequestH
 	return results
 }
 
-func (p *proxy) sendListOffsets(ctx context.Context, header *protocol.RequestHeader, conn net.Conn, addr string, req *kmsg.ListOffsetsRequest) (*kmsg.ListOffsetsResponse, error) {
+func (p *proxy) sendToOwner(ctx context.Context, header *protocol.RequestHeader, conn net.Conn, addr string, req kmsg.Request) (kmsg.Response, error) {
 	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID(clientIDStr(header.ClientID)))
 	payload := formatter.AppendRequest(nil, req, header.CorrelationID)[4:]
 	data, err := p.forwardToBackend(ctx, conn, addr, payload)
 	if err != nil {
 		return nil, err
 	}
-	body, ok := protocol.SkipResponseHeader(protocol.APIKeyListOffsets, header.APIVersion, data)
+	body, ok := protocol.SkipResponseHeader(req.Key(), header.APIVersion, data)
 	if !ok {
-		return nil, fmt.Errorf("list offsets response too short or malformed header")
+		return nil, fmt.Errorf("api key %d response too short or malformed header", req.Key())
 	}
-	resp := kmsg.NewPtrListOffsetsResponse()
+	resp := req.ResponseKind()
 	resp.SetVersion(header.APIVersion)
 	if err := resp.ReadFrom(body); err != nil {
-		return nil, fmt.Errorf("decode list offsets response v%d: %w", header.APIVersion, err)
+		return nil, fmt.Errorf("decode api key %d response v%d: %w", req.Key(), header.APIVersion, err)
 	}
 	return resp, nil
+}
+
+func subRequest(req kmsg.Request, include map[topicPartition]bool) kmsg.Request {
+	switch req := req.(type) {
+	case *kmsg.ListOffsetsRequest:
+		sub := *req
+		sub.Topics = nil
+		for _, topic := range req.Topics {
+			st := topic
+			st.Partitions = nil
+			for _, part := range topic.Partitions {
+				if include[topicPartition{topic.Topic, part.Partition}] {
+					st.Partitions = append(st.Partitions, part)
+				}
+			}
+			if len(st.Partitions) > 0 {
+				sub.Topics = append(sub.Topics, st)
+			}
+		}
+		return &sub
+	case *kmsg.OffsetForLeaderEpochRequest:
+		sub := *req
+		sub.Topics = nil
+		for _, topic := range req.Topics {
+			st := topic
+			st.Partitions = nil
+			for _, part := range topic.Partitions {
+				if include[topicPartition{topic.Topic, part.Partition}] {
+					st.Partitions = append(st.Partitions, part)
+				}
+			}
+			if len(st.Partitions) > 0 {
+				sub.Topics = append(sub.Topics, st)
+			}
+		}
+		return &sub
+	}
+	return req
+}
+
+func responseReplies(resp kmsg.Response) (int32, map[topicPartition]partitionReply) {
+	replies := make(map[topicPartition]partitionReply)
+	switch resp := resp.(type) {
+	case *kmsg.ListOffsetsResponse:
+		for _, topic := range resp.Topics {
+			for _, part := range topic.Partitions {
+				replies[topicPartition{topic.Topic, part.Partition}] = partitionReply{errorCode: part.ErrorCode, body: part}
+			}
+		}
+		return resp.ThrottleMillis, replies
+	case *kmsg.OffsetForLeaderEpochResponse:
+		for _, topic := range resp.Topics {
+			for _, part := range topic.Partitions {
+				replies[topicPartition{topic.Topic, part.Partition}] = partitionReply{errorCode: part.ErrorCode, body: part}
+			}
+		}
+		return resp.ThrottleMillis, replies
+	}
+	return 0, replies
+}
+
+func mergeReplies(req kmsg.Request, answered map[topicPartition]partitionReply, throttle int32) kmsg.Response {
+	switch req := req.(type) {
+	case *kmsg.ListOffsetsRequest:
+		merged := kmsg.NewPtrListOffsetsResponse()
+		merged.ThrottleMillis = throttle
+		for _, topic := range req.Topics {
+			rt := kmsg.NewListOffsetsResponseTopic()
+			rt.Topic = topic.Topic
+			for _, part := range topic.Partitions {
+				reply, ok := answered[topicPartition{topic.Topic, part.Partition}]
+				if !ok {
+					continue
+				}
+				rp, ok := reply.body.(kmsg.ListOffsetsResponseTopicPartition)
+				if !ok {
+					rp = kmsg.NewListOffsetsResponseTopicPartition()
+					rp.Partition = part.Partition
+					rp.ErrorCode = reply.errorCode
+				}
+				rt.Partitions = append(rt.Partitions, rp)
+			}
+			if len(rt.Partitions) > 0 {
+				merged.Topics = append(merged.Topics, rt)
+			}
+		}
+		return merged
+	case *kmsg.OffsetForLeaderEpochRequest:
+		merged := kmsg.NewPtrOffsetForLeaderEpochResponse()
+		merged.ThrottleMillis = throttle
+		for _, topic := range req.Topics {
+			rt := kmsg.NewOffsetForLeaderEpochResponseTopic()
+			rt.Topic = topic.Topic
+			for _, part := range topic.Partitions {
+				reply, ok := answered[topicPartition{topic.Topic, part.Partition}]
+				if !ok {
+					continue
+				}
+				rp, ok := reply.body.(kmsg.OffsetForLeaderEpochResponseTopicPartition)
+				if !ok {
+					rp = kmsg.NewOffsetForLeaderEpochResponseTopicPartition()
+					rp.Partition = part.Partition
+					rp.ErrorCode = reply.errorCode
+				}
+				rt.Partitions = append(rt.Partitions, rp)
+			}
+			if len(rt.Partitions) > 0 {
+				merged.Topics = append(merged.Topics, rt)
+			}
+		}
+		return merged
+	}
+	return nil
 }

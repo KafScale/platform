@@ -229,6 +229,41 @@ func TestPartitionRouterInvalidate(t *testing.T) {
 	}
 }
 
+func TestPartitionRouterRefreshReadsLeaseWithoutWatch(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	cli := newEtcdClientForTest(t, endpoints)
+	if _, err := cli.Put(ctx, partitionLeaseKey("orders", 0), "broker-a"); err != nil {
+		t.Fatal(err)
+	}
+	router, err := NewPartitionRouter(ctx, cli, slog.Default())
+	if err != nil {
+		t.Fatalf("create router: %v", err)
+	}
+	router.Stop()
+
+	if _, err := cli.Put(ctx, partitionLeaseKey("orders", 0), "broker-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Refresh(ctx, "orders", 0); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if owner := router.LookupOwner("orders", 0); owner != "broker-b" {
+		t.Fatalf("owner after refresh = %q, want broker-b", owner)
+	}
+
+	if _, err := cli.Delete(ctx, partitionLeaseKey("orders", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Refresh(ctx, "orders", 0); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if owner := router.LookupOwner("orders", 0); owner != "" {
+		t.Fatalf("owner after lease delete = %q, want empty", owner)
+	}
+}
+
 // Scenario 7: Multiple partitions route to different brokers.
 func TestRouterMultipleBrokersMultiplePartitions(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)

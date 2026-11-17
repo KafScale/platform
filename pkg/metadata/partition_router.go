@@ -109,6 +109,22 @@ func (r *PartitionRouter) Invalidate(topic string, partition int32) {
 	r.mu.Unlock()
 }
 
+func (r *PartitionRouter) Refresh(ctx context.Context, topic string, partition int32) error {
+	resp, err := r.client.Get(ctx, partitionLeaseKey(topic, partition))
+	if err != nil {
+		return err
+	}
+	key := partitionKey(topic, partition)
+	r.mu.Lock()
+	if len(resp.Kvs) == 0 {
+		delete(r.routes, key)
+	} else {
+		r.routes[key] = string(resp.Kvs[0].Value)
+	}
+	r.mu.Unlock()
+	return nil
+}
+
 // Stop terminates the background watcher.
 func (r *PartitionRouter) Stop() {
 	r.cancel()
