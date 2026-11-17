@@ -26,6 +26,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 const defaultLeaseTTLSeconds = 30
@@ -51,12 +52,12 @@ func NewEtcdStore(cfg config.Config) (Store, error) {
 		keyPrefix = defaultKeyPrefix
 	}
 
-	client, err := clientv3.New(clientv3.Config{
+	client, err := clientv3.New(metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   cfg.Etcd.Endpoints,
 		Username:    cfg.Etcd.Username,
 		Password:    cfg.Etcd.Password,
 		DialTimeout: 5 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, err
 	}

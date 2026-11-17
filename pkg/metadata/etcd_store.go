@@ -77,12 +77,12 @@ func NewEtcdStore(ctx context.Context, snapshot ClusterMetadata, cfg EtcdStoreCo
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = 5 * time.Second
 	}
-	cli, err := clientv3.New(clientv3.Config{
+	cli, err := clientv3.New(EtcdClientConfig(clientv3.Config{
 		Endpoints:   cfg.Endpoints,
 		Username:    cfg.Username,
 		Password:    cfg.Password,
 		DialTimeout: cfg.DialTimeout,
-	})
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("connect etcd: %w", err)
 	}

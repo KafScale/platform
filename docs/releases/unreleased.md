@@ -152,6 +152,8 @@ limitations under the License.
 
 ### Proxy and etcd outages
 
+- etcd clients reconnect with a one-second maximum gRPC backoff, a 100 millisecond first retry, keepalive probes every 10 seconds, and a 3 second keepalive timeout. The gRPC default maximum backoff is two minutes, which after a long outage delayed recovery by about 45 to 60 seconds (61 seconds for the proxies in the 2.0 QA run). The same settings are used by the broker, proxy, console, MCP, CLI, schema registry, operator and processors.
+
 - The Kafka listener rejects Produce responses with a mismatched correlation ID instead of accepting an unrelated acknowledgement.
 - During an etcd outage the proxy kept using the last broker list from etcd without a time limit, because a failed etcd read was only logged and still counted as a successful refresh.
   - `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default 60 seconds) now applies: after a failed read the proxy, including its Kafka listener, readiness check and LFS HTTP API, uses the brokers, routes and metadata it last read until that time has passed since the last successful read.
@@ -159,7 +161,7 @@ limitations under the License.
   - Each such request gets the reply the proxy already sends while it is not ready: `REQUEST_TIMED_OUT`, which clients retry, on the response or on each topic, partition, group or resource the request names.
   - A Metadata request for all topics, which `kcat -L` and most clients send at startup, names none, so it gets an empty reply with no brokers, no topics and no error code, and clients treat it as failed metadata and retry.
   - A request type with no not-ready reply gets no answer. The client connection is then closed. ApiVersions is still answered.
-  - Before rejecting a request the proxy tries to read etcd again, so it serves again as soon as etcd answers.
+  - Before rejecting a request the proxy tries to read etcd again, so it serves again within a few seconds after etcd answers.
   - The LFS HTTP API needs etcd for every request: `/lfs/produce` and `/lfs/uploads` read the topic generation from etcd each time, so they return 503 `metadata_unavailable` as soon as etcd cannot be read, even within the TTL.
   - Past the TTL they send nothing to a broker, and `/lfs/produce` checks the TTL again after the upload, right before the record is sent, so an upload that outlasts it is deleted and gets 503.
   - The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
