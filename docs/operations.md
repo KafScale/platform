@@ -257,15 +257,23 @@ The schema registry does not roll. The Helm chart passes the keys of
 registry reads them once at startup. After you change that secret, restart the
 registry pods.
 
-Until the restart, every request that has to reach S3 fails:
+Until the restart, every request that has to read or write S3 fails. For
+example:
 
 - Registering a new schema fails with HTTP 500, error code 50001 and
   `SignatureDoesNotMatch`.
 - Reading a schema above `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` fails
   when the pod does not have it in its cache, because its text is stored in S3.
+- Schema lookup (`POST /subjects/{subject}`) and compatibility checks
+  (`POST /compatibility/subjects/{subject}/versions` and
+  `POST /compatibility/subjects/{subject}/versions/{version}`) load the existing
+  versions of the subject. They fail when one of those versions is stored in S3
+  and not cached.
+- A schema stored inline in etcd fails to load when one of its references is
+  stored in S3 and not cached.
 
-Schemas stored inline in etcd, and schemas the pod already has in its cache,
-keep working.
+Only requests whose schemas and references are all stored inline in etcd or
+already in the pod cache keep working.
 
 Find the registry Deployment by its labels, then restart it:
 
