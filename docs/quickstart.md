@@ -59,11 +59,14 @@ Leave etcd endpoints empty in both the Helm values and the cluster spec. The ope
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints={} \
-  --set operator.image.useLatest=true \
-  --set operator.brokerImage.useLatest=true \
-  --set console.image.useLatest=true
+  --set operator.etcdEndpoints={}
 ```
+
+Image tags follow the chart `appVersion` unless you override them. The current
+chart `appVersion` may be older than this release. For a full list of image
+keys, including `useLatest` and `tag` for the operator, broker, etcd-tools,
+console, proxy, schema registry, MCP and the LFS browser demo, see
+[Installing with Helm](operations.md#installing-with-helm).
 
 ### Option B: External etcd
 
@@ -72,11 +75,14 @@ Provide reachable etcd endpoints.
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
-  --set operator.image.useLatest=true \
-  --set operator.brokerImage.useLatest=true \
-  --set console.image.useLatest=true
+  --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379
 ```
+
+`http://etcd.kafscale.svc:2379` is an example external etcd Service, not the
+operator-managed etcd client. Managed etcd is
+`<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`. For the image
+tags, see the note under Option A and
+[Installing with Helm](operations.md#installing-with-helm).
 
 ## 4) Create a KafscaleCluster
 
@@ -84,7 +90,7 @@ This creates the broker deployment and wires S3 + etcd into the broker env.
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.novatechflow.io/v1alpha1
+apiVersion: kafscale.io/v1alpha1
 kind: KafscaleCluster
 metadata:
   name: demo
@@ -104,7 +110,7 @@ If you are using external etcd, set `spec.etcd.endpoints` instead:
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.novatechflow.io/v1alpha1
+apiVersion: kafscale.io/v1alpha1
 kind: KafscaleCluster
 metadata:
   name: demo
@@ -132,7 +138,7 @@ For S3-compatible endpoints (MinIO, etc), add:
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.novatechflow.io/v1alpha1
+apiVersion: kafscale.io/v1alpha1
 kind: KafscaleTopic
 metadata:
   name: orders
@@ -144,7 +150,22 @@ EOF
 
 ## 6) Produce and Consume
 
-Port-forward the broker and use Kafka CLI tools:
+A laptop cannot use `kubectl port-forward` to `svc/demo-broker` once there is
+more than one broker, or when `spec.brokers.advertisedHost` is unset. Metadata
+then advertises each broker as
+`<cluster>-broker-<n>.<cluster>-broker-headless.<namespace>.svc.cluster.local:9092`,
+which is only reachable from inside the cluster. For the quickstart cluster
+`demo` in namespace `kafscale`, that is
+`demo-broker-0.demo-broker-headless.kafscale.svc.cluster.local:9092`.
+
+Run the client in the cluster, or enable the Kafka proxy (`proxy.enabled=true`)
+and set `proxy.advertisedHost` / `proxy.advertisedPort` to an address the
+client can reach. For local clusters, pin `proxy.service.nodePort` (see
+`docs/operations.md`).
+
+Port-forward to `svc/<cluster>-broker` only works with a single broker and
+with `spec.brokers.advertisedHost` set to an address the client can reach, for
+example `127.0.0.1`:
 
 ```bash
 kubectl -n kafscale port-forward svc/demo-broker 9092:9092
@@ -154,13 +175,31 @@ kubectl -n kafscale port-forward svc/demo-broker 9092:9092
 kafka-console-producer --bootstrap-server 127.0.0.1:9092 --topic orders --producer-property enable.idempotence=false
 kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic orders --from-beginning
 ```
+
 Note: Kafka clients that default to idempotent producers or transactions must disable them explicitly.
 
-External clients: enable the Kafka proxy (`proxy.enabled=true`) and set
-`proxy.advertisedHost` / `proxy.advertisedPort` so clients learn a stable
-endpoint. For local clusters, pin `proxy.service.nodePort` (see
-`docs/operations.md`). Direct broker exposure via `spec.brokers.service` is
-optional when you intentionally bypass the proxy.
+Direct broker exposure via `spec.brokers.service` is optional when you
+intentionally bypass the proxy.
+
+Service names for a `KafscaleCluster` named `<cluster>` in namespace
+`<namespace>` are documented in [Service names](operations.md#service-names).
+The operator-managed etcd client is
+`<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`, and the broker
+Service is `<cluster>-broker.<namespace>.svc.cluster.local:9092` (metrics on
+port 9093).
+
+## 7) Delete a topic
+
+Deleting a `KafscaleTopic` custom resource does not delete the Kafka topic.
+The operator does not call `DeleteTopics` and does not write a
+`/kafscale/deleted-topics` record, so the topic stays in Kafka metadata and
+its S3 data is not recorded for `kafscale-cli prune`.
+
+To delete a topic, use the Kafka `DeleteTopics` API from a client that can
+reach the brokers, or the console `DELETE /ui/api/status/topics/<topic>`
+endpoint after signing in (see [Console](operations.md#console)). If you
+created the topic with a `KafscaleTopic`, delete that resource as well, so
+the operator does not publish the topic back into the cluster snapshot.
 
 ## Next Steps
 

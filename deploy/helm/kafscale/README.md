@@ -63,13 +63,20 @@ helm upgrade --install kafscale ./deploy/helm/kafscale
 
 ### With Kafka Proxy (external access)
 
+Operator-managed etcd and broker Services are named from the
+`KafscaleCluster`: `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`
+and `<cluster>-broker.<namespace>.svc.cluster.local:9092` (metrics on port
+9093). The quickstart cluster `demo` in namespace `kafscale` uses
+`demo-etcd-client` and `demo-broker`. See
+[Service names](../../../docs/operations.md#service-names).
+
 ```bash
 helm upgrade --install kafscale ./deploy/helm/kafscale \
   --set proxy.enabled=true \
   --set proxy.replicaCount=2 \
   --set proxy.service.type=LoadBalancer \
   --set proxy.advertisedHost=kafka.example.com \
-  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+  --set proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 ```
 
 ### LFS Demo Stack

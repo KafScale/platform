@@ -39,7 +39,18 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
 
-By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a specific release (for example, `v1.6.3`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
+By default, image tags follow the chart `appVersion`. Every image key below uses that tag when `tag` is empty, unless `useLatest` is true, in which case the tag is `latest` and `imagePullPolicy` is `Always`:
+
+- `operator.image`
+- `operator.brokerImage`
+- `operator.etcdSnapshotEtcdctlImage`
+- `console.image`
+- `proxy.image`
+- `schemaRegistry.image`
+- `mcp.image`
+- `lfsDemos.e72Browser.image` (only when the LFS browser demo is enabled)
+
+Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v1.6.3`). For a dev/latest install, set `useLatest=true` on every image the install actually runs, not only the operator, broker and console. The current chart `appVersion` may be older than the branch you are following.
 
 ### Per-cluster broker image
 
@@ -412,6 +423,26 @@ The operator resolves etcd endpoints in this order:
 1. `KafscaleCluster.spec.etcd.endpoints`
 2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`
 3. Managed etcd (operator creates a 3-node StatefulSet)
+
+### Service names
+
+On an operator-managed cluster, Kubernetes Service names come from the
+`KafscaleCluster` name (`<cluster>`) and its namespace (`<namespace>`):
+
+- etcd client: `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`
+- broker (Kafka): `<cluster>-broker.<namespace>.svc.cluster.local:9092`
+- broker (metrics): `<cluster>-broker.<namespace>.svc.cluster.local:9093`
+- per-broker DNS: `<cluster>-broker-<n>.<cluster>-broker-headless.<namespace>.svc.cluster.local:9092`
+
+The quickstart cluster `demo` in namespace `kafscale` uses
+`demo-etcd-client.kafscale.svc.cluster.local:2379` and
+`demo-broker.kafscale.svc.cluster.local:9092` (metrics on port 9093).
+
+Helm values such as `proxy.etcdEndpoints`, `schemaRegistry.etcdEndpoints`,
+`mcp.etcdEndpoints` and `mcp.metrics.brokerMetricsURL` must use these
+Services when etcd is operator-managed. Examples that use
+`etcd.kafscale.svc` are for an external etcd you already run, not for
+managed etcd.
 
 ### etcd schema direction
 
@@ -1051,8 +1082,11 @@ Recommended settings:
 
 Helm values to enable:
 - `proxy.enabled=true`
-- `proxy.etcdEndpoints[0]=http://kafscale-etcd-client.<namespace>.svc.cluster.local:2379`
+- `proxy.etcdEndpoints[0]=http://<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`
 - `proxy.advertisedHost=<public DNS>`
+
+The examples below use the quickstart cluster `demo` in namespace `kafscale`.
+Replace `demo-etcd-client` when your `KafscaleCluster` has a different name.
 
 Example (HA proxy + external access):
 
@@ -1065,7 +1099,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.service.port=9092 \
   --set proxy.advertisedHost=kafka.example.com \
   --set proxy.advertisedPort=9092 \
-  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+  --set proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 ```
 
 For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
@@ -1083,7 +1117,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.service.nodePort=30092 \
   --set proxy.advertisedHost=127.0.0.1 \
   --set proxy.advertisedPort=30092 \
-  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+  --set proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 ```
 
 Helm chart docs: `deploy/helm/kafscale/README.md`.
