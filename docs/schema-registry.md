@@ -308,3 +308,23 @@ kubectl rollout status "$DEPLOY" -n <namespace>
 ```
 
 `<namespace>` is the namespace of the Helm release and `<release>` is the release name.
+
+### Shutdown
+
+On SIGTERM or SIGINT the registry shuts down in three steps, so that a rollout restart does not drop requests as long as the pod leaves the Service endpoints within the drain period:
+
+1. `/readyz` returns 503 at once, so Kubernetes takes the pod out of the Service endpoints.
+2. The registry keeps serving every request, `/readyz` excepted, for the drain period, `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`). This covers the time kube-proxy and other nodes need to stop sending traffic to the pod.
+3. It stops accepting connections and waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`) for in-flight requests. Requests still running then are cut off and the registry exits with an error.
+
+Chart values:
+
+```yaml
+schemaRegistry:
+  shutdownDrain: ""                  # sets KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN, empty keeps 5s
+  shutdownTimeout: ""                # sets KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT, empty keeps 10s
+  preStopSleepSeconds: 0             # a preStop hook that sleeps before SIGTERM, 0 adds no hook
+  terminationGracePeriodSeconds: 30
+```
+
+The drain period already covers endpoint removal, so the chart adds no preStop hook by default. Set `preStopSleepSeconds` to delay SIGTERM as well, for example with `shutdownDrain: 0s`. Kubernetes kills the pod when `terminationGracePeriodSeconds` runs out, and that time includes the preStop hook. Keep `preStopSleepSeconds` plus the drain period plus the shutdown timeout below it. The defaults use 15 of the 30 seconds.

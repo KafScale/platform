@@ -269,6 +269,11 @@ limitations under the License.
 
 - Schema registry pods now notice an etcd snapshot restore and clear their schema cache without a restart. Each pod watches its etcd keys and resets when the watch reports a compaction. The operator now restores etcd snapshots with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, which triggers this. Manual restores should use the same flags or restart the registry pods. See `docs/schema-registry.md` and `docs/operations.md`.
 
+- The schema registry now shuts down gracefully, so that the rollout restart S3 key rotation needs does not drop requests. Before, it stopped accepting connections at once on SIGTERM while the Service could still send it traffic, which gave refused connections and client timeouts during a restart.
+  - On SIGTERM or SIGINT `/readyz` returns 503 at once, the registry keeps serving for `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), then waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`, before it was a fixed 5s) for in-flight requests.
+  - New chart values: `schemaRegistry.shutdownDrain`, `schemaRegistry.shutdownTimeout`, `schemaRegistry.preStopSleepSeconds` (default `0`, no hook) and `schemaRegistry.terminationGracePeriodSeconds` (default `30`, the Kubernetes default). Upgrading the chart changes the pod template, so the registry rolls once.
+  - See `docs/schema-registry.md#shutdown`.
+
 ### Processors
 
 - The Iceberg and SQL processors map segments under `<topic>@<generation>/` to the topic `<topic>` and its table, and keep a separate checkpoint for each generation, so a re-created topic is processed from offset 0 (#262).
@@ -348,6 +353,12 @@ ones most likely to affect you.
 - **LFS multipart sessions live in etcd.** Uploads work across proxy replicas
   and restarts. The orphan sweep needs `s3:ListBucketMultipartUploads` and
   `s3:AbortMultipartUpload` (#321).
+
+- **Schema registry takes longer to stop.** On SIGTERM it now keeps serving
+  for 5 seconds with `/readyz` failing before it stops, and gives in-flight
+  requests up to 10 seconds instead of 5. Set
+  `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN=0s` for the old immediate stop. See
+  [Shutdown](../schema-registry.md#shutdown).
 
 ### Deprecations
 

@@ -347,6 +347,10 @@ schemaRegistry:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
   requestTimeout: ""  # Go duration, for example 10s
   inlineLimitBytes: ""  # Schema text above this size goes to S3, default 65536
+  shutdownDrain: ""  # Go duration the registry keeps serving after SIGTERM with /readyz failing, default 5s, 0s turns it off
+  shutdownTimeout: ""  # Go duration in-flight requests get to finish after the drain, default 10s
+  preStopSleepSeconds: 0  # Seconds a preStop hook sleeps before SIGTERM, 0 adds no hook
+  terminationGracePeriodSeconds: 30
   s3:
     bucket: ""
     region: ""

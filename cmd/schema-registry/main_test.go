@@ -33,7 +33,7 @@ func TestLoadSettingsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.addr != ":8081" || s.namespace != "default" || s.timeout != 10*time.Second || s.inlineLimit != schemaregistry.DefaultInlineLimit || s.s3 != nil {
+	if s.addr != ":8081" || s.namespace != "default" || s.timeout != 10*time.Second || s.inlineLimit != schemaregistry.DefaultInlineLimit || s.s3 != nil || s.drain != 5*time.Second || s.shutdown != 10*time.Second {
 		t.Fatalf("defaults %+v", s)
 	}
 	if strings.Join(s.endpoints, ",") != "a:2379,b:2379" {
@@ -49,6 +49,8 @@ func TestLoadSettingsOverrides(t *testing.T) {
 		"KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD":      "p",
 		"KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT":    "3s",
 		"KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES": "100",
+		"KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN":     "0s",
+		"KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT":   "20s",
 		"KAFSCALE_S3_NAMESPACE":                       "ns",
 		"KAFSCALE_S3_BUCKET":                          "bucket",
 		"KAFSCALE_S3_REGION":                          "eu-west-1",
@@ -62,7 +64,7 @@ func TestLoadSettingsOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.addr != ":9000" || s.username != "u" || s.password != "p" || s.timeout != 3*time.Second || s.inlineLimit != 100 || s.namespace != "ns" {
+	if s.addr != ":9000" || s.username != "u" || s.password != "p" || s.timeout != 3*time.Second || s.inlineLimit != 100 || s.namespace != "ns" || s.drain != 0 || s.shutdown != 20*time.Second {
 		t.Fatalf("settings %+v", s)
 	}
 	c := s.s3
@@ -111,6 +113,8 @@ func TestLoadSettingsErrors(t *testing.T) {
 		"no endpoints": {},
 		"bad timeout":  {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT": "soon"},
 		"zero timeout": {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT": "0s"},
+		"bad drain":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN": "-1s"},
+		"bad shutdown": {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT": "0s"},
 		"bad limit":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES": "-1"},
 		"bad style":    {"KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS": "e", "KAFSCALE_S3_BUCKET": "b", "KAFSCALE_S3_PATH_STYLE": "maybe"},
 	} {

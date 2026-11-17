@@ -44,6 +44,9 @@ spec:
         - name: {{ . }}
 {{- end }}
 {{- end }}
+{{- with .Values.schemaRegistry.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ int . }}
+{{- end }}
 {{- with .Values.schemaRegistry.podSecurityContext }}
       securityContext:
 {{ toYaml . | indent 8 }}
@@ -76,6 +79,14 @@ spec:
 {{- if .Values.schemaRegistry.requestTimeout }}
             - name: KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT
               value: "{{ .Values.schemaRegistry.requestTimeout }}"
+{{- end }}
+{{- if .Values.schemaRegistry.shutdownDrain }}
+            - name: KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN
+              value: "{{ .Values.schemaRegistry.shutdownDrain }}"
+{{- end }}
+{{- if .Values.schemaRegistry.shutdownTimeout }}
+            - name: KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT
+              value: "{{ .Values.schemaRegistry.shutdownTimeout }}"
 {{- end }}
 {{- if .Values.schemaRegistry.inlineLimitBytes }}
             - name: KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES
@@ -126,6 +137,12 @@ spec:
             - name: http
               containerPort: {{ .Values.schemaRegistry.port }}
               protocol: TCP
+{{- if gt (int .Values.schemaRegistry.preStopSleepSeconds) 0 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ int .Values.schemaRegistry.preStopSleepSeconds }}"]
+{{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
