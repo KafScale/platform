@@ -286,6 +286,8 @@ limitations under the License.
 
 - The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358).
 
+- The operator `EtcdSnapshot` condition and the `kafscale_operator_etcd_snapshot_*` gauges no longer freeze between reconciles. The operator watches the snapshot CronJob and reconciles when its status changes, and reconciles again when the last successful snapshot passes `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, so `kafscale_operator_etcd_snapshot_stale` and the `KafscaleSnapshotStale` alert fire when snapshots stop (#357).
+
 - Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
 ### CI, tests and demos
