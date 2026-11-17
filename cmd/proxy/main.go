@@ -781,6 +781,22 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			}
 			writeResponse(resp)
 			continue
+		case protocol.APIKeyListOffsets:
+			if req, groups := p.routeListOffsets(ctx, frame.Payload); req != nil {
+				resp, err := p.forwardListOffsets(ctx, header, req, groups, pool)
+				if err != nil {
+					select {
+					case <-clientGone:
+						continue
+					default:
+					}
+					p.logger.Warn("list offsets routing failed", "error", err)
+					p.respondBackendError(writeResponse, header, body)
+					return
+				}
+				writeResponse(resp)
+				continue
+			}
 		case protocol.APIKeyJoinGroup,
 			protocol.APIKeySyncGroup,
 			protocol.APIKeyHeartbeat,
