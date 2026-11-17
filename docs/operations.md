@@ -778,8 +778,9 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 ### Console
 
 - `KAFSCALE_CONSOLE_HTTP_ADDR`: Console listen address.
-- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS`: Etcd endpoints for metadata read-only access.
+- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS`: Etcd endpoints for cluster metadata. The console reads status from etcd and writes to it when it creates or deletes a topic.
 - `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD`: Etcd auth for console.
+- `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. The console writes it into the deleted topic record that `kafscale-cli prune` uses. An unset or blank value means `default`. Set it to the namespace the operator gives the brokers, the `KafscaleCluster` namespace. The Helm chart sets it from `console.s3Namespace`.
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL`: Broker Prometheus endpoint.
 - `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials.
 - `KAFSCALE_CONSOLE_LFS_ENABLED`: Enable the LFS views and API (`true` to enable; any other value disables them).
@@ -788,6 +789,12 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_REGION`, `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT`: S3 location for browsing LFS objects. Path-style addressing is used when an endpoint is set.
 - `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY`: S3 credentials for the console.
 - `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL`: Presigned URL lifetime in seconds (default `300`).
+
+The console serves these authenticated topic endpoints when `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` is set. They use the same etcd metadata path as the broker Kafka `CreateTopics` and `DeleteTopics` APIs.
+
+- `POST /ui/api/status/topics` creates a topic. The JSON body is `{"name":"<topic>","partitions":<count>,"replication_factor":<count>}`. `partitions` must be at least 1. `replication_factor` is optional and defaults to 1. It returns `201` with `{"name","partitions","state"}`.
+- `DELETE /ui/api/status/topics/<topic>` deletes a topic the same way the broker does. It returns `200` with `{"name":"<topic>"}`.
+- Errors: `400` for a malformed body, an invalid topic name, a partition count below 1 or a replication factor above the broker count, `404` for an unknown topic, `409` for a topic that already exists or changed during the delete, and `503` when no etcd endpoints are configured or etcd is unavailable.
 
 When LFS is enabled, the console serves these authenticated endpoints: `/ui/api/lfs/status`, `/ui/api/lfs/objects`, `/ui/api/lfs/topics`, `/ui/api/lfs/topics/{topic}`, `/ui/api/lfs/events`, `/ui/api/lfs/orphans`, `/ui/api/lfs/s3/browse` and `/ui/api/lfs/s3/presign`.
 

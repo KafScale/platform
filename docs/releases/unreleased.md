@@ -286,6 +286,8 @@ limitations under the License.
 
 - The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358).
 
+- The console `POST /ui/api/status/topics` and `DELETE /ui/api/status/topics/<topic>` endpoints create and delete topics in etcd through the same metadata path as the broker. They returned `202` and changed nothing. Create takes `{"name","partitions","replication_factor"}` and returns `201`, delete returns `200`, and errors return `400`, `404`, `409` or `503`. The console needs write access to etcd for these calls. Set `KAFSCALE_S3_NAMESPACE`, or `console.s3Namespace` in the Helm chart, to the broker namespace so that deleted topic records point at the right S3 prefix (#362).
+
 - Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
 ### CI, tests and demos

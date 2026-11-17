@@ -68,6 +68,10 @@ spec:
             - name: KAFSCALE_CONSOLE_ETCD_ENDPOINTS
               value: "{{ join "," .Values.console.etcdEndpoints }}"
 {{- end }}
+{{- if .Values.console.s3Namespace }}
+            - name: KAFSCALE_S3_NAMESPACE
+              value: "{{ .Values.console.s3Namespace }}"
+{{- end }}
 {{- if .Values.console.etcd.username }}
             - name: KAFSCALE_CONSOLE_ETCD_USERNAME
               value: "{{ .Values.console.etcd.username }}"

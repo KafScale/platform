@@ -18,10 +18,12 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/KafScale/platform/internal/health"
@@ -219,13 +221,41 @@ func (h *consoleHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusFromMetadata(meta, metrics))
 }
 
+type createTopicRequest struct {
+	Name              string `json:"name"`
+	Partitions        int32  `json:"partitions"`
+	ReplicationFactor int16  `json:"replication_factor"`
+}
+
+type deleteTopicResponse struct {
+	Name string `json:"name"`
+}
+
 func (h *consoleHandlers) handleCreateTopic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Future work will invoke the operator APIs; for now this is an ack.
-	w.WriteHeader(http.StatusAccepted)
+	if !h.topicStoreReady(w) {
+		return
+	}
+	var req createTopicRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	topic, err := h.store.CreateTopic(r.Context(), metadata.TopicSpec{
+		Name:              req.Name,
+		NumPartitions:     req.Partitions,
+		ReplicationFactor: req.ReplicationFactor,
+	})
+	if err != nil {
+		writeTopicAdminError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(topicInfo{Name: *topic.Topic, Partitions: len(topic.Partitions), State: "ready"})
 }
 
 func (h *consoleHandlers) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +263,44 @@ func (h *consoleHandlers) handleDeleteTopic(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	if !h.topicStoreReady(w) {
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/ui/api/status/topics/")
+	if err := metadata.ValidateTopicName(name); err != nil {
+		writeTopicAdminError(w, err)
+		return
+	}
+	if err := h.store.DeleteTopic(r.Context(), name); err != nil {
+		writeTopicAdminError(w, err)
+		return
+	}
+	writeJSON(w, deleteTopicResponse{Name: name})
+}
+
+func (h *consoleHandlers) topicStoreReady(w http.ResponseWriter) bool {
+	if h.store == nil {
+		http.Error(w, "metadata store not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	if checker, ok := h.store.(interface{ Available() bool }); ok && !checker.Available() {
+		http.Error(w, "etcd unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
+func writeTopicAdminError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, metadata.ErrInvalidTopic):
+		status = http.StatusBadRequest
+	case errors.Is(err, metadata.ErrUnknownTopic):
+		status = http.StatusNotFound
+	case errors.Is(err, metadata.ErrTopicExists), errors.Is(err, metadata.ErrTopicGenerationChanged):
+		status = http.StatusConflict
+	}
+	http.Error(w, err.Error(), status)
 }
 
 func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) {

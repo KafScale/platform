@@ -103,6 +103,7 @@ console:
     username: ""
     password: null  # Set via --set or use existingSecret
   etcdEndpoints: []
+  s3Namespace: ""  # KAFSCALE_S3_NAMESPACE of the brokers; the operator uses the KafscaleCluster namespace
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""

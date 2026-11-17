@@ -125,9 +125,10 @@ func consoleEtcdConfigFromEnv() (metadata.EtcdStoreConfig, bool) {
 		return metadata.EtcdStoreConfig{}, false
 	}
 	return metadata.EtcdStoreConfig{
-		Endpoints: strings.Split(endpoints, ","),
-		Username:  os.Getenv("KAFSCALE_CONSOLE_ETCD_USERNAME"),
-		Password:  os.Getenv("KAFSCALE_CONSOLE_ETCD_PASSWORD"),
+		Endpoints:        strings.Split(endpoints, ","),
+		Username:         os.Getenv("KAFSCALE_CONSOLE_ETCD_USERNAME"),
+		Password:         os.Getenv("KAFSCALE_CONSOLE_ETCD_PASSWORD"),
+		StorageNamespace: strings.TrimSpace(os.Getenv("KAFSCALE_S3_NAMESPACE")),
 	}, true
 }
 
