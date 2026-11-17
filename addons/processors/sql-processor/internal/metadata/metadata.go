@@ -484,13 +484,7 @@ func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = 5 * time.Second
 	}
-	if cfg.DialKeepAliveTime == 0 {
-		cfg.DialKeepAliveTime = 10 * time.Second
-	}
-	if cfg.DialKeepAliveTimeout == 0 {
-		cfg.DialKeepAliveTimeout = 3 * time.Second
-	}
-	cfg.PermitWithoutStream = true
+	cfg.PermitWithoutStream = false
 	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(grpc.ConnectParams{
 		Backoff: backoff.Config{
 			BaseDelay:  100 * time.Millisecond,

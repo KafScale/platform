@@ -171,7 +171,7 @@ still applies. See [issue #297](https://github.com/KafScale/platform/issues/297)
   - Within `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`) of the last successful etcd read, the Kafka listener keeps using its last metadata. Produces still wait, because brokers do not ack while etcd is down.
   - Past the TTL the proxy reports NotReady, answers Kafka requests with `REQUEST_TIMED_OUT` (an all-topics Metadata request gets an empty reply), closes the client connection, and still answers ApiVersions.
   - The LFS HTTP API returns 503 `metadata_unavailable` as soon as etcd cannot be read, even within the TTL.
-  - The proxy serves again within a few seconds after etcd answers. etcd clients use a one-second maximum gRPC reconnect backoff and keepalive probes, so recovery is no longer delayed by the default two-minute backoff. The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
+  - The proxy serves again within a few seconds after etcd answers. etcd clients use a one-second maximum gRPC reconnect backoff, so recovery is no longer delayed by the default two-minute backoff. The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
   - Full details: [Proxy behavior when etcd is down](operations.md#proxy-behavior-when-etcd-is-down).
 
 - Brokers now upload segments with `PutObject` and `If-None-Match: *` (#324, #327).

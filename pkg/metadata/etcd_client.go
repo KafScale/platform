@@ -24,10 +24,8 @@ import (
 )
 
 const (
-	etcdDialKeepAliveTime    = 10 * time.Second
-	etcdDialKeepAliveTimeout = 3 * time.Second
-	etcdReconnectMaxDelay    = time.Second
-	etcdMinConnectTimeout    = time.Second
+	etcdReconnectMaxDelay = time.Second
+	etcdMinConnectTimeout = time.Second
 )
 
 var etcdConnectParams = grpc.ConnectParams{
@@ -44,13 +42,7 @@ func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = 5 * time.Second
 	}
-	if cfg.DialKeepAliveTime == 0 {
-		cfg.DialKeepAliveTime = etcdDialKeepAliveTime
-	}
-	if cfg.DialKeepAliveTimeout == 0 {
-		cfg.DialKeepAliveTimeout = etcdDialKeepAliveTimeout
-	}
-	cfg.PermitWithoutStream = true
+	cfg.PermitWithoutStream = false
 	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(etcdConnectParams))
 	return cfg
 }

@@ -26,6 +26,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/connectivity"
 
 	"github.com/KafScale/platform/internal/testutil"
 )
@@ -158,14 +159,14 @@ func TestEtcdClientConfigSetsReconnectBackoff(t *testing.T) {
 	if cfg.DialTimeout != 4*time.Second {
 		t.Fatalf("DialTimeout = %s, want 4s", cfg.DialTimeout)
 	}
-	if cfg.DialKeepAliveTime != etcdDialKeepAliveTime {
-		t.Fatalf("DialKeepAliveTime = %s, want %s", cfg.DialKeepAliveTime, etcdDialKeepAliveTime)
+	if cfg.DialKeepAliveTime != 0 {
+		t.Fatalf("DialKeepAliveTime = %s, want 0", cfg.DialKeepAliveTime)
 	}
-	if cfg.DialKeepAliveTimeout != etcdDialKeepAliveTimeout {
-		t.Fatalf("DialKeepAliveTimeout = %s, want %s", cfg.DialKeepAliveTimeout, etcdDialKeepAliveTimeout)
+	if cfg.DialKeepAliveTimeout != 0 {
+		t.Fatalf("DialKeepAliveTimeout = %s, want 0", cfg.DialKeepAliveTimeout)
 	}
-	if !cfg.PermitWithoutStream {
-		t.Fatal("expected PermitWithoutStream")
+	if cfg.PermitWithoutStream {
+		t.Fatal("PermitWithoutStream must stay false; etcd rejects idle pings")
 	}
 	if len(cfg.DialOptions) == 0 {
 		t.Fatal("expected reconnect DialOptions")
@@ -178,5 +179,59 @@ func TestEtcdClientConfigSetsReconnectBackoff(t *testing.T) {
 	}
 	if etcdConnectParams.MinConnectTimeout != etcdMinConnectTimeout {
 		t.Fatalf("MinConnectTimeout = %s, want %s", etcdConnectParams.MinConnectTimeout, etcdMinConnectTimeout)
+	}
+}
+
+func TestEtcdClientIdleConnectionSurvivesKeepaliveStrikeWindow(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	cfg := EtcdClientConfig(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 2 * time.Second,
+	})
+	cli, err := clientv3.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	ctx := context.Background()
+	putCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	_, err = cli.Put(putCtx, "/kafscale/idle-keepalive", "ok")
+	cancel()
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	conn := cli.ActiveConnection()
+	if conn == nil {
+		t.Fatal("missing active connection")
+	}
+	if got := conn.GetState(); got != connectivity.Ready {
+		t.Fatalf("connection state %s, want READY", got)
+	}
+
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		state := conn.GetState()
+		if state != connectivity.Ready {
+			t.Fatalf("idle connection left READY after %s: %s", 25*time.Second-time.Until(deadline), state)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if cli.ActiveConnection() != conn {
+		t.Fatal("idle client replaced its connection during the strike window")
+	}
+
+	getCtx, cancelGet := context.WithTimeout(ctx, 3*time.Second)
+	resp, err := cli.Get(getCtx, "/kafscale/idle-keepalive")
+	cancelGet()
+	if err != nil {
+		t.Fatalf("get after idle window: %v", err)
+	}
+	if len(resp.Kvs) != 1 || string(resp.Kvs[0].Value) != "ok" {
+		t.Fatalf("unexpected get result: %+v", resp.Kvs)
+	}
+	if conn.GetState() != connectivity.Ready {
+		t.Fatalf("connection state after get %s, want READY", conn.GetState())
 	}
 }
