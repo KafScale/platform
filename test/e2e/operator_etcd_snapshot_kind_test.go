@@ -232,6 +232,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=0")
 	waitForStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd", 0, 180*time.Second)
+	t.Log("checking that brokers become NotReady while etcd is unavailable")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "--for=condition=Ready=false", "pods", "-l", "app=kafscale-broker,cluster=kafscale", "--timeout=30s")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pvc", "-l", "app=kafscale-etcd,cluster=kafscale", "--ignore-not-found=true")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-etcd", "--replicas=3")
 	waitForStatefulSetPodsReady(t, ctx, kindNamespace, "kafscale-etcd", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 2*time.Minute)
@@ -240,6 +242,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
 
+	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	if err := waitForOperatorBackends(ctx, runCmdWithOutputErr, kindNamespace, "kafscale", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 2*time.Minute); err != nil {
 		t.Fatal(err)
 	}

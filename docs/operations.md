@@ -79,6 +79,8 @@ the override returns that cluster to the operator default.
 
 Console and MCP use `/healthz` for liveness. Their Helm readiness probes use `/readyz`, which performs a live etcd read with a one-second deadline and returns HTTP 503 when configured etcd is unreachable, even if metadata is cached. The next successful probe restores readiness without restarting the process. The Kubernetes probe timeout is two seconds. Standalone or metrics-only mode without a metadata store remains ready.
 
+Operator-managed brokers use `/readyz` on the metrics port for Kubernetes readiness. Each check performs a live metadata read with a one-second deadline and checks the broker’s S3 health state. Unreachable etcd or an unavailable S3 state returns HTTP 503; degraded S3 remains ready. Kubernetes uses a two-second HTTP timeout and checks every five seconds, marking the broker NotReady after three failures. A successful check restores readiness. `/healthz` continues to report process liveness independently of etcd.
+
 ## Broker partition restore
 
 On first access after a broker restart, a partition rebuilds its in-memory segment

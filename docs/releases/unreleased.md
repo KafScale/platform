@@ -282,7 +282,7 @@ limitations under the License.
 
 ### CI, tests and demos
 
-- The operator kind snapshot suite waits for all expected etcd members and broker readiness before producing, retries its startup smoke test once, and checks backend health after restore. CI now runs this suite with nftables alongside the existing operator envtests. Separate `test-operator-envtest` and `test-operator-kind` Make targets support both paths; envtest setup is pinned to Kubernetes 1.35.0 and fails when assets are unavailable (#341).
+- Operator-managed brokers now have an HTTP readiness probe, and broker `/readyz` checks live etcd access as well as S3 health. The operator kind snapshot suite asserts NotReady during an etcd outage, verifies recovery after restore, waits for all expected etcd members and broker readiness before producing, retries its startup smoke test once, and checks backend health after restore. CI now runs this suite with nftables alongside the existing operator envtests. Separate `test-operator-envtest` and `test-operator-kind` Make targets support both paths; envtest setup is pinned to Kubernetes 1.35.0 and fails when assets are unavailable (#341).
 
 - Broker and console tests use isolated random-port etcd fixtures. Test setup no longer terminates arbitrary processes listening on fixed ports.
 - `make lfs-demo` no longer loses LFS tracker events (#308).
