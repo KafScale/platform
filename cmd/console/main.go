@@ -38,9 +38,10 @@ func main() {
 		log.Fatalf("metadata store init failed: %v", err)
 	}
 	opts := consolepkg.ServerOptions{
-		Store:  store,
-		Logger: log.Default(),
-		Auth:   authConfigFromEnv(),
+		Store:       store,
+		Logger:      log.Default(),
+		Auth:        authConfigFromEnv(),
+		S3Namespace: os.Getenv("KAFSCALE_S3_NAMESPACE"),
 	}
 	if metricsProvider := buildMetricsProvider(store); metricsProvider != nil {
 		opts.Metrics = metricsProvider
@@ -125,9 +126,10 @@ func consoleEtcdConfigFromEnv() (metadata.EtcdStoreConfig, bool) {
 		return metadata.EtcdStoreConfig{}, false
 	}
 	return metadata.EtcdStoreConfig{
-		Endpoints: strings.Split(endpoints, ","),
-		Username:  os.Getenv("KAFSCALE_CONSOLE_ETCD_USERNAME"),
-		Password:  os.Getenv("KAFSCALE_CONSOLE_ETCD_PASSWORD"),
+		Endpoints:        strings.Split(endpoints, ","),
+		Username:         os.Getenv("KAFSCALE_CONSOLE_ETCD_USERNAME"),
+		Password:         os.Getenv("KAFSCALE_CONSOLE_ETCD_PASSWORD"),
+		StorageNamespace: strings.TrimSpace(os.Getenv("KAFSCALE_S3_NAMESPACE")),
 	}, true
 }
 
