@@ -284,7 +284,7 @@ The S3 error depends on the provider and on how the key was retired, for example
 
 Requests that need no S3 read or write keep working, such as reads of schemas
 whose text and references are inline in etcd or in the pod cache, and
-registering such a schema again.
+registering such a schema again when it is the latest version of the subject.
 
 Rotate the keys in this order. The order matters.
 
