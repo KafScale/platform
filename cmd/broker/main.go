@@ -2125,6 +2125,7 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 					nextOffset = buffered
 				}
 			}
+			errorCode := int16(protocol.NONE)
 			if offsetErr != nil {
 				if errors.Is(offsetErr, metadata.ErrUnknownTopic) {
 					p := kmsg.NewFetchResponseTopicPartition()
@@ -2133,34 +2134,36 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 					partitionResponses = append(partitionResponses, p)
 					continue
 				}
-				if errors.Is(offsetErr, context.Canceled) || errors.Is(offsetErr, context.DeadlineExceeded) {
-					offsetErr = nil
-				} else if !h.etcdAvailable() {
-					nextOffset = part.FetchOffset
-					offsetErr = nil
+				// A failed read provides no watermark to validate the requested
+				// offset against. Report the failure instead of causing a
+				// consumer offset reset using a zero or invented watermark.
+				nextOffset = -1
+				if errors.Is(offsetErr, context.Canceled) || errors.Is(offsetErr, context.DeadlineExceeded) || !h.etcdAvailable() {
+					errorCode = protocol.REQUEST_TIMED_OUT
 				} else {
 					h.logger.Error("fetch wait failed", "topic", topicName, "partition", part.Partition, "error", offsetErr, "etcd_available", h.etcdAvailable())
-					nextOffset = 0
+					errorCode = protocol.UNKNOWN_SERVER_ERROR
 				}
 			}
-			errorCode := int16(0)
 			var recordSet []byte
-			switch {
-			case part.FetchOffset > nextOffset:
-				errorCode = protocol.OFFSET_OUT_OF_RANGE
-			case part.FetchOffset == nextOffset:
-				recordSet = nil
-			default:
-				recordSet, err = plog.Read(ctx, part.FetchOffset, part.PartitionMaxBytes)
-				if err != nil {
-					if errors.Is(err, metadata.ErrNotOwner) {
-						errorCode = protocol.NOT_LEADER_OR_FOLLOWER
-					} else if errors.Is(err, storage.ErrOffsetOutOfRange) {
-						errorCode = protocol.OFFSET_OUT_OF_RANGE
-					} else {
-						errorCode = h.backpressureErrorCode()
-						if h.traceKafka {
-							h.logger.Debug("fetch read error", "topic", topicName, "partition", part.Partition, "error", err)
+			if offsetErr == nil {
+				switch {
+				case part.FetchOffset > nextOffset:
+					errorCode = protocol.OFFSET_OUT_OF_RANGE
+				case part.FetchOffset == nextOffset:
+					recordSet = nil
+				default:
+					recordSet, err = plog.Read(ctx, part.FetchOffset, part.PartitionMaxBytes)
+					if err != nil {
+						if errors.Is(err, metadata.ErrNotOwner) {
+							errorCode = protocol.NOT_LEADER_OR_FOLLOWER
+						} else if errors.Is(err, storage.ErrOffsetOutOfRange) {
+							errorCode = protocol.OFFSET_OUT_OF_RANGE
+						} else {
+							errorCode = h.backpressureErrorCode()
+							if h.traceKafka {
+								h.logger.Debug("fetch read error", "topic", topicName, "partition", part.Partition, "error", err)
+							}
 						}
 					}
 				}
