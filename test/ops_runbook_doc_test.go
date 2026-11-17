@@ -1,0 +1,92 @@
+// Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/KafScale/platform/pkg/metadata"
+)
+
+func TestConsoleLoginDocumented(t *testing.T) {
+	text := readOpsDoc(t, "docs/operations.md")
+	for _, want := range []string{
+		"POST /ui/api/auth/login",
+		`"username"`,
+		`"password"`,
+		"kafscale_ui_session",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("docs/operations.md does not document console login %q", want)
+		}
+	}
+}
+
+func TestPartitionLeaseDocsMatchCode(t *testing.T) {
+	text := readOpsDoc(t, "docs/operations.md")
+	prefix := metadata.PartitionLeasePrefix()
+	if prefix != "/kafscale/partition-leases" {
+		t.Fatalf("unexpected PartitionLeasePrefix %q", prefix)
+	}
+	if !strings.Contains(text, prefix+"/") {
+		t.Errorf("docs/operations.md does not document lease keys under %s/", prefix)
+	}
+	if !strings.Contains(text, "<topic>/<partition>") && !strings.Contains(text, prefix+"/<topic>/<partition>") {
+		t.Error("docs/operations.md does not document the /<topic>/<partition> lease key shape")
+	}
+}
+
+func TestEtcdSnapshotJobDocumented(t *testing.T) {
+	text := readOpsDoc(t, "docs/operations.md")
+	for _, want := range []string{
+		"{cluster}-etcd-snapshot",
+		"create job --from=cronjob/",
+		"etcd-snapshots/",
+		"EtcdSnapshot",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("docs/operations.md does not contain %q", want)
+		}
+	}
+}
+
+func TestBrokerScalingDocumented(t *testing.T) {
+	for _, doc := range []string{"docs/operations.md", "docs/user-guide.md"} {
+		text := readOpsDoc(t, doc)
+		if !strings.Contains(text, "spec.brokers.replicas") {
+			t.Errorf("%s does not document scaling via spec.brokers.replicas", doc)
+		}
+		if !strings.Contains(text, "HPA") {
+			t.Errorf("%s does not mention the broker HPA", doc)
+		}
+	}
+	ops := readOpsDoc(t, "docs/operations.md")
+	if !strings.Contains(ops, "4") || (!strings.Contains(ops, "four times") && !strings.Contains(ops, "4x") && !strings.Contains(ops, "times the")) {
+		t.Error("docs/operations.md does not say the HPA max is four times the replica count")
+	}
+}
+
+func readOpsDoc(t *testing.T, rel string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
