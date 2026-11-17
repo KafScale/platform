@@ -580,8 +580,8 @@ advertised address.
 
 **Routing to the partition owner**
 
-- With brokers from etcd, `/lfs/produce` and multipart completion send the
-  produce to the broker that owns the partition. They use the same partition
+- `/lfs/produce` and multipart completion send the produce to the broker that
+  owns the partition, with brokers from etcd and with static backends. They use the same partition
   routes as the Kafka listener, and reuse an idle broker connection only when it
   goes to that broker.
 - When the owner is not known yet, they pick one of the listed brokers.
@@ -595,12 +595,15 @@ advertised address.
 
 **Static backends**
 
-- With static backends the proxy picks a broker as before. When that broker
-  answers that it does not lead the partition, the proxy tries another listed
-  broker if there is one.
-- With only one address, for example a broker Service, there is no other broker
-  to try. A non-owner answer gives 503 `backend_unavailable` and the object is
-  deleted.
+- With static backends the proxy still sends the produce to the partition
+  owner from the etcd routes when the owner is known. The listed brokers are
+  used when the owner is not known yet, or when the owner address cannot be
+  dialed.
+- When a listed broker answers that it does not lead the partition, the proxy
+  tries the current owner, or another listed broker if the owner is not known.
+- With only one address, for example a broker Service, and no reachable owner,
+  there is no other broker to try. A non-owner answer gives 503
+  `backend_unavailable` and the object is deleted.
 - When the advertised address is not reachable from inside the cluster, for
   example when brokers advertise a host port forward, set
   `spec.lfsProxy.backends` to the broker service, such as

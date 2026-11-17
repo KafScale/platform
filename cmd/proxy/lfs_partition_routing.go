@@ -40,10 +40,10 @@ func lfsNotPartitionOwner(err error) bool {
 		errors.Is(err, kerr.UnknownLeaderEpoch)
 }
 
-// ownerAddr returns the partition owner from the etcd routes. Static backends
-// have no routes.
+// ownerAddr returns the partition owner from the etcd routes, also when static
+// backends are listed.
 func (m *lfsModule) ownerAddr(ctx context.Context, topic string, partition int32) string {
-	if topic == "" || len(m.backends) > 0 || m.partitionOwner == nil {
+	if topic == "" || m.partitionOwner == nil {
 		return ""
 	}
 	return m.partitionOwner(ctx, topic, partition)

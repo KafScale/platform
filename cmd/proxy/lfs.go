@@ -624,12 +624,16 @@ func (m *lfsModule) connectBackend(ctx context.Context) (net.Conn, string, error
 }
 
 // connectPartitionBackend connects to the broker that owns topic/partition
-// when brokers come from etcd and the owner is known, and otherwise to one of
-// the listed brokers. Brokers in tried are skipped.
+// when the owner is known, and otherwise to one of the listed brokers. Brokers
+// in tried are skipped. With static backends, an owner that cannot be dialed
+// is added to tried and a listed broker is used instead.
 func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, partition int32, tried map[string]bool) (net.Conn, string, error) {
 	attempts := m.backendRetries
 	if attempts < 1 {
 		attempts = 1
+	}
+	if tried == nil {
+		tried = make(map[string]bool)
 	}
 	var lastErr error
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -663,6 +667,10 @@ func (m *lfsModule) connectPartitionBackend(ctx context.Context, topic string, p
 		}
 		if dialErr != nil {
 			lastErr = dialErr
+			if len(m.backends) > 0 && !slices.Contains(m.backends, addr) {
+				tried[addr] = true
+				attempt--
+			}
 			continue
 		}
 		wrapped, err := m.wrapBackendTLS(ctx, conn, addr)

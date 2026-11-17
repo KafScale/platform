@@ -308,3 +308,28 @@ func TestLFSHTTPMultipartCompleteRoutesToPartitionOwner(t *testing.T) {
 		})
 	}
 }
+
+func TestLFSHTTPProduceWithStaticBackendsRoutesToPartitionOwner(t *testing.T) {
+	f := newPartitionRoutingFixture(t, 0, 0)
+	f.m.backends = []string{f.brokers[1].addr}
+	rr := f.produce(t, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+	if f.brokers[0].produced.Load() != 1 || f.brokers[1].refused.Load() != 0 {
+		t.Fatalf("owner acked %d, listed non-owner refused %d", f.brokers[0].produced.Load(), f.brokers[1].refused.Load())
+	}
+}
+
+func TestLFSHTTPProduceWithStaticBackendsFallsBackWhenOwnerIsUnreachable(t *testing.T) {
+	f := newPartitionRoutingFixture(t, 0, 0)
+	f.m.backends = []string{f.brokers[0].addr}
+	f.p.updateBrokerAddrs([]protocol.MetadataBroker{brokerAt(t, 0, closedBackendAddr(t)), brokerAt(t, 1, f.brokers[1].addr)})
+	rr := f.produce(t, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("got %d %s", rr.Code, rr.Body.String())
+	}
+	if f.brokers[0].produced.Load() != 1 {
+		t.Fatalf("listed broker acked %d produce(s), want 1", f.brokers[0].produced.Load())
+	}
+}
