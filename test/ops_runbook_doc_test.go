@@ -31,6 +31,12 @@ func TestConsoleLoginDocumented(t *testing.T) {
 		`"username"`,
 		`"password"`,
 		"kafscale_ui_session",
+		"kafscale-console",
+		"8080:80",
+		"invalid credentials",
+		"429",
+		"503",
+		"console.replicaCount",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/operations.md does not document console login %q", want)
@@ -44,21 +50,28 @@ func TestPartitionLeaseDocsMatchCode(t *testing.T) {
 	if prefix != "/kafscale/partition-leases" {
 		t.Fatalf("unexpected PartitionLeasePrefix %q", prefix)
 	}
-	if !strings.Contains(text, prefix+"/") {
-		t.Errorf("docs/operations.md does not document lease keys under %s/", prefix)
+	exact := prefix + "/<topic>/<partition>"
+	if !strings.Contains(text, exact) {
+		t.Errorf("docs/operations.md does not document the exact lease key %s", exact)
 	}
-	if !strings.Contains(text, "<topic>/<partition>") && !strings.Contains(text, prefix+"/<topic>/<partition>") {
-		t.Error("docs/operations.md does not document the /<topic>/<partition> lease key shape")
+	if strings.Contains(text, "a delay, not a leak") {
+		t.Error("docs/operations.md still calls leftover lease keys a delay, not a leak")
+	}
+	if !strings.Contains(text, "demo-etcd-0") || !strings.Contains(text, "-c etcd") {
+		t.Error("docs/operations.md does not show kubectl exec into demo-etcd-0 -c etcd for etcdctl")
 	}
 }
 
 func TestEtcdSnapshotJobDocumented(t *testing.T) {
 	text := readOpsDoc(t, "docs/operations.md")
 	for _, want := range []string{
-		"{cluster}-etcd-snapshot",
+		"<cluster>-etcd-snapshot",
 		"create job --from=cronjob/",
+		"--timeout=5m",
 		"etcd-snapshots/",
 		"EtcdSnapshot",
+		"SnapshotNotManaged",
+		"operator-managed",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/operations.md does not contain %q", want)
@@ -75,11 +88,24 @@ func TestBrokerScalingDocumented(t *testing.T) {
 		if !strings.Contains(text, "HPA") {
 			t.Errorf("%s does not mention the broker HPA", doc)
 		}
+		if !strings.Contains(text, "<cluster>-broker") {
+			t.Errorf("%s does not name the <cluster>-broker HPA", doc)
+		}
+		if !strings.Contains(text, "-n kafscale") {
+			t.Errorf("%s patch command is missing -n kafscale", doc)
+		}
+		if !strings.Contains(text, "to 0 stops all brokers") {
+			t.Errorf("%s does not say replicas: 0 stops all brokers", doc)
+		}
 	}
 	ops := readOpsDoc(t, "docs/operations.md")
 	if !strings.Contains(ops, "4") || (!strings.Contains(ops, "four times") && !strings.Contains(ops, "4x") && !strings.Contains(ops, "times the")) {
 		t.Error("docs/operations.md does not say the HPA max is four times the replica count")
 	}
+	if !strings.Contains(ops, "sets the StatefulSet replicas to the new value") {
+		t.Error("docs/operations.md does not say the operator sets the StatefulSet replicas to the new value")
+	}
+	// Leave HPA product-bug assertions (STS reset vs HPA min) for later.
 }
 
 func readOpsDoc(t *testing.T, rel string) string {

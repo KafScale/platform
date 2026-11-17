@@ -156,12 +156,13 @@ kafka-console-consumer --bootstrap-server kafscale-broker:9092 --topic orders --
 
 The operator creates a HorizontalPodAutoscaler named `<cluster>-broker` for the
 broker StatefulSet. The HPA minimum is `spec.brokers.replicas` (or 3 if that
-field is unset or 0) and the maximum is four times that minimum.
+field is unset) and the maximum is four times that minimum. Setting
+`spec.brokers.replicas` to 0 stops all brokers.
 
 To change the minimum replica count:
 
 ```bash
-kubectl patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
+kubectl -n kafscale patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
 ```
 
 See [Scaling brokers](operations.md#scaling-brokers). The operator also uses

@@ -80,19 +80,20 @@ the override returns that cluster to the operator default.
 ### Scaling brokers
 
 The operator creates a HorizontalPodAutoscaler named `<cluster>-broker`. Its
-minimum is `spec.brokers.replicas` (or 3 if that field is unset or 0) and its
+minimum is `spec.brokers.replicas` (or 3 if that field is unset) and its
 maximum is four times that minimum. The HPA targets 70% CPU and 80% memory
 utilization.
 
 To raise or lower the minimum replica count, patch the cluster:
 
 ```bash
-kubectl patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
+kubectl -n kafscale patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
 ```
 
 The operator updates the HPA (for example, a minimum of 2 with a maximum of 8
-becomes 3/12) and adds or removes broker pods so the StatefulSet meets the new
-minimum.
+becomes 3/12) and sets the StatefulSet replicas to the new value.
+
+Setting `spec.brokers.replicas` to 0 stops all brokers.
 
 Console and MCP use `/healthz` for liveness. Their Helm readiness probes use `/readyz`, which performs a live etcd read with a one-second deadline and returns HTTP 503 when configured etcd is unreachable, even if metadata is cached. The next successful probe restores readiness without restarting the process. The Kubernetes probe timeout is two seconds. Standalone or metrics-only mode without a metadata store remains ready.
 
@@ -417,18 +418,18 @@ If no etcd endpoints are supplied, the operator will provision a 3-node etcd Sta
 The operator tunes managed etcd automatically:
 
 - In-process periodic compaction (5m retention) and a 4 GiB backend quota on the etcd StatefulSet.
-- `{cluster}-etcd-snapshot` CronJob (hourly, `0 * * * *`): writes `etcd-snapshots/<timestamp>.db` and a matching `.sha256` into the snapshot bucket (default `kafscale-etcd-<namespace>-<cluster>`, prefix `etcd-snapshots`). Override the schedule with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE`.
-- `{cluster}-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
-- `{cluster}-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
+- `<cluster>-etcd-snapshot` CronJob (hourly, `0 * * * *`): writes `etcd-snapshots/<timestamp>.db` and a matching `.sha256` into the snapshot bucket (default `kafscale-etcd-<namespace>-<cluster>`, prefix `etcd-snapshots`). Override the schedule with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE`.
+- `<cluster>-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
+- `<cluster>-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
 
 To take a snapshot now, start a Job from the snapshot CronJob:
 
 ```bash
 kubectl -n <namespace> create job --from=cronjob/<cluster>-etcd-snapshot snapshot-now
-kubectl -n <namespace> wait --for=condition=complete job/snapshot-now
+kubectl -n <namespace> wait --for=condition=complete --timeout=5m job/snapshot-now
 ```
 
-A successful run sets the `KafscaleCluster` condition `EtcdSnapshot=True` with reason `SnapshotHealthy`. The CronJob is created only when a snapshot bucket is configured.
+A successful run sets the `KafscaleCluster` condition `EtcdSnapshot=True` with reason `SnapshotHealthy`. The snapshot bucket always has a default (`kafscale-etcd-<namespace>-<cluster>`). The CronJob is created only when etcd is operator-managed. External etcd gets `EtcdSnapshot=False` with reason `SnapshotNotManaged`. The condition is set on the next reconcile.
 
 Override schedules and thresholds via the operator etcd env vars listed below.
 
@@ -454,16 +455,16 @@ Kafscale uses a snapshot-based metadata schema today: the operator publishes a f
 
 Each in-use partition is owned by one broker through an etcd lease. The key is
 `/kafscale/partition-leases/<topic>/<partition>` and the value is the broker
-id, as a decimal string (the broker NodeID). The default lease TTL is 10
-seconds, and the owning broker refreshes it while it holds the partition. To
-see who owns the partitions of a topic:
+id, as a decimal string (the broker NodeID). The keys share one etcd session
+on the owning broker. The default lease TTL is 10 seconds, and the owning
+broker refreshes it while it holds the partition. The keys stay while that
+broker runs. They go away when the broker shuts down (`ReleaseAll` at
+shutdown), or 10 seconds after it stops refreshing the lease. To see who owns
+the partitions of a topic:
 
 ```bash
-etcdctl get --prefix /kafscale/partition-leases/orders/
+kubectl -n kafscale exec demo-etcd-0 -c etcd -- etcdctl get --prefix /kafscale/partition-leases/orders/
 ```
-
-Lease keys for a deleted topic can remain until the TTL expires or the owning
-broker restarts and drops them. That is a delay, not a leak.
 
 The retention sweep runs on the broker that holds the `/kafscale/retention-sweeper` lease.
 
@@ -887,10 +888,11 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY`: S3 credentials for the console.
 - `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL`: Presigned URL lifetime in seconds (default `300`).
 
-These topic endpoints require a console session cookie, not HTTP basic auth. A request with basic auth, or with no session, returns `401` `unauthorized`. Sign in with `POST /ui/api/auth/login`:
+These topic endpoints require a console session cookie, not HTTP basic auth. A request with basic auth, or with no session, returns `401` `unauthorized`. The Helm release name `kafscale` creates the console Service `kafscale-console` on port 80. Forward it and sign in with `POST /ui/api/auth/login`:
 
 ```bash
-curl -c cookies.txt -X POST http://127.0.0.1:<console-port>/ui/api/auth/login \
+kubectl -n kafscale port-forward svc/kafscale-console 8080:80
+curl -c cookies.txt -X POST http://127.0.0.1:8080/ui/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"<user>","password":"<password>"}'
 ```
@@ -900,6 +902,11 @@ A successful login sets an HttpOnly cookie named `kafscale_ui_session` (12 hour
 lifetime) and returns `{"authenticated":true}`. Pass that cookie on later
 requests, for example `curl -b cookies.txt ...`. `POST /ui/api/auth/logout`
 clears it. Login is `POST` only.
+
+If `KAFSCALE_UI_USERNAME` or `KAFSCALE_UI_PASSWORD` is unset, login and the
+topic endpoints return `503`. A wrong password returns `401` with `invalid credentials`. More than 20 logins per minute from one IP return `429`.
+Sessions are in memory on each console pod, so if `console.replicaCount` is
+above 1 a cookie issued by one pod can get `401` from another.
 
 The console serves these authenticated topic endpoints when `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` is set. They use the same etcd metadata path as the broker Kafka `CreateTopics` and `DeleteTopics` APIs.
 
