@@ -19,8 +19,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const leaderOperatorMetrics = `
@@ -64,7 +67,9 @@ func TestOperatorSnapshotKeepsLastKnownValuesAcrossStandbyScrape(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewCompositeMetricsProvider(nil, server.URL)
+	provider := NewCompositeMetricsProvider(nil, server.URL).(*compositeMetricsProvider)
+	fixed := time.Unix(1700001100, 0)
+	provider.now = func() time.Time { return fixed }
 	for i := 0; i < 4; i++ {
 		snap, err := provider.Snapshot(context.Background())
 		if err != nil {
@@ -101,5 +106,155 @@ kafscale_operator_etcd_snapshot_access_ok{cluster="default/kafscale"} 0
 	}
 	if !snap.OperatorMetricsAvailable || snap.OperatorEtcdSnapshotAccessOK != 0 {
 		t.Fatalf("expected reported access failure, got available=%v access_ok=%v", snap.OperatorMetricsAvailable, snap.OperatorEtcdSnapshotAccessOK)
+	}
+}
+
+type testClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
+type switchingOperator struct {
+	mu   sync.Mutex
+	body string
+}
+
+func (s *switchingOperator) set(body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.body = body
+}
+
+func (s *switchingOperator) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	body := s.body
+	s.mu.Unlock()
+	_, _ = w.Write([]byte(body))
+}
+
+const leaderWithThresholdMetrics = `
+kafscale_operator_clusters 1
+kafscale_operator_etcd_snapshot_age_seconds{cluster="default/kafscale"} 120
+kafscale_operator_etcd_snapshot_last_success_timestamp{cluster="default/kafscale"} 1700000000
+kafscale_operator_etcd_snapshot_last_schedule_timestamp{cluster="default/kafscale"} 1700001000
+kafscale_operator_etcd_snapshot_stale{cluster="default/kafscale"} 0
+kafscale_operator_etcd_snapshot_access_ok{cluster="default/kafscale"} 1
+kafscale_operator_etcd_snapshot_threshold_seconds 150
+`
+
+const standbyWithThresholdMetrics = `
+kafscale_operator_clusters 0
+kafscale_operator_etcd_snapshot_threshold_seconds 150
+`
+
+func newClockedOperatorProvider(t *testing.T, op *switchingOperator) (*compositeMetricsProvider, *testClock) {
+	t.Helper()
+	server := httptest.NewServer(op)
+	t.Cleanup(server.Close)
+	provider := NewCompositeMetricsProvider(nil, server.URL).(*compositeMetricsProvider)
+	clock := &testClock{now: time.Unix(1700001100, 0)}
+	provider.now = clock.Now
+	return provider, clock
+}
+
+func streamedMetrics(t *testing.T, provider MetricsProvider) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	w := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	h := &consoleHandlers{metrics: provider}
+	h.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil).WithContext(ctx))
+	return w.Body.String()
+}
+
+func TestOperatorSnapshotWithoutAccessGaugeShowsAccessUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`
+kafscale_operator_clusters 1
+kafscale_operator_etcd_snapshot_age_seconds{cluster="default/kafscale"} 120
+kafscale_operator_etcd_snapshot_last_success_timestamp{cluster="default/kafscale"} 1700000000
+kafscale_operator_etcd_snapshot_stale{cluster="default/kafscale"} 0
+`))
+	}))
+	defer server.Close()
+
+	body := streamedMetrics(t, NewCompositeMetricsProvider(nil, server.URL))
+	if !strings.Contains(body, `"etcd_snapshot_age_s":120`) {
+		t.Fatalf("expected snapshot age in stream: %s", body)
+	}
+	if strings.Contains(body, "etcd_snapshot_access_ok") {
+		t.Fatalf("access_ok gauge is absent, so access must be unknown: %s", body)
+	}
+}
+
+func TestOperatorSnapshotCachedAgeAdvancesAndTurnsStale(t *testing.T) {
+	op := &switchingOperator{body: leaderWithThresholdMetrics}
+	provider, clock := newClockedOperatorProvider(t, op)
+	if _, err := provider.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	op.set(standbyWithThresholdMetrics)
+
+	clock.Advance(10 * time.Second)
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.OperatorMetricsAvailable || snap.OperatorEtcdSnapshotAgeSeconds != 130 || snap.OperatorEtcdSnapshotStale != 0 {
+		t.Fatalf("after 10s: available=%v age=%v stale=%v, want age 130 and not stale", snap.OperatorMetricsAvailable, snap.OperatorEtcdSnapshotAgeSeconds, snap.OperatorEtcdSnapshotStale)
+	}
+
+	clock.Advance(50 * time.Second)
+	snap, err = provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.OperatorMetricsAvailable || snap.OperatorEtcdSnapshotAgeSeconds != 180 || snap.OperatorEtcdSnapshotStale != 1 {
+		t.Fatalf("after 60s: available=%v age=%v stale=%v, want age 180 and stale past the 150s threshold", snap.OperatorMetricsAvailable, snap.OperatorEtcdSnapshotAgeSeconds, snap.OperatorEtcdSnapshotStale)
+	}
+	if snap.OperatorEtcdSnapshotLastSuccessTS != 1700000000 || snap.OperatorEtcdSnapshotAccessOK != 1 {
+		t.Fatalf("cached last_success=%v access_ok=%v", snap.OperatorEtcdSnapshotLastSuccessTS, snap.OperatorEtcdSnapshotAccessOK)
+	}
+}
+
+func TestOperatorSnapshotCacheExpires(t *testing.T) {
+	op := &switchingOperator{body: leaderWithThresholdMetrics}
+	provider, clock := newClockedOperatorProvider(t, op)
+	if _, err := provider.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	op.set(standbyWithThresholdMetrics)
+
+	clock.Advance(3*time.Minute - time.Second)
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.OperatorMetricsAvailable {
+		t.Fatal("cached snapshot should still be used just before it expires")
+	}
+
+	clock.Advance(2 * time.Second)
+	snap, err = provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.OperatorMetricsAvailable {
+		t.Fatalf("cached snapshot older than 3 minutes must not be shown, got age=%v", snap.OperatorEtcdSnapshotAgeSeconds)
+	}
+	if body := streamedMetrics(t, provider); strings.Contains(body, "etcd_snapshot_") {
+		t.Fatalf("expired cache must leave the panel at n/a: %s", body)
 	}
 }
