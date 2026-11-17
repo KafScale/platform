@@ -172,5 +172,35 @@ func envtestAssetsAvailable() bool {
 
 func resourceExists(ctx context.Context, c client.Reader, obj client.Object, ns, name string) bool {
 	err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, obj)
-	return err == nil || !apierrors.IsNotFound(err)
+	return err == nil
+}
+
+// API errors must keep reconciliation polling; only a successful read proves
+// that the expected resource exists.
+type resourceTestReader struct {
+	client.Reader
+	err error
+}
+
+func (r resourceTestReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return r.err
+}
+
+func TestOperatorResourceExists(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "found", want: true},
+		{name: "not found", err: apierrors.NewNotFound(corev1.Resource("services"), "test")},
+		{name: "forbidden", err: apierrors.NewForbidden(corev1.Resource("services"), "test", context.Canceled)},
+		{name: "API timeout", err: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resourceExists(context.Background(), resourceTestReader{err: tc.err}, &corev1.Service{}, "default", "test"); got != tc.want {
+				t.Fatalf("resourceExists=%v, want %v for %v", got, tc.want, tc.err)
+			}
+		})
+	}
 }

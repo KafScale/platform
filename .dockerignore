@@ -14,6 +14,7 @@
 # limitations under the License.
 
 .build
+.tools
 .gocache
 .git
 .idea

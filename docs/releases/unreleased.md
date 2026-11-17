@@ -282,6 +282,8 @@ limitations under the License.
 
 ### CI, tests and demos
 
+- The operator kind snapshot suite waits for all expected etcd members and broker readiness before producing, retries its startup smoke test once, and checks backend health after restore. CI now runs this suite with nftables alongside the existing operator envtests. Separate `test-operator-envtest` and `test-operator-kind` Make targets support both paths; envtest setup is pinned to Kubernetes 1.35.0 and fails when assets are unavailable (#341).
+
 - Broker and console tests use isolated random-port etcd fixtures. Test setup no longer terminates arbitrary processes listening on fixed ports.
 - `make lfs-demo` no longer loses LFS tracker events (#308).
   - The demo brokers advertised the host port forward address `127.0.0.1:39092`, which the LFS proxy pod cannot reach. The tracker could not create `__lfs_ops_state` or deliver events, and the proxy logged a warning.

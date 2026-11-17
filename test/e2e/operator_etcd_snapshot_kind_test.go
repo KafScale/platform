@@ -160,9 +160,19 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-broker."+kindNamespace+".svc.cluster.local", []int{9092, 9093}); err != nil {
 		t.Fatalf("broker port sanity: %v", err)
 	}
+	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	t.Log("testing internal produce via e2e client")
 	cliTopic := fmt.Sprintf("cli-%08x", rand.Uint32())
-	if err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", "kafscale-broker."+kindNamespace+".svc.cluster.local:9092", cliTopic, 1, 40); err != nil {
+	if err := produceAfterReadiness(ctx, func(ctx context.Context) error {
+		return waitForOperatorBackends(ctx, runCmdWithOutputErr, kindNamespace, "kafscale", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 2*time.Minute)
+	}, func(ctx context.Context) error {
+		err := runE2EClient(t, ctx, kindNamespace, e2eClientImage, "produce", "kafscale-broker."+kindNamespace+".svc.cluster.local:9092", cliTopic, 1, 40)
+		if err != nil {
+			t.Logf("startup produce attempt failed: %v", err)
+		}
+		return err
+	}); err != nil {
+		dumpKindDebug(t, ctx, kindNamespace, operatorDeployment)
 		t.Fatalf("internal produce failed: %v", err)
 	}
 
@@ -229,6 +239,10 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForEtcdSnapshotContains(t, ctx, kindNamespace, restoreTopic, 2*time.Minute)
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "deployment/"+operatorDeployment, "--replicas=2")
 	waitForDeploymentReadyByLabel(t, ctx, kindNamespace, "app.kubernetes.io/component=operator", 2*time.Minute)
+
+	if err := waitForOperatorBackends(ctx, runCmdWithOutputErr, kindNamespace, "kafscale", getStatefulSetReplicas(t, ctx, kindNamespace, "kafscale-etcd"), 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Log("testing broker restart durability: produce before restart, consume after restart")
 	brokerAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9092", kindNamespace)

@@ -58,7 +58,9 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 | `make test-ops-api` | Ops/admin API e2e (embedded etcd + memory S3). |
 | `make test-multi-segment-durability` | Multi-segment restart durability e2e (embedded etcd + MinIO). |
 | `make test-full` | Unit tests plus local e2e suites. |
-| `make test-operator` | Operator envtest + optional kind-based integration. |
+| `make test-operator` | Operator envtest and kind snapshot/restore/HA integration. |
+| `make test-operator-envtest` | Operator reconciliation with a real Kubernetes API; no Docker required. |
+| `make test-operator-kind` | Build required images and run the operator kind suite. Use `KAFSCALE_KIND_KUBE_PROXY_MODE=nftables` on hosts without working iptables. |
 | `make demo` | Local demo with broker + console + embedded etcd. |
 | `make demo-platform` | Kind-based demo (operator HA + managed etcd + console). |
 | `make docker-build` | Build broker/operator/console/sql-processor images locally. |
@@ -180,9 +182,11 @@ The broker exports live throughput gauges (`kafscale_produce_rps` / `kafscale_fe
 Recommended setup (using `setup-envtest`):
 
 ```bash
-go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
-export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.29.x)"
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20260126174550-f52bbb8bb1a2
+export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.35.0)"
 ```
+
+`make test-operator-envtest` obtains these assets automatically unless `KUBEBUILDER_ASSETS` is set, and fails if the binaries are missing. CI runs both reconciliation envtests and a separate nftables kind job. The kind suite waits for health across all expected etcd members and every broker's `/readyz` endpoint before its startup produce check. It retries that check once after checking health again, and repeats the health gate after snapshot restore.
 
 ### Broker logging levels
 
