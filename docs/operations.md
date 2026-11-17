@@ -478,6 +478,11 @@ Recommended operator alerting (when using Prometheus Operator):
 The proxy exposes `/readyz` and `/livez` on `KAFSCALE_PROXY_HEALTH_ADDR`
 (default `:9094`).
 
+`/livez` returns 200 as soon as the process starts. `/readyz` returns 503 with
+`starting` until startup finishes: the etcd metadata read, the partition and
+group route load, and the Kafka listener bind. While etcd does not answer,
+startup waits, and the pod stays up and NotReady.
+
 `/readyz` answers two questions, not one:
 
 1. **Is a backend known?** Cached backend state when fresh, otherwise a live
