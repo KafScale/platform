@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -50,13 +51,15 @@ type pruneEntry struct {
 
 func runPruneCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	var (
 		topic     = fs.String("topic", "", "Only prune deleted incarnations of this topic")
 		olderThan = fs.String("older-than", "", "Only prune incarnations deleted longer ago than this, for example 7d or 24h")
 		force     = fs.Bool("force", false, "Delete the data instead of listing it")
 	)
-	if err := fs.Parse(args); err != nil {
+	if err := parseCLIFlags(fs, args, stdout); err != nil {
+		if errors.Is(err, errCLIHelp) {
+			return nil
+		}
 		return err
 	}
 	age, err := parseAge(*olderThan)

@@ -132,7 +132,7 @@ A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it,
 
 ### Moving schemas into the built in registry
 
-To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API:
+To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API. Build the CLI with `go build -o bin/kafscale-cli ./cmd/kafscale-cli` from the repository root, as described in [operations.md](operations.md#installing-kafscale-cli):
 
 ```
 kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081 \

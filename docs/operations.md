@@ -466,6 +466,18 @@ The schema registry keeps its state in the same etcd.
 
 The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.14. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
+### Installing kafscale-cli
+
+`kafscale-cli` is built from this repository. There is no container image or
+released binary for it. From the repository root:
+
+```bash
+go build -o bin/kafscale-cli ./cmd/kafscale-cli
+```
+
+`kafscale-cli --help` and `kafscale-cli <command> --help` print the commands,
+flags and environment variables.
+
 ### Topic recovery on the DR spine
 
 For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
@@ -487,6 +499,7 @@ Operational semantics:
 - If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
 - Offsets are preserved inside the recovered topic so replay, validation, and downstream cutover can happen without rewriting the source topic.
 - The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
+- S3 credentials are `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, optionally `KAFSCALE_S3_SESSION_TOKEN`. If those are unset, the AWS SDK default chain is used, including `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Without credentials, the client is created, then the copy fails when it talks to S3.
 
 ### Pruning deleted topic data
 
@@ -509,6 +522,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 - Prune is safe while brokers run, because brokers only write to the current generation's prefix.
 - On a bucket with versioning enabled, prune only adds delete markers. Add a lifecycle rule that expires noncurrent versions to free the space.
 - Prune does not delete LFS objects. Topics deleted before the upgrade that added generations have no record, so prune does not cover their data.
+- If `kafscale-cli restore` creates the target topic and then the copy fails, restore rolls back by retiring that target. That writes a `/kafscale/deleted-topics` record, often with no S3 objects, which `kafscale-cli prune` lists. Use `prune --topic <target> --force` to remove the record once you do not need it.
 
 ### Consumer offsets after restore
 

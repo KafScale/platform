@@ -173,7 +173,6 @@ func runSchemaCommand(ctx context.Context, args []string, stdout io.Writer) erro
 		return errors.New("usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--subjects <regex>] [--dry-run]")
 	}
 	fs := flag.NewFlagSet("schema import", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	var (
 		from     = fs.String("from", "", "Source schema registry URL, for example a Confluent Schema Registry")
 		to       = fs.String("to", envOrDefault("KAFSCALE_SCHEMA_REGISTRY_URL", "http://localhost:8081"), "Target KafScale schema registry URL")
@@ -183,7 +182,10 @@ func runSchemaCommand(ctx context.Context, args []string, stdout io.Writer) erro
 		dryRun   = fs.Bool("dry-run", false, "Report what would change without writing to the target")
 		force    = fs.Bool("force", false, "Switch a target that already holds schemas to IMPORT mode")
 	)
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseCLIFlags(fs, args[1:], stdout); err != nil {
+		if errors.Is(err, errCLIHelp) {
+			return nil
+		}
 		return err
 	}
 	if *from == "" {
