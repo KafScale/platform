@@ -252,10 +252,12 @@ keys present in the secret. When one of those keys changes, those pods roll,
 also while the etcd snapshot check fails. Other keys in the secret do not roll
 them.
 
-The schema registry does not roll. The Helm chart passes the keys of
-`schemaRegistry.s3.credentialsSecret` to it as environment variables, and the
-registry reads them once at startup. After you change that secret, restart the
-registry pods.
+When the keys inside the Secret named by `schemaRegistry.s3.credentialsSecret`
+change, the schema registry does not roll. The Helm chart passes the keys of
+that Secret to it as environment variables, and the registry reads them once at
+startup. After you change the keys in that Secret, restart the registry pods.
+Pointing `schemaRegistry.s3.credentialsSecret` at a different Secret changes the
+pod template, so `helm upgrade` rolls the registry without a manual restart.
 
 Until the restart, every request that has to read or write S3 fails. For
 example:

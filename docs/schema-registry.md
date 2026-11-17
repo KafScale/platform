@@ -297,7 +297,7 @@ Client settings, using the in cluster Service `<fullname>-schema-registry` on po
 - confluent-kafka-python: `SchemaRegistryClient({"url": "http://<fullname>-schema-registry:8081"})`
 - franz-go: `sr.NewClient(sr.URLs("http://<fullname>-schema-registry:8081"))`
 
-After you change the S3 secret named by `schemaRegistry.s3.credentialsSecret`, restart the registry pods. The registry reads the keys once at startup, and nothing rolls it when the secret changes. Until the restart, every request that has to read or write S3 fails, including lookups, compatibility checks and reads that load a schema or reference stored in S3 and not cached. Only requests whose schemas and references are all inline in etcd or cached keep working. See [S3 credentials secret](operations.md#s3-credentials-secret) for details. Find the Deployment by its labels, then restart it:
+After you change the keys in the Secret named by `schemaRegistry.s3.credentialsSecret`, restart the registry pods. The registry reads the keys once at startup, and when the keys inside that Secret change, the registry does not roll. Pointing `schemaRegistry.s3.credentialsSecret` at a different Secret changes the pod template, so `helm upgrade` rolls the registry. Until the restart, every request that has to read or write S3 fails, including lookups, compatibility checks and reads that load a schema or reference stored in S3 and not cached. Only requests whose schemas and references are all inline in etcd or cached keep working. See [S3 credentials secret](operations.md#s3-credentials-secret) for details. Find the Deployment by its labels, then restart it:
 
 ```bash
 DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
