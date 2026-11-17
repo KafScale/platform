@@ -23,28 +23,56 @@ import (
 )
 
 func TestCommandHelpPrintsFlags(t *testing.T) {
-	cases := []struct {
-		args []string
-		want []string
+	tests := []struct {
+		args   []string
+		want   []string
+		unwant []string
 	}{
 		{
 			args: []string{"--help"},
-			want: []string{"--namespace", "--target-namespace", "--partitions", "KAFSCALE_NAMESPACE", "KAFSCALE_S3_ACCESS_KEY", "AWS_ACCESS_KEY_ID"},
+			want: []string{
+				"[--namespace <ns>]",
+				"[--target-namespace <ns>]",
+				"[--partitions <list>]",
+				"[--to-auth user:password]",
+				"KAFSCALE_NAMESPACE",
+				"KAFSCALE_S3_ACCESS_KEY",
+				"AWS_ACCESS_KEY_ID",
+				"KAFSCALE_S3_KMS_ARN",
+				"KAFSCALE_S3_CONCURRENCY (default 16)",
+				"KAFSCALE_SCHEMA_REGISTRY_URL",
+				"KAFSCALE_SCHEMA_IMPORT_AUTH",
+				"KAFSCALE_SCHEMA_REGISTRY_AUTH",
+				"If either is unset",
+			},
+			unwant: []string{"Build it from this repository"},
 		},
 		{
 			args: []string{"restore", "--help"},
-			want: []string{"-namespace", "-target-namespace", "-partitions", "-topic", "-target-topic", "-to"},
+			want: []string{"  -namespace string", "  -target-namespace string", "  -partitions string", "  -topic string", "  -target-topic string", "  -to string"},
 		},
 		{
 			args: []string{"prune", "--help"},
-			want: []string{"-topic", "-older-than", "-force"},
+			want: []string{"  -topic string", "  -older-than string", "  -force"},
 		},
 		{
 			args: []string{"schema", "import", "--help"},
-			want: []string{"-from", "-to", "-auth", "-subjects", "-dry-run", "-force"},
+			want: []string{"  -from string", "  -to string", "  -auth string", "  -to-auth string", "  -subjects string", "  -dry-run", "  -force"},
+		},
+		{
+			args: []string{"schema", "--help"},
+			want: []string{schemaImportUsage, "--to-auth user:password", "--force"},
+		},
+		{
+			args: []string{"schema", "-h"},
+			want: []string{schemaImportUsage},
+		},
+		{
+			args: []string{"schema", "help"},
+			want: []string{schemaImportUsage},
 		},
 	}
-	for _, tc := range cases {
+	for _, tc := range tests {
 		var stdout, stderr bytes.Buffer
 		err := run(context.Background(), tc.args, &stdout, &stderr)
 		if err != nil {
@@ -61,6 +89,11 @@ func TestCommandHelpPrintsFlags(t *testing.T) {
 		for _, want := range tc.want {
 			if !strings.Contains(out, want) {
 				t.Errorf("%v output does not contain %q:\n%s", tc.args, want, out)
+			}
+		}
+		for _, unwant := range tc.unwant {
+			if strings.Contains(out, unwant) {
+				t.Errorf("%v output still contains %q:\n%s", tc.args, unwant, out)
 			}
 		}
 	}

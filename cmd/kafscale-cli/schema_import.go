@@ -168,9 +168,15 @@ func subjectPath(subject string) string {
 	return "/subjects/" + url.PathEscape(subject)
 }
 
+const schemaImportUsage = "usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--to-auth user:password] [--subjects <regex>] [--dry-run] [--force]"
+
 func runSchemaCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] != "import" {
-		return errors.New("usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--subjects <regex>] [--dry-run]")
+		if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+			_, _ = fmt.Fprintln(stdout, schemaImportUsage)
+			return nil
+		}
+		return errors.New(schemaImportUsage)
 	}
 	fs := flag.NewFlagSet("schema import", flag.ContinueOnError)
 	var (
@@ -183,7 +189,7 @@ func runSchemaCommand(ctx context.Context, args []string, stdout io.Writer) erro
 		force    = fs.Bool("force", false, "Switch a target that already holds schemas to IMPORT mode")
 	)
 	if err := parseCLIFlags(fs, args[1:], stdout); err != nil {
-		if errors.Is(err, errCLIHelp) {
+		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err

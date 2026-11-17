@@ -40,8 +40,20 @@ func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
 	if !strings.Contains(ops, "RetireTopic") && !strings.Contains(ops, "rolls back") && !strings.Contains(ops, "rolled back") {
 		t.Error("docs/operations.md does not say a failed restore leaves a deleted-topic record")
 	}
+	if !strings.Contains(ops, "operations.md#installing-kafscale-cli") && !strings.Contains(ops, "### Installing kafscale-cli") {
+		t.Error("docs/operations.md is missing the Installing kafscale-cli section")
+	}
+	if !strings.Contains(ops, "If either is unset") {
+		t.Error("docs/operations.md does not say the default chain is used if either static key is unset")
+	}
+	if !strings.Contains(ops, "listing the source segments") {
+		t.Error("docs/operations.md does not say a restore without credentials fails while listing source segments")
+	}
+	if !strings.Contains(ops, "with no objects, or only those copied before the failure") {
+		t.Error("docs/operations.md does not describe a rolled-back restore prefix accurately")
+	}
 	sr := readDoc(t, "docs/schema-registry.md")
-	if !strings.Contains(sr, "go build -o bin/kafscale-cli ./cmd/kafscale-cli") && !strings.Contains(sr, "operations.md") {
+	if !strings.Contains(sr, "go build -o bin/kafscale-cli ./cmd/kafscale-cli") && !strings.Contains(sr, "operations.md#installing-kafscale-cli") {
 		t.Error("docs/schema-registry.md does not point at how to get kafscale-cli")
 	}
 }

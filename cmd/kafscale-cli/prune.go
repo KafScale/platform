@@ -57,7 +57,7 @@ func runPruneCommand(ctx context.Context, args []string, stdout io.Writer) error
 		force     = fs.Bool("force", false, "Delete the data instead of listing it")
 	)
 	if err := parseCLIFlags(fs, args, stdout); err != nil {
-		if errors.Is(err, errCLIHelp) {
+		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err

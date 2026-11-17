@@ -78,14 +78,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 }
 
-var errCLIHelp = errors.New("help requested")
-
 func writeUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: kafscale-cli restore --topic <source> --target-topic <target> --to <RFC3339 timestamp> [--namespace <ns>] [--target-namespace <ns>] [--partitions <list>]")
 	_, _ = fmt.Fprintln(w, "       kafscale-cli prune [--topic <name>] [--older-than <7d|24h>] [--force]")
-	_, _ = fmt.Fprintln(w, "       kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--subjects <regex>] [--dry-run] [--force]")
+	_, _ = fmt.Fprintln(w, "       kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--to-auth user:password] [--subjects <regex>] [--dry-run] [--force]")
 	_, _ = fmt.Fprintln(w, "")
-	_, _ = fmt.Fprintln(w, "Build it from this repository with: go build -o bin/kafscale-cli ./cmd/kafscale-cli")
 	_, _ = fmt.Fprintln(w, "Use kafscale-cli <command> --help for flag help.")
 	_, _ = fmt.Fprintln(w, "")
 	writeCLIEnvUsage(w)
@@ -94,20 +91,23 @@ func writeUsage(w io.Writer) {
 func writeCLIEnvUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Environment:")
 	_, _ = fmt.Fprintln(w, "  restore --namespace defaults to KAFSCALE_NAMESPACE, otherwise default")
-	_, _ = fmt.Fprintln(w, "  S3: KAFSCALE_S3_BUCKET, KAFSCALE_S3_REGION, KAFSCALE_S3_ENDPOINT, KAFSCALE_S3_PATH_STYLE")
+	_, _ = fmt.Fprintln(w, "  S3: KAFSCALE_S3_BUCKET, KAFSCALE_S3_REGION, KAFSCALE_S3_ENDPOINT, KAFSCALE_S3_PATH_STYLE, KAFSCALE_S3_KMS_ARN, KAFSCALE_S3_CONCURRENCY (default 16)")
 	_, _ = fmt.Fprintln(w, "  S3 credentials: KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY, optionally KAFSCALE_S3_SESSION_TOKEN.")
-	_, _ = fmt.Fprintln(w, "  If those are unset, the AWS SDK default chain is used, including AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.")
+	_, _ = fmt.Fprintln(w, "  If either is unset, the AWS SDK default chain is used, including AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.")
 	_, _ = fmt.Fprintln(w, "  etcd: KAFSCALE_ETCD_ENDPOINTS, optionally KAFSCALE_ETCD_USERNAME and KAFSCALE_ETCD_PASSWORD")
+	_, _ = fmt.Fprintln(w, "  schema: KAFSCALE_SCHEMA_REGISTRY_URL, KAFSCALE_SCHEMA_IMPORT_AUTH, KAFSCALE_SCHEMA_REGISTRY_AUTH")
 }
 
 func parseCLIFlags(fs *flag.FlagSet, args []string, stdout io.Writer) error {
-	fs.SetOutput(stdout)
+	fs.SetOutput(io.Discard)
 	err := fs.Parse(args)
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, flag.ErrHelp) {
-		return errCLIHelp
+		fs.SetOutput(stdout)
+		fs.PrintDefaults()
+		return flag.ErrHelp
 	}
 	return err
 }
@@ -123,7 +123,7 @@ func runRestoreCommand(ctx context.Context, args []string, stdout io.Writer) err
 		partitionsRaw   = fs.String("partitions", "", "Optional comma-separated partition list")
 	)
 	if err := parseCLIFlags(fs, args, stdout); err != nil {
-		if errors.Is(err, errCLIHelp) {
+		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
