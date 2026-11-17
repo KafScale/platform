@@ -18,41 +18,41 @@ package test
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
 
 func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 	root := repoRoot(t)
-	chartDir := filepath.Join(root, "deploy", "helm", "kafscale")
-	chartYAML, err := os.ReadFile(filepath.Join(chartDir, "Chart.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	match := regexp.MustCompile(`(?m)^name:\s*(\S+)\s*$`).FindStringSubmatch(string(chartYAML))
-	if match == nil {
-		t.Fatal("chart name not found in Chart.yaml")
-	}
-	template, err := os.ReadFile(filepath.Join(chartDir, "templates", "schema-registry-deployment.yaml"))
+	template, err := os.ReadFile(filepath.Join(root, "deploy", "helm", "kafscale", "templates", "schema-registry-deployment.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	tpl := string(template)
-	if !strings.Contains(tpl, `"component" "schema-registry"`) {
-		t.Fatal("schema registry Deployment no longer uses the schema-registry component name")
+	if !strings.Contains(tpl, "app.kubernetes.io/component: schema-registry") || !strings.Contains(tpl, `"component" "schema-registry"`) {
+		t.Fatal("schema registry Deployment no longer carries the schema-registry component label")
 	}
 	if !strings.Contains(tpl, "secretKeyRef:") || strings.Contains(tpl, "checksum") {
 		t.Fatal("schema registry S3 key loading changed; update the rotation docs and this check")
 	}
-	want := "kubectl rollout restart deployment/" + match[1] + "-schema-registry"
+	want := []string{
+		"DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)",
+		`kubectl rollout restart "$DEPLOY" -n <namespace>`,
+		`kubectl rollout status "$DEPLOY" -n <namespace>`,
+	}
 	for _, doc := range []string{"operations.md", "schema-registry.md"} {
 		body, err := os.ReadFile(filepath.Join(root, "docs", doc))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(body), want) {
-			t.Errorf("docs/%s does not tell operators to run %q after rotating the S3 secret", doc, want)
+		text := string(body)
+		for _, line := range want {
+			if !strings.Contains(text, line) {
+				t.Errorf("docs/%s does not contain %q", doc, line)
+			}
+		}
+		if strings.Contains(text, "rollout restart deployment/") {
+			t.Errorf("docs/%s still restarts the registry by a fixed Deployment name", doc)
 		}
 	}
 }

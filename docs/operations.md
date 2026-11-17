@@ -255,18 +255,28 @@ them.
 The schema registry does not roll. The Helm chart passes the keys of
 `schemaRegistry.s3.credentialsSecret` to it as environment variables, and the
 registry reads them once at startup. After you change that secret, restart the
-registry pods. Until then, registering a new schema fails with HTTP 500, error
-code 50001 and `SignatureDoesNotMatch`, and reads keep working.
+registry pods.
+
+Until the restart, every request that has to reach S3 fails:
+
+- Registering a new schema fails with HTTP 500, error code 50001 and
+  `SignatureDoesNotMatch`.
+- Reading a schema above `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` fails
+  when the pod does not have it in its cache, because its text is stored in S3.
+
+Schemas stored inline in etcd, and schemas the pod already has in its cache,
+keep working.
+
+Find the registry Deployment by its labels, then restart it:
 
 ```bash
-kubectl rollout restart deployment/kafscale-schema-registry --namespace <namespace>
-kubectl rollout status deployment/kafscale-schema-registry --namespace <namespace>
+DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
+kubectl rollout restart "$DEPLOY" -n <namespace>
+kubectl rollout status "$DEPLOY" -n <namespace>
 ```
 
-`<namespace>` is the namespace of the Helm release. The Deployment is
-`kafscale-schema-registry` when the release is named `kafscale`,
-`<release>-kafscale-schema-registry` for another release name `<release>`, and
-`<fullnameOverride>-schema-registry` when `fullnameOverride` is set.
+`<namespace>` is the namespace of the Helm release and `<release>` is the
+release name. The labels do not depend on `nameOverride` or `fullnameOverride`.
 
 **The `S3Credentials` condition**
 
