@@ -162,6 +162,8 @@ Run a client in the cluster:
 
 ```bash
 kubectl -n kafscale run kcat --rm -it --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -L
+echo hello | kubectl -n kafscale run kcat-produce --rm -i --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -t orders -P
+kubectl -n kafscale run kcat-consume --rm -it --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -t orders -C -o beginning -e
 ```
 
 Or enable the Kafka proxy (`proxy.enabled=true`) and set
@@ -193,7 +195,7 @@ If you created the topic with a `KafscaleTopic`, delete that resource first.
 Then use the Kafka `DeleteTopics` API from a client that can reach the
 brokers, or the console `DELETE /ui/api/status/topics/<topic>` endpoint after
 signing in (see [Console](operations.md#console)). If the CR still exists, the
-operator publish brings the topic back (Publish plus mergeSnapshots).
+next operator reconcile publishes the topic again.
 
 ## Next Steps
 

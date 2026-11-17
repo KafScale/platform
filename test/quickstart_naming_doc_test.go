@@ -44,6 +44,10 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"spec.brokers.replicas",
 		"proxy.advertisedHost",
 		"edenhill/kcat:1.7.1",
+		"kcat-produce",
+		"-t orders",
+		"kcat-consume",
+		"next operator reconcile publishes the topic again",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/quickstart.md does not contain %q", want)
