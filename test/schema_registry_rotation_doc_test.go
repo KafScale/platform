@@ -54,5 +54,31 @@ func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 		if strings.Contains(text, "rollout restart deployment/") {
 			t.Errorf("docs/%s still restarts the registry by a fixed Deployment name", doc)
 		}
+		checkRotationWording(t, "docs/"+doc, text)
+	}
+	notes, err := os.ReadFile(filepath.Join(root, "docs", "releases", "unreleased.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var note string
+	for _, line := range strings.Split(string(notes), "\n") {
+		if strings.Contains(line, "schemaRegistry.s3.credentialsSecret") && strings.Contains(line, "(#361)") {
+			note = line
+		}
+	}
+	if note == "" {
+		t.Fatal("docs/releases/unreleased.md has no #361 note about schemaRegistry.s3.credentialsSecret")
+	}
+	checkRotationWording(t, "docs/releases/unreleased.md", note)
+}
+
+func checkRotationWording(t *testing.T, doc, text string) {
+	t.Helper()
+	text = strings.Join(strings.Fields(text), " ")
+	if strings.Contains(text, "SignatureDoesNotMatch") && !strings.Contains(text, "for example `InvalidAccessKeyId` or `SignatureDoesNotMatch`") {
+		t.Errorf("%s presents SignatureDoesNotMatch as the error that always comes back", doc)
+	}
+	if !strings.Contains(text, "only then revoke the old keys") && !strings.Contains(text, "Only then revoke the old keys") {
+		t.Errorf("%s does not say to revoke the old keys only after the restart", doc)
 	}
 }
