@@ -6,6 +6,7 @@ package chart
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -44,6 +45,38 @@ func TestConsoleS3Namespace(t *testing.T) {
 			}
 			if got != tc.want || found != tc.found {
 				t.Fatalf("KAFSCALE_S3_NAMESPACE = %q (set %v), want %q (set %v)", got, found, tc.want, tc.found)
+			}
+		})
+	}
+}
+
+func TestConsoleS3NamespaceWarning(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("Helm is required")
+	}
+	chart := filepath.Join("..", "..", "deploy", "helm", "kafscale")
+	const warning = "console.s3Namespace is empty"
+	for _, tc := range []struct {
+		name string
+		args []string
+		warn bool
+	}{
+		{"default install", nil, false},
+		{"etcd without namespace", []string{"--set", "console.etcdEndpoints[0]=http://etcd:2379"}, true},
+		{"etcd with namespace", []string{"--set", "console.etcdEndpoints[0]=http://etcd:2379", "--set", "console.s3Namespace=team-a"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"install", "ns", chart, "--dry-run=client", "--namespace", "kafscale"}, tc.args...)
+			output, err := exec.Command("helm", args...).CombinedOutput()
+			if err != nil {
+				t.Fatal(err, string(output))
+			}
+			_, notes, found := strings.Cut(string(output), "NOTES:")
+			if !found {
+				t.Fatalf("no NOTES section in output:\n%s", output)
+			}
+			if got := strings.Contains(notes, warning); got != tc.warn {
+				t.Fatalf("NOTES warning present = %v, want %v:\n%s", got, tc.warn, notes)
 			}
 		})
 	}

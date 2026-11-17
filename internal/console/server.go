@@ -62,6 +62,7 @@ type ServerOptions struct {
 	Logger      *log.Logger
 	Auth        AuthConfig
 	LFSHandlers *LFSHandlers
+	S3Namespace string
 }
 
 // StartServer launches the HTTP console on the provided address. When store is
@@ -105,7 +106,7 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 	mux.Handle("/ui/", http.StripPrefix("/ui/", staticHandler))
 	mux.Handle("/favicon.ico", staticHandler)
 
-	handlers := &consoleHandlers{store: opts.Store, metrics: opts.Metrics}
+	handlers := &consoleHandlers{store: opts.Store, metrics: opts.Metrics, s3Namespace: strings.TrimSpace(opts.S3Namespace)}
 	mux.HandleFunc("/ui/api/auth/config", auth.handleConfig)
 	mux.HandleFunc("/ui/api/auth/session", auth.handleSession)
 	mux.HandleFunc("/ui/api/auth/login", auth.handleLogin)
@@ -133,8 +134,9 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 }
 
 type consoleHandlers struct {
-	store   metadata.Store
-	metrics MetricsProvider
+	store       metadata.Store
+	metrics     MetricsProvider
+	s3Namespace string
 }
 
 type statusResponse struct {
@@ -270,6 +272,10 @@ func (h *consoleHandlers) handleDeleteTopic(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if !h.topicStoreReady(w) {
+		return
+	}
+	if h.s3Namespace == "" {
+		http.Error(w, "console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace", http.StatusServiceUnavailable)
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/ui/api/status/topics/")

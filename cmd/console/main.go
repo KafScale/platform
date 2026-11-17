@@ -38,9 +38,10 @@ func main() {
 		log.Fatalf("metadata store init failed: %v", err)
 	}
 	opts := consolepkg.ServerOptions{
-		Store:  store,
-		Logger: log.Default(),
-		Auth:   authConfigFromEnv(),
+		Store:       store,
+		Logger:      log.Default(),
+		Auth:        authConfigFromEnv(),
+		S3Namespace: os.Getenv("KAFSCALE_S3_NAMESPACE"),
 	}
 	if metricsProvider := buildMetricsProvider(store); metricsProvider != nil {
 		opts.Metrics = metricsProvider

@@ -18,6 +18,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -39,9 +40,9 @@ type topicAdminClient struct {
 	cookie *http.Cookie
 }
 
-func newTopicAdminClient(t *testing.T, store metadata.Store) *topicAdminClient {
+func newTopicAdminClient(t *testing.T, store metadata.Store, s3Namespace string) *topicAdminClient {
 	t.Helper()
-	mux, err := NewMux(ServerOptions{Store: store, Auth: AuthConfig{Username: "demo", Password: "secret"}})
+	mux, err := NewMux(ServerOptions{Store: store, Auth: AuthConfig{Username: "demo", Password: "secret"}, S3Namespace: s3Namespace})
 	if err != nil {
 		t.Fatalf("NewMux: %v", err)
 	}
@@ -92,7 +93,8 @@ func etcdTopicPartitions(t *testing.T, endpoints []string, name string) int {
 	return 0
 }
 
-func TestConsoleTopicCreateAndDeleteReachEtcd(t *testing.T) {
+func startTopicAdminEtcd(t *testing.T, storageNamespace string) ([]string, *clientv3.Client, *metadata.EtcdStore) {
+	t.Helper()
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	ctx := context.Background()
 	cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 3 * time.Second})
@@ -107,12 +109,18 @@ func TestConsoleTopicCreateAndDeleteReachEtcd(t *testing.T) {
 	if _, err := cli.Put(ctx, "/kafscale/metadata/snapshot", string(snapshot)); err != nil {
 		t.Fatal(err)
 	}
-	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints, StorageNamespace: "team-a"})
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints, StorageNamespace: storageNamespace})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	c := newTopicAdminClient(t, store)
+	return endpoints, cli, store
+}
+
+func TestConsoleTopicCreateAndDeleteReachEtcd(t *testing.T) {
+	ctx := context.Background()
+	endpoints, cli, store := startTopicAdminEtcd(t, "team-a")
+	c := newTopicAdminClient(t, store, "team-a")
 
 	status, body := c.do(http.MethodPost, "/ui/api/status/topics", `{"name":"orders","partitions":3,"replication_factor":1}`)
 	if got := etcdTopicPartitions(t, endpoints, "orders"); got != 3 {
@@ -147,7 +155,7 @@ func TestConsoleTopicAdminErrors(t *testing.T) {
 		Brokers: []protocol.MetadataBroker{{NodeID: 0, Host: "broker-0", Port: 9092}},
 		Topics:  []protocol.MetadataTopic{{Topic: kmsg.StringPtr("existing"), Partitions: []protocol.MetadataPartition{{Partition: 0}}}},
 	})
-	c := newTopicAdminClient(t, store)
+	c := newTopicAdminClient(t, store, "team-a")
 	cases := []struct {
 		name   string
 		method string
@@ -183,7 +191,7 @@ func TestConsoleTopicAdminErrors(t *testing.T) {
 }
 
 func TestConsoleTopicAdminWithoutStore(t *testing.T) {
-	c := newTopicAdminClient(t, nil)
+	c := newTopicAdminClient(t, nil, "team-a")
 	if status, body := c.do(http.MethodPost, "/ui/api/status/topics", `{"name":"orders","partitions":1}`); status != http.StatusServiceUnavailable {
 		t.Fatalf("create status = %d %q, want 503", status, body)
 	}
@@ -203,7 +211,7 @@ func TestConsoleTopicAdminEtcdUnavailable(t *testing.T) {
 		Brokers: []protocol.MetadataBroker{{NodeID: 0, Host: "broker-0", Port: 9092}},
 		Topics:  []protocol.MetadataTopic{{Topic: kmsg.StringPtr("existing"), Partitions: []protocol.MetadataPartition{{Partition: 0}}}},
 	})}
-	c := newTopicAdminClient(t, store)
+	c := newTopicAdminClient(t, store, "team-a")
 	if status, body := c.do(http.MethodPost, "/ui/api/status/topics", `{"name":"orders","partitions":1}`); status != http.StatusServiceUnavailable {
 		t.Fatalf("create status = %d %q, want 503", status, body)
 	}
@@ -216,5 +224,32 @@ func TestConsoleTopicAdminEtcdUnavailable(t *testing.T) {
 	}
 	if len(meta.Topics) != 1 || *meta.Topics[0].Topic != "existing" {
 		t.Fatalf("topics = %+v, want only existing", meta.Topics)
+	}
+}
+
+func TestConsoleTopicDeleteRefusesWithoutS3Namespace(t *testing.T) {
+	for _, namespace := range []string{"", "  "} {
+		t.Run(fmt.Sprintf("namespace %q", namespace), func(t *testing.T) {
+			ctx := context.Background()
+			endpoints, cli, store := startTopicAdminEtcd(t, namespace)
+			c := newTopicAdminClient(t, store, namespace)
+			if status, body := c.do(http.MethodPost, "/ui/api/status/topics", `{"name":"orders","partitions":2}`); status != http.StatusCreated {
+				t.Fatalf("create status = %d %q, want 201", status, body)
+			}
+			status, body := c.do(http.MethodDelete, "/ui/api/status/topics/orders", "")
+			if status != http.StatusServiceUnavailable || !strings.Contains(body, "KAFSCALE_S3_NAMESPACE") {
+				t.Fatalf("delete status = %d %q, want 503 naming KAFSCALE_S3_NAMESPACE", status, body)
+			}
+			if got := etcdTopicPartitions(t, endpoints, "orders"); got != 2 {
+				t.Fatalf("after refused delete etcd has topic orders with %d partitions, want 2", got)
+			}
+			deleted, err := cli.Get(ctx, metadata.DeletedTopicPrefix, clientv3.WithPrefix())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(deleted.Kvs) != 0 {
+				t.Fatalf("deleted topic records = %v, want none", deleted.Kvs)
+			}
+		})
 	}
 }

@@ -594,6 +594,7 @@ demo-platform-bootstrap: docker-build $(MINIO_BUILD) ## Bootstrap a full platfor
 	  --set console.auth.username=$(KAFSCALE_UI_USERNAME) \
 	  --set console.auth.password=$(KAFSCALE_UI_PASSWORD) \
 	  --set console.etcdEndpoints[0]=http://kafscale-etcd-client.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:2379 \
+	  --set console.s3Namespace=$(KAFSCALE_DEMO_NAMESPACE) \
 	  --set console.metrics.brokerMetricsURL=http://kafscale-broker.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:9093/metrics \
 	  --set console.metrics.operatorMetricsURL=http://kafscale-operator-metrics.$(KAFSCALE_DEMO_NAMESPACE).svc.cluster.local:8080/metrics \
 	  --set operator.etcdEndpoints[0]= \
