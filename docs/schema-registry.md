@@ -296,3 +296,12 @@ Client settings, using the in cluster Service `<fullname>-schema-registry` on po
 - Java: `schema.registry.url=http://<fullname>-schema-registry:8081`
 - confluent-kafka-python: `SchemaRegistryClient({"url": "http://<fullname>-schema-registry:8081"})`
 - franz-go: `sr.NewClient(sr.URLs("http://<fullname>-schema-registry:8081"))`
+
+After you change the S3 secret named by `schemaRegistry.s3.credentialsSecret`, restart the registry pods. The registry reads the keys once at startup, and nothing rolls it when the secret changes. With the release named `kafscale`:
+
+```bash
+kubectl rollout restart deployment/kafscale-schema-registry --namespace <namespace>
+kubectl rollout status deployment/kafscale-schema-registry --namespace <namespace>
+```
+
+`<namespace>` is the namespace of the Helm release. For other release names, see [S3 credentials secret](operations.md#s3-credentials-secret).

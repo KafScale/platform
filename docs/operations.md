@@ -252,6 +252,22 @@ keys present in the secret. When one of those keys changes, those pods roll,
 also while the etcd snapshot check fails. Other keys in the secret do not roll
 them.
 
+The schema registry does not roll. The Helm chart passes the keys of
+`schemaRegistry.s3.credentialsSecret` to it as environment variables, and the
+registry reads them once at startup. After you change that secret, restart the
+registry pods. Until then, registering a new schema fails with HTTP 500, error
+code 50001 and `SignatureDoesNotMatch`, and reads keep working.
+
+```bash
+kubectl rollout restart deployment/kafscale-schema-registry --namespace <namespace>
+kubectl rollout status deployment/kafscale-schema-registry --namespace <namespace>
+```
+
+`<namespace>` is the namespace of the Helm release. The Deployment is
+`kafscale-schema-registry` when the release is named `kafscale`,
+`<release>-kafscale-schema-registry` for another release name `<release>`, and
+`<fullnameOverride>-schema-registry` when `fullnameOverride` is set.
+
 **The `S3Credentials` condition**
 
 The operator reports the secret state on the KafscaleCluster:
