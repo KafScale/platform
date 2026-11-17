@@ -470,7 +470,8 @@ func (p *proxy) checkReady(ctx context.Context) bool {
 	// traffic that silently returns zero records. Require a Fetch round-trip
 	// that actually decodes before reporting Ready.
 	if p.readyzFetchProbe {
-		if len(p.backends) == 0 && p.cacheFresh() && p.etcdUnreachable(ctx) {
+		if len(p.backends) == 0 && p.etcdUnreachable(ctx) {
+			p.logger.Debug("readyz fetch probe skipped during an etcd outage; staying Ready")
 			return true
 		}
 		if err := p.fetchProbe(ctx); err != nil {

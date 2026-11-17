@@ -157,6 +157,7 @@ limitations under the License.
   - `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default 60 seconds) now applies: after a failed read the proxy, including its Kafka listener, readiness check and LFS HTTP API, uses the brokers, routes and metadata it last read until that time has passed since the last successful read.
   - After that it reports NotReady, and its Kafka listener answers no Metadata or FindCoordinator request and routes no request to a broker, not even over a broker connection that is already open.
   - Each such request gets the reply the proxy already sends while it is not ready: `REQUEST_TIMED_OUT`, which clients retry, on the response or on each topic, partition, group or resource the request names.
+  - Within the TTL, `/readyz` on the chart and LFS proxy probes stays Ready while etcd does not answer within 200 ms, even if the Fetch probe cannot reach a broker. The probe still has to succeed when etcd answers, and always when `KAFSCALE_PROXY_BACKENDS` lists static brokers. Before, the Fetch probe failed during an etcd outage and Kubernetes marked the proxy NotReady after about 30 seconds (probe every 5 seconds, `failureThreshold: 6`), well before the default 60 second TTL, while the Kafka listener was still using its cached routes.
   - A Metadata request for all topics, which `kcat -L` and most clients send at startup, names none, so it gets an empty reply with no brokers, no topics and no error code, and clients treat it as failed metadata and retry.
   - A request type with no not-ready reply gets no answer. The client connection is then closed. ApiVersions is still answered.
   - Before rejecting a request the proxy tries to read etcd again, so it serves again as soon as etcd answers.
@@ -170,8 +171,6 @@ limitations under the License.
 - Helm rejects handshake deadlines outside 1..60000; 0 or an empty value selects the default (#286).
 - The proxy chart omits `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` when `proxy.security.handshakeTimeoutMs` is empty or null. It rendered `"0"`, which the proxy rejects at startup, so TLS proxies with an empty value failed to start (#278).
 - The Helm chart can set `proxy.responseWriteTimeoutMs` and `proxy.lfsMetadataTimeoutMs`. The proxy logs a warning when an integer environment setting is not a number. The KafscaleCluster CRD rejects a negative `offsetsRetentionMinutes` (#263).
-
-- `/readyz` stayed Ready only while a Fetch probe to a broker succeeded. During an etcd outage the brokers often stop serving Fetch, so the probe failed and Kubernetes marked the proxy NotReady after about 30 seconds (the chart probe is every 5 seconds with `failureThreshold: 6`), well before the default 60 second backend cache TTL. The Kafka listener was still using its cached routes, as documented. `/readyz` now stays Ready while the cache is fresh and etcd is unreachable, even if the Fetch probe fails. It still reports NotReady when etcd is reachable and the probe fails, and once the TTL has expired. See `docs/operations.md`.
 
 ### LFS proxy and SDKs
 

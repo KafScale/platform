@@ -543,7 +543,7 @@ startup waits, and the pod stays up and NotReady.
 1. **Is a backend known?** Cached backend state when fresh, otherwise a live
    metadata fetch from etcd.
 2. **Does that backend actually serve Fetch?** A Fetch round-trip on a fresh
-   connection that must decode cleanly.
+   connection that must decode cleanly. Skipped during an etcd outage within the TTL, see [Proxy behavior when etcd is down](#proxy-behavior-when-etcd-is-down).
 
 The second question exists because the proxy is a full Fetch codec: it decodes,
 merges and re-encodes broker Fetch responses. A proxy-to-broker Fetch
@@ -580,8 +580,7 @@ successful read.
 - Clients still get metadata and reach a broker, but their produces wait. Brokers
   reject produces with `REQUEST_TIMED_OUT` while etcd is down, and clients keep
   retrying, so the TTL does not keep produces working.
-- `/readyz` stays Ready, even if the Fetch probe cannot reach a broker. The probe
-  still has to succeed when etcd is reachable.
+- `/readyz` stays Ready while etcd does not answer within 200 ms, even if the Fetch probe cannot reach a broker. The probe still has to succeed when etcd answers, and always when `KAFSCALE_PROXY_BACKENDS` lists static brokers. This applies to the chart proxy and the LFS proxy.
 - The LFS HTTP API already fails. `/lfs/produce` and `/lfs/uploads` read the
   topic generation from etcd on every request, so they return 503
   `metadata_unavailable` as soon as etcd cannot be read.
@@ -615,6 +614,7 @@ as soon as etcd answers, and `/readyz` turns Ready on the next check.
   seconds and the full TTL before the proxy stops. With a TTL of 10 seconds or
   less it stops almost at once.
 - The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
+- Kubernetes marks the pod NotReady about 30 seconds after `/readyz` starts failing (probe every 5 seconds, failureThreshold 6).
 - This is on purpose. When etcd is down the cluster has to stop writing to avoid
   data loss, so past the TTL the proxy stops instead of letting clients write
   through stale routing.
