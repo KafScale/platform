@@ -45,8 +45,9 @@ type PartitionRouter struct {
 	logger *slog.Logger
 	cancel context.CancelFunc
 
-	mu     sync.RWMutex
-	routes map[string]string // "topic/partition" -> brokerID
+	mu       sync.RWMutex
+	routes   map[string]string // "topic/partition" -> brokerID
+	revision int64
 }
 
 // NewPartitionRouter creates a router and starts watching etcd for lease changes.
@@ -109,6 +110,25 @@ func (r *PartitionRouter) Invalidate(topic string, partition int32) {
 	r.mu.Unlock()
 }
 
+func (r *PartitionRouter) Refresh(ctx context.Context, topic string, partition int32) error {
+	resp, err := r.client.Get(ctx, partitionLeaseKey(topic, partition))
+	if err != nil {
+		return err
+	}
+	key := partitionKey(topic, partition)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if resp.Header.Revision < r.revision {
+		return nil
+	}
+	if len(resp.Kvs) == 0 {
+		delete(r.routes, key)
+	} else {
+		r.routes[key] = string(resp.Kvs[0].Value)
+	}
+	return nil
+}
+
 // Stop terminates the background watcher.
 func (r *PartitionRouter) Stop() {
 	r.cancel()
@@ -130,6 +150,7 @@ func (r *PartitionRouter) loadAll(ctx context.Context) error {
 	}
 	r.mu.Lock()
 	r.routes = fresh
+	r.revision = resp.Header.Revision
 	r.mu.Unlock()
 	r.logger.Info("loaded partition routes from etcd", "count", len(fresh))
 	return nil
@@ -137,7 +158,10 @@ func (r *PartitionRouter) loadAll(ctx context.Context) error {
 
 func (r *PartitionRouter) watch(ctx context.Context) {
 	for {
-		watchChan := r.client.Watch(ctx, partitionLeasePrefix+"/", clientv3.WithPrefix(), clientv3.WithPrevKV())
+		r.mu.RLock()
+		next := r.revision + 1
+		r.mu.RUnlock()
+		watchChan := r.client.Watch(ctx, partitionLeasePrefix+"/", clientv3.WithPrefix(), clientv3.WithPrevKV(), clientv3.WithRev(next))
 		for resp := range watchChan {
 			if resp.Err() != nil {
 				r.logger.Warn("partition lease watch error", "error", resp.Err())
@@ -146,6 +170,7 @@ func (r *PartitionRouter) watch(ctx context.Context) {
 			r.mu.Lock()
 			for _, ev := range resp.Events {
 				etcdKey := string(ev.Kv.Key)
+				r.revision = max(r.revision, ev.Kv.ModRevision)
 				routeKey, ok := leaseKeyToRouteKey(etcdKey)
 				if !ok {
 					continue

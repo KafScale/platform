@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/internal/testutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 func TestLeaseKeyToRouteKey(t *testing.T) {
@@ -226,6 +227,93 @@ func TestPartitionRouterInvalidate(t *testing.T) {
 	router.Invalidate("orders", 0)
 	if owner := router.LookupOwner("orders", 0); owner != "" {
 		t.Fatalf("expected empty owner after invalidate, got %q", owner)
+	}
+}
+
+func TestPartitionRouterRefreshReadsLeaseWithoutWatch(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	cli := newEtcdClientForTest(t, endpoints)
+	if _, err := cli.Put(ctx, partitionLeaseKey("orders", 0), "broker-a"); err != nil {
+		t.Fatal(err)
+	}
+	router, err := NewPartitionRouter(ctx, cli, slog.Default())
+	if err != nil {
+		t.Fatalf("create router: %v", err)
+	}
+	router.Stop()
+
+	if _, err := cli.Put(ctx, partitionLeaseKey("orders", 0), "broker-b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Refresh(ctx, "orders", 0); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if owner := router.LookupOwner("orders", 0); owner != "broker-b" {
+		t.Fatalf("owner after refresh = %q, want broker-b", owner)
+	}
+
+	if _, err := cli.Delete(ctx, partitionLeaseKey("orders", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := router.Refresh(ctx, "orders", 0); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if owner := router.LookupOwner("orders", 0); owner != "" {
+		t.Fatalf("owner after lease delete = %q, want empty", owner)
+	}
+}
+
+type staleLeaseKV struct {
+	clientv3.KV
+	stale *clientv3.GetResponse
+}
+
+func (kv staleLeaseKV) Get(ctx context.Context, key string, opts ...clientv3.OpOption) (*clientv3.GetResponse, error) {
+	if len(opts) == 0 {
+		return kv.stale, nil
+	}
+	return kv.KV.Get(ctx, key, opts...)
+}
+
+func TestPartitionRouterRefreshKeepsNewerWatchedRoute(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	cli := newEtcdClientForTest(t, endpoints)
+	if _, err := cli.Put(ctx, partitionLeaseKey("orders", 0), "broker-a"); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := cli.Get(ctx, partitionLeaseKey("orders", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	routerCli := newEtcdClientForTest(t, endpoints)
+	routerCli.KV = staleLeaseKV{KV: routerCli.KV, stale: stale}
+	router, err := NewPartitionRouter(ctx, routerCli, slog.Default())
+	if err != nil {
+		t.Fatalf("create router: %v", err)
+	}
+	t.Cleanup(router.Stop)
+
+	if _, err := cli.Put(ctx, partitionLeaseKey("orders", 0), "broker-b"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for router.LookupOwner("orders", 0) != "broker-b" {
+		if time.Now().After(deadline) {
+			t.Fatalf("watch did not apply broker-b, owner %q", router.LookupOwner("orders", 0))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := router.Refresh(ctx, "orders", 0); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if owner := router.LookupOwner("orders", 0); owner != "broker-b" {
+		t.Fatalf("owner after older refresh read = %q, want broker-b", owner)
 	}
 }
 
