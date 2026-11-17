@@ -269,8 +269,9 @@ with HTTP 500, error code 50001 and `Error in the backend data store: <S3 error>
 The S3 error depends on the provider and on how the key was retired, for example
 `InvalidAccessKeyId` or `SignatureDoesNotMatch`. Requests that fail include:
 
-- Registering a new schema. Registering a schema that is already the latest
-  version of the subject returns its id without writing to S3.
+- Registering a schema that gets a new id. The registry writes an id marker to
+  S3 for every new id, and the schema text too when it is above
+  `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`.
 - Reading a schema above `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES` when the
   pod does not have it in its cache, because its text is stored in S3.
 - Schema lookup (`POST /subjects/{subject}`) and compatibility checks
@@ -281,8 +282,9 @@ The S3 error depends on the provider and on how the key was retired, for example
 - Loading a schema stored inline in etcd when one of its references is stored in
   S3 and not cached.
 
-Only requests whose schemas and references are all stored inline in etcd or
-already in the pod cache keep working.
+Requests that need no S3 read or write keep working, such as reads of schemas
+whose text and references are inline in etcd or in the pod cache, and
+registering such a schema again.
 
 Rotate the keys in this order. The order matters.
 
