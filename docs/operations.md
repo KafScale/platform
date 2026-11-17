@@ -153,7 +153,7 @@ operator:
     proxyProtocol: true
 ```
 - **Health / metrics**: Prometheus can scrape `/metrics` on the brokers and operator for early detection of S3 pressure or degraded nodes. The operator exposes metrics on port `8080` and the Helm chart can create a metrics Service, ServiceMonitor, and PrometheusRule.
-- **Startup gating**: Before opening listeners, brokers check metadata access and S3 conditional writes. They write a unique `__health/` probe key twice and require the second `PutObject` with `If-None-Match: *` to return `412 Precondition Failed`; ignored or rejected conditions fail startup with an error. A first write that fails with `501`, or with the error code `NotImplemented`, `InvalidArgument` or `InvalidRequest`, fails startup at once with `backend rejects If-None-Match: *`. Other initial S3 write failures retry until `KAFSCALE_STARTUP_TIMEOUT_SEC` expires. Probe objects are deleted after each attempt with a bounded cleanup request; cleanup failures are logged and need `s3:DeleteObject` on `__health/`.
+- **Startup gating**: Before opening listeners, brokers check metadata access and S3 conditional writes. They write a unique `__health/` probe key twice and require the second `PutObject` with `If-None-Match: *` to return `412 Precondition Failed`; ignored or rejected conditions fail startup with an error. A first write that fails with `501` or the error code `NotImplemented` fails startup at once with `backend rejects If-None-Match: *`. A first write that fails with the error code `InvalidArgument` or `InvalidRequest` fails startup at once with `backend rejected the conditional PutObject (If-None-Match: *)`. Other initial S3 write failures retry until `KAFSCALE_STARTUP_TIMEOUT_SEC` expires. Probe objects are deleted after each attempt with a bounded cleanup request; cleanup failures are logged and need `s3:DeleteObject` on `__health/`.
 - **Leader IDs**: Each broker advertises a numeric `NodeID` in etcd. In the single-node demo you’ll always see `Leader=0` in the Console’s topic detail because the only broker has ID `0`. In real clusters those IDs align with the broker addresses the operator published; if you see `Leader=3`, look for the broker with `NodeID 3` in the metadata payload.
 
 ### Proxy TLS via LoadBalancer
@@ -833,8 +833,9 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 ### Console
 
 - `KAFSCALE_CONSOLE_HTTP_ADDR`: Console listen address.
-- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS`: Etcd endpoints for metadata read-only access.
+- `KAFSCALE_CONSOLE_ETCD_ENDPOINTS`: Etcd endpoints for cluster metadata. The console reads status from etcd and writes to it when it creates or deletes a topic.
 - `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD`: Etcd auth for console.
+- `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. Set it to the `KafscaleCluster` namespace, which the operator gives the brokers. The console writes it into the deleted topic record that `kafscale-cli prune` uses. When it is unset or blank, the console refuses topic deletes with `503`. The Helm chart sets it from `console.s3Namespace` and prints a warning in the install notes when `console.etcdEndpoints` is set and `console.s3Namespace` is empty.
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL`: Broker Prometheus endpoint.
 - `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials.
 - `KAFSCALE_CONSOLE_LFS_ENABLED`: Enable the LFS views and API (`true` to enable; any other value disables them).
@@ -843,6 +844,12 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_REGION`, `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT`: S3 location for browsing LFS objects. Path-style addressing is used when an endpoint is set.
 - `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY`: S3 credentials for the console.
 - `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL`: Presigned URL lifetime in seconds (default `300`).
+
+The console serves these authenticated topic endpoints when `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` is set. They use the same etcd metadata path as the broker Kafka `CreateTopics` and `DeleteTopics` APIs.
+
+- `POST /ui/api/status/topics` creates a topic. The JSON body is `{"name":"<topic>","partitions":<count>,"replication_factor":<count>}`. `partitions` must be between 1 and 10000. `replication_factor` is optional and defaults to 1. It returns `201` with `{"name":"<topic>","partitions":<count>,"state":"ready"}`.
+- `DELETE /ui/api/status/topics/<topic>` deletes a topic the same way the broker does. It needs `KAFSCALE_S3_NAMESPACE`. It returns `200` with `{"name":"<topic>"}`.
+- Errors: `400` for a malformed body or data after the JSON object, an invalid topic name, a partition count outside 1 to 10000 or a replication factor above the broker count, `404` for an unknown topic, `409` for a topic that already exists or changed during the delete, and `503` when no etcd endpoints are configured, etcd is unavailable or times out, or a delete runs without `KAFSCALE_S3_NAMESPACE`. Other failures return `500`.
 
 When LFS is enabled, the console serves these authenticated endpoints: `/ui/api/lfs/status`, `/ui/api/lfs/objects`, `/ui/api/lfs/topics`, `/ui/api/lfs/topics/{topic}`, `/ui/api/lfs/events`, `/ui/api/lfs/orphans`, `/ui/api/lfs/s3/browse` and `/ui/api/lfs/s3/presign`.
 

@@ -103,6 +103,7 @@ console:
     username: ""
     password: null  # Set via --set or use existingSecret
   etcdEndpoints: []
+  s3Namespace: ""  # Set to the KafscaleCluster namespace when etcdEndpoints is set. Empty makes the console refuse topic deletes.
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
     username: ""

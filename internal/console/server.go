@@ -18,11 +18,18 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
+
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/KafScale/platform/internal/health"
 	"github.com/KafScale/platform/pkg/metadata"
@@ -60,6 +67,7 @@ type ServerOptions struct {
 	Logger      *log.Logger
 	Auth        AuthConfig
 	LFSHandlers *LFSHandlers
+	S3Namespace string
 }
 
 // StartServer launches the HTTP console on the provided address. When store is
@@ -103,7 +111,7 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 	mux.Handle("/ui/", http.StripPrefix("/ui/", staticHandler))
 	mux.Handle("/favicon.ico", staticHandler)
 
-	handlers := &consoleHandlers{store: opts.Store, metrics: opts.Metrics}
+	handlers := &consoleHandlers{store: opts.Store, metrics: opts.Metrics, s3Namespace: strings.TrimSpace(opts.S3Namespace)}
 	mux.HandleFunc("/ui/api/auth/config", auth.handleConfig)
 	mux.HandleFunc("/ui/api/auth/session", auth.handleSession)
 	mux.HandleFunc("/ui/api/auth/login", auth.handleLogin)
@@ -131,8 +139,9 @@ func NewMux(opts ServerOptions) (http.Handler, error) {
 }
 
 type consoleHandlers struct {
-	store   metadata.Store
-	metrics MetricsProvider
+	store       metadata.Store
+	metrics     MetricsProvider
+	s3Namespace string
 }
 
 type statusResponse struct {
@@ -219,13 +228,58 @@ func (h *consoleHandlers) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusFromMetadata(meta, metrics))
 }
 
+const maxCreateTopicPartitions = 10000
+
+type createTopicRequest struct {
+	Name              string `json:"name"`
+	Partitions        int32  `json:"partitions"`
+	ReplicationFactor int16  `json:"replication_factor"`
+}
+
+type createTopicResponse struct {
+	Name       string `json:"name"`
+	Partitions int    `json:"partitions"`
+	State      string `json:"state"`
+}
+
+type deleteTopicResponse struct {
+	Name string `json:"name"`
+}
+
 func (h *consoleHandlers) handleCreateTopic(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Future work will invoke the operator APIs; for now this is an ack.
-	w.WriteHeader(http.StatusAccepted)
+	if !h.topicStoreReady(w) {
+		return
+	}
+	var req createTopicRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	if err := decoder.Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid request body: trailing data after the JSON object", http.StatusBadRequest)
+		return
+	}
+	if req.Partitions < 1 || req.Partitions > maxCreateTopicPartitions {
+		http.Error(w, fmt.Sprintf("partitions must be between 1 and %d", maxCreateTopicPartitions), http.StatusBadRequest)
+		return
+	}
+	topic, err := h.store.CreateTopic(r.Context(), metadata.TopicSpec{
+		Name:              req.Name,
+		NumPartitions:     req.Partitions,
+		ReplicationFactor: req.ReplicationFactor,
+	})
+	if err != nil {
+		writeTopicAdminError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(createTopicResponse{Name: *topic.Topic, Partitions: len(topic.Partitions), State: "ready"})
 }
 
 func (h *consoleHandlers) handleDeleteTopic(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +287,59 @@ func (h *consoleHandlers) handleDeleteTopic(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	if !h.topicStoreReady(w) {
+		return
+	}
+	if h.s3Namespace == "" {
+		http.Error(w, "console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace", http.StatusServiceUnavailable)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/ui/api/status/topics/")
+	if err := metadata.ValidateTopicName(name); err != nil {
+		writeTopicAdminError(w, err)
+		return
+	}
+	if err := h.store.DeleteTopic(r.Context(), name); err != nil {
+		writeTopicAdminError(w, err)
+		return
+	}
+	writeJSON(w, deleteTopicResponse{Name: name})
+}
+
+func (h *consoleHandlers) topicStoreReady(w http.ResponseWriter) bool {
+	if h.store == nil {
+		http.Error(w, "metadata store not configured", http.StatusServiceUnavailable)
+		return false
+	}
+	if checker, ok := h.store.(interface{ Available() bool }); ok && !checker.Available() {
+		http.Error(w, "etcd unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
+func etcdUnavailable(err error) bool {
+	var etcdErr rpctypes.EtcdError
+	if errors.As(err, &etcdErr) && (etcdErr.Code() == codes.Unavailable || etcdErr.Code() == codes.DeadlineExceeded) {
+		return true
+	}
+	code := grpcstatus.Code(err)
+	return errors.Is(err, context.DeadlineExceeded) || code == codes.Unavailable || code == codes.DeadlineExceeded
+}
+
+func writeTopicAdminError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, metadata.ErrInvalidTopic):
+		status = http.StatusBadRequest
+	case errors.Is(err, metadata.ErrUnknownTopic):
+		status = http.StatusNotFound
+	case errors.Is(err, metadata.ErrTopicExists), errors.Is(err, metadata.ErrTopicGenerationChanged):
+		status = http.StatusConflict
+	case etcdUnavailable(err):
+		status = http.StatusServiceUnavailable
+	}
+	http.Error(w, err.Error(), status)
 }
 
 func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) {
