@@ -79,6 +79,7 @@ limitations under the License.
 - Topic config updates participate in expansion's snapshot revision checks and derive partition counts from the current topology. Delayed config creation or updates retry after expansion instead of restoring an old count, reject a topic recreated during the operation, and publish local config state only after a successful commit. CLI restore uses the same guarded update path (#338).
 
 - Brokers check S3 conditional PUT support before opening listeners. A second write to a unique probe key must return `412 Precondition Failed`; backends that ignore or reject the condition fail startup with a clear error. Startup probes are cleaned up after successful and failed attempts (#336).
+- A broker whose S3 backend rejects the first `PutObject` with `If-None-Match: *` (HTTP `501`, or the error code `NotImplemented`, `InvalidArgument` or `InvalidRequest`) now exits at once with `backend rejects If-None-Match: * ... partition segments cannot be fenced`. Before, it retried the probe until `KAFSCALE_STARTUP_TIMEOUT_SEC` expired, and the pod restarted and did the same again. Other startup S3 errors still retry until the timeout (#360).
 
 - Conditional S3 write conflicts (412 precondition failed and 409 conditional conflict) no longer count as S3 health errors and block produces across the broker. The conflicting partition remains fenced; S3 latency and other failures still drive backpressure (#335).
 
