@@ -1219,6 +1219,12 @@ with `python3 hack/update_affinity_schema.py` (requires Go and PyYAML).
 `python3 hack/update_affinity_schema.py --check` checks for drift while preserving
 the other manually maintained CRD fields.
 
+## Conditional segment conflicts
+
+A failed conditional segment PUT or a failed index upload after a successful segment PUT fences the old log handle. The broker evicts only that handle; the next request restores the immutable winning segment and continues after its last offset under the current lease. If the winner’s index is missing or corrupt, restore validates the segment checksum and batch offset bounds and rebuilds an index in memory. Failed append cleanup never deletes an immutable segment or its sidecar, including after a delayed old-writer failure. Recovery does not overwrite either object. Malformed segments and overlapping ranges fail restore rather than silently selecting or skipping data.
+
+This recovery prevents reuse of the winning segment’s occupied offsets. It does not deduplicate producer retries: a timed-out write may already exist in S3, and KafScale does not implement idempotent producers or `InitProducerId`. Retrying the same records can append them again at later offsets.
+
 ## Produce deadlines and topic generations
 
 A positive Produce `TimeoutMillis` bounds broker processing, including partition

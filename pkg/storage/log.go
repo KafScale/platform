@@ -70,11 +70,12 @@ type PartitionLog struct {
 	appendMu     sync.Mutex
 	mu           sync.Mutex
 	s3sem        *semaphore.Weighted
-	// failedUploadBase is guarded by appendMu and fences retries until orphaned
-	// objects from a failed upload have been removed.
-	failedUploadBase *int64
-	uploadConflict   error
+
+	uploadConflict atomic.Pointer[partitionLogFailure]
 }
+
+// Immutable terminal failure shared with readers that retained this handle.
+type partitionLogFailure struct{ err error }
 
 type segmentRange struct {
 	baseOffset int64
@@ -85,6 +86,9 @@ type segmentRange struct {
 // ErrOffsetOutOfRange is returned when the requested offset is outside persisted data.
 var ErrOffsetOutOfRange = errors.New("offset out of range")
 var ErrObjectStorage = errors.New("object storage request failed")
+
+// ErrLogFenced marks a terminal handle; create and restore a new log to continue.
+var ErrLogFenced = errors.New("partition log requires reload")
 
 // NewPartitionLog constructs a log for a topic partition.
 func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
@@ -181,10 +185,6 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (lastOffset int64, res
 	}
 	total = len(candidates)
 	logger.Info("partition restore listed segments", "segments", total)
-	l.mu.Lock()
-	nextOffset := l.nextOffset
-	l.mu.Unlock()
-
 	results := make([]*restoredSegment, total)
 	group, groupCtx := errgroup.WithContext(ctx)
 	workers := min(restoreConcurrency, total)
@@ -194,7 +194,7 @@ func (l *PartitionLog) RestoreFromS3(ctx context.Context) (lastOffset int64, res
 				if err := groupCtx.Err(); err != nil {
 					return err
 				}
-				result, err := l.restoreSegment(groupCtx, candidates[i], nextOffset)
+				result, err := l.restoreSegment(groupCtx, candidates[i])
 				if err != nil {
 					return fmt.Errorf("restore segment %s: %w", candidates[i].Key, err)
 				}
@@ -234,6 +234,11 @@ waiting:
 	sort.Slice(segments, func(i, j int) bool {
 		return segments[i].baseOffset < segments[j].baseOffset
 	})
+	for i := 1; i < len(segments); i++ {
+		if segments[i-1].lastOffset >= segments[i].baseOffset {
+			return -1, fmt.Errorf("overlapping segments at offsets %d and %d", segments[i-1].baseOffset, segments[i].baseOffset)
+		}
+	}
 	last := int64(-1)
 	if len(segments) > 0 {
 		last = segments[len(segments)-1].lastOffset
@@ -249,7 +254,7 @@ waiting:
 	return last, nil
 }
 
-func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object, nextOffset int64) (*restoredSegment, error) {
+func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object) (*restoredSegment, error) {
 	base, _ := parseSegmentBaseOffset(obj.Key)
 	rng := &ByteRange{Start: obj.Size - segmentFooterLen, End: obj.Size - 1}
 	if err := l.acquireS3(ctx); err != nil {
@@ -278,26 +283,24 @@ func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object, nextOff
 	if l.onS3Op != nil {
 		l.onS3Op("download_index", time.Since(started), err)
 	}
-	if err != nil {
-		if errors.Is(err, ErrNotFound) && base >= nextOffset {
-			l.logger().Warn("skipping orphaned segment: missing .index",
-				"topic", l.topic, "partition", l.partition,
-				"segment_base", base, "next_offset", nextOffset,
-				"index_key", indexKey, "error", err)
-			return nil, nil
-		}
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	entries, err := ParseIndex(indexBytes)
-	if err != nil {
-		if base >= nextOffset {
-			l.logger().Warn("skipping orphaned segment: corrupt .index",
-				"topic", l.topic, "partition", l.partition,
-				"segment_base", base, "next_offset", nextOffset,
-				"index_key", indexKey, "error", err)
-			return nil, nil
+	var entries []*IndexEntry
+	if err == nil {
+		entries, err = ParseIndex(indexBytes)
+		if err == nil && !indexMatchesSegment(entries, base, lastOffset, obj.Size) {
+			err = fmt.Errorf("index entries do not match segment bounds")
 		}
-		return nil, fmt.Errorf("parse index %s: %w", indexKey, err)
+	}
+	if err != nil {
+		// The immutable segment occupies these offsets even if its writer
+		// has not uploaded the sidecar yet. Rebuild only our in-memory index;
+		// never replace or delete another writer's S3 objects.
+		entries, err = l.restoreSegmentIndex(ctx, obj, base, lastOffset)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &restoredSegment{segment: segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size}, entries: entries}, nil
 }
@@ -308,7 +311,9 @@ func (l *PartitionLog) AppendBatch(ctx context.Context, batch RecordBatch) (*App
 }
 
 // AppendBatches stages a partition's complete Produce record set as one write.
-// A failed build or upload leaves the live buffer and offsets unchanged.
+// A failed build or upload leaves the live buffer and offsets unchanged. An
+// immutable segment may still exist after failure; a fenced handle must be
+// replaced and restored before further reads or writes.
 // forceFlush makes the whole set durable before returning; otherwise the normal
 // buffer thresholds apply. Concurrent readers see only previously accepted data.
 func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch, forceFlush bool) (*AppendResult, error) {
@@ -327,12 +332,6 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 	}
 	if err := l.CheckOwnership(); err != nil {
 		return nil, err
-	}
-	if l.uploadConflict != nil {
-		return nil, l.uploadConflict
-	}
-	if err := l.discardFailedUpload(ctx); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrObjectStorage, err)
 	}
 	l.mu.Lock()
 	baseOffset := l.nextOffset
@@ -364,30 +363,18 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		return nil, fmt.Errorf("build segment: %w", err)
 	}
 	if err := l.uploadStaged(ctx, artifact); err != nil {
-		if errors.Is(err, ErrPreconditionFailed) || errors.Is(err, ErrConditionalConflict) {
-			// These objects belong to another writer. Never delete them, even on retry.
-			l.uploadConflict = fmt.Errorf("%w: %w", ErrObjectStorage, err)
-			return nil, l.uploadConflict
-		}
+		failure := fmt.Errorf("%w: %w", ErrObjectStorage, err)
 		var uncertain *segmentUploadError
-		if errors.As(err, &uncertain) {
-			// A timed-out conditional PUT may still complete. Deleting this key could
-			// remove a different writer's successful claim. Leave any orphan untouched.
-			return nil, fmt.Errorf("%w: %w", ErrObjectStorage, err)
+		if errors.As(err, &uncertain) && !errors.Is(err, ErrPreconditionFailed) && !errors.Is(err, ErrConditionalConflict) {
+			// The PUT may still complete. A later conditional retry determines
+			// whether this offset was occupied; never delete an uncertain claim.
+			return nil, failure
 		}
-		base := artifact.BaseOffset
-		l.failedUploadBase = &base
-		// Remove the index before releasing the segment claim, even if the
-		// Produce deadline expired. The successful path incurs no DELETEs.
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		cleanupErr := l.discardFailedUpload(cleanupCtx)
-		failure := fmt.Errorf("%w: %w", ErrObjectStorage, errors.Join(err, cleanupErr))
-		if cleanupErr != nil {
-			// A DELETE may have succeeded despite returning an error. Its old key
-			// can now belong to a new writer, so this handle must never retry cleanup.
-			l.uploadConflict = failure
-		}
+		// A conflicting claim or a failed sidecar write leaves an immutable
+		// segment that a new owner may already be restoring. Cleanup must not
+		// delete that segment or index, even after a lease handoff.
+		failure = fmt.Errorf("%w: %w", ErrLogFenced, failure)
+		l.uploadConflict.Store(&partitionLogFailure{err: failure})
 		return nil, failure
 	}
 	if err := l.CheckOwnership(); err != nil {
@@ -398,8 +385,10 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 	l.mu.Lock()
 	if l.cfg.CommitOffsets != nil {
 		if err := l.cfg.CommitOffsets(ctx, artifact); err != nil {
+			failure := fmt.Errorf("%w: %w", ErrLogFenced, err)
+			l.uploadConflict.Store(&partitionLogFailure{err: failure})
 			l.mu.Unlock()
-			return nil, err
+			return nil, failure
 		}
 	}
 	l.buffer, l.nextOffset = staged, nextOffset
@@ -445,7 +434,7 @@ func (l *PartitionLog) EarliestOffset() int64 {
 }
 
 // Flush persists the current buffer through the atomic record-set path.
-// The live buffer stays readable and retryable until both uploads succeed.
+// A terminal upload failure fences the handle without deleting durable objects.
 func (l *PartitionLog) Flush(ctx context.Context) error {
 	_, err := l.appendBatches(ctx, nil, true)
 	return err
@@ -486,31 +475,6 @@ func (l *PartitionLog) uploadStaged(ctx context.Context, artifact *SegmentArtifa
 			return err
 		}
 	}
-	return nil
-}
-
-func (l *PartitionLog) discardFailedUpload(ctx context.Context) error {
-	if l.failedUploadBase == nil {
-		return nil
-	}
-	base := *l.failedUploadBase
-	for _, deletion := range []struct {
-		key    string
-		remove func(context.Context, string) error
-	}{
-		{l.indexKey(base), l.s3.DeleteIndex},
-		{l.segmentKey(base), l.s3.DeleteSegment},
-	} {
-		if err := l.acquireS3(ctx); err != nil {
-			return err
-		}
-		err := deletion.remove(ctx, deletion.key)
-		l.releaseS3()
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return fmt.Errorf("remove failed upload: %w", err)
-		}
-	}
-	l.failedUploadBase = nil
 	return nil
 }
 
@@ -814,10 +778,15 @@ func limitRecordBatchesFromOffset(data []byte, offset int64, maxBytes int32) []b
 	return data[start:end]
 }
 
-// CheckOwnership rejects handles retained from an earlier lease acquisition.
+// CheckOwnership rejects handles fenced by lease loss or a terminal upload failure.
 func (l *PartitionLog) CheckOwnership() error {
 	if l.cfg.CheckOwnership != nil {
-		return l.cfg.CheckOwnership()
+		if err := l.cfg.CheckOwnership(); err != nil {
+			return err
+		}
+	}
+	if failure := l.uploadConflict.Load(); failure != nil {
+		return failure.err
 	}
 	return nil
 }

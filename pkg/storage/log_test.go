@@ -433,7 +433,7 @@ func (f *failingUploadS3) UploadIndex(ctx context.Context, key string, body []by
 	return fmt.Errorf("simulated S3 upload failure")
 }
 
-func TestPartitionLogRestoreFromS3SkipsOrphanedSegment(t *testing.T) {
+func TestPartitionLogRestoreFromS3RecoversUnindexedSegment(t *testing.T) {
 	s3 := NewMemoryS3Client()
 	c := cache.NewSegmentCache(1024)
 	log := NewPartitionLog("default", "orders", 0, 0, s3, c, PartitionLogConfig{
@@ -476,16 +476,14 @@ func TestPartitionLogRestoreFromS3SkipsOrphanedSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreFromS3 should not fail for orphaned .kfs: %v", err)
 	}
-	if lastOffset != -1 {
-		t.Fatalf("expected last offset -1 (no valid segments), got %d", lastOffset)
+	if lastOffset != 0 || len(recovered.segments) != 1 {
+		t.Fatalf("unindexed winner was skipped: last=%d segments=%d", lastOffset, len(recovered.segments))
 	}
-	if len(recovered.segments) != 0 {
-		t.Fatalf("expected no segments, got %d", len(recovered.segments))
+	if data, err := recovered.Read(context.Background(), 0, 1<<20); err != nil || !bytes.Equal(data, batch.Bytes) {
+		t.Fatalf("winner unreadable: %x %v", data, err)
 	}
-	// A missing index may belong to a writer whose segment PUT just completed.
-	// Preserve the segment and fail closed; overwriting it can destroy acked data.
-	if _, err := recovered.AppendBatch(context.Background(), batch); !errors.Is(err, ErrPreconditionFailed) {
-		t.Fatalf("append over orphan: %v", err)
+	if result, err := recovered.AppendBatch(context.Background(), batch); err != nil || result.BaseOffset != 1 {
+		t.Fatalf("append reused occupied offset: %+v %v", result, err)
 	}
 
 }
@@ -572,7 +570,9 @@ func TestPartitionLogReadSkipsGap(t *testing.T) {
 	}
 
 	firstIndexKey := "default/orders/0/segment-00000000000000000000.index"
+	// A real gap has no segment object; a missing index alone is recoverable.
 	s3.mu.Lock()
+	delete(s3.data, log.segmentKey(0))
 	delete(s3.index, firstIndexKey)
 	s3.mu.Unlock()
 

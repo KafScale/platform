@@ -1249,6 +1249,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			}
 			result, err := plog.AppendBatches(ctx, batches, req.Acks != 0 && h.flushOnAck)
 			if err != nil {
+				if errors.Is(err, storage.ErrLogFenced) {
+					h.dropConflictingPartitionLog(topic.Topic, part.Partition, plog)
+				}
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR

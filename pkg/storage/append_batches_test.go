@@ -29,7 +29,7 @@ import (
 type atomicAppendS3 struct {
 	*MemoryS3Client
 	fail            string
-	failDelete      bool
+	deletes         atomic.Int32
 	cancelOnFailure context.CancelFunc
 	puts            atomic.Int32
 }
@@ -66,29 +66,18 @@ func (s *atomicAppendS3) UploadSegment(ctx context.Context, key string, body []b
 }
 
 func (s *atomicAppendS3) DeleteIndex(ctx context.Context, key string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if s.failDelete {
-		return errors.New("delete index failed")
-	}
+	s.deletes.Add(1)
 	return s.MemoryS3Client.DeleteIndex(ctx, key)
 }
-
 func (s *atomicAppendS3) DeleteSegment(ctx context.Context, key string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if s.failDelete {
-		return errors.New("delete segment failed")
-	}
+	s.deletes.Add(1)
 	return s.MemoryS3Client.DeleteSegment(ctx, key)
 }
 
 func TestAppendBatchesFailureAndRetry(t *testing.T) {
 	ctx := context.Background()
 	for _, force := range []bool{false, true} {
-		for _, fail := range []string{"index", "segment", "index-after-write"} {
+		for _, fail := range []string{"segment"} {
 			t.Run(fmt.Sprintf("force=%t/%s", force, fail), func(t *testing.T) {
 				s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client()}
 				var committed int64 = -1
@@ -305,27 +294,25 @@ func TestAppendBatchesClaimsSegmentBeforeIndex(t *testing.T) {
 	}
 }
 
-func TestAppendBatchesFailedCleanupFencesRetry(t *testing.T) {
+func TestAppendBatchesIndexFailureFencesRetry(t *testing.T) {
 	ctx := context.Background()
-	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "index", failDelete: true}
+	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "index"}
 	log := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
 	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
-		t.Fatal("expected upload and cleanup failure")
+		t.Fatal("expected index upload failure")
 	}
 	s3.fail = "index"
 	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
-		t.Fatal("retry bypassed failed cleanup")
+		t.Fatal("retry bypassed the fenced handle")
 	}
 	if s3.puts.Load() != 2 || log.BufferedHighWatermark() != 0 {
-		t.Fatal("dirty offset was reused before cleanup")
+		t.Fatal("occupied offset was reused")
 	}
-	// Even after connectivity recovers, an ambiguous DELETE cannot be retried:
-	// the key may now belong to a different writer.
-	s3.failDelete = false
+	// Connectivity recovery must not revive an old handle or delete its claim.
 	s3.fail = ""
 	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
-		t.Fatal("retried an ambiguous cleanup after recovery")
+		t.Fatal("revived the fenced log after recovery")
 	}
 	if s3.puts.Load() != 2 {
 		t.Fatal("fenced handle uploaded again")
@@ -345,12 +332,20 @@ func TestAppendBatchFailureDoesNotReserveOffsets(t *testing.T) {
 		t.Fatal("single-batch failure reserved an offset")
 	}
 	s3.fail = ""
-	if result, err := log.AppendBatch(ctx, batch); err != nil || result.BaseOffset != 0 {
-		t.Fatalf("single-batch retry: %+v, %v", result, err)
+	if _, err := log.AppendBatch(ctx, batch); !errors.Is(err, ErrLogFenced) {
+		t.Fatalf("old handle revived: %v", err)
 	}
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := recovered.RestoreFromS3(ctx); err != nil || last != 0 {
+		t.Fatalf("claim lost: %d %v", last, err)
+	}
+	if result, err := recovered.AppendBatches(ctx, []RecordBatch{batch}, true); err != nil || result.BaseOffset != 1 {
+		t.Fatalf("reused occupied offset: %+v %v", result, err)
+	}
+
 }
 
-func TestAppendBatchesCanceledUploadCleanup(t *testing.T) {
+func TestAppendBatchesCanceledUploadPreservesOffsets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client(), fail: "segment", cancelOnFailure: cancel}
@@ -361,9 +356,6 @@ func TestAppendBatchesCanceledUploadCleanup(t *testing.T) {
 	}
 	if ctx.Err() == nil {
 		t.Fatal("test did not cancel the upload context")
-	}
-	if log.failedUploadBase != nil {
-		t.Fatal("cleanup reused the canceled upload context")
 	}
 	if log.BufferedHighWatermark() != 0 {
 		t.Fatal("canceled upload reserved offsets")
@@ -389,6 +381,9 @@ func TestStaleWriterPreservesAcknowledgedSegment(t *testing.T) {
 	for range 2 {
 		if _, err := stale.AppendBatches(ctx, []RecordBatch{other}, true); !errors.Is(err, ErrPreconditionFailed) {
 			t.Fatalf("stale append: %v", err)
+		}
+		if _, err := stale.Read(ctx, 0, 1<<20); !errors.Is(err, ErrPreconditionFailed) {
+			t.Fatalf("stale read not fenced: %v", err)
 		}
 		got, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
 		gotIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
@@ -462,52 +457,63 @@ func TestConcurrentWritersClaimOneSegment(t *testing.T) {
 	}
 }
 
-// A lost DELETE response must not let a later cleanup delete a new writer's data.
-type lostSegmentDeleteS3 struct {
+// A delayed old writer must not delete a segment a new owner has adopted.
+type delayedIndexFailureS3 struct {
 	*MemoryS3Client
-	failIndex  bool
-	loseDelete bool
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+	deletes atomic.Int32
 }
 
-func (s *lostSegmentDeleteS3) UploadIndex(ctx context.Context, key string, body []byte) error {
-	if s.failIndex {
-		return errors.New("index unavailable")
+func (s *delayedIndexFailureS3) UploadIndex(ctx context.Context, key string, body []byte) error {
+	if s.calls.Add(1) == 1 {
+		close(s.entered)
+		<-s.release
+		return errors.New("index upload failed")
 	}
 	return s.MemoryS3Client.UploadIndex(ctx, key, body)
 }
-func (s *lostSegmentDeleteS3) DeleteSegment(ctx context.Context, key string) error {
-	if err := s.MemoryS3Client.DeleteSegment(ctx, key); err != nil {
-		return err
-	}
-	if s.loseDelete {
-		s.loseDelete = false
-		return errors.New("delete response lost")
-	}
-	return nil
+func (s *delayedIndexFailureS3) DeleteSegment(context.Context, string) error {
+	s.deletes.Add(1)
+	return errors.New("unexpected delete")
 }
-func TestCleanupLostDeletePreservesNewWriter(t *testing.T) {
+func (s *delayedIndexFailureS3) DeleteIndex(context.Context, string) error {
+	s.deletes.Add(1)
+	return errors.New("unexpected delete")
+}
+func TestLateIndexFailurePreservesAdoptedSegment(t *testing.T) {
 	ctx := context.Background()
-	s3 := &lostSegmentDeleteS3{MemoryS3Client: NewMemoryS3Client(), failIndex: true, loseDelete: true}
+	s3 := &delayedIndexFailureS3{MemoryS3Client: NewMemoryS3Client(), entered: make(chan struct{}), release: make(chan struct{})}
 	stale := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
-	if _, err := stale.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
-		t.Fatal("expected cleanup failure")
-	}
-	s3.failIndex = false
-	winner := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
-	other, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 99))
-	if _, err := winner.AppendBatches(ctx, []RecordBatch{other}, true); err != nil {
+	done := make(chan error, 1)
+	go func() { _, err := stale.AppendBatches(ctx, []RecordBatch{batch}, true); done <- err }()
+	<-s3.entered
+	func() {
+		defer close(s3.release)
+		winner := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+		if last, err := winner.RestoreFromS3(ctx); err != nil || last != 0 {
+			t.Errorf("adoption failed: %d %v", last, err)
+			return
+		}
+		other, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 99))
+		if result, err := winner.AppendBatches(ctx, []RecordBatch{other}, true); err != nil || result.BaseOffset != 1 {
+			t.Errorf("continue failed: %+v %v", result, err)
+		}
+	}()
+	if err := <-done; !errors.Is(err, ErrLogFenced) {
 		t.Fatal(err)
 	}
-	original, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
-	originalIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
-	if _, err := stale.AppendBatches(ctx, []RecordBatch{batch}, true); err == nil {
-		t.Error("cleanup retry reused an ambiguous delete")
+	if s3.deletes.Load() != 0 {
+		t.Fatal("old writer deleted adopted objects")
 	}
-	after, _ := s3.DownloadSegment(ctx, winner.segmentKey(0), nil)
-	afterIndex, _ := s3.DownloadIndex(ctx, winner.indexKey(0))
-	if !bytes.Equal(original, after) || !bytes.Equal(originalIndex, afterIndex) {
-		t.Fatal("cleanup retry replaced acknowledged data")
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := recovered.RestoreFromS3(ctx); err != nil || last != 1 {
+		t.Fatalf("adopted data lost: %d %v", last, err)
+	}
+	if data, err := recovered.Read(ctx, 0, 1<<20); err != nil || !bytes.Equal(data, batch.Bytes) {
+		t.Fatalf("winner changed: %x %v", data, err)
 	}
 }
 
@@ -543,5 +549,72 @@ func TestReadersWaitForOffsetPublication(t *testing.T) {
 	}
 	if err := <-readDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestIndexFailurePreservesUnacknowledgedSegment(t *testing.T) {
+	for _, fault := range []string{"index", "index-after-write"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx := context.Background()
+			s3 := &atomicAppendS3{MemoryS3Client: NewMemoryS3Client()}
+			committed := int64(-1)
+			cfg := PartitionLogConfig{Segment: SegmentWriterConfig{IndexIntervalMessages: 1}}
+			log := NewPartitionLog("default", "orders", 0, 0, s3, nil, cfg, func(_ context.Context, a *SegmentArtifact) { committed = a.LastOffset }, nil, nil)
+			old, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+			if _, err := log.AppendBatch(ctx, old); err != nil {
+				t.Fatal(err)
+			}
+			next, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 1, 2, 2))
+			s3.fail = fault
+			if _, err := log.AppendBatches(ctx, []RecordBatch{next}, true); !errors.Is(err, ErrLogFenced) {
+				t.Fatal(err)
+			}
+			if log.BufferedHighWatermark() != 1 || committed != -1 {
+				t.Fatal("failed request was committed")
+			}
+			if _, err := log.Read(ctx, 0, 1<<20); !errors.Is(err, ErrLogFenced) {
+				t.Fatalf("failed handle still readable: %v", err)
+			}
+			before, err := s3.DownloadSegment(ctx, log.segmentKey(0), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s3.fail = ""
+			recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, cfg, nil, nil, nil)
+			if last, err := recovered.RestoreFromS3(ctx); err != nil || last != 2 {
+				t.Fatalf("unacknowledged segment lost: %d %v", last, err)
+			}
+			data, err := recovered.Read(ctx, 0, 1<<20)
+			PatchRecordBatchBaseOffset(&next, 1)
+			if err != nil || !bytes.Equal(data, append(bytes.Clone(old.Bytes), next.Bytes...)) {
+				t.Fatalf("recovery changed records: %x %v", data, err)
+			}
+			different, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 3))
+			if result, err := recovered.AppendBatches(ctx, []RecordBatch{different}, true); err != nil || result.BaseOffset != 3 {
+				t.Fatalf("occupied offsets reused: %+v %v", result, err)
+			}
+			after, err := s3.DownloadSegment(ctx, log.segmentKey(0), nil)
+			if err != nil || !bytes.Equal(before, after) || s3.deletes.Load() != 0 {
+				t.Fatal("immutable claim modified or deleted")
+			}
+		})
+	}
+}
+
+func TestOffsetCommitFailureFencesDurableHandle(t *testing.T) {
+	ctx := context.Background()
+	s3 := NewMemoryS3Client()
+	injected := context.DeadlineExceeded
+	log := NewPartitionLogWithOptions("default", "orders", 0, 0, s3, nil, PartitionLogOptions{CommitOffsets: func(context.Context, *SegmentArtifact) error { return injected }}, nil, nil, nil)
+	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); !errors.Is(err, ErrLogFenced) || !errors.Is(err, injected) {
+		t.Fatal(err)
+	}
+	if _, err := log.Read(ctx, 0, 1<<20); !errors.Is(err, ErrLogFenced) {
+		t.Fatalf("stale handle readable: %v", err)
+	}
+	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
+	if last, err := recovered.RestoreFromS3(ctx); err != nil || last != 0 {
+		t.Fatalf("durable segment lost: %d %v", last, err)
 	}
 }

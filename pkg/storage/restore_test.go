@@ -280,7 +280,7 @@ func TestRestoreFailureCancelsWorkersAndLeavesStateUnchanged(t *testing.T) {
 	}
 }
 
-func TestRestoreInvalidIndexesPreserveCommitBoundary(t *testing.T) {
+func TestRestoreInvalidIndexesRebuildFromSegment(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		for _, committed := range []bool{false, true} {
 			t.Run(fmt.Sprintf("corrupt_%t_committed_%t", corrupt, committed), func(t *testing.T) {
@@ -297,18 +297,13 @@ func TestRestoreInvalidIndexesPreserveCommitBoundary(t *testing.T) {
 				}
 				log := NewPartitionLog("default", "orders", 0, next, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 				last, err := log.RestoreFromS3(context.Background())
-				if committed {
-					if err == nil || len(log.segments) != 0 || log.nextOffset != next {
-						t.Fatalf("committed invalid index: last=%d err=%v", last, err)
-					}
-					return
+				if err != nil || last != 19 || len(log.segments) != 20 {
+					t.Fatalf("index recovery: last=%d segments=%d err=%v", last, len(log.segments), err)
 				}
-				if err != nil || last != 19 || len(log.segments) != 19 {
-					t.Fatalf("orphan handling: last=%d segments=%d err=%v", last, len(log.segments), err)
+				if len(log.indexEntries[5]) == 0 {
+					t.Fatal("missing rebuilt index")
 				}
-				if _, exists := log.indexEntries[5]; exists {
-					t.Fatal("orphan index retained")
-				}
+
 				batch := buildRecoveryBatch(0, 1000, []int64{0})
 				result, err := log.AppendBatch(context.Background(), batch)
 				if err != nil || result.BaseOffset != 20 {
