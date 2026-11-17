@@ -40,14 +40,16 @@ and `docs/mcp.md`.
 
 Read-only tools exposed by the MCP service:
 
-- `cluster_status`
-- `cluster_metrics`
-- `list_topics`
-- `describe_topics`
-- `list_groups`
-- `describe_group`
-- `fetch_offsets`
-- `describe_configs`
+- `cluster_status`: no arguments.
+- `cluster_metrics`: no arguments. Needs `KAFSCALE_MCP_BROKER_METRICS_URL`.
+- `list_topics`: no arguments. Returns every topic.
+- `describe_topics`: optional `names`, an array of topic names. Omit it to describe every topic.
+- `list_groups`: no arguments.
+- `describe_group`: required `group_id`.
+- `fetch_offsets`: required `group_id`, optional `topics` (an array of topic names). Omit `topics` to fetch offsets for every topic in the group.
+- `describe_configs`: optional `topics`, an array of topic names. Omit it to describe every topic.
+
+A call that omits a required argument returns `invalid params` with `missing properties`. The input schemas mark `names` and `topics` as optional, and `group_id` as required.
 
 ### Response shapes
 
@@ -81,9 +83,12 @@ mcp:
   auth:
     token: "<bearer-token>"
   etcdEndpoints:
-    - "http://etcd.kafscale.svc:2379"
+    # Operator-managed etcd for KafscaleCluster demo in namespace kafscale.
+    # The Service is <cluster>-etcd-client.<namespace>.svc.cluster.local:2379.
+    - "http://demo-etcd-client.kafscale.svc.cluster.local:2379"
   metrics:
-    brokerMetricsURL: "http://kafscale-broker.kafscale.svc:9093/metrics"
+    # Broker metrics Service: <cluster>-broker.<namespace>.svc.cluster.local:9093
+    brokerMetricsURL: "http://demo-broker.kafscale.svc.cluster.local:9093/metrics"
   sessionTimeout: 10m
 ```
 
@@ -92,10 +97,10 @@ mcp:
 ```bash
 KAFSCALE_MCP_HTTP_ADDR=:8090
 KAFSCALE_MCP_AUTH_TOKEN=<bearer-token>
-KAFSCALE_MCP_ETCD_ENDPOINTS=http://etcd.kafscale.svc:2379
+KAFSCALE_MCP_ETCD_ENDPOINTS=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 KAFSCALE_MCP_ETCD_USERNAME=
 KAFSCALE_MCP_ETCD_PASSWORD=
-KAFSCALE_MCP_BROKER_METRICS_URL=http://kafscale-broker.kafscale.svc:9093/metrics
+KAFSCALE_MCP_BROKER_METRICS_URL=http://demo-broker.kafscale.svc.cluster.local:9093/metrics
 KAFSCALE_MCP_SESSION_TIMEOUT=10m
 ```
 
@@ -103,6 +108,7 @@ Notes:
 
 - Metadata tools require `KAFSCALE_MCP_ETCD_ENDPOINTS`.
 - Metrics require `KAFSCALE_MCP_BROKER_METRICS_URL`.
+- The examples use the quickstart cluster `demo` in namespace `kafscale`. Operator-managed etcd is `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`. Broker metrics are on `<cluster>-broker.<namespace>.svc.cluster.local:9093`. Use the full `.svc.cluster.local` name. See [Service names](operations.md#service-names).
 
 ### Creating a bearer token
 
@@ -137,6 +143,17 @@ kubectl -n kafscale-mcp port-forward svc/<mcp-service> 8090:80
 ```
 
 You can then connect an MCP client to `http://127.0.0.1:8090/mcp`.
+
+The docs examples for Claude Desktop and IDE clients are below. From a
+shell, the MCP Inspector CLI talks to the same endpoint:
+
+```bash
+npx @modelcontextprotocol/inspector --cli --help
+```
+
+Point it at `http://127.0.0.1:8090/mcp`. If `mcp.auth.token` is set, send
+`Authorization: Bearer <token>` the same way as in the Claude Desktop
+example.
 
 ### Local run (no Helm)
 

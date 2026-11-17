@@ -65,12 +65,14 @@ Environment variables:
 
 Read-only tools (default):
 
-- `cluster_status` (summary view; similar to console status).
-- `cluster_metrics` (S3 latency, produce/fetch RPS, admin error rates).
-- `list_topics` / `describe_topics`.
-- `list_groups` / `describe_group`.
-- `fetch_offsets` (consumer group offsets).
-- `describe_configs` (topic configs).
+- `cluster_status` (summary view; similar to console status). No arguments.
+- `cluster_metrics` (S3 latency, produce/fetch RPS, admin error rates). No arguments. Needs `KAFSCALE_MCP_BROKER_METRICS_URL`.
+- `list_topics`: no arguments. `describe_topics`: optional `names`, an array of topic names. Omit `names` to describe every topic.
+- `list_groups`: no arguments. `describe_group`: required `group_id`.
+- `fetch_offsets` (consumer group offsets): required `group_id`, optional `topics` (an array of topic names). Omit `topics` to fetch offsets for every topic in the group.
+- `describe_configs` (topic configs): optional `topics`, an array of topic names. Omit it to describe every topic.
+
+A call that omits a required argument returns `invalid params` with `missing properties`.
 
 Not implemented. MCP has no mutation tools such as:
 
