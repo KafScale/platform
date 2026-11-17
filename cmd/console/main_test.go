@@ -77,6 +77,15 @@ func TestConsoleEtcdConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestConsoleEtcdConfigStorageNamespace(t *testing.T) {
+	t.Setenv("KAFSCALE_CONSOLE_ETCD_ENDPOINTS", "http://a:2379")
+	t.Setenv("KAFSCALE_S3_NAMESPACE", " team-a ")
+	cfg, ok := consoleEtcdConfigFromEnv()
+	if !ok || cfg.StorageNamespace != "team-a" {
+		t.Fatalf("StorageNamespace = %q (enabled %v), want team-a", cfg.StorageNamespace, ok)
+	}
+}
+
 func TestAuthConfigFromEnv(t *testing.T) {
 	t.Setenv("KAFSCALE_UI_USERNAME", " user ")
 	t.Setenv("KAFSCALE_UI_PASSWORD", " pass ")

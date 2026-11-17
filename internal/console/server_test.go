@@ -204,13 +204,13 @@ func TestHandleStatusMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleCreateTopicAccepts(t *testing.T) {
+func TestHandleCreateTopicWithoutStore(t *testing.T) {
 	h := &consoleHandlers{}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/ui/api/status/topics", nil)
 	h.handleCreateTopic(w, r)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
 	}
 }
 
@@ -224,13 +224,13 @@ func TestHandleCreateTopicMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteTopicAccepts(t *testing.T) {
+func TestHandleDeleteTopicWithoutStore(t *testing.T) {
 	h := &consoleHandlers{}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodDelete, "/ui/api/status/topics/orders", nil)
 	h.handleDeleteTopic(w, r)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("expected 202, got %d", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
 	}
 }
 
