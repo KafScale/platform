@@ -81,4 +81,15 @@ func checkRotationWording(t *testing.T, doc, text string) {
 	if !strings.Contains(text, "only then revoke the old keys") && !strings.Contains(text, "Only then revoke the old keys") {
 		t.Errorf("%s does not say to revoke the old keys only after the restart", doc)
 	}
+	for _, early := range []string{"Until the restart, every request", "Until then, every request", "Until the restart, requests"} {
+		if strings.Contains(text, early) {
+			t.Errorf("%s says S3 requests fail before the old keys are revoked or expire: %q", doc, early)
+		}
+	}
+	if !strings.Contains(text, "keeps using the old keys") || !strings.Contains(text, "revoked") || !strings.Contains(text, "expire") {
+		t.Errorf("%s does not say the registry keeps using the old keys until they are revoked or expire", doc)
+	}
+	if !strings.Contains(text, "no session token") {
+		t.Errorf("%s does not say the chart passes no session token to the registry", doc)
+	}
 }
