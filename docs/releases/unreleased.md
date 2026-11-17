@@ -278,6 +278,10 @@ limitations under the License.
 
 - Restore the exact published v1.6.3 `broker.CoordinatorConfig` shape and comparability. The legacy constructor remains supported and deprecated; use `CoordinatorOptions` and `NewGroupCoordinatorWithOptions` for retention and lease hooks. `metadata.Store` retains its original method set; group offset listing is an optional `GroupConsumerOffsetLister` capability with a filtering adapter (#298).
 
+### CLI
+
+- `kafscale-cli restore` exits with an error and does not create the target topic when no segments are found under the source S3 prefix. The error names the prefix it searched and points to `--namespace` and `KAFSCALE_NAMESPACE`. The source namespace defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`. The usage text and the restore example in [operations.md](../operations.md#topic-recovery-on-the-dr-spine) now include `--namespace`, `--target-namespace`, `--partitions` and `KAFSCALE_NAMESPACE`.
+
 ### Console
 
 - Console and MCP readiness now checks configured etcd with a live read and a one-second deadline. Helm probes use `/readyz`, so an unreachable endpoint produces HTTP 503 even with cached metadata; `/healthz` remains a process liveness check (#340).
@@ -324,6 +328,7 @@ ones most likely to affect you.
 
 ### Behavior changes
 
+- **`kafscale-cli restore` no longer creates an empty target topic when the source prefix has no segments.** The command exits with an error that names the prefix it searched. `--namespace` still defaults to `KAFSCALE_NAMESPACE` when that is set, otherwise to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`.
 - **Proxy stops past the etcd TTL.** When etcd cannot be read for longer than
   `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`, set with
   `spec.lfsProxy.backendCacheTTLSeconds` or the chart value

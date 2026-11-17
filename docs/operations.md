@@ -476,12 +476,16 @@ Use `kafscale-cli restore` to create a fresh target topic, copy `.kfs` segment/i
 kafscale-cli restore \
   --topic orders \
   --target-topic orders-restore-20260513 \
+  --namespace kafscale \
   --to 2026-05-13T14:23:00Z
 ```
+
+`--namespace` is the S3 prefix namespace for the source topic, which on an operator cluster is the `KafscaleCluster` namespace. It defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`. `--target-namespace` defaults to the source namespace. `--partitions` is an optional comma-separated list of partitions to restore.
 
 Operational semantics:
 
 - Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
+- If no segments are found under `<namespace>/<topic>/`, restore exits with a non-zero status, names the prefix it searched, and does not create the target topic. Set `--namespace` or `KAFSCALE_NAMESPACE` to the cluster namespace that holds the topic data.
 - The target topic must be new. KafScale refuses to restore over an existing persisted topic.
 - Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
 - If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
