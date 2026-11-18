@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -438,7 +439,7 @@ func sameSchema(a, b *srVersion) bool {
 	return a.Schema == b.Schema || (a.GUID != "" && a.GUID == b.GUID)
 }
 
-func (im *schemaImport) sameOnTarget(ctx context.Context, v *srVersion) bool {
+func (im *schemaImport) sameOnTarget(ctx context.Context, subject string, v *srVersion) (bool, error) {
 	body := map[string]any{"schema": v.Schema}
 	if v.SchemaType != "" {
 		body["schemaType"] = v.SchemaType
@@ -450,8 +451,29 @@ func (im *schemaImport) sameOnTarget(ctx context.Context, v *srVersion) bool {
 		ID      int64 `json:"id"`
 		Version int   `json:"version"`
 	}
-	err := im.dst.call(ctx, http.MethodPost, subjectPath(v.Subject)+"?deleted=true", body, &out)
-	return err == nil && out.ID == v.ID && out.Version == v.Version
+	err := im.dst.call(ctx, http.MethodPost, subjectPath(subject)+"?deleted=true", body, &out)
+	if isSRCode(err, 40403) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return out.ID == v.ID, nil
+}
+
+func (im *schemaImport) sameOnTargetByID(ctx context.Context, v *srVersion) (bool, error) {
+	var holders []struct {
+		Subject string `json:"subject"`
+		Version int    `json:"version"`
+	}
+	err := im.dst.call(ctx, http.MethodGet, fmt.Sprintf("/schemas/ids/%d/versions?deleted=true", v.ID), nil, &holders)
+	if err != nil {
+		return false, fmt.Errorf("list target versions of schema id %d: %w", v.ID, err)
+	}
+	if len(holders) == 0 {
+		return false, nil
+	}
+	return im.sameOnTarget(ctx, holders[0].Subject, v)
 }
 
 func (im *schemaImport) conflict(format string, args ...any) {
@@ -469,9 +491,19 @@ func (im *schemaImport) importVersion(ctx context.Context, v *srVersion) error {
 		if existing.SchemaType == "" {
 			existing.SchemaType = "AVRO"
 		}
-		if !sameSchema(v, existing) && !(existing.ID == v.ID && im.sameOnTarget(ctx, v)) {
-			im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
-			return nil
+		if !sameSchema(v, existing) {
+			if existing.ID != v.ID {
+				im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
+				return nil
+			}
+			ok, err := im.sameOnTarget(ctx, v.Subject, v)
+			if err != nil {
+				return fmt.Errorf("compare source subject %s version %d with the target: %w", v.Subject, v.Version, err)
+			}
+			if !ok {
+				im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
+				return nil
+			}
 		}
 		im.skipped++
 	case isSRCode(err, 40401, 40402):
@@ -484,8 +516,14 @@ func (im *schemaImport) importVersion(ctx context.Context, v *srVersion) error {
 			}
 			byID.ID = v.ID
 			if !sameSchema(v, byID) {
-				im.conflict("schema id %d already holds different content in the target\n  source: %s\n  target: %s", v.ID, v.Schema, byID.Schema)
-				return nil
+				ok, err := im.sameOnTargetByID(ctx, v)
+				if err != nil {
+					return fmt.Errorf("compare source schema id %d with the target: %w", v.ID, err)
+				}
+				if !ok {
+					im.conflict("schema id %d already holds different content in the target\n  source: %s\n  target: %s", v.ID, v.Schema, byID.Schema)
+					return nil
+				}
 			}
 		case !isSRCode(err, 40403):
 			return fmt.Errorf("read target schema id %d: %w", v.ID, err)
@@ -646,6 +684,15 @@ func (im *schemaImport) detectDefaultToGlobal(ctx context.Context, subjects []st
 		return
 	}
 	im.defaultToGlobalKnown = true
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		var body configBody
+		err := im.src.call(ctx, http.MethodGet, "/config/"+url.PathEscape(fmt.Sprintf("kafscale-import-probe-%x", b))+"?defaultToGlobal=false", nil, &body)
+		if isSRCode(err, 40408) {
+			im.defaultToGlobalIgnored = false
+			return
+		}
+	}
 	sawValue := false
 	for _, s := range subjects {
 		var body configBody
@@ -698,7 +745,7 @@ func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet 
 		name = kind + " of " + scope
 	}
 	want, err := read(im.src)
-	if kind == "mode" && isSRStatus(err, http.StatusNotFound) {
+	if kind == "mode" && isSRStatus(err, http.StatusNotFound) && isSRCode(err, 0) {
 		im.noteMissingSourceMode()
 		return nil
 	}

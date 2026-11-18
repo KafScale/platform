@@ -765,3 +765,201 @@ func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) 
 	t.Cleanup(srv.Close)
 	return &testRegistry{t: t, url: srv.URL, srv: srv}
 }
+
+func TestSchemaImportSharedPrettySchemaByID(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws":  {{ID: 3, Version: 1, Schema: pretty}},
+		"ws2": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("first import: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("first import reported a conflict\n%s", out)
+	}
+	if !strings.Contains(out, "imported 2") {
+		t.Fatalf("expected both shared-id subjects to import\n%s", out)
+	}
+	out, err = runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("second import: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("second import reported a false conflict\n%s", out)
+	}
+	if !strings.Contains(out, "imported 0, skipped 2") {
+		t.Fatalf("expected second import to skip both versions\n%s", out)
+	}
+}
+
+func TestSchemaImportCopiesAllPinnedSubjectConfigs(t *testing.T) {
+	src := startTestRegistry(t, nil)
+	src.must("PUT", "/mode", map[string]string{"mode": "IMPORT"})
+	src.put("user", 1, 1, impUser1)
+	src.put("addr", 2, 1, impAddress)
+	src.must("PUT", "/mode", map[string]string{"mode": "READWRITE"})
+	src.must("PUT", "/config", map[string]string{"compatibility": "BACKWARD"})
+	src.must("PUT", "/config/user", map[string]string{"compatibility": "BACKWARD"})
+	src.must("PUT", "/config/addr", map[string]string{"compatibility": "BACKWARD"})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	for _, s := range []string{"user", "addr"} {
+		if status, data := dst.call("GET", "/config/"+s+"?defaultToGlobal=false", nil); status != http.StatusOK || !strings.Contains(string(data), "BACKWARD") {
+			t.Fatalf("pinned subject %s was not copied: %d %s\n%s", s, status, data, out)
+		}
+	}
+}
+
+func TestSchemaImportLookupDifferentIDConflicts(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	var intercept atomic.Bool
+	dst := startTestRegistry(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if intercept.Load() && r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/subjects/") && !strings.Contains(r.URL.Path, "/versions") {
+				w.Header().Set("Content-Type", srContentType)
+				_, _ = w.Write([]byte(`{"id":99,"version":1}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("first import: %v\n%s", err, out)
+	}
+	intercept.Store(true)
+	out, err = runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("expected a conflict when lookup returns a different id, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "conflict:") {
+		t.Fatalf("missing conflict message\n%s", out)
+	}
+}
+
+func TestSchemaImportLookupErrorStopsRun(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	var intercept atomic.Bool
+	dst := startTestRegistry(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if intercept.Load() && r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/subjects/") && !strings.Contains(r.URL.Path, "/versions") {
+				http.Error(w, "lookup failed", http.StatusInternalServerError)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("first import: %v\n%s", err, out)
+	}
+	intercept.Store(true)
+	out, err = runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "compare source subject") {
+		t.Fatalf("expected a lookup error to stop the run, got %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("lookup error was reported as a content conflict\n%s", out)
+	}
+}
+
+func TestSchemaImportLookupAcceptsLatestMatchingVersion(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("first import: %v\n%s", err, out)
+	}
+	dst.must("PUT", "/mode?force=true", map[string]string{"mode": "IMPORT"})
+	dst.put("ws", 3, 3, pretty)
+	dst.must("PUT", "/mode", map[string]string{"mode": "READWRITE"})
+	out, err = runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("second import: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("lookup of the latest matching version should not conflict with v1\n%s", out)
+	}
+	if !strings.Contains(out, "imported 0, skipped 1") {
+		t.Fatalf("expected v1 to be skipped\n%s", out)
+	}
+}
+
+func TestSchemaImportDryRunRerunWithNormalizedText(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("first import: %v\n%s", err, out)
+	}
+	out, err = runImport(t, "--from", src.url, "--to", dst.url, "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run rerun: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("dry-run rerun reported a false conflict\n%s", out)
+	}
+	if !strings.Contains(out, "imported 0, skipped 1") {
+		t.Fatalf("expected dry-run rerun to skip the normalized schema\n%s", out)
+	}
+}
+
+func TestSchemaImportSourceMode40401IsError(t *testing.T) {
+	src := seedSource(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/mode/") {
+				w.Header().Set("Content-Type", srContentType)
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error_code":40401,"message":"Subject not found."}`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "read source mode") {
+		t.Fatalf("expected a source mode read error for 40401, got %v\n%s", err, out)
+	}
+	if strings.Contains(out, "source has no /mode/{subject} endpoint") {
+		t.Fatalf("a Confluent 40401 should not be treated as a missing mode endpoint\n%s", out)
+	}
+}
