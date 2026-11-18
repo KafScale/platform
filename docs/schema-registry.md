@@ -308,3 +308,23 @@ kubectl rollout status "$DEPLOY" -n <namespace>
 ```
 
 `<namespace>` is the namespace of the Helm release and `<release>` is the release name.
+
+### Shutdown
+
+Kubernetes marks a pod as terminating in the Service EndpointSlices as soon as its deletion starts, independent of the readiness probe, so new connections stop once kube-proxy on every node and any load balancer have caught up. Until then traffic can still reach the pod. On SIGTERM or SIGINT the registry shuts down in three steps, so that a rollout restart does not drop requests as long as that catch-up finishes within the drain period:
+
+1. `/readyz` returns 503 at once. This is for anything else that polls readiness, and for the case where every endpoint of the Service is terminating, when proxies may still route to endpoints that are terminating but serving until the readiness probe fails.
+2. The registry keeps serving every request, `/readyz` excepted, for the drain period, `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), while kube-proxy and load balancers catch up.
+3. It stops accepting connections and waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`) for in-flight requests. Requests still running then are cut off and the registry exits with an error.
+
+Chart values:
+
+```yaml
+schemaRegistry:
+  shutdownDrain: ""                  # sets KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN, empty keeps 5s, 0 or 0s turns it off
+  shutdownTimeout: ""                # sets KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT, empty keeps 10s
+  preStopSleepSeconds: 0             # a preStop hook that sleeps before SIGTERM, 0 adds no hook
+  terminationGracePeriodSeconds: 30  # null leaves it out of the pod spec
+```
+
+The drain period already keeps the pod serving while kube-proxy and load balancers catch up, so the chart adds no preStop hook by default. Set `preStopSleepSeconds` to delay SIGTERM as well, for example with `shutdownDrain: 0s`. Kubernetes kills the pod when `terminationGracePeriodSeconds` runs out, and that time includes the preStop hook. Keep `preStopSleepSeconds` plus the drain period plus the shutdown timeout below it. The defaults use 15 of the 30 seconds. Any value that is set, `0` included, is passed to the registry, so a value it does not accept, such as `5` without a unit or a shutdown timeout of `0`, stops it at startup with an error.
