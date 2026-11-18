@@ -783,6 +783,15 @@ advertised address.
 - `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`: Optional source and target registry credentials for `schema import`, used when `--auth` or `--to-auth` is empty. This is the recommended way to pass credentials.
 - `KAFSCALE_USE_MEMORY_S3`: Optional in-memory S3 client for `restore` and `prune` (default false). Dev and test only.
 
+### MCP server
+
+- `KAFSCALE_MCP_HTTP_ADDR`: Listen address (default `:8090`). The Helm chart sets `:8090`.
+- `KAFSCALE_MCP_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Optional. If unset, the metadata tools return `metadata store not configured`. Helm value `mcp.etcdEndpoints`.
+- `KAFSCALE_MCP_ETCD_USERNAME` and `KAFSCALE_MCP_ETCD_PASSWORD`: Optional etcd basic auth. Helm values `mcp.etcd.existingSecret` (keys `ETCD_USERNAME` and `ETCD_PASSWORD`), or `mcp.etcd.username` and `mcp.etcd.password`.
+- `KAFSCALE_MCP_BROKER_METRICS_URL`: Broker Prometheus metrics URL. Optional. If unset, `cluster_metrics` returns `metrics provider not configured`. With `KAFSCALE_MCP_ETCD_ENDPOINTS` set, every broker registered in etcd is read with this URL's scheme, port and path and the results are summed, and the URL itself is the fallback when no broker answers. Without etcd only this URL is read. Helm value `mcp.metrics.brokerMetricsURL`.
+- `KAFSCALE_MCP_SESSION_TIMEOUT`: Idle session timeout as a Go duration such as `10m`. Optional. If unset, idle sessions are never closed. An invalid value stops the server at startup. Helm value `mcp.sessionTimeout`.
+- `KAFSCALE_MCP_AUTH_TOKEN`: Static bearer token for `/mcp`. Optional. If unset, the server is unauthenticated and logs a warning. Helm value `mcp.auth.token`.
+
 ### Operator
 
 - `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`: Comma-separated etcd endpoints to use instead of managed etcd.

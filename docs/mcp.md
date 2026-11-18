@@ -57,7 +57,7 @@ Environment variables:
 - `KAFSCALE_MCP_ETCD_ENDPOINTS` (comma-separated)
 - `KAFSCALE_MCP_ETCD_USERNAME`
 - `KAFSCALE_MCP_ETCD_PASSWORD`
-- `KAFSCALE_MCP_BROKER_METRICS_URL` (Prometheus metrics endpoint)
+- `KAFSCALE_MCP_BROKER_METRICS_URL` (Prometheus metrics endpoint; with etcd configured, every registered broker is read with its scheme, port and path and the results are summed)
 - `KAFSCALE_MCP_SESSION_TIMEOUT` (optional, duration string)
 - `KAFSCALE_MCP_AUTH_TOKEN` (optional bearer token; if unset, server is open)
 

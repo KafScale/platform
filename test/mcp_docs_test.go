@@ -16,15 +16,13 @@
 package test
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestMCPToolArgumentsDocumented(t *testing.T) {
 	for _, doc := range []string{"docs/ops-mcp.md", "docs/mcp.md"} {
-		text := readMCPDoc(t, doc)
+		text := readRepoDoc(t, doc)
 		for _, want := range []string{
 			"`describe_topics`: optional `names`",
 			"`describe_group`: required `group_id`",
@@ -41,7 +39,7 @@ func TestMCPToolArgumentsDocumented(t *testing.T) {
 }
 
 func TestMCPOperatorEndpointsDocumented(t *testing.T) {
-	text := readMCPDoc(t, "docs/ops-mcp.md")
+	text := readRepoDoc(t, "docs/ops-mcp.md")
 	for _, want := range []string{
 		"<cluster>-etcd-client",
 		"<cluster>-broker",
@@ -51,10 +49,19 @@ func TestMCPOperatorEndpointsDocumented(t *testing.T) {
 		"--method tools/list",
 		"--method tools/call",
 		"--tool-name describe_group",
+		"--tool-arg 'group_id=<group>'",
+		"--config mcp-inspector.json",
+		"port-forward svc/kafscale-mcp 8090:80",
+		"read every broker registered in etcd",
 		"Claude Desktop and IDE examples follow",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/ops-mcp.md does not contain %q", want)
+		}
+	}
+	for _, bad := range []string{"Bearer <token>\" --method", "svc/<mcp-service>", "tag: v1.6.3", "KAFSCALE_MCP_AUTH_TOKEN=\"<"} {
+		if strings.Contains(text, bad) {
+			t.Errorf("docs/ops-mcp.md still contains %q", bad)
 		}
 	}
 	if strings.Contains(text, "the same way as in the Claude Desktop") {
@@ -62,11 +69,27 @@ func TestMCPOperatorEndpointsDocumented(t *testing.T) {
 	}
 }
 
-func readMCPDoc(t *testing.T, rel string) string {
-	t.Helper()
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
-	if err != nil {
-		t.Fatal(err)
+func TestMCPEnvVarsInOperationsIndex(t *testing.T) {
+	text := readRepoDoc(t, "docs/operations.md")
+	start := strings.Index(text, "### MCP server")
+	if start < 0 {
+		t.Fatal("docs/operations.md has no MCP server section in the environment variable index")
 	}
-	return string(body)
+	section := text[start:]
+	if end := strings.Index(section[1:], "\n### "); end >= 0 {
+		section = section[:end+1]
+	}
+	for _, env := range []string{
+		"KAFSCALE_MCP_HTTP_ADDR",
+		"KAFSCALE_MCP_ETCD_ENDPOINTS",
+		"KAFSCALE_MCP_ETCD_USERNAME",
+		"KAFSCALE_MCP_ETCD_PASSWORD",
+		"KAFSCALE_MCP_BROKER_METRICS_URL",
+		"KAFSCALE_MCP_SESSION_TIMEOUT",
+		"KAFSCALE_MCP_AUTH_TOKEN",
+	} {
+		if !strings.Contains(section, env) {
+			t.Errorf("MCP server section of the environment variable index does not document %s", env)
+		}
+	}
 }

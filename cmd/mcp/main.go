@@ -52,7 +52,7 @@ func main() {
 	if store == nil {
 		log.Printf("warning: KAFSCALE_MCP_ETCD_ENDPOINTS not set; metadata tools will be unavailable")
 	}
-	metricsProvider := buildMetricsProvider()
+	metricsProvider := buildMetricsProvider(store)
 	if metricsProvider == nil {
 		log.Printf("warning: KAFSCALE_MCP_BROKER_METRICS_URL not set; metrics tool will be unavailable")
 	}
@@ -143,10 +143,13 @@ func buildMetadataStore(ctx context.Context) (metadata.Store, error) {
 	return store, nil
 }
 
-func buildMetricsProvider() console.MetricsProvider {
+func buildMetricsProvider(store metadata.Store) console.MetricsProvider {
 	metricsURL := strings.TrimSpace(os.Getenv("KAFSCALE_MCP_BROKER_METRICS_URL"))
 	if metricsURL == "" {
 		return nil
+	}
+	if store != nil {
+		return console.NewAggregatedPromMetricsClient(store, metricsURL)
 	}
 	return console.NewPromMetricsClient(metricsURL)
 }
