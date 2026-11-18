@@ -24,6 +24,7 @@ This guide covers a minimal installation on a cloud Kubernetes cluster using the
 - Kubernetes 1.26+
 - Helm 3.12+
 - `kubectl` access to your cluster
+- `jq` (used to build the login request and the optional session token patch)
 - An S3-compatible bucket and credentials
 - Optional: external etcd endpoints (or let the operator manage etcd)
 
@@ -258,10 +259,10 @@ returns `503` with `metadata store not configured`. Without
 Without `console.auth.existingSecret`, and without both `console.auth.username` and `console.auth.password`, login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`. The chart sets those from the Secret named by `console.auth.existingSecret` (keys `username` and `password`), or from `--set console.auth.username` and `--set console.auth.password`.
 
 For the quickstart cluster `demo` in namespace `kafscale`, when etcd is
-operator-managed, install or upgrade with:
-
-Enter the console password when prompted. Use the same shell for the login
-command later so `$CONSOLE_PASSWORD` is still set.
+operator-managed, first create the console login Secret. Enter the console
+password when prompted, and keep this shell open: the login below runs here
+and reads `$CONSOLE_PASSWORD`. If `kafscale-console-auth` already exists,
+delete it first with `kubectl -n kafscale delete secret kafscale-console-auth`.
 
 ```bash
 printf 'Console password: '
@@ -270,6 +271,8 @@ echo
 printf '%s' "$CONSOLE_PASSWORD" | kubectl -n kafscale create secret generic kafscale-console-auth \
   --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
 ```
+
+Then install or upgrade with:
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
@@ -285,19 +288,20 @@ that etcd endpoint instead, for example
 `--set 'console.etcdEndpoints[0]=http://etcd.kafscale.svc:2379'`.
 
 The Helm release named `kafscale` exposes the console as Service
-`kafscale-console` on port 80. In a second terminal, port-forward it, then
-sign in with `POST /ui/api/auth/login` and delete topic `orders`:
+`kafscale-console` on port 80. Port-forward it in a second terminal and
+leave it running:
 
 ```bash
 kubectl -n kafscale port-forward svc/kafscale-console 8080:80
 ```
 
+Back in the first shell, where you entered the password, sign in with
+`POST /ui/api/auth/login` and delete topic `orders`:
+
 ```bash
-jq -n --arg username kafscaleadmin --arg password "$CONSOLE_PASSWORD" \
-  '{username:$username,password:$password}' | \
+printf '%s' "$CONSOLE_PASSWORD" | jq -cRs '{username:"kafscaleadmin",password:.}' | \
   curl -sS -c console.cookies -X POST -H 'Content-Type: application/json' \
-  -d @- \
-  http://127.0.0.1:8080/ui/api/auth/login
+  -d @- http://127.0.0.1:8080/ui/api/auth/login
 
 curl -sS -b console.cookies -X DELETE \
   http://127.0.0.1:8080/ui/api/status/topics/orders

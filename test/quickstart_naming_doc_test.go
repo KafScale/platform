@@ -71,8 +71,9 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"--from-literal=AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY",
 		"unset AWS_SECRET_ACCESS_KEY",
 		"unset CONSOLE_PASSWORD",
-		`--arg password "$CONSOLE_PASSWORD"`,
-		"jq -n --arg username kafscaleadmin",
+		"printf '%s' \"$CONSOLE_PASSWORD\" | jq -cRs '{username:\"kafscaleadmin\",password:.}'",
+		"Back in the first shell, where you entered the password",
+		"- `jq`",
 		"-d @-",
 		"--set 'operator.etcdEndpoints={}'",
 		"--set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'",
@@ -112,6 +113,9 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 	}
 	if strings.Contains(text, "every `/ui/api`") && !strings.Contains(text, "every other `/ui/api`") {
 		t.Error("docs/quickstart.md still says every /ui/api call returns 503 ui auth disabled")
+	}
+	if strings.Contains(text, "--arg password") {
+		t.Error("docs/quickstart.md passes the console password to jq as a process argument")
 	}
 	if strings.Contains(text, "aws s3 mb s3://kafscale-demo --endpoint-url") {
 		t.Error("docs/quickstart.md still runs aws s3 mb against minio.kafscale.svc from the user's terminal")
