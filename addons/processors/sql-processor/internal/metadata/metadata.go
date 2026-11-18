@@ -480,23 +480,32 @@ func normalizePrefix(prefix string) string {
 	return clean + "/"
 }
 
-func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
-	if cfg.DialTimeout == 0 {
-		cfg.DialTimeout = 5 * time.Second
+const (
+	etcdReconnectMaxDelay = time.Second
+	etcdMinConnectTimeout = 5 * time.Second
+)
+
+func etcdConnectParams(dialTimeout time.Duration) grpc.ConnectParams {
+	minConnect := etcdMinConnectTimeout
+	if dialTimeout > minConnect {
+		minConnect = dialTimeout
 	}
-	minConnect := 5 * time.Second
-	if cfg.DialTimeout > minConnect {
-		minConnect = cfg.DialTimeout
-	}
-	cfg.PermitWithoutStream = false
-	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(grpc.ConnectParams{
+	return grpc.ConnectParams{
 		Backoff: backoff.Config{
 			BaseDelay:  100 * time.Millisecond,
 			Multiplier: backoff.DefaultConfig.Multiplier,
 			Jitter:     backoff.DefaultConfig.Jitter,
-			MaxDelay:   time.Second,
+			MaxDelay:   etcdReconnectMaxDelay,
 		},
 		MinConnectTimeout: minConnect,
-	}))
+	}
+}
+
+func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
+	if cfg.DialTimeout == 0 {
+		cfg.DialTimeout = 5 * time.Second
+	}
+	cfg.PermitWithoutStream = false
+	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(etcdConnectParams(cfg.DialTimeout)))
 	return cfg
 }
