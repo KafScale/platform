@@ -110,8 +110,9 @@ console:
     useLatest: false
     pullPolicy: IfNotPresent
   auth:
+    existingSecret: ""  # Name of existing Secret with username and password keys
     username: ""
-    password: null  # Set via --set or a values file
+    password: null  # Set via --set or a values file when existingSecret is empty
   etcdEndpoints: []
   s3Namespace: ""  # Set to the KafscaleCluster namespace when etcdEndpoints is set. Empty makes the console refuse topic deletes.
   etcd:
@@ -253,9 +254,11 @@ proxy:
     # tracked separately.
     nodePort: ""
 
-# NOTE: The standalone lfs-proxy has been removed.
-# LFS is now a feature-flag on the unified proxy: set proxy.lfs.enabled=true.
-# See proxy values above for LFS configuration.
+# NOTE: The standalone lfs-proxy Helm values were removed. Enable LFS on a
+# cluster with spec.lfsProxy on the KafscaleCluster. The chart-deployed
+# proxy does not read a proxy.lfs.enabled setting.
+#
+# lfsDemos is unused. No chart template reads these keys.
 
 lfsDemos:
   enabled: false

@@ -297,6 +297,8 @@ limitations under the License.
 
 ### Console
 
+- The Helm chart can set console login credentials from `console.auth.existingSecret`, a Secret with `username` and `password` keys, which maps to `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. Inline `console.auth.username` and `console.auth.password` remain the fallback when `existingSecret` is empty. `console.etcd.existingSecret`, `proxy.etcd.existingSecret` and `mcp.etcd.existingSecret` now work the same way as `schemaRegistry.etcd.existingSecret`: they map Secret keys `ETCD_USERNAME` and `ETCD_PASSWORD` to each component's etcd env vars and omit inline username and password when the Secret is set. The quickstart creates the console auth Secret and an in-cluster Job that creates the S3 bucket from the `kafscale-s3` Secret.
+
 - Console and MCP readiness now checks configured etcd with a live read and a one-second deadline. Helm probes use `/readyz`, so an unreachable endpoint produces HTTP 503 even with cached metadata; `/healthz` remains a process liveness check (#340).
 
 - Transient cluster-status and LFS-status failures no longer return the authenticated console to the login screen. Only HTTP 401 ends the UI session; HTTP 503 displays the service failure and preserves existing streams (#339).

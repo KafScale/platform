@@ -83,7 +83,7 @@ the override returns that cluster to the operator default.
 | `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. Console etcd snapshot panel: Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges, and the operator metrics Service balances console scrapes across the replicas. When a scrape reaches a standby replica, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age 0, stale NO, and n/a for last success and last schedule. |
 | `operator.leaderKey` | Kubernetes leader election lock name. Use a DNS-1123 compatible name. |
 | `console.service.*` | Type/port used to expose the UI. Combine with `.console.ingress` to publish via an ingress controller. |
-| `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
+| `console.auth.*` | Console login credentials. Set `console.auth.existingSecret` to a Secret with `username` and `password` keys, or set both `console.auth.username` and `console.auth.password`, to enable the UI. |
 | `imagePullSecrets` | Provide if your container registry (e.g., GHCR) is private. |
 
 ## Post-install steps
@@ -116,12 +116,15 @@ add a persistent manifest. Requests for the restoring partition wait for complet
 
 - **RBAC**: The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
 - **S3 credentials**: Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into the AWS CLI env vars (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) automatically.
-- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, set `console.auth.username` and `console.auth.password`, for example:
+- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, point `console.auth.existingSecret` at a Secret whose keys are `username` and `password`, or set `console.auth.username` and `console.auth.password` directly. For example:
 
 ```bash
+kubectl -n kafscale create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin \
+  --from-literal=password='use-a-secret'
+
 helm upgrade --install kafscale deploy/helm/kafscale \
-  --set console.auth.username=kafscaleadmin \
-  --set console.auth.password='use-a-secret'
+  --set console.auth.existingSecret=kafscale-console-auth
 ```
 
 - **TLS**: For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
@@ -564,7 +567,7 @@ Minimal env + spec checklist for a smooth run:
 - Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (optional override), `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
 - Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS). Optional read replica: `spec.s3.readBucket`, `spec.s3.readRegion`, `spec.s3.readEndpoint`.
 - Secret keys: `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`.
-- Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
+- Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`. The Helm chart sets them from `console.auth.existingSecret` or from `console.auth.username` and `console.auth.password`.
 
 Recommended operator alerting (when using Prometheus Operator):
 - `KafscaleSnapshotAccessFailed`: S3 snapshot writes failing.
@@ -892,7 +895,7 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD`: Etcd auth for console.
 - `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. Set it to the `KafscaleCluster` namespace, which the operator gives the brokers. The console writes it into the deleted topic record that `kafscale-cli prune` uses. When it is unset or blank, the console refuses topic deletes with `503`. The Helm chart sets it from `console.s3Namespace` and prints a warning in the install notes when `console.etcdEndpoints` is set and `console.s3Namespace` is empty.
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL`: Broker Prometheus endpoint.
-- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials.
+- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials. The Helm chart sets them from the Secret named by `console.auth.existingSecret` (keys `username` and `password`), or from `console.auth.username` and `console.auth.password`.
 - `KAFSCALE_CONSOLE_LFS_ENABLED`: Enable the LFS views and API (`true` to enable; any other value disables them).
 - `KAFSCALE_CONSOLE_KAFKA_BROKERS`: Comma-separated brokers used to consume the LFS tracker topic.
 - `KAFSCALE_LFS_TRACKER_TOPIC`: Tracker topic to read (default `__lfs_ops_state`).

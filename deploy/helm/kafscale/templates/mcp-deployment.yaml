@@ -62,6 +62,18 @@ spec:
             - name: KAFSCALE_MCP_ETCD_ENDPOINTS
               value: "{{ join "," .Values.mcp.etcdEndpoints }}"
 {{- end }}
+{{- if .Values.mcp.etcd.existingSecret }}
+            - name: KAFSCALE_MCP_ETCD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mcp.etcd.existingSecret }}
+                  key: ETCD_USERNAME
+            - name: KAFSCALE_MCP_ETCD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mcp.etcd.existingSecret }}
+                  key: ETCD_PASSWORD
+{{- else }}
 {{- if .Values.mcp.etcd.username }}
             - name: KAFSCALE_MCP_ETCD_USERNAME
               value: "{{ .Values.mcp.etcd.username }}"
@@ -69,6 +81,7 @@ spec:
 {{- if .Values.mcp.etcd.password }}
             - name: KAFSCALE_MCP_ETCD_PASSWORD
               value: "{{ .Values.mcp.etcd.password }}"
+{{- end }}
 {{- end }}
 {{- if .Values.mcp.metrics.brokerMetricsURL }}
             - name: KAFSCALE_MCP_BROKER_METRICS_URL

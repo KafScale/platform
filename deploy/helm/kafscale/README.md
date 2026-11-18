@@ -108,7 +108,7 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | Section | Description |
 |---------|-------------|
 | `operator.*` | KafScale operator settings |
-| `console.*` | Console UI settings |
+| `console.*` | Console UI settings. `console.auth.existingSecret` names a Secret with `username` and `password` keys for `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. Inline `console.auth.username` and `console.auth.password` are the fallback when `existingSecret` is empty. `console.etcd.existingSecret` names a Secret with `ETCD_USERNAME` and `ETCD_PASSWORD` keys |
 | `proxy.*` | Kafka proxy settings (external entrypoint) |
 | `lfsDemos.*` | Optional LFS browser demo UI |
 | `mcp.*` | MCP server settings |
@@ -116,6 +116,22 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `<component>.podSecurityContext` | Pod-level PSA `restricted` defaults (UID/GID `10001`, `runAsNonRoot`, `seccompProfile`) |
 | `<component>.containerSecurityContext` | Container hardening (`readOnlyRootFilesystem`, dropped capabilities) |
 | `proxy.affinity` | Pod affinity override; when empty the chart applies soft hostname anti-affinity |
+
+### Console auth
+
+Set `console.auth.existingSecret` to a Secret that has `username` and
+`password` keys. The chart maps those to `KAFSCALE_UI_USERNAME` and
+`KAFSCALE_UI_PASSWORD`. When `existingSecret` is empty, set
+`console.auth.username` and `console.auth.password` instead.
+
+```bash
+kubectl create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin \
+  --from-literal=password=use-a-secret
+
+helm upgrade --install kafscale ./deploy/helm/kafscale \
+  --set console.auth.existingSecret=kafscale-console-auth
+```
 
 ### Proxy Service
 

@@ -136,14 +136,39 @@ For S3-compatible endpoints (MinIO, etc), add:
 ```
 
 The S3 bucket must already exist. Create it if needed. For MinIO and other
-in-cluster S3-compatible endpoints, run the command in the cluster so the
-Service name resolves and the credentials from step 2 are set:
+in-cluster S3-compatible endpoints, apply this Job so the Service name
+resolves and the Job reads credentials from the `kafscale-s3` Secret
+created in step 2:
 
 ```bash
-kubectl -n kafscale run s3-mb --rm -i --restart=Never --image=amazon/aws-cli:2.15.0 \
-  --env AWS_ACCESS_KEY_ID='YOUR_ACCESS_KEY' --env AWS_SECRET_ACCESS_KEY='YOUR_SECRET_KEY' \
-  --env AWS_DEFAULT_REGION=us-east-1 \
-  -- s3 mb s3://kafscale-demo --endpoint-url 'http://minio.kafscale.svc:9000'
+cat <<'EOF' | kubectl apply -n kafscale -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: s3-mb
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: s3-mb
+          image: amazon/aws-cli:2.15.0
+          args:
+            - s3
+            - mb
+            - s3://kafscale-demo
+            - --endpoint-url
+            - http://minio.kafscale.svc:9000
+          envFrom:
+            - secretRef:
+                name: kafscale-s3
+          env:
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+EOF
+kubectl -n kafscale wait --for=condition=complete job/s3-mb --timeout=120s
+kubectl -n kafscale logs job/s3-mb
+kubectl -n kafscale delete job s3-mb
 ```
 
 For AWS S3, drop `--endpoint-url`, or run `aws s3 mb s3://kafscale-demo --region us-east-1`.
@@ -218,12 +243,16 @@ signing in (see [Console](operations.md#console)). The console needs
 set to the cluster namespace. Without `console.etcdEndpoints`, that delete
 returns `503` with `metadata store not configured`. Without
 `console.s3Namespace`, it returns `503` with `console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace`.
-Without `console.auth.username` and `console.auth.password`, login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`. The chart sets those from
-`--set console.auth.username` and `--set console.auth.password`; it does not
-read the console login password from a Secret.
+Without `console.auth.existingSecret`, and without both `console.auth.username` and `console.auth.password`, login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`. The chart sets those from the Secret named by `console.auth.existingSecret` (keys `username` and `password`), or from `--set console.auth.username` and `--set console.auth.password`.
 
 For the quickstart cluster `demo` in namespace `kafscale`, when etcd is
 operator-managed, install or upgrade with:
+
+```bash
+kubectl -n kafscale create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin \
+  --from-literal=password=use-a-secret
+```
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
@@ -231,8 +260,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set 'operator.etcdEndpoints={}' \
   --set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379' \
   --set 'console.s3Namespace=kafscale' \
-  --set 'console.auth.username=kafscaleadmin' \
-  --set 'console.auth.password=use-a-secret'
+  --set 'console.auth.existingSecret=kafscale-console-auth'
 ```
 
 If you used the external etcd option in step 4, set `console.etcdEndpoints` to

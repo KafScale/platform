@@ -57,10 +57,14 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace",
 		"ui auth disabled",
 		"login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`",
+		"Without `console.auth.existingSecret`, and without both `console.auth.username` and `console.auth.password`",
+		"console.auth.existingSecret",
 		"console.auth.username",
 		"console.auth.password",
-		"--set 'console.auth.username=kafscaleadmin'",
-		"--set 'console.auth.password=use-a-secret'",
+		"--set 'console.auth.existingSecret=kafscale-console-auth'",
+		"kubectl -n kafscale create secret generic kafscale-console-auth",
+		"--from-literal=username=kafscaleadmin",
+		"--from-literal=password=use-a-secret",
 		"--set 'operator.etcdEndpoints={}'",
 		"--set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'",
 		"--set 'console.etcdEndpoints[0]=http://etcd.kafscale.svc:2379'",
@@ -76,13 +80,20 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"-b console.cookies",
 		"kubectl -n kafscale delete kafscaletopic orders",
 		"The S3 bucket must already exist",
-		"kubectl -n kafscale run s3-mb",
-		"--image=amazon/aws-cli:2.15.0",
-		"--env AWS_ACCESS_KEY_ID='YOUR_ACCESS_KEY'",
-		"--env AWS_SECRET_ACCESS_KEY='YOUR_SECRET_KEY'",
-		"--env AWS_DEFAULT_REGION=us-east-1",
-		"s3 mb s3://kafscale-demo",
-		"--endpoint-url 'http://minio.kafscale.svc:9000'",
+		"reads credentials from the `kafscale-s3` Secret",
+		"kind: Job",
+		"name: s3-mb",
+		"image: amazon/aws-cli:2.15.0",
+		"envFrom:",
+		"secretRef:",
+		"name: kafscale-s3",
+		"AWS_DEFAULT_REGION",
+		"value: us-east-1",
+		"s3://kafscale-demo",
+		"http://minio.kafscale.svc:9000",
+		"kubectl -n kafscale wait --for=condition=complete job/s3-mb --timeout=120s",
+		"kubectl -n kafscale logs job/s3-mb",
+		"kubectl -n kafscale delete job s3-mb",
 		"aws s3 mb s3://kafscale-demo --region us-east-1",
 	} {
 		if !strings.Contains(text, want) {
@@ -94,6 +105,18 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 	}
 	if strings.Contains(text, "aws s3 mb s3://kafscale-demo --endpoint-url") {
 		t.Error("docs/quickstart.md still runs aws s3 mb against minio.kafscale.svc from the user's terminal")
+	}
+	if strings.Contains(text, "kubectl -n kafscale run s3-mb") {
+		t.Error("docs/quickstart.md still creates the bucket with kubectl run and literal keys")
+	}
+	if strings.Contains(text, "AWS_ACCESS_KEY_ID='YOUR_ACCESS_KEY'") || strings.Contains(text, "AWS_SECRET_ACCESS_KEY='YOUR_SECRET_KEY'") {
+		t.Error("docs/quickstart.md still puts S3 keys on the kubectl command line")
+	}
+	if strings.Contains(text, "does not") && strings.Contains(text, "login password from a Secret") {
+		t.Error("docs/quickstart.md still says the chart cannot read the console login from a Secret")
+	}
+	if strings.Contains(text, "--set 'console.auth.password=use-a-secret'") || strings.Contains(text, "--set 'console.auth.username=kafscaleadmin'") {
+		t.Error("docs/quickstart.md still puts console auth credentials on the helm line")
 	}
 }
 
