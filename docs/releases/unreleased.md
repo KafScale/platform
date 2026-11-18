@@ -299,7 +299,7 @@ limitations under the License.
 
 - The Helm chart can set console login credentials from `console.auth.existingSecret`, a Secret with `username` and `password` keys, which maps to `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. Inline `console.auth.username` and `console.auth.password` remain the fallback when `existingSecret` is empty. `console.etcd.existingSecret`, `proxy.etcd.existingSecret` and `mcp.etcd.existingSecret` now work the same way as `schemaRegistry.etcd.existingSecret`: they map Secret keys `ETCD_USERNAME` and `ETCD_PASSWORD` to each component's etcd env vars and omit inline username and password when the Secret is set. The quickstart creates the console auth Secret and an in-cluster Job that creates the S3 bucket from the `kafscale-s3` Secret.
 
-- The quickstart, operations guide and Helm README read the console password and the S3 secret access key from a prompt and stdin, instead of passing those values on the command line. The bucket Job sets `backoffLimit: 0`, and `BucketAlreadyOwnedByYou` means the bucket already exists. The unused `lfsDemos` Helm values and `values-lfs-demo.yaml` were removed. Enable LFS with `spec.lfsProxy` on the KafscaleCluster.
+- The quickstart, operations guide and Helm README read the console password and the S3 secret access key from a prompt and stdin, instead of passing those values on the command line.
 
 - Console and MCP readiness now checks configured etcd with a live read and a one-second deadline. Helm probes use `/readyz`, so an unreachable endpoint produces HTTP 503 even with cached metadata; `/healthz` remains a process liveness check (#340).
 
@@ -345,6 +345,7 @@ ones most likely to affect you.
 
 ### Behavior changes
 
+- The unused `lfsDemos` Helm values and `values-lfs-demo.yaml` were removed. Installs that use `-f values-lfs-demo.yaml` must drop that file and enable LFS with `spec.lfsProxy`.
 - **`kafscale-cli restore` no longer leaves an empty target topic when the source prefix has no segments for the selected partitions, or when no record in those segments is at or before `--to`.** The command exits with an error that names the prefix it searched. If the first listing already shows no segments, the target is not created; otherwise the target is rolled back. This includes a topic that was created but never written. `--namespace` still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`.
 - **Proxy stops past the etcd TTL.** When etcd cannot be read for longer than
   `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`, set with

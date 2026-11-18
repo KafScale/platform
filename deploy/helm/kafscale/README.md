@@ -29,13 +29,6 @@ Kafka proxy, and MCP server. LFS is configured on the `KafscaleCluster` CRD
 
 ## Installation
 
-### Add the repository (if published)
-
-```bash
-helm repo add kafscale https://charts.kafscale.io
-helm repo update
-```
-
 ### Install from local chart
 
 ```bash
@@ -126,6 +119,8 @@ helm upgrade --install kafscale ./deploy/helm/kafscale \
   --set console.auth.existingSecret=kafscale-console-auth
 ```
 
+Keep the other `--set` flags your install already uses, because an upgrade with only this flag resets them.
+
 ### Proxy Service
 
 The proxy is the single Kafka entrypoint, so its Service is the one clients connect to.
@@ -205,52 +200,6 @@ name `kafscale-lfs`.
 
 For local development without Kubernetes, see
 [`deploy/docker-compose/README.md`](../../docker-compose/README.md).
-
-## Local Registry (Stage Release)
-
-For air-gapped or LAN installs, you can publish images to a local registry (for example `192.168.0.131:5100`) and point the chart at it.
-
-### 1) Configure Docker to allow the registry (insecure HTTP)
-
-Docker Desktop on macOS:
-
-1. Open Docker Desktop → Settings → Docker Engine.
-2. Add the registry under `insecure-registries`:
-   ```json
-   {
-     "insecure-registries": ["192.168.0.131:5100"]
-   }
-   ```
-3. Apply & Restart Docker.
-
-Verify:
-```bash
-docker info | grep -n "Insecure Registries"
-docker info | grep -n "192.168.0.131"
-```
-
-### 2) Push images to the registry
-
-Use the stage release target (local buildx):
-```bash
-make stage-release STAGE_REGISTRY=192.168.0.131:5100 STAGE_TAG=dev
-```
-
-If you want to run the GitHub Actions workflow locally instead, use:
-```bash
-make stage-release-act STAGE_REGISTRY=192.168.0.131:5100 STAGE_TAG=dev
-```
-This target builds a local `act` runner image first (`make act-image`) and executes the workflow inside that container.
-
-### 3) Install the chart using the staged registry
-
-```bash
-helm upgrade --install kafscale ./deploy/helm/kafscale \
-  -n kafscale-demo --create-namespace \
-  --set global.imageRegistry=192.168.0.131:5100
-```
-
-Note: if you set `global.imageRegistry`, individual component image repositories inherit it.
 
 ## Security
 

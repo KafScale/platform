@@ -50,7 +50,7 @@ By default, image tags follow the chart `appVersion`. Every image key below uses
 - `schemaRegistry.image`
 - `mcp.image`
 
-Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v1.6.3`). For a dev/latest install, set `useLatest=true` on every image the install actually runs, not only the operator, broker and console. The current chart `appVersion` may be older than the branch you are following.
+Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v1.6.3`). If you install from a checkout of `main`, that tag may be older than the branch; set `useLatest=true` on each image the install runs.
 
 The operator-managed LFS proxy image comes from `spec.lfsProxy.image` if that field is set, otherwise from the operator's `LFS_PROXY_IMAGE` env (the chart sets it from `operator.lfsProxyImage`, which follows `appVersion` like the other image keys). If neither is set, it falls back to `ghcr.io/kafscale/kafscale-proxy:dev`. The same order applies to the pull policy: `spec.lfsProxy.imagePullPolicy` if that field is set, otherwise `LFS_PROXY_IMAGE_PULL_POLICY` (the chart sets it to `Always` when `operator.lfsProxyImage.useLatest` is true, and to `IfNotPresent` otherwise). If that env is also unset, the pull policy is `IfNotPresent`.
 
@@ -127,8 +127,11 @@ printf '%s' "$CONSOLE_PASSWORD" | kubectl -n kafscale create secret generic kafs
 unset CONSOLE_PASSWORD
 
 helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale \
   --set console.auth.existingSecret=kafscale-console-auth
 ```
+
+Keep the other `--set` flags your install already uses, because an upgrade with only this flag resets them.
 
 - **TLS**: For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
 - **Admin APIs**: Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
