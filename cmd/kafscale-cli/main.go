@@ -78,26 +78,69 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 }
 
+const restoreUsage = "usage: kafscale-cli restore --topic <source> --target-topic <target> --to <RFC3339 timestamp> [--namespace <ns>] [--target-namespace <ns>] [--partitions <list>]"
+const pruneUsage = "usage: kafscale-cli prune [--topic <name>] [--older-than <7d|24h>] [--force]"
+
 func writeUsage(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "usage: kafscale-cli restore --topic <source> --target-topic <target> --to <RFC3339 timestamp> [--namespace <ns>] [--target-namespace <ns>] [--partitions <list>]")
+	_, _ = fmt.Fprintln(w, restoreUsage)
 	_, _ = fmt.Fprintln(w, "       restore namespace defaults to KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, then default")
-	_, _ = fmt.Fprintln(w, "       kafscale-cli prune [--topic <name>] [--older-than <7d|24h>] [--force]")
-	_, _ = fmt.Fprintln(w, "       kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--subjects <regex>] [--dry-run] [--force]")
+	_, _ = fmt.Fprintln(w, "       "+strings.TrimPrefix(pruneUsage, "usage: "))
+	_, _ = fmt.Fprintln(w, "       "+strings.TrimPrefix(schemaImportUsage, "usage: "))
+	_, _ = fmt.Fprintln(w, "")
+	_, _ = fmt.Fprintln(w, "Use kafscale-cli <command> --help for flag help.")
+	_, _ = fmt.Fprintln(w, "")
+	writeCLIEnvUsage(w)
+}
+
+func writeCLIEnvUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Environment:")
+	_, _ = fmt.Fprintln(w, "  restore --namespace defaults to KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, then default")
+	_, _ = fmt.Fprintln(w, "  S3: KAFSCALE_S3_BUCKET, KAFSCALE_S3_REGION, KAFSCALE_S3_ENDPOINT, KAFSCALE_S3_PATH_STYLE, KAFSCALE_S3_KMS_ARN, KAFSCALE_S3_CONCURRENCY (default 16)")
+	_, _ = fmt.Fprintln(w, "  S3 credentials: KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY, optionally KAFSCALE_S3_SESSION_TOKEN.")
+	_, _ = fmt.Fprintln(w, "  If either is unset, the AWS SDK default credential chain is used: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN; the shared config and credentials files with AWS_PROFILE; web identity with AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE (EKS IRSA); and ECS or EC2 instance role credentials.")
+	_, _ = fmt.Fprintln(w, "  etcd: KAFSCALE_ETCD_ENDPOINTS, optionally KAFSCALE_ETCD_USERNAME and KAFSCALE_ETCD_PASSWORD")
+	_, _ = fmt.Fprintln(w, "  schema: KAFSCALE_SCHEMA_REGISTRY_URL, KAFSCALE_SCHEMA_IMPORT_AUTH, KAFSCALE_SCHEMA_REGISTRY_AUTH")
+	_, _ = fmt.Fprintln(w, "  --auth and --to-auth values are visible to other local users in the process list, so prefer the env vars.")
+}
+
+func parseCLIFlags(fs *flag.FlagSet, args []string, stdout io.Writer, usage string) error {
+	fs.SetOutput(io.Discard)
+	err := fs.Parse(args)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, flag.ErrHelp) {
+		fs.SetOutput(stdout)
+		if usage != "" {
+			_, _ = fmt.Fprintln(stdout, usage)
+		}
+		fs.PrintDefaults()
+		return flag.ErrHelp
+	}
+	return err
+}
+
+func flagOrEnv(flagVal, envKey string) string {
+	if strings.TrimSpace(flagVal) != "" {
+		return flagVal
+	}
+	return envOrDefault(envKey, "")
 }
 
 func runRestoreCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
 	var (
 		sourceTopic     = fs.String("topic", "", "Source topic to recover from")
-		sourceNamespace = fs.String("namespace", defaultRestoreNamespace(), "Source namespace")
+		sourceNamespace = fs.String("namespace", defaultRestoreNamespace(), "Source namespace (KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, then default)")
 		targetTopic     = fs.String("target-topic", "", "Target topic to create and populate")
 		targetNamespace = fs.String("target-namespace", "", "Target namespace (defaults to source namespace)")
 		restoreToRaw    = fs.String("to", "", "Restore cutoff in RFC3339 format")
 		partitionsRaw   = fs.String("partitions", "", "Optional comma-separated partition list")
 	)
-	if err := fs.Parse(args); err != nil {
+	if err := parseCLIFlags(fs, args, stdout, restoreUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *sourceTopic == "" {
@@ -212,7 +255,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 	if !sourceSegmentPresent(objects, sourcePrefix, cfg.Partitions) {
-		return fmt.Errorf("no segments found for topic %s under %s; set --namespace or KAFSCALE_NAMESPACE to the cluster namespace", cfg.SourceTopic, sourcePrefix)
+		return fmt.Errorf("no segments found for topic %s under %s; set --namespace, KAFSCALE_NAMESPACE or KAFSCALE_S3_NAMESPACE to the cluster namespace (KAFSCALE_NAMESPACE wins over KAFSCALE_S3_NAMESPACE)", cfg.SourceTopic, sourcePrefix)
 	}
 
 	restoreCommitted := false

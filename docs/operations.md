@@ -514,6 +514,18 @@ The schema registry keeps its state in the same etcd.
 
 The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.14. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
+### Installing kafscale-cli
+
+`kafscale-cli` is built from this repository and needs Go 1.26 or later. There is no container image or
+released binary for it. From the repository root:
+
+```bash
+go build -o bin/kafscale-cli ./cmd/kafscale-cli
+```
+
+`kafscale-cli --help` and `kafscale-cli <command> --help` print the commands,
+flags and environment variables.
+
 ### Topic recovery on the DR spine
 
 For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
@@ -530,10 +542,13 @@ kafscale-cli restore \
 
 `--namespace` is the S3 prefix namespace for the source topic, which on an operator cluster is the `KafscaleCluster` namespace. It defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`. `--target-namespace` defaults to the source namespace. `--partitions` is an optional comma-separated list of partitions to restore.
 
+Every environment variable `restore` reads is listed in [kafscale-cli](#kafscale-cli).
+
 Operational semantics:
 
 - Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
-- Restore fails when there are no segments for the selected partitions under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, or when no record in those segments is at or before `--to`. The command exits with a non-zero status and names the prefix it searched. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. Set `--namespace` or `KAFSCALE_NAMESPACE` to the cluster namespace that holds the topic data.
+- S3 credentials are `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, optionally `KAFSCALE_S3_SESSION_TOKEN`. If either is unset, the AWS SDK default credential chain is used: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; the shared config and credentials files with `AWS_PROFILE`; web identity with `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` (EKS IRSA); and ECS or EC2 instance role credentials. Without credentials, restore fails at its first S3 call, listing the source segments, with an error that starts `list objects <prefix>:` and includes `get credentials`, and creates no target.
+- Restore fails when there are no segments for the selected partitions under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, or when no record in those segments is at or before `--to`. The command exits with a non-zero status and names the prefix it searched. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. Set `--namespace`, `KAFSCALE_NAMESPACE` or `KAFSCALE_S3_NAMESPACE` to the cluster namespace (`KAFSCALE_NAMESPACE` wins over `KAFSCALE_S3_NAMESPACE`).
 - The target topic must be new. KafScale refuses to restore over an existing persisted topic.
 - Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
 - If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
@@ -542,7 +557,7 @@ Operational semantics:
 
 ### Pruning deleted topic data
 
-DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`:
+DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`. Every environment variable `prune` reads is listed in [kafscale-cli](#kafscale-cli):
 
 ```bash
 kafscale-cli prune
@@ -552,7 +567,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 
 - `--topic` limits the run to deleted incarnations of one topic. `--older-than` limits it to incarnations deleted longer ago than the given age, such as `7d` or `24h`.
 - The output has one line per deleted incarnation with the topic, generation, S3 prefix, object count, bytes and `deleted_at`, then the totals. A dry run says that nothing was deleted.
-- Prune uses the same environment as `kafscale-cli restore`. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.
+- `kafscale-cli prune` needs the same S3 and etcd environment as restore. A dry run needs them too, because it calls CheckBucket, lists etcd and lists S3. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.
 - Each incarnation is matched by its exact prefix with a trailing slash, such as `default/orders@1/`, so it never matches `orders@10` or `orders-x`.
 - Prune only counts and deletes partition segment and index files, `<prefix><partition>/segment-<offset>.kfs` and `.index`. It skips every other key under the prefix, including LFS objects that older proxies wrote under `<namespace>/<topic>/lfs/`. LFS objects written now live under `<namespace>/@lfs/`, outside every topic prefix.
 - Prune checks that the bucket exists before it lists anything, and fails instead of creating it.
@@ -561,6 +576,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 - Prune is safe while brokers run, because brokers only write to the current generation's prefix.
 - On a bucket with versioning enabled, prune only adds delete markers. Add a lifecycle rule that expires noncurrent versions to free the space.
 - Prune does not delete LFS objects. Topics deleted before the upgrade that added generations have no record, so prune does not cover their data.
+- If `kafscale-cli restore` creates the target topic and a later step fails (`UpdateTopicConfig`, `TopicGeneration` or the copy), restore rolls back by retiring that target. That writes a `/kafscale/deleted-topics` record with no objects, or only those copied before the failure, which `kafscale-cli prune` lists. If the rollback itself fails, restore prints `warning: failed to roll back target topic <name>: ...` to stderr, the target stays, and no deleted-topics record is written. `prune --topic <target> --force` removes the record, and every other deleted incarnation of that name.
 
 ### Consumer offsets after restore
 
@@ -748,6 +764,24 @@ advertised address.
   `advertisedPort` set to the forwarded address. `make lfs-demo` does this.
 
 ## Environment variable index
+
+### kafscale-cli
+
+- `KAFSCALE_NAMESPACE`: First default for `restore --namespace`. If unset or blank, `KAFSCALE_S3_NAMESPACE` is used, then `default`. Optional. Used by `restore`.
+- `KAFSCALE_S3_NAMESPACE`: Second default for `restore --namespace` when `KAFSCALE_NAMESPACE` is unset or blank. Optional. Used by `restore`.
+- `KAFSCALE_S3_BUCKET`: S3 bucket. Required for `restore` and `prune` unless `KAFSCALE_USE_MEMORY_S3` is set. No default; the CLI fails with `s3 bucket required` if it is unset.
+- `KAFSCALE_S3_REGION`: S3 region. Required for `restore` and `prune` unless `KAFSCALE_USE_MEMORY_S3` is set. No default; the CLI fails with `s3 region required` if it is unset.
+- `KAFSCALE_S3_ENDPOINT`: Optional S3 endpoint override for `restore` and `prune`. No default.
+- `KAFSCALE_S3_PATH_STYLE`: Optional path-style addressing for `restore` and `prune`. Defaults to true when `KAFSCALE_S3_ENDPOINT` is set, and to false when it is not.
+- `KAFSCALE_S3_KMS_ARN`: Optional KMS key ARN for SSE-KMS. Used by `restore` and `prune`. No default.
+- `KAFSCALE_S3_CONCURRENCY`: Optional cap on concurrent S3 operations for `restore` and `prune` (default `16`).
+- `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`: Optional static S3 credentials for `restore` and `prune`. They are used only when both are set. If either is unset, the AWS SDK default credential chain is used: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; the shared config and credentials files with `AWS_PROFILE`; web identity with `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` (EKS IRSA); and ECS or EC2 instance role credentials.
+- `KAFSCALE_S3_SESSION_TOKEN`: Optional session token sent with those static credentials. Used by `restore` and `prune`. No default.
+- `KAFSCALE_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Required for `restore` and `prune`. No default; the CLI fails with `etcd endpoints required` if it is unset.
+- `KAFSCALE_ETCD_USERNAME` and `KAFSCALE_ETCD_PASSWORD`: Optional etcd basic auth for `restore` and `prune`.
+- `KAFSCALE_SCHEMA_REGISTRY_URL`: Optional target registry URL for `schema import` (default `http://localhost:8081`), used when `--to` is omitted.
+- `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`: Optional source and target registry credentials for `schema import`, used when `--auth` or `--to-auth` is empty. This is the recommended way to pass credentials.
+- `KAFSCALE_USE_MEMORY_S3`: Optional in-memory S3 client for `restore` and `prune` (default false). Dev and test only.
 
 ### Operator
 

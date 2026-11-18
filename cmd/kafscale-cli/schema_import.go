@@ -174,28 +174,36 @@ func subjectPath(subject string) string {
 	return "/subjects/" + url.PathEscape(subject)
 }
 
+const schemaImportUsage = "usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--to-auth user:password] [--subjects <regex>] [--dry-run] [--force]"
+
 func runSchemaCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] != "import" {
-		return errors.New("usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--subjects <regex>] [--dry-run]")
+		if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+			_, _ = fmt.Fprintln(stdout, schemaImportUsage)
+			return nil
+		}
+		return errors.New(schemaImportUsage)
 	}
 	fs := flag.NewFlagSet("schema import", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	var (
 		from     = fs.String("from", "", "Source schema registry URL, for example a Confluent Schema Registry")
 		to       = fs.String("to", envOrDefault("KAFSCALE_SCHEMA_REGISTRY_URL", "http://localhost:8081"), "Target KafScale schema registry URL")
-		fromAuth = fs.String("auth", envOrDefault("KAFSCALE_SCHEMA_IMPORT_AUTH", ""), "Source credentials as user:password or bearer:<token>")
-		toAuth   = fs.String("to-auth", envOrDefault("KAFSCALE_SCHEMA_REGISTRY_AUTH", ""), "Target credentials as user:password or bearer:<token>")
+		fromAuth = fs.String("auth", "", "Source credentials as user:password or bearer:<token> (or KAFSCALE_SCHEMA_IMPORT_AUTH)")
+		toAuth   = fs.String("to-auth", "", "Target credentials as user:password or bearer:<token> (or KAFSCALE_SCHEMA_REGISTRY_AUTH)")
 		subjects = fs.String("subjects", "", "Only import subjects matching this regular expression")
 		dryRun   = fs.Bool("dry-run", false, "Report what would change without writing to the target")
 		force    = fs.Bool("force", false, "Switch a target that already holds schemas to IMPORT mode")
 	)
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseCLIFlags(fs, args[1:], stdout, schemaImportUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *from == "" {
 		return errors.New("--from is required")
 	}
-	cfg := schemaImportConfig{From: *from, To: *to, FromAuth: *fromAuth, ToAuth: *toAuth, DryRun: *dryRun, Force: *force}
+	cfg := schemaImportConfig{From: *from, To: *to, FromAuth: flagOrEnv(*fromAuth, "KAFSCALE_SCHEMA_IMPORT_AUTH"), ToAuth: flagOrEnv(*toAuth, "KAFSCALE_SCHEMA_REGISTRY_AUTH"), DryRun: *dryRun, Force: *force}
 	if *subjects != "" {
 		re, err := regexp.Compile(*subjects)
 		if err != nil {

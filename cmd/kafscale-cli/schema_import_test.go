@@ -397,6 +397,30 @@ func TestSchemaImportSendsAuth(t *testing.T) {
 	}
 }
 
+func TestSchemaImportUsesAuthEnvWhenFlagsEmpty(t *testing.T) {
+	var seen sync.Map
+	wrap := func(name string) func(http.Handler) http.Handler {
+		return func(h http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seen.Store(name+" "+r.Header.Get("Authorization"), true)
+				h.ServeHTTP(w, r)
+			})
+		}
+	}
+	src := startTestRegistry(t, wrap("src"))
+	dst := startTestRegistry(t, wrap("dst"))
+	t.Setenv("KAFSCALE_SCHEMA_IMPORT_AUTH", "u:p:w")
+	t.Setenv("KAFSCALE_SCHEMA_REGISTRY_AUTH", "bearer:tok")
+	if out, err := runImport(t, "--from", src.url, "--to", dst.url); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, want := range []string{"src Basic dTpwOnc=", "dst Bearer tok"} {
+		if _, ok := seen.Load(want); !ok {
+			t.Fatalf("missing header %q when flags are empty", want)
+		}
+	}
+}
+
 func withExtraSubjects(extra map[string]srVersion) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
