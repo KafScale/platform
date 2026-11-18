@@ -64,9 +64,13 @@ type PartitionLeaseOptions struct {
 // It delegates to the generic LeaseManager, translating topic+partition pairs
 // into string resource IDs.
 type PartitionLeaseManager struct {
-	lm     *LeaseManager
-	holdMu sync.Mutex
-	holds  map[string]time.Time
+	lm    *LeaseManager
+	holds *partitionHolds
+}
+
+type partitionHolds struct {
+	mu    sync.Mutex
+	until map[string]time.Time
 }
 
 // NewPartitionLeaseManager creates a lease manager backed by the given etcd client.
@@ -77,6 +81,7 @@ func NewPartitionLeaseManager(client *clientv3.Client, cfg PartitionLeaseConfig)
 // NewPartitionLeaseManagerWithOptions constructs a manager with ownership callbacks.
 func NewPartitionLeaseManagerWithOptions(client *clientv3.Client, cfg PartitionLeaseOptions) *PartitionLeaseManager {
 	return &PartitionLeaseManager{
+		holds: &partitionHolds{until: make(map[string]time.Time)},
 		lm: NewLeaseManagerWithOptions(client, LeaseManagerOptions{
 			LeaseManagerConfig: LeaseManagerConfig{
 				BrokerID:        cfg.BrokerID,
@@ -129,26 +134,28 @@ func (m *PartitionLeaseManager) Acquire(ctx context.Context, topic string, parti
 
 func (m *PartitionLeaseManager) Handover(topic string, partition int32, hold time.Duration) {
 	id := partitionResourceID(topic, partition)
-	m.holdMu.Lock()
-	if m.holds == nil {
-		m.holds = make(map[string]time.Time)
+	if m.holds != nil {
+		m.holds.mu.Lock()
+		m.holds.until[id] = time.Now().Add(hold)
+		m.holds.mu.Unlock()
 	}
-	m.holds[id] = time.Now().Add(hold)
-	m.holdMu.Unlock()
 	m.lm.Release(id)
 }
 
 func (m *PartitionLeaseManager) held(id string) bool {
-	m.holdMu.Lock()
-	defer m.holdMu.Unlock()
-	until, ok := m.holds[id]
+	if m.holds == nil {
+		return false
+	}
+	m.holds.mu.Lock()
+	defer m.holds.mu.Unlock()
+	until, ok := m.holds.until[id]
 	if !ok {
 		return false
 	}
 	if time.Now().Before(until) {
 		return true
 	}
-	delete(m.holds, id)
+	delete(m.holds.until, id)
 	return false
 }
 
