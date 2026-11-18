@@ -152,6 +152,8 @@ limitations under the License.
 
 ### Proxy and etcd outages
 
+- etcd clients reconnect with a one-second maximum gRPC backoff and a 100 millisecond first retry. Each connection attempt is given at least five seconds, or the configured DialTimeout when that is larger, so a slow TCP or TLS handshake can complete. They do not enable gRPC keepalive pings. Before, clients used the gRPC default maximum backoff of two minutes, so after a long etcd outage reconnecting could take up to about two minutes. QA measured 45 to 61 seconds. The same settings are used by the broker, proxy, console, MCP, CLI, schema registry, operator and processors.
+
 - The Kafka listener rejects Produce responses with a mismatched correlation ID instead of accepting an unrelated acknowledgement.
 - During an etcd outage the proxy kept using the last broker list from etcd without a time limit, because a failed etcd read was only logged and still counted as a successful refresh.
   - `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default 60 seconds) now applies: after a failed read the proxy, including its Kafka listener, readiness check and LFS HTTP API, uses the brokers, routes and metadata it last read until that time has passed since the last successful read.
@@ -159,7 +161,7 @@ limitations under the License.
   - Each such request gets the reply the proxy already sends while it is not ready: `REQUEST_TIMED_OUT`, which clients retry, on the response or on each topic, partition, group or resource the request names.
   - A Metadata request for all topics, which `kcat -L` and most clients send at startup, names none, so it gets an empty reply with no brokers, no topics and no error code, and clients treat it as failed metadata and retry.
   - A request type with no not-ready reply gets no answer. The client connection is then closed. ApiVersions is still answered.
-  - Before rejecting a request the proxy tries to read etcd again, so it serves again as soon as etcd answers.
+  - Before rejecting a request the proxy tries to read etcd again, so it serves again within a few seconds after etcd answers.
   - The LFS HTTP API needs etcd for every request: `/lfs/produce` and `/lfs/uploads` read the topic generation from etcd each time, so they return 503 `metadata_unavailable` as soon as etcd cannot be read, even within the TTL.
   - Past the TTL they send nothing to a broker, and `/lfs/produce` checks the TTL again after the upload, right before the record is sent, so an upload that outlasts it is deleted and gets 503.
   - The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
@@ -271,6 +273,11 @@ limitations under the License.
 
 - `kafscale-cli schema import` no longer fails when the source returns HTTP 404 with error code 0 for `GET /mode/{subject}`, as Apicurio Registry 2.6.5 and 3.0.6 do; that is treated as no subject mode, and the run continues. A second import, and a second subject that shares an id, no longer report a false conflict when the target has already normalized the source schema. Explicit subject levels are still copied from registries that honor `defaultToGlobal=false`, such as Confluent. When a source returns a level for every subject, as Apicurio does, subject levels equal to the source global level are not copied. A source version that is listed as soft deleted but cannot be read is skipped with a warning, counted as skipped in the summary, and does not stop the run. See `docs/schema-registry.md`.
 
+- The schema registry now shuts down gracefully, so a rollout restart, such as the one S3 key rotation needs, no longer drops requests. Before, it stopped accepting connections at once on SIGTERM while the Service could still send it traffic, which gave refused connections and client timeouts during a restart.
+  - On SIGTERM or SIGINT `/readyz` returns 503 at once, the registry keeps serving for `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), then waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`, before it was a fixed 5s) for in-flight requests.
+  - New chart values: `schemaRegistry.shutdownDrain`, `schemaRegistry.shutdownTimeout`, `schemaRegistry.preStopSleepSeconds` (default `0`, no hook) and `schemaRegistry.terminationGracePeriodSeconds` (default `30`, the Kubernetes default). With the defaults the chart adds no env var and no hook, and the grace period equals the default Kubernetes already stores, so these values do not change the pod template on their own. Setting any of them rolls the registry once.
+  - See `docs/schema-registry.md#shutdown`.
+
 ### Processors
 
 - The Iceberg and SQL processors map segments under `<topic>@<generation>/` to the topic `<topic>` and its table, and keep a separate checkpoint for each generation, so a re-created topic is processed from offset 0 (#262).
@@ -279,6 +286,11 @@ limitations under the License.
 ### Go API compatibility
 
 - Restore the exact published v1.6.3 `broker.CoordinatorConfig` shape and comparability. The legacy constructor remains supported and deprecated; use `CoordinatorOptions` and `NewGroupCoordinatorWithOptions` for retention and lease hooks. `metadata.Store` retains its original method set; group offset listing is an optional `GroupConsumerOffsetLister` capability with a filtering adapter (#298).
+- `storage.RecoverTopicToTimestamp` now returns an error when no source segments match the selected partitions, or when no record in those segments is at or before the restore timestamp. It previously returned success with an empty result.
+
+### CLI
+
+- `kafscale-cli restore` fails when there are no segments for the selected partitions under the source S3 prefix (`<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic), or when no record in those segments is at or before `--to`. If the first listing already shows no segments, the error names the prefix it searched and points to `--namespace` and `KAFSCALE_NAMESPACE`, and the target topic is not created. If recovery later finds no segments for those partitions, or no record at or before `--to`, the error names the prefix only and the target is rolled back. The source namespace still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`. The usage text and the restore example in [operations.md](../operations.md#topic-recovery-on-the-dr-spine) now include `--namespace`, `--target-namespace`, `--partitions` and `KAFSCALE_NAMESPACE`.
 
 ### Console
 
@@ -288,11 +300,11 @@ limitations under the License.
 
 - The LFS status endpoint remains available when LFS is disabled. The console shows the disabled state without starting LFS data requests or event streams, and closes streams on tab changes and logout. A bundled favicon is served at both `/favicon.ico` and `/ui/favicon.ico` (#339).
 
-- The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358).
+- The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358). With more than one operator replica (`operator.replicaCount` of `2` or more), the console etcd snapshot panel no longer flaps to access FAIL with age `0`. Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges, and the operator metrics Service balances console scrapes across the replicas. When a scrape reaches a standby replica, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age 0, stale NO, and n/a for last success and last schedule.
 
 - The operator `EtcdSnapshot` condition and the `kafscale_operator_etcd_snapshot_*` gauges stay current between CronJob changes. The operator watches the snapshot CronJob and reconciles when its status changes, at least once a minute while a managed snapshot CronJob exists, including when snapshots are stale or have never succeeded, and again when the last successful snapshot passes `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, so `kafscale_operator_etcd_snapshot_age_seconds` stays current and `kafscale_operator_etcd_snapshot_stale` and the `KafscaleSnapshotStale` alert fire when snapshots stop (#357).
 
-- The console `POST /ui/api/status/topics` and `DELETE /ui/api/status/topics/<topic>` endpoints create and delete topics in etcd through the same metadata path as the broker. They returned `202` and changed nothing. Create takes `{"name","partitions","replication_factor"}` and returns `201`, delete returns `200`, and errors return `400`, `404`, `409` or `503`. The console needs write access to etcd for these calls. Delete also needs `KAFSCALE_S3_NAMESPACE`, or `console.s3Namespace` in the Helm chart, set to the `KafscaleCluster` namespace, so that the deleted topic record points at the brokers' S3 prefix. Without it, delete returns `503` and changes nothing (#362).
+- The console `POST /ui/api/status/topics` and `DELETE /ui/api/status/topics/<topic>` endpoints create and delete topics in etcd through the same metadata path as the broker. They returned `202` and changed nothing. Create takes `{"name","partitions","replication_factor"}` and returns `201`, delete returns `200`, and errors return `400`, `401`, `404`, `405`, `409`, `500` or `503`. The console needs write access to etcd for these calls. Delete also needs `KAFSCALE_S3_NAMESPACE`, or `console.s3Namespace` in the Helm chart, set to the `KafscaleCluster` namespace, so that the deleted topic record points at the brokers' S3 prefix. Without it, delete returns `503` and changes nothing (#362).
 
 - Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
@@ -326,6 +338,7 @@ ones most likely to affect you.
 
 ### Behavior changes
 
+- **`kafscale-cli restore` no longer leaves an empty target topic when the source prefix has no segments for the selected partitions, or when no record in those segments is at or before `--to`.** The command exits with an error that names the prefix it searched. If the first listing already shows no segments, the target is not created; otherwise the target is rolled back. This includes a topic that was created but never written. `--namespace` still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`.
 - **Proxy stops past the etcd TTL.** When etcd cannot be read for longer than
   `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`, set with
   `spec.lfsProxy.backendCacheTTLSeconds` or the chart value
@@ -350,6 +363,11 @@ ones most likely to affect you.
 - **LFS multipart sessions live in etcd.** Uploads work across proxy replicas
   and restarts. The orphan sweep needs `s3:ListBucketMultipartUploads` and
   `s3:AbortMultipartUpload` (#321).
+- **Schema registry takes longer to stop.** On SIGTERM it now keeps serving
+  for 5 seconds with `/readyz` failing before it stops, and gives in-flight
+  requests up to 10 seconds instead of 5. Set
+  `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN=0s` for the old immediate stop. See
+  [Shutdown](../schema-registry.md#shutdown).
 
 ### Deprecations
 

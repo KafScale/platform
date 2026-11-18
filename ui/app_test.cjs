@@ -29,7 +29,7 @@ function element() {
 function app(statusResponse, clusterResponse = () => ({ ok: true, json: async () => ({}) })) {
   const elements = new Map();
   const get = id => {
-    if (!elements.has(id)) elements.set(id, element());
+    if (!elements.has(id)) elements.set(id, Object.assign(element(), { id }));
     return elements.get(id);
   };
   const content = Array.from({ length: 8 }, element);
@@ -241,3 +241,17 @@ for (const source of ['lfs', 'cluster']) {
     });
   }
 }
+
+test('etcd snapshot access shows n/a when the stream has no access value', () => {
+  const page = app(() => status(false));
+  page.context.startMetricsStream();
+  const stream = page.streams[page.streams.length - 1];
+  const access = page.get('etcd-snapshot-access');
+  stream.onmessage({ data: JSON.stringify({ metrics: { etcd_snapshot_age_s: 10, etcd_snapshot_stale: 0, etcd_snapshot_access_ok: 0 } }) });
+  assert.equal(access.textContent, 'FAIL');
+  stream.onmessage({ data: JSON.stringify({ metrics: { etcd_snapshot_age_s: 10, etcd_snapshot_stale: 0 } }) });
+  assert.equal(access.textContent, 'n/a');
+  assert.equal(page.get('etcd-snapshot-age').textContent, '10');
+  stream.onmessage({ data: JSON.stringify({ metrics: { etcd_snapshot_age_s: 10, etcd_snapshot_stale: 0, etcd_snapshot_access_ok: 1 } }) });
+  assert.equal(access.textContent, 'OK');
+});

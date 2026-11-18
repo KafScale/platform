@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/internal/s3env"
+	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/schemaregistry"
 	"github.com/KafScale/platform/pkg/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -42,6 +44,8 @@ type settings struct {
 	timeout     time.Duration
 	inlineLimit int
 	namespace   string
+	drain       time.Duration
+	shutdown    time.Duration
 	s3          *storage.S3Config
 }
 
@@ -60,6 +64,8 @@ func loadSettings(getenv func(string) string) (settings, error) {
 		password:    getenv("KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD"),
 		timeout:     10 * time.Second,
 		inlineLimit: schemaregistry.DefaultInlineLimit,
+		drain:       5 * time.Second,
+		shutdown:    10 * time.Second,
 		namespace:   strings.TrimSpace(getenv("KAFSCALE_S3_NAMESPACE")),
 	}
 	if s.addr == "" {
@@ -82,6 +88,20 @@ func loadSettings(getenv func(string) string) (settings, error) {
 			return s, fmt.Errorf("invalid KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT %q", raw)
 		}
 		s.timeout = d
+	}
+	if raw := getenv("KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < 0 {
+			return s, fmt.Errorf("invalid KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN %q", raw)
+		}
+		s.drain = d
+	}
+	if raw := getenv("KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d <= 0 {
+			return s, fmt.Errorf("invalid KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT %q", raw)
+		}
+		s.shutdown = d
 	}
 	if raw := getenv("KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -126,12 +146,12 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	cli, err := clientv3.New(clientv3.Config{
+	cli, err := clientv3.New(metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   s.endpoints,
 		Username:    s.username,
 		Password:    s.password,
 		DialTimeout: 5 * time.Second,
-	})
+	}))
 	if err != nil {
 		return fmt.Errorf("connect to etcd: %w", err)
 	}
@@ -162,7 +182,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		log.Printf("read schema id counter from etcd: %v", err)
 	}
 	cancel()
-	watchCtx, stopWatch := context.WithCancel(ctx)
+	watchCtx, stopWatch := context.WithCancel(context.Background())
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
@@ -172,18 +192,36 @@ func run(ctx context.Context, getenv func(string) string) error {
 		stopWatch()
 		<-watchDone
 	}()
-	srv := &http.Server{Addr: s.addr, Handler: schemaregistry.NewServer(reg, s.timeout), ReadHeaderTimeout: 10 * time.Second}
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	api := schemaregistry.NewServer(reg, s.timeout)
+	log.Printf("kafscale schema registry listening on %s", s.addr)
+	return serve(ctx, ln, api, api.SetDraining, s.drain, s.shutdown)
+}
+
+func serve(ctx context.Context, ln net.Listener, handler http.Handler, setDraining func(), drain, timeout time.Duration) error {
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("kafscale schema registry listening on %s", s.addr)
-		errCh <- srv.ListenAndServe()
+		errCh <- srv.Serve(ln)
 	}()
 	select {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
 	}
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	return srv.Shutdown(shutdownCtx)
+	setDraining()
+	if drain > 0 {
+		log.Printf("shutting down: readiness fails now, serving for another %s", drain)
+		time.Sleep(drain)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		_ = srv.Close()
+		return fmt.Errorf("shut down the HTTP server: %w", err)
+	}
+	return nil
 }
