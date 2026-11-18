@@ -269,6 +269,11 @@ limitations under the License.
 
 - Schema registry pods now notice an etcd snapshot restore and clear their schema cache without a restart. Each pod watches its etcd keys and resets when the watch reports a compaction. The operator now restores etcd snapshots with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, which triggers this. Manual restores should use the same flags or restart the registry pods. See `docs/schema-registry.md` and `docs/operations.md`.
 
+- The schema registry now shuts down gracefully, so a rollout restart, such as the one S3 key rotation needs, no longer drops requests. Before, it stopped accepting connections at once on SIGTERM while the Service could still send it traffic, which gave refused connections and client timeouts during a restart.
+  - On SIGTERM or SIGINT `/readyz` returns 503 at once, the registry keeps serving for `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), then waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`, before it was a fixed 5s) for in-flight requests.
+  - New chart values: `schemaRegistry.shutdownDrain`, `schemaRegistry.shutdownTimeout`, `schemaRegistry.preStopSleepSeconds` (default `0`, no hook) and `schemaRegistry.terminationGracePeriodSeconds` (default `30`, the Kubernetes default). With the defaults the chart adds no env var and no hook, and the grace period equals the default Kubernetes already stores, so these values do not change the pod template on their own. Setting any of them rolls the registry once.
+  - See `docs/schema-registry.md#shutdown`.
+
 ### Processors
 
 - The Iceberg and SQL processors map segments under `<topic>@<generation>/` to the topic `<topic>` and its table, and keep a separate checkpoint for each generation, so a re-created topic is processed from offset 0 (#262).
@@ -294,7 +299,7 @@ limitations under the License.
 
 - The operator `EtcdSnapshot` condition and the `kafscale_operator_etcd_snapshot_*` gauges stay current between CronJob changes. The operator watches the snapshot CronJob and reconciles when its status changes, at least once a minute while a managed snapshot CronJob exists, including when snapshots are stale or have never succeeded, and again when the last successful snapshot passes `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, so `kafscale_operator_etcd_snapshot_age_seconds` stays current and `kafscale_operator_etcd_snapshot_stale` and the `KafscaleSnapshotStale` alert fire when snapshots stop (#357).
 
-- The console `POST /ui/api/status/topics` and `DELETE /ui/api/status/topics/<topic>` endpoints create and delete topics in etcd through the same metadata path as the broker. They returned `202` and changed nothing. Create takes `{"name","partitions","replication_factor"}` and returns `201`, delete returns `200`, and errors return `400`, `404`, `409` or `503`. The console needs write access to etcd for these calls. Delete also needs `KAFSCALE_S3_NAMESPACE`, or `console.s3Namespace` in the Helm chart, set to the `KafscaleCluster` namespace, so that the deleted topic record points at the brokers' S3 prefix. Without it, delete returns `503` and changes nothing (#362).
+- The console `POST /ui/api/status/topics` and `DELETE /ui/api/status/topics/<topic>` endpoints create and delete topics in etcd through the same metadata path as the broker. They returned `202` and changed nothing. Create takes `{"name","partitions","replication_factor"}` and returns `201`, delete returns `200`, and errors return `400`, `401`, `404`, `405`, `409`, `500` or `503`. The console needs write access to etcd for these calls. Delete also needs `KAFSCALE_S3_NAMESPACE`, or `console.s3Namespace` in the Helm chart, set to the `KafscaleCluster` namespace, so that the deleted topic record points at the brokers' S3 prefix. Without it, delete returns `503` and changes nothing (#362).
 
 - Metrics streams send their first snapshot immediately, then refresh periodically. Previously clients waited for the first refresh interval before receiving a response, which could cause connection timeouts under load.
 
@@ -353,6 +358,11 @@ ones most likely to affect you.
 - **LFS multipart sessions live in etcd.** Uploads work across proxy replicas
   and restarts. The orphan sweep needs `s3:ListBucketMultipartUploads` and
   `s3:AbortMultipartUpload` (#321).
+- **Schema registry takes longer to stop.** On SIGTERM it now keeps serving
+  for 5 seconds with `/readyz` failing before it stops, and gives in-flight
+  requests up to 10 seconds instead of 5. Set
+  `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN=0s` for the old immediate stop. See
+  [Shutdown](../schema-registry.md#shutdown).
 
 ### Deprecations
 

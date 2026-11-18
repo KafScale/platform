@@ -304,6 +304,10 @@ Rotate the keys in this order. The order matters.
 
 4. Only then revoke the old keys.
 
+During the restart each old pod leaves the Service endpoints when its deletion
+starts, and keeps serving for a short drain period while kube-proxy and load
+balancers catch up, before it stops listening. See [Shutdown](schema-registry.md#shutdown).
+
 `<namespace>` is the namespace of the Helm release and `<release>` is the
 release name. The labels do not depend on `nameOverride` or `fullnameOverride`.
 
@@ -822,6 +826,8 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Required.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_USERNAME`, `KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD`: Etcd auth for the registry.
 - `KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT`: Time limit for one request as a Go duration (default `10s`). A write that is still retrying when it runs out fails with error code 50002.
+- `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN`: How long the registry keeps serving after SIGTERM or SIGINT, with `/readyz` failing, before it stops accepting connections, as a Go duration (default `5s`, `0` or `0s` turns it off). See [Shutdown](schema-registry.md#shutdown).
+- `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT`: How long in-flight requests get to finish after the drain period, as a Go duration (default `10s`). Requests still running then are cut off and the registry exits with an error.
 - `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`: Schema text above this size is stored in S3 instead of etcd (default `65536`).
 - `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker.
   - Used for schema text above the inline limit and for the schema id records described in [schema-registry.md](schema-registry.md#storage).
@@ -853,7 +859,7 @@ The console serves these authenticated topic endpoints when `KAFSCALE_CONSOLE_ET
 
 - `POST /ui/api/status/topics` creates a topic. The JSON body is `{"name":"<topic>","partitions":<count>,"replication_factor":<count>}`. `partitions` must be between 1 and 10000. `replication_factor` is optional and defaults to 1. It returns `201` with `{"name":"<topic>","partitions":<count>,"state":"ready"}`.
 - `DELETE /ui/api/status/topics/<topic>` deletes a topic the same way the broker does. It needs `KAFSCALE_S3_NAMESPACE`. It returns `200` with `{"name":"<topic>"}`.
-- Errors: `400` for a malformed body or data after the JSON object, an invalid topic name, a partition count outside 1 to 10000 or a replication factor above the broker count, `404` for an unknown topic, `409` for a topic that already exists or changed during the delete, and `503` when no etcd endpoints are configured, etcd is unavailable or times out, or a delete runs without `KAFSCALE_S3_NAMESPACE`. Other failures return `500`.
+- Errors: `400` for a malformed body or data after the JSON object, an invalid topic name, a partition count outside 1 to 10000 or a replication factor above the broker count, `401` for a request without a valid console session, `404` for an unknown topic, `405` for a method other than `POST` on `/ui/api/status/topics` or `DELETE` on `/ui/api/status/topics/<topic>`, `409` for a topic that already exists or changed during the delete, and `503` when console login is not configured, no etcd endpoints are configured, etcd is unavailable or times out, or a delete runs without `KAFSCALE_S3_NAMESPACE`. Other failures return `500`.
 
 When LFS is enabled, the console serves these authenticated endpoints: `/ui/api/lfs/status`, `/ui/api/lfs/objects`, `/ui/api/lfs/topics`, `/ui/api/lfs/topics/{topic}`, `/ui/api/lfs/events`, `/ui/api/lfs/orphans`, `/ui/api/lfs/s3/browse` and `/ui/api/lfs/s3/presign`.
 
