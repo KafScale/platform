@@ -237,11 +237,13 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		Namespace: cluster.Namespace,
 	}}
 
+	hpaActive, err := r.brokerHPAActive(ctx, cluster)
+	if err != nil {
+		return err
+	}
+
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
-		replicas := int32(3)
-		if cluster.Spec.Brokers.Replicas != nil {
-			replicas = *cluster.Spec.Brokers.Replicas
-		}
+		replicas := desiredBrokerReplicas(cluster, sts.Spec.Replicas, hpaActive)
 		labels := map[string]string{
 			"app":     "kafscale-broker",
 			"cluster": cluster.Name,
@@ -262,6 +264,38 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
 	})
 	return err
+}
+
+func (r *ClusterReconciler) brokerHPAActive(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (bool, error) {
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{}
+	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, hpa)
+	if apierrors.IsNotFound(err) || runtime.IsNotRegisteredError(err) || meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return metav1.IsControlledBy(hpa, cluster), nil
+}
+
+func desiredBrokerReplicas(cluster *kafscalev1alpha1.KafscaleCluster, live *int32, hpaActive bool) int32 {
+	replicas := int32(3)
+	if cluster.Spec.Brokers.Replicas != nil {
+		replicas = *cluster.Spec.Brokers.Replicas
+	}
+	if !hpaActive || live == nil || replicas <= 0 {
+		return replicas
+	}
+	minReplicas, maxReplicas := brokerHPABounds(cluster)
+	return min(max(*live, minReplicas), maxReplicas)
+}
+
+func brokerHPABounds(cluster *kafscalev1alpha1.KafscaleCluster) (int32, int32) {
+	minReplicas := int32(3)
+	if cluster.Spec.Brokers.Replicas != nil && *cluster.Spec.Brokers.Replicas > 0 {
+		minReplicas = *cluster.Spec.Brokers.Replicas
+	}
+	return minReplicas, minReplicas * 4
 }
 
 // workloadAffinity uses an explicit override as a complete replacement. Keeping
@@ -572,13 +606,13 @@ func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kaf
 		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, hpa, func() error {
-		min := int32(3)
-		if cluster.Spec.Brokers.Replicas != nil && *cluster.Spec.Brokers.Replicas > 0 {
-			min = *cluster.Spec.Brokers.Replicas
+		minReplicas, maxReplicas := brokerHPABounds(cluster)
+		hpa.Spec.MinReplicas = &minReplicas
+		hpa.Spec.MaxReplicas = maxReplicas
+		if hpa.Spec.Behavior == nil {
+			hpa.Spec.Behavior = &autoscalingv2.HorizontalPodAutoscalerBehavior{}
 		}
-		max := min * 4
-		hpa.Spec.MinReplicas = &min
-		hpa.Spec.MaxReplicas = max
+		hpa.Spec.Behavior.ScaleDown = brokerHPAScaleDown()
 		hpa.Spec.ScaleTargetRef = autoscalingv2.CrossVersionObjectReference{
 			Kind:       "StatefulSet",
 			Name:       fmt.Sprintf("%s-broker", cluster.Name),
@@ -609,6 +643,18 @@ func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kaf
 		return controllerutil.SetControllerReference(cluster, hpa, r.Scheme)
 	})
 	return err
+}
+
+func brokerHPAScaleDown() *autoscalingv2.HPAScalingRules {
+	window := int32(300)
+	policy := autoscalingv2.MaxChangePolicySelect
+	return &autoscalingv2.HPAScalingRules{
+		StabilizationWindowSeconds: &window,
+		SelectPolicy:               &policy,
+		Policies: []autoscalingv2.HPAScalingPolicy{
+			{Type: autoscalingv2.PodsScalingPolicy, Value: 1, PeriodSeconds: 60},
+		},
+	}
 }
 
 func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, status metav1.ConditionStatus, reason, message string) error {

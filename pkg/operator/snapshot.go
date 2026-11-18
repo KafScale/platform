@@ -25,6 +25,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
+	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
@@ -61,7 +62,7 @@ func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alph
 			topics = append(topics, topic)
 		}
 	}
-	meta := BuildClusterMetadata(cluster, topics)
+	meta := BuildClusterMetadataForBrokers(cluster, topics, p.liveBrokerCount(ctx, cluster))
 	if err := PublishMetadataSnapshot(ctx, endpoints, meta); err != nil {
 		operatorSnapshotResults.WithLabelValues("error").Inc()
 		return err
@@ -130,11 +131,29 @@ func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.Clu
 	return snap, nil
 }
 
+func (p *SnapshotPublisher) liveBrokerCount(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) int32 {
+	sts := &appsv1.StatefulSet{}
+	if err := p.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, sts); err != nil {
+		return 0
+	}
+	if sts.Spec.Replicas == nil {
+		return 0
+	}
+	return *sts.Spec.Replicas
+}
+
 // BuildClusterMetadata converts CRD state into the metadata snapshot consumed by brokers.
 func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic) metadata.ClusterMetadata {
+	return BuildClusterMetadataForBrokers(cluster, topics, 0)
+}
+
+func BuildClusterMetadataForBrokers(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic, brokerCount int32) metadata.ClusterMetadata {
 	replicas := int32(1)
 	if cluster.Spec.Brokers.Replicas != nil && *cluster.Spec.Brokers.Replicas > 0 {
 		replicas = *cluster.Spec.Brokers.Replicas
+	}
+	if brokerCount > 0 {
+		replicas = brokerCount
 	}
 	brokers := make([]protocol.MetadataBroker, replicas)
 	brokerPort := int32(9092)

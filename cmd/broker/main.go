@@ -2578,6 +2578,7 @@ func main() {
 	}
 	handler.startConsumerLagSampler(ctx)
 	handler.startTopicDeleteWatch(ctx)
+	handler.startPartitionRebalance(ctx)
 	metricsAddr := envOrDefault("KAFSCALE_METRICS_ADDR", defaultMetricsAddr)
 	controlAddr := envOrDefault("KAFSCALE_CONTROL_ADDR", defaultControlAddr)
 	startMetricsServer(ctx, metricsAddr, handler, logger)

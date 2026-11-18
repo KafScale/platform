@@ -64,7 +64,9 @@ type PartitionLeaseOptions struct {
 // It delegates to the generic LeaseManager, translating topic+partition pairs
 // into string resource IDs.
 type PartitionLeaseManager struct {
-	lm *LeaseManager
+	lm     *LeaseManager
+	holdMu sync.Mutex
+	holds  map[string]time.Time
 }
 
 // NewPartitionLeaseManager creates a lease manager backed by the given etcd client.
@@ -118,7 +120,36 @@ func partitionResourceID(topic string, partition int32) string {
 // Acquire tries to grab the partition lease. If this broker already owns it,
 // it returns nil immediately. If another broker owns it, it returns ErrNotOwner.
 func (m *PartitionLeaseManager) Acquire(ctx context.Context, topic string, partition int32) error {
-	return m.lm.Acquire(ctx, partitionResourceID(topic, partition))
+	id := partitionResourceID(topic, partition)
+	if m.held(id) && !m.lm.Owns(id) {
+		return ErrNotOwner
+	}
+	return m.lm.Acquire(ctx, id)
+}
+
+func (m *PartitionLeaseManager) Handover(topic string, partition int32, hold time.Duration) {
+	id := partitionResourceID(topic, partition)
+	m.holdMu.Lock()
+	if m.holds == nil {
+		m.holds = make(map[string]time.Time)
+	}
+	m.holds[id] = time.Now().Add(hold)
+	m.holdMu.Unlock()
+	m.lm.Release(id)
+}
+
+func (m *PartitionLeaseManager) held(id string) bool {
+	m.holdMu.Lock()
+	defer m.holdMu.Unlock()
+	until, ok := m.holds[id]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(m.holds, id)
+	return false
 }
 
 // PartitionID identifies a topic-partition pair.
