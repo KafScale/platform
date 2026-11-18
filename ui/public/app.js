@@ -263,6 +263,10 @@ function setEtcdFallbacks(metrics) {
     accessEl.textContent = 'n/a';
     lastSuccessEl.textContent = 'n/a';
     lastScheduleEl.textContent = 'n/a';
+    return;
+  }
+  if (typeof metrics.etcd_snapshot_access_ok !== 'number') {
+    accessEl.textContent = 'n/a';
   }
 }
 

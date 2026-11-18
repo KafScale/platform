@@ -25,6 +25,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/KafScale/platform/pkg/metadata"
@@ -61,7 +62,14 @@ type compositeMetricsProvider struct {
 	broker      MetricsProvider
 	operatorURL string
 	client      *http.Client
+
+	now            func() time.Time
+	mu             sync.Mutex
+	lastOperator   *operatorSnapshot
+	lastOperatorAt time.Time
 }
+
+const operatorSnapshotCacheTTL = 3 * time.Minute
 
 func NewAggregatedPromMetricsClient(store metadata.Store, metricsURL string) MetricsProvider {
 	client := &http.Client{Timeout: 3 * time.Second}
@@ -100,6 +108,7 @@ func NewCompositeMetricsProvider(broker MetricsProvider, operatorURL string) Met
 		broker:      broker,
 		operatorURL: operatorURL,
 		client:      &http.Client{Timeout: 3 * time.Second},
+		now:         time.Now,
 	}
 }
 
@@ -116,17 +125,53 @@ func (c *compositeMetricsProvider) Snapshot(ctx context.Context) (*MetricsSnapsh
 		snap = &MetricsSnapshot{}
 	}
 	if c.operatorURL != "" {
-		if op, err := fetchOperatorSnapshot(ctx, c.client, c.operatorURL); err == nil && op != nil {
+		if op := c.operatorSnapshot(ctx); op != nil {
 			snap.OperatorClusters = op.Clusters
 			snap.OperatorEtcdSnapshotAgeSeconds = op.EtcdSnapshotAgeSeconds
 			snap.OperatorEtcdSnapshotLastSuccessTS = op.EtcdSnapshotLastSuccessTS
 			snap.OperatorEtcdSnapshotLastScheduleTS = op.EtcdSnapshotLastScheduleTS
 			snap.OperatorEtcdSnapshotStale = op.EtcdSnapshotStale
 			snap.OperatorEtcdSnapshotAccessOK = op.EtcdSnapshotAccessOK
+			snap.OperatorEtcdSnapshotAccessReported = op.EtcdSnapshotAccessReported
 			snap.OperatorMetricsAvailable = true
 		}
 	}
 	return snap, nil
+}
+
+func (c *compositeMetricsProvider) operatorSnapshot(ctx context.Context) *operatorSnapshot {
+	op, err := fetchOperatorSnapshot(ctx, c.client, c.operatorURL)
+	if err != nil || op == nil {
+		return nil
+	}
+	now := c.now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if op.EtcdSnapshotReported {
+		cached := *op
+		c.lastOperator = &cached
+		c.lastOperatorAt = now
+		return op
+	}
+	if c.lastOperator == nil {
+		return nil
+	}
+	elapsed := now.Sub(c.lastOperatorAt)
+	if elapsed > operatorSnapshotCacheTTL {
+		c.lastOperator = nil
+		return nil
+	}
+	cached := *c.lastOperator
+	if op.EtcdSnapshotStaleAfterSeconds > 0 {
+		cached.EtcdSnapshotStaleAfterSeconds = op.EtcdSnapshotStaleAfterSeconds
+	}
+	if cached.EtcdSnapshotLastSuccessTS > 0 && elapsed > 0 {
+		cached.EtcdSnapshotAgeSeconds += elapsed.Seconds()
+	}
+	if cached.EtcdSnapshotStaleAfterSeconds > 0 && cached.EtcdSnapshotAgeSeconds > cached.EtcdSnapshotStaleAfterSeconds {
+		cached.EtcdSnapshotStale = 1
+	}
+	return &cached
 }
 
 func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSnapshot, error) {
@@ -243,12 +288,15 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 }
 
 type operatorSnapshot struct {
-	Clusters                   float64
-	EtcdSnapshotAgeSeconds     float64
-	EtcdSnapshotLastSuccessTS  float64
-	EtcdSnapshotLastScheduleTS float64
-	EtcdSnapshotStale          float64
-	EtcdSnapshotAccessOK       float64
+	Clusters                      float64
+	EtcdSnapshotAgeSeconds        float64
+	EtcdSnapshotLastSuccessTS     float64
+	EtcdSnapshotLastScheduleTS    float64
+	EtcdSnapshotStale             float64
+	EtcdSnapshotAccessOK          float64
+	EtcdSnapshotAccessReported    bool
+	EtcdSnapshotStaleAfterSeconds float64
+	EtcdSnapshotReported          bool
 }
 
 func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL string) (*operatorSnapshot, error) {
@@ -270,8 +318,10 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 		lastSuccessMax  float64
 		lastScheduleMax float64
 		staleMax        float64
-		accessMin       = 1.0
+		accessMin       = 0.0
+		staleAfter      float64
 		accessSeen      bool
+		snapshotSeen    bool
 	)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -281,21 +331,37 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 			if val, ok := parsePromSample(line); ok {
 				clusters = val
 			}
+		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_threshold_seconds"):
+			if val, ok := parsePromSample(line); ok {
+				staleAfter = val
+			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_age_seconds"):
-			if val, ok := parsePromSample(line); ok && val > ageMax {
-				ageMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > ageMax {
+					ageMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_last_success_timestamp"):
-			if val, ok := parsePromSample(line); ok && val > lastSuccessMax {
-				lastSuccessMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > lastSuccessMax {
+					lastSuccessMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_last_schedule_timestamp"):
-			if val, ok := parsePromSample(line); ok && val > lastScheduleMax {
-				lastScheduleMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > lastScheduleMax {
+					lastScheduleMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_stale"):
-			if val, ok := parsePromSample(line); ok && val > staleMax {
-				staleMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > staleMax {
+					staleMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_access_ok"):
 			if val, ok := parsePromSample(line); ok {
@@ -303,22 +369,23 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 					accessMin = val
 				}
 				accessSeen = true
+				snapshotSeen = true
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if !accessSeen {
-		accessMin = 0
-	}
 	return &operatorSnapshot{
-		Clusters:                   clusters,
-		EtcdSnapshotAgeSeconds:     ageMax,
-		EtcdSnapshotLastSuccessTS:  lastSuccessMax,
-		EtcdSnapshotLastScheduleTS: lastScheduleMax,
-		EtcdSnapshotStale:          staleMax,
-		EtcdSnapshotAccessOK:       accessMin,
+		Clusters:                      clusters,
+		EtcdSnapshotAgeSeconds:        ageMax,
+		EtcdSnapshotLastSuccessTS:     lastSuccessMax,
+		EtcdSnapshotLastScheduleTS:    lastScheduleMax,
+		EtcdSnapshotStale:             staleMax,
+		EtcdSnapshotAccessOK:          accessMin,
+		EtcdSnapshotAccessReported:    accessSeen,
+		EtcdSnapshotStaleAfterSeconds: staleAfter,
+		EtcdSnapshotReported:          snapshotSeen,
 	}, nil
 }
 
