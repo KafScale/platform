@@ -171,14 +171,21 @@ func TestEtcdClientConfigSetsReconnectBackoff(t *testing.T) {
 	if len(cfg.DialOptions) == 0 {
 		t.Fatal("expected reconnect DialOptions")
 	}
-	if etcdConnectParams.Backoff.MaxDelay != etcdReconnectMaxDelay {
-		t.Fatalf("MaxDelay = %s, want %s", etcdConnectParams.Backoff.MaxDelay, etcdReconnectMaxDelay)
+	params := etcdConnectParams(cfg.DialTimeout)
+	if params.Backoff.BaseDelay != 100*time.Millisecond {
+		t.Fatalf("BaseDelay = %s, want 100ms", params.Backoff.BaseDelay)
 	}
-	if etcdConnectParams.Backoff.MaxDelay >= backoff.DefaultConfig.MaxDelay {
-		t.Fatalf("MaxDelay %s is not shorter than the gRPC default %s", etcdConnectParams.Backoff.MaxDelay, backoff.DefaultConfig.MaxDelay)
+	if params.Backoff.MaxDelay != etcdReconnectMaxDelay {
+		t.Fatalf("MaxDelay = %s, want %s", params.Backoff.MaxDelay, etcdReconnectMaxDelay)
 	}
-	if etcdConnectParams.MinConnectTimeout != etcdMinConnectTimeout {
-		t.Fatalf("MinConnectTimeout = %s, want %s", etcdConnectParams.MinConnectTimeout, etcdMinConnectTimeout)
+	if params.Backoff.MaxDelay >= backoff.DefaultConfig.MaxDelay {
+		t.Fatalf("MaxDelay %s is not shorter than the gRPC default %s", params.Backoff.MaxDelay, backoff.DefaultConfig.MaxDelay)
+	}
+	if params.MinConnectTimeout != etcdMinConnectTimeout {
+		t.Fatalf("MinConnectTimeout = %s, want %s when DialTimeout is %s", params.MinConnectTimeout, etcdMinConnectTimeout, cfg.DialTimeout)
+	}
+	if got := etcdConnectParams(10 * time.Second).MinConnectTimeout; got != 10*time.Second {
+		t.Fatalf("MinConnectTimeout = %s, want 10s when DialTimeout is 10s", got)
 	}
 }
 
@@ -234,4 +241,79 @@ func TestEtcdClientIdleConnectionSurvivesKeepaliveStrikeWindow(t *testing.T) {
 	if conn.GetState() != connectivity.Ready {
 		t.Fatalf("connection state after get %s, want READY", conn.GetState())
 	}
+}
+
+func TestEtcdClientConnectsWhenHandshakeTakesOverOneSecond(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	backend := strings.TrimPrefix(endpoints[0], "http://")
+	proxy := startDelayedProxy(t, backend, 1500*time.Millisecond)
+
+	cfg := EtcdClientConfig(clientv3.Config{
+		Endpoints:   []string{"http://" + proxy.addr()},
+		DialTimeout: 5 * time.Second,
+	})
+	cli, err := clientv3.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = cli.Close() })
+
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := cli.Get(ctx, "/kafscale/slow-connect"); err != nil {
+		t.Fatalf("expected a 1.5s handshake to succeed, failed after %s: %v", time.Since(started), err)
+	}
+	if elapsed := time.Since(started); elapsed < 1400*time.Millisecond {
+		t.Fatalf("expected the handshake to take about 1.5s, took %s", elapsed)
+	}
+}
+
+type delayedProxy struct {
+	ln     net.Listener
+	target string
+	delay  time.Duration
+}
+
+func startDelayedProxy(t *testing.T, target string, delay time.Duration) *delayedProxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	p := &delayedProxy{ln: ln, target: target, delay: delay}
+	go p.serve()
+	t.Cleanup(func() { _ = ln.Close() })
+	return p
+}
+
+func (p *delayedProxy) addr() string {
+	return p.ln.Addr().String()
+}
+
+func (p *delayedProxy) serve() {
+	for {
+		c, err := p.ln.Accept()
+		if err != nil {
+			return
+		}
+		go p.pipe(c)
+	}
+}
+
+func (p *delayedProxy) pipe(client net.Conn) {
+	time.Sleep(p.delay)
+	backend, err := net.DialTimeout("tcp", p.target, 5*time.Second)
+	if err != nil {
+		_ = client.Close()
+		return
+	}
+	go func() {
+		_, _ = io.Copy(backend, client)
+		_ = backend.Close()
+		_ = client.Close()
+	}()
+	_, _ = io.Copy(client, backend)
+	_ = backend.Close()
+	_ = client.Close()
 }

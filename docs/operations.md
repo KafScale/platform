@@ -613,9 +613,9 @@ successful read.
 ### Recovery
 
 Before it rejects a request, the proxy tries to read etcd again. etcd clients
-reconnect with a one-second maximum gRPC backoff, so the proxy serves again
-within a few seconds after etcd answers, and `/readyz` turns Ready on the next
-check.
+reconnect with a one-second maximum gRPC backoff, and each connection attempt
+is given at least five seconds, so the proxy serves again within a few seconds
+after etcd answers, and `/readyz` turns Ready on the next check.
 
 ### Notes
 

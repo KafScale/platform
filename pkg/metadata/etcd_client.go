@@ -25,17 +25,23 @@ import (
 
 const (
 	etcdReconnectMaxDelay = time.Second
-	etcdMinConnectTimeout = time.Second
+	etcdMinConnectTimeout = 5 * time.Second
 )
 
-var etcdConnectParams = grpc.ConnectParams{
-	Backoff: backoff.Config{
-		BaseDelay:  100 * time.Millisecond,
-		Multiplier: backoff.DefaultConfig.Multiplier,
-		Jitter:     backoff.DefaultConfig.Jitter,
-		MaxDelay:   etcdReconnectMaxDelay,
-	},
-	MinConnectTimeout: etcdMinConnectTimeout,
+func etcdConnectParams(dialTimeout time.Duration) grpc.ConnectParams {
+	minConnect := etcdMinConnectTimeout
+	if dialTimeout > minConnect {
+		minConnect = dialTimeout
+	}
+	return grpc.ConnectParams{
+		Backoff: backoff.Config{
+			BaseDelay:  100 * time.Millisecond,
+			Multiplier: backoff.DefaultConfig.Multiplier,
+			Jitter:     backoff.DefaultConfig.Jitter,
+			MaxDelay:   etcdReconnectMaxDelay,
+		},
+		MinConnectTimeout: minConnect,
+	}
 }
 
 func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
@@ -43,6 +49,6 @@ func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
 		cfg.DialTimeout = 5 * time.Second
 	}
 	cfg.PermitWithoutStream = false
-	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(etcdConnectParams))
+	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(etcdConnectParams(cfg.DialTimeout)))
 	return cfg
 }

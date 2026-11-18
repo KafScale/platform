@@ -484,6 +484,10 @@ func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = 5 * time.Second
 	}
+	minConnect := 5 * time.Second
+	if cfg.DialTimeout > minConnect {
+		minConnect = cfg.DialTimeout
+	}
 	cfg.PermitWithoutStream = false
 	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(grpc.ConnectParams{
 		Backoff: backoff.Config{
@@ -492,7 +496,7 @@ func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
 			Jitter:     backoff.DefaultConfig.Jitter,
 			MaxDelay:   time.Second,
 		},
-		MinConnectTimeout: time.Second,
+		MinConnectTimeout: minConnect,
 	}))
 	return cfg
 }

@@ -152,7 +152,7 @@ limitations under the License.
 
 ### Proxy and etcd outages
 
-- etcd clients reconnect with a one-second maximum gRPC backoff and a 100 millisecond first retry. They do not enable gRPC keepalive pings. Before, clients used the gRPC default maximum backoff of two minutes, so after a long etcd outage reconnecting could take up to about two minutes. QA measured 45 to 61 seconds. The same settings are used by the broker, proxy, console, MCP, CLI, schema registry, operator and processors.
+- etcd clients reconnect with a one-second maximum gRPC backoff and a 100 millisecond first retry. Each connection attempt is given at least five seconds, or the configured DialTimeout when that is larger, so a slow TCP or TLS handshake can complete. They do not enable gRPC keepalive pings. Before, clients used the gRPC default maximum backoff of two minutes, so after a long etcd outage reconnecting could take up to about two minutes. QA measured 45 to 61 seconds. The same settings are used by the broker, proxy, console, MCP, CLI, schema registry, operator and processors.
 
 - The Kafka listener rejects Produce responses with a mismatched correlation ID instead of accepting an unrelated acknowledgement.
 - During an etcd outage the proxy kept using the last broker list from etcd without a time limit, because a failed etcd read was only logged and still counted as a successful refresh.
