@@ -43,7 +43,7 @@ limitations under the License.
 
 - `schemaregistry.Error` has an unexported field for error details and is not comparable. This package was not present in published v1.6.3; code using intermediate main builds should compare `Code` or use `errors.As`.
 
-- `kafscale-cli schema import --from <url>` copies subjects, versions, ids, references, soft deletes, compatibility levels and subject modes from Confluent Schema Registry or another registry with its REST API into the built in registry.
+- `kafscale-cli schema import --from <url>` copies subjects, versions, ids, references, soft deletes, compatibility levels and subject modes from Confluent Schema Registry or another registry with the Confluent REST API, such as Apicurio Registry's Confluent compatible API, into the built in registry.
   - It keeps the ids, can be run again, and fails on any id or version that the target holds with a different schema.
   - Subjects in a non-default Confluent context are skipped with a message and make the run exit with an error.
   - A failed run still prints its counts and whether the target is in `IMPORT` mode.
@@ -270,6 +270,8 @@ limitations under the License.
 ### Schema registry
 
 - Schema registry pods now notice an etcd snapshot restore and clear their schema cache without a restart. Each pod watches its etcd keys and resets when the watch reports a compaction. The operator now restores etcd snapshots with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`, which triggers this. Manual restores should use the same flags or restart the registry pods. See `docs/schema-registry.md` and `docs/operations.md`.
+
+- `kafscale-cli schema import` no longer fails when the source returns HTTP 404 with error code 0 for `GET /mode/{subject}`, as Apicurio Registry 2.6.5 and 3.0.6 do; that is treated as no subject mode, and the run continues. A second import, and a second subject that shares an id, no longer report a false conflict when the target has already normalized the source schema. Explicit subject levels are still copied from registries that honor `defaultToGlobal=false`, such as Confluent. When a source returns a level for every subject, as Apicurio does, subject levels equal to the source global level are not copied. A source version that is listed as soft deleted but cannot be read is skipped with a warning, counted as skipped in the summary, and does not stop the run. See `docs/schema-registry.md`.
 
 - The schema registry now shuts down gracefully, so a rollout restart, such as the one S3 key rotation needs, no longer drops requests. Before, it stopped accepting connections at once on SIGTERM while the Service could still send it traffic, which gave refused connections and client timeouts during a restart.
   - On SIGTERM or SIGINT `/readyz` returns 503 at once, the registry keeps serving for `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), then waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`, before it was a fixed 5s) for in-flight requests.

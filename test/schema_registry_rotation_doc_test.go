@@ -24,10 +24,15 @@ import (
 
 func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 	root := repoRoot(t)
-	want := []string{
+	wantOps := []string{
 		"DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)",
 		`kubectl rollout restart "$DEPLOY" -n <namespace>`,
 		`kubectl rollout status "$DEPLOY" -n <namespace>`,
+	}
+	wantSchema := []string{
+		"DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)",
+		`kubectl rollout restart "$DEPLOY" -n '<namespace>'`,
+		`kubectl rollout status "$DEPLOY" -n '<namespace>'`,
 	}
 	for _, doc := range []string{"operations.md", "schema-registry.md"} {
 		body, err := os.ReadFile(filepath.Join(root, "docs", doc))
@@ -35,6 +40,10 @@ func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(body)
+		want := wantOps
+		if doc == "schema-registry.md" {
+			want = wantSchema
+		}
 		for _, line := range want {
 			if !strings.Contains(text, line) {
 				t.Errorf("docs/%s does not contain %q", doc, line)
