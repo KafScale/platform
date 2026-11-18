@@ -79,7 +79,7 @@ the override returns that cluster to the operator default.
 
 ### Scaling brokers
 
-The operator creates a HorizontalPodAutoscaler named `<cluster>-broker` for the broker StatefulSet. Its minimum is `spec.brokers.replicas` (or 3 if that field is unset or 0) and its maximum is four times that minimum. It targets 70% CPU and 80% memory utilization, so set CPU and memory requests in `spec.brokers.resources`; without requests the HPA cannot compute utilization and does not scale. The HPA also needs a metrics server in the cluster.
+The operator creates a HorizontalPodAutoscaler named `<cluster>-broker` for the broker StatefulSet. Its minimum is `spec.brokers.replicas` (or 3 if that field is unset or 0) and its maximum is four times that minimum. It targets 70% CPU and 80% memory utilization, so set CPU and memory requests in `spec.brokers.resources`; without requests the HPA cannot compute utilization and does not scale. The HPA also needs a metrics server in the cluster. CRDs from releases before 2.0 have no schema for `spec.brokers.resources.requests` and `limits`, so the API server drops them. Apply the new CRD before you set them (see [Upgrades & rollbacks](#upgrades--rollbacks)), then reapply the cluster.
 
 - **Creating the cluster**: the operator creates the StatefulSet with `spec.brokers.replicas` brokers.
 - **After that**: the operator keeps the replica count the HPA set. It only moves the count back inside the HPA range: a count below the minimum is raised to the minimum and a count above the maximum is lowered to the maximum.
@@ -1181,7 +1181,7 @@ spec:
 
 ## Upgrades & rollbacks
 
-- Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.
+- Use `helm upgrade --install` with the desired image tags. Each restarted broker releases its partition and group leases on shutdown and the other brokers take them over. The BrokerControl `DrainPartitions` RPC is not implemented.
 - Helm installs CRDs on the first installation but does not upgrade CRDs from
   `crds/`. Before upgrading the chart or applying a cluster with `spec.security`,
   apply the new schema explicitly:

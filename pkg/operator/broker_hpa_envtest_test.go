@@ -26,8 +26,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+
+	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 )
 
 func TestBrokerHPAReplicasAPI(t *testing.T) {
@@ -61,8 +65,18 @@ func TestBrokerHPAReplicasAPI(t *testing.T) {
 	ctx := context.Background()
 	cluster := testCluster("hpa-api", nil)
 	cluster.Spec.Brokers.Replicas = int32Ptr(2)
+	cluster.Spec.Brokers.Resources = kafscalev1alpha1.BrokerResources{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+	}
 	if err := c.Create(ctx, cluster); err != nil {
 		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(cluster), cluster); err != nil {
+		t.Fatal(err)
+	}
+	if cpu := cluster.Spec.Brokers.Resources.Requests[corev1.ResourceCPU]; cpu.String() != "50m" {
+		t.Fatalf("API dropped spec.brokers.resources: %+v", cluster.Spec.Brokers.Resources)
 	}
 	r := &ClusterReconciler{Client: c, Scheme: scheme, Publisher: NewSnapshotPublisher(c)}
 	reconcile := func() {
@@ -97,6 +111,10 @@ func TestBrokerHPAReplicasAPI(t *testing.T) {
 	reconcile()
 	if got := replicas(); got != 2 {
 		t.Fatalf("created replicas = %d, want 2", got)
+	}
+	requests := sts.Spec.Template.Spec.Containers[0].Resources.Requests
+	if cpu, mem := requests[corev1.ResourceCPU], requests[corev1.ResourceMemory]; cpu.String() != "50m" || mem.String() != "512Mi" {
+		t.Fatalf("broker container requests = %v, want cpu 50m and memory 512Mi for the HPA", requests)
 	}
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{}
 	if err := c.Get(ctx, key, hpa); err != nil {
