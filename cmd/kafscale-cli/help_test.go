@@ -39,6 +39,8 @@ func TestCommandHelpPrintsFlags(t *testing.T) {
 				"KAFSCALE_S3_NAMESPACE",
 				"KAFSCALE_S3_ACCESS_KEY",
 				"AWS_ACCESS_KEY_ID",
+				"AWS_SESSION_TOKEN",
+				"AWS_PROFILE",
 				"KAFSCALE_S3_KMS_ARN",
 				"KAFSCALE_S3_CONCURRENCY (default 16)",
 				"KAFSCALE_SCHEMA_REGISTRY_URL",

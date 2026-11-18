@@ -144,13 +144,12 @@ read -rs KAFSCALE_SCHEMA_REGISTRY_AUTH
 echo
 export KAFSCALE_SCHEMA_REGISTRY_AUTH
 
-kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081 \
-  [--subjects '<regex>'] [--dry-run] [--force]
+kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081
 
 unset KAFSCALE_SCHEMA_IMPORT_AUTH KAFSCALE_SCHEMA_REGISTRY_AUTH
 ```
 
-`--auth` and `--to-auth` values are visible to other local users in the process list, so prefer the env vars. Every environment variable `schema import` reads is listed in [kafscale-cli](operations.md#kafscale-cli).
+Optional flags are `--subjects '<regex>'`, `--dry-run` and `--force`. `--auth` and `--to-auth` values are visible to other local users in the process list, so prefer the env vars. Every environment variable `schema import` reads is listed in [kafscale-cli](operations.md#kafscale-cli).
 
 It reads `/subjects?deleted=true` and every version of each subject, including soft deleted ones, and imports them in ascending id order, with every referenced subject version before the schemas that reference it.
 

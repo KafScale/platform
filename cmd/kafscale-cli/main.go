@@ -97,7 +97,7 @@ func writeCLIEnvUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  restore --namespace defaults to KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, then default")
 	_, _ = fmt.Fprintln(w, "  S3: KAFSCALE_S3_BUCKET, KAFSCALE_S3_REGION, KAFSCALE_S3_ENDPOINT, KAFSCALE_S3_PATH_STYLE, KAFSCALE_S3_KMS_ARN, KAFSCALE_S3_CONCURRENCY (default 16)")
 	_, _ = fmt.Fprintln(w, "  S3 credentials: KAFSCALE_S3_ACCESS_KEY and KAFSCALE_S3_SECRET_KEY, optionally KAFSCALE_S3_SESSION_TOKEN.")
-	_, _ = fmt.Fprintln(w, "  If either is unset, the AWS SDK default chain is used, including AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.")
+	_, _ = fmt.Fprintln(w, "  If either is unset, the AWS SDK default credential chain is used: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN; the shared config and credentials files with AWS_PROFILE; web identity with AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE (EKS IRSA); and ECS or EC2 instance role credentials.")
 	_, _ = fmt.Fprintln(w, "  etcd: KAFSCALE_ETCD_ENDPOINTS, optionally KAFSCALE_ETCD_USERNAME and KAFSCALE_ETCD_PASSWORD")
 	_, _ = fmt.Fprintln(w, "  schema: KAFSCALE_SCHEMA_REGISTRY_URL, KAFSCALE_SCHEMA_IMPORT_AUTH, KAFSCALE_SCHEMA_REGISTRY_AUTH")
 	_, _ = fmt.Fprintln(w, "  --auth and --to-auth values are visible to other local users in the process list, so prefer the env vars.")
@@ -255,7 +255,7 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 	if !sourceSegmentPresent(objects, sourcePrefix, cfg.Partitions) {
-		return fmt.Errorf("no segments found for topic %s under %s; set --namespace or KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, to the cluster namespace", cfg.SourceTopic, sourcePrefix)
+		return fmt.Errorf("no segments found for topic %s under %s; set --namespace, KAFSCALE_NAMESPACE or KAFSCALE_S3_NAMESPACE to the cluster namespace (KAFSCALE_NAMESPACE wins over KAFSCALE_S3_NAMESPACE)", cfg.SourceTopic, sourcePrefix)
 	}
 
 	restoreCommitted := false

@@ -27,26 +27,28 @@ import (
 )
 
 func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
-	ops := readDoc(t, "docs/operations.md")
+	ops := readRepoDoc(t, "docs/operations.md")
 	for _, want := range []string{
 		"`kafscale-cli` is built from this repository and needs Go 1.26 or later.",
 		"go build -o bin/kafscale-cli ./cmd/kafscale-cli",
 		"### Installing kafscale-cli",
 		"It defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`.",
-		"- S3 credentials are `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, optionally `KAFSCALE_S3_SESSION_TOKEN`. If either is unset, the AWS SDK default chain is used, including `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. Without credentials, restore fails at its first S3 call, listing the source segments, with an error that starts `list objects <prefix>:` and includes `get credentials`, and creates no target.",
-		"- Restore fails when there are no segments for the selected partitions under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, or when no record in those segments is at or before `--to`. The command exits with a non-zero status and names the prefix it searched. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. Set `--namespace` or `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, to the cluster namespace that holds the topic data.",
+		"- S3 credentials are `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, optionally `KAFSCALE_S3_SESSION_TOKEN`. If either is unset, the AWS SDK default credential chain is used: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN; the shared config and credentials files with AWS_PROFILE; web identity with AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE (EKS IRSA); and ECS or EC2 instance role credentials. Without credentials, restore fails at its first S3 call, listing the source segments, with an error that starts `list objects <prefix>:` and includes `get credentials`, and creates no target.",
+		"- Restore fails when there are no segments for the selected partitions under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, or when no record in those segments is at or before `--to`. The command exits with a non-zero status and names the prefix it searched. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. Set `--namespace`, `KAFSCALE_NAMESPACE` or `KAFSCALE_S3_NAMESPACE` to the cluster namespace (`KAFSCALE_NAMESPACE` wins over `KAFSCALE_S3_NAMESPACE`).",
 		"- `kafscale-cli prune` needs the same S3 and etcd environment as restore. A dry run needs them too, because it calls CheckBucket, lists etcd and lists S3. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.",
-		"- If `kafscale-cli restore` creates the target topic and a later step fails (`UpdateTopicConfig`, `TopicGeneration` or the copy), restore rolls back by retiring that target. That writes a `/kafscale/deleted-topics` record with no objects, or only those copied before the failure, which `kafscale-cli prune` lists. If the rollback itself fails, restore prints `warning: failed to roll back target topic <name>: ...` to stderr, the target stays, and no deleted-topics record is written. `prune --force` needs the same S3 and etcd environment as restore. `prune --topic <target> --force` removes the record, and every other deleted incarnation of that name.",
+		"- If `kafscale-cli restore` creates the target topic and a later step fails (`UpdateTopicConfig`, `TopicGeneration` or the copy), restore rolls back by retiring that target. That writes a `/kafscale/deleted-topics` record with no objects, or only those copied before the failure, which `kafscale-cli prune` lists. If the rollback itself fails, restore prints `warning: failed to roll back target topic <name>: ...` to stderr, the target stays, and no deleted-topics record is written. `prune --topic <target> --force` removes the record, and every other deleted incarnation of that name.",
 		"Every environment variable `restore` reads is listed in [kafscale-cli](#kafscale-cli).",
 		"Every environment variable `prune` reads is listed in [kafscale-cli](#kafscale-cli):",
 		"### kafscale-cli",
+		"AWS_SESSION_TOKEN",
+		"AWS_PROFILE",
 	} {
 		if !strings.Contains(ops, want) {
 			t.Errorf("docs/operations.md is missing exact sentence:\n%s", want)
 		}
 	}
 
-	sr := readDoc(t, "docs/schema-registry.md")
+	sr := readRepoDoc(t, "docs/schema-registry.md")
 	for _, want := range []string{
 		"go build -o bin/kafscale-cli ./cmd/kafscale-cli",
 		"operations.md#installing-kafscale-cli",
@@ -56,6 +58,8 @@ func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
 		"export KAFSCALE_SCHEMA_IMPORT_AUTH",
 		"read -rs KAFSCALE_SCHEMA_REGISTRY_AUTH",
 		"export KAFSCALE_SCHEMA_REGISTRY_AUTH",
+		"kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081",
+		"Optional flags are `--subjects '<regex>'`, `--dry-run` and `--force`.",
 	} {
 		if !strings.Contains(sr, want) {
 			t.Errorf("docs/schema-registry.md is missing exact sentence:\n%s", want)
@@ -64,7 +68,7 @@ func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
 }
 
 func TestCLIEnvIndexDocumentsEveryCLIEnv(t *testing.T) {
-	ops := readDoc(t, "docs/operations.md")
+	ops := readRepoDoc(t, "docs/operations.md")
 	section := cliEnvIndexSection(t, ops)
 	root := filepath.Join(repoRoot(t), "cmd", "kafscale-cli")
 	entries, err := os.ReadDir(root)
@@ -119,13 +123,4 @@ func cliEnvIndexSection(t *testing.T, ops string) string {
 		return rest[:end]
 	}
 	return rest
-}
-
-func readDoc(t *testing.T, rel string) string {
-	t.Helper()
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(body)
 }
