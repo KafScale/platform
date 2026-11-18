@@ -59,13 +59,13 @@ Leave etcd endpoints empty in both the Helm values and the cluster spec. The ope
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints={}
+  --set 'operator.etcdEndpoints={}'
 ```
 
 Image tags follow the chart `appVersion` unless you override them. The current
 chart `appVersion` may be older than this release. For a full list of image
 keys, including `useLatest` and `tag` for the operator, broker, etcd-tools,
-console, proxy, schema registry, MCP and the LFS browser demo, see
+console, proxy, schema registry, MCP and the operator-managed LFS proxy, see
 [Installing with Helm](operations.md#installing-with-helm).
 
 ### Option B: External etcd
@@ -75,7 +75,7 @@ Provide reachable etcd endpoints.
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379
+  --set 'operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379'
 ```
 
 `http://etcd.kafscale.svc:2379` is an example external etcd Service, not the
@@ -194,8 +194,23 @@ its S3 data is not recorded for `kafscale-cli prune`.
 If you created the topic with a `KafscaleTopic`, delete that resource first.
 Then use the Kafka `DeleteTopics` API from a client that can reach the
 brokers, or the console `DELETE /ui/api/status/topics/<topic>` endpoint after
-signing in (see [Console](operations.md#console)). If the CR still exists, the
-next operator reconcile publishes the topic again.
+signing in (see [Console](operations.md#console)). The console needs
+`console.etcdEndpoints` and `console.s3Namespace` set to the cluster
+namespace. Without `console.etcdEndpoints`, that delete returns `503` with
+`metadata store not configured`. Without `console.s3Namespace`, it returns
+`503` with `console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace`.
+For the quickstart cluster `demo` in namespace `kafscale`, install or upgrade
+with:
+
+```bash
+helm upgrade --install kafscale deploy/helm/kafscale \
+  --namespace kafscale --create-namespace \
+  --set 'operator.etcdEndpoints={}' \
+  --set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379' \
+  --set 'console.s3Namespace=kafscale'
+```
+
+If the CR still exists, the next operator reconcile publishes the topic again.
 
 ## Next Steps
 

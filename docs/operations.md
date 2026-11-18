@@ -32,7 +32,7 @@ This guide explains how to install the Kafscale control plane with Helm, configu
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
+  --set 'operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379' \
   --set operator.image.tag=v1.6.3 \
   --set console.image.tag=v1.6.3
 ```
@@ -44,6 +44,7 @@ By default, image tags follow the chart `appVersion`. Every image key below uses
 - `operator.image`
 - `operator.brokerImage`
 - `operator.etcdSnapshotEtcdctlImage`
+- `operator.lfsProxyImage`
 - `console.image`
 - `proxy.image`
 - `schemaRegistry.image`
@@ -51,7 +52,9 @@ By default, image tags follow the chart `appVersion`. Every image key below uses
 
 Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v1.6.3`). For a dev/latest install, set `useLatest=true` on every image the install actually runs, not only the operator, broker and console. The current chart `appVersion` may be older than the branch you are following.
 
-The operator-managed LFS proxy image comes from `spec.lfsProxy.image`, which defaults to `ghcr.io/kafscale/kafscale-proxy:dev`, not from a chart image key.
+The operator-managed LFS proxy image comes from `spec.lfsProxy.image` if that field is set, otherwise from the operator's `LFS_PROXY_IMAGE` env (the chart sets it from `operator.lfsProxyImage`, which follows `appVersion` like the other image keys). If neither is set, it falls back to `ghcr.io/kafscale/kafscale-proxy:dev`. The same order applies to the pull policy: `spec.lfsProxy.imagePullPolicy` if that field is set, otherwise `LFS_PROXY_IMAGE_PULL_POLICY` (the chart sets it to `Always` when `operator.lfsProxyImage.useLatest` is true, and to `IfNotPresent` otherwise). If that env is also unset, the pull policy is `IfNotPresent`.
+
+The operator also reads `KAFSCALE_OPERATOR_ETCD_IMAGE` and `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE`. The chart sets them from `operator.etcdImage` and `operator.etcdSnapshotImage`. Those keys default to the pinned upstream images the operator already uses when the env is unset, `gcr.io/etcd-development/etcd:v3.6.14@sha256:a491baeaa0cb0c9cd89c0062ac44ece53886e3e5bddad18d2daf36678ce665b6` and `amazon/aws-cli:2.15.0`. They do not follow `appVersion`.
 
 ### Per-cluster broker image
 
@@ -304,14 +307,14 @@ Rotate the keys in this order. The order matters.
 2. Find the registry Deployment by its labels and restart it:
 
    ```bash
-   DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
-   kubectl rollout restart "$DEPLOY" -n <namespace>
+   DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)
+   kubectl rollout restart "$DEPLOY" -n '<namespace>'
    ```
 
 3. Check that the rollout finished:
 
    ```bash
-   kubectl rollout status "$DEPLOY" -n <namespace>
+   kubectl rollout status "$DEPLOY" -n '<namespace>'
    ```
 
 4. Only then revoke the old keys.
@@ -373,22 +376,22 @@ config inspection, cleanup). The canonical plan and scope live in `docs/ops-api.
 
 ```bash
 # List consumer groups
-kafka-consumer-groups.sh --bootstrap-server <broker> --list
+kafka-consumer-groups.sh --bootstrap-server '<broker>' --list
 
 # Describe a consumer group
-kafka-consumer-groups.sh --bootstrap-server <broker> --describe --group <group-id>
+kafka-consumer-groups.sh --bootstrap-server '<broker>' --describe --group '<group-id>'
 
 # Delete a consumer group
-kafka-consumer-groups.sh --bootstrap-server <broker> --delete --group <group-id>
+kafka-consumer-groups.sh --bootstrap-server '<broker>' --delete --group '<group-id>'
 
 # Read topic configs
-kafka-configs.sh --bootstrap-server <broker> --describe --entity-type topics --entity-name <topic>
+kafka-configs.sh --bootstrap-server '<broker>' --describe --entity-type topics --entity-name '<topic>'
 
 # Increase partition count for a topic (additive only)
-kafka-topics.sh --bootstrap-server <broker> --alter --topic <topic> --partitions <count>
+kafka-topics.sh --bootstrap-server '<broker>' --alter --topic '<topic>' --partitions '<count>'
 
 # Update topic retention (whitelist only)
-kafka-configs.sh --bootstrap-server <broker> --alter --entity-type topics --entity-name <topic> \
+kafka-configs.sh --bootstrap-server '<broker>' --alter --entity-type topics --entity-name '<topic>' \
   --add-config retention.ms=604800000
 ```
 
@@ -1112,7 +1115,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.service.port=9092 \
   --set proxy.advertisedHost=kafka.example.com \
   --set proxy.advertisedPort=9092 \
-  --set proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379
+  --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
 For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
@@ -1130,7 +1133,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.service.nodePort=30092 \
   --set proxy.advertisedHost=127.0.0.1 \
   --set proxy.advertisedPort=30092 \
-  --set proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379
+  --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
 Helm chart docs: `deploy/helm/kafscale/README.md`.

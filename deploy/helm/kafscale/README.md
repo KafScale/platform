@@ -76,7 +76,7 @@ helm upgrade --install kafscale ./deploy/helm/kafscale \
   --set proxy.replicaCount=2 \
   --set proxy.service.type=LoadBalancer \
   --set proxy.advertisedHost=kafka.example.com \
-  --set proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379
+  --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
 ### LFS Demo Stack

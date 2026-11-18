@@ -48,6 +48,14 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"-t orders",
 		"kcat-consume",
 		"next operator reconcile publishes the topic again",
+		"console.etcdEndpoints",
+		"console.s3Namespace=kafscale",
+		"demo-etcd-client.kafscale.svc.cluster.local:2379",
+		"503",
+		"metadata store not configured",
+		"console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace",
+		"--set 'operator.etcdEndpoints={}'",
+		"--set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/quickstart.md does not contain %q", want)
@@ -69,6 +77,12 @@ func TestImageTagKeysDocumented(t *testing.T) {
 	}
 	if strings.Contains(ops, "lfsDemos.e72Browser.image") {
 		t.Error("docs/operations.md documents lfsDemos.e72Browser.image, which no chart template reads")
+	}
+	if strings.Contains(quick, "LFS browser demo") {
+		t.Error("docs/quickstart.md still lists the LFS browser demo among image keys")
+	}
+	if !strings.Contains(ops, "`operator.etcdImage`") || !strings.Contains(ops, "`operator.etcdSnapshotImage`") {
+		t.Error("docs/operations.md does not document operator.etcdImage and operator.etcdSnapshotImage")
 	}
 	if !strings.Contains(quick, "operations.md#installing-with-helm") || !strings.Contains(strings.ToLower(quick), "appversion") {
 		t.Error("docs/quickstart.md does not point at operations.md#installing-with-helm or mention appVersion")
