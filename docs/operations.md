@@ -103,7 +103,8 @@ Partitions move to new brokers:
 
 Scale-down:
 
-- The HPA removes at most one broker per 60 seconds, and only after the load has been low enough for 300 seconds (the `scaleDown` rules on the HPA). Scale-up uses the Kubernetes defaults.
+- The HPA removes at most one broker per 60 seconds, and only after the load has been low enough for 300 seconds (the `scaleDown` rules on the HPA).
+- Scale-up uses a 60 second stabilization window, so a short CPU spike, for example while brokers take over partitions after a scale-down, does not add brokers. After that it adds up to 100% of the brokers or 4 brokers per 15 seconds, whichever is more (the Kubernetes default policies).
 - The StatefulSet removes the highest ordinal first. On SIGTERM the broker stops accepting connections, releases all of its partition and group leases, and waits for requests in flight. A produce that arrives after the release is rejected with `NOT_LEADER_OR_FOLLOWER`, and the client retries on the new owner.
 - The operator then publishes the snapshot without the removed broker, and its partitions get a preferred leader among the remaining brokers, which take the leases on the next request.
 - With `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default) a produce is acknowledged only after its data is in S3, so removing a broker loses no acknowledged write. With `KAFSCALE_PRODUCE_SYNC_FLUSH=false`, records the removed broker acknowledged but had not yet flushed (up to `KAFSCALE_FLUSH_INTERVAL_MS` of data) are lost, as on any broker restart in that mode.

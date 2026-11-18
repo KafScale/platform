@@ -612,6 +612,7 @@ func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kaf
 		if hpa.Spec.Behavior == nil {
 			hpa.Spec.Behavior = &autoscalingv2.HorizontalPodAutoscalerBehavior{}
 		}
+		hpa.Spec.Behavior.ScaleUp = brokerHPAScaleUp()
 		hpa.Spec.Behavior.ScaleDown = brokerHPAScaleDown()
 		hpa.Spec.ScaleTargetRef = autoscalingv2.CrossVersionObjectReference{
 			Kind:       "StatefulSet",
@@ -643,6 +644,19 @@ func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kaf
 		return controllerutil.SetControllerReference(cluster, hpa, r.Scheme)
 	})
 	return err
+}
+
+func brokerHPAScaleUp() *autoscalingv2.HPAScalingRules {
+	window := int32(60)
+	policy := autoscalingv2.MaxChangePolicySelect
+	return &autoscalingv2.HPAScalingRules{
+		StabilizationWindowSeconds: &window,
+		SelectPolicy:               &policy,
+		Policies: []autoscalingv2.HPAScalingPolicy{
+			{Type: autoscalingv2.PercentScalingPolicy, Value: 100, PeriodSeconds: 15},
+			{Type: autoscalingv2.PodsScalingPolicy, Value: 4, PeriodSeconds: 15},
+		},
+	}
 }
 
 func brokerHPAScaleDown() *autoscalingv2.HPAScalingRules {

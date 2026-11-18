@@ -182,8 +182,12 @@ func TestBrokerHPAScaleDownPolicy(t *testing.T) {
 	if len(down.Policies) != 1 || down.Policies[0].Type != autoscalingv2.PodsScalingPolicy || down.Policies[0].Value != 1 || down.Policies[0].PeriodSeconds != 60 {
 		t.Fatalf("scale-down policies = %+v, want one pod per 60 seconds", down.Policies)
 	}
-	if hpa.Spec.Behavior.ScaleUp != nil {
-		t.Fatalf("scale-up rules = %+v, want the Kubernetes default", hpa.Spec.Behavior.ScaleUp)
+	up := hpa.Spec.Behavior.ScaleUp
+	if up == nil || up.StabilizationWindowSeconds == nil || *up.StabilizationWindowSeconds != 60 {
+		t.Fatalf("scale-up rules = %+v, want a 60 second window", up)
+	}
+	if len(up.Policies) != 2 || up.Policies[0].Type != autoscalingv2.PercentScalingPolicy || up.Policies[0].Value != 100 || up.Policies[1].Type != autoscalingv2.PodsScalingPolicy || up.Policies[1].Value != 4 {
+		t.Fatalf("scale-up policies = %+v, want the Kubernetes default policies", up.Policies)
 	}
 }
 

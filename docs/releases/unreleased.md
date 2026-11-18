@@ -223,7 +223,7 @@ limitations under the License.
   - The operator now keeps the replica count the HPA set, inside the HPA minimum and maximum. Lowering `spec.brokers.replicas` no longer removes brokers at once; the HPA removes them. Without an HPA owned by the cluster, and with `spec.brokers.replicas: 0`, the old behavior stays.
   - The metadata snapshot lists as many brokers as the StatefulSet has replicas, and preferred partition leaders are spread over all of them.
   - Brokers hand partitions they hold to the preferred leader once it accepts connections (`KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS`, default 10 seconds), and the proxy sends requests for unowned partitions to the preferred leader. After the upgrade, partitions whose current owner is not their preferred leader move once.
-  - The HPA scale-down rules remove at most one broker per minute after five minutes of low load.
+  - The HPA scale-down rules remove at most one broker per minute after five minutes of low load. Scale-up waits for one minute of high load.
   - The KafscaleCluster CRD now has a schema for `spec.brokers.resources.requests` and `limits`. Before, the API server dropped them, so broker pods had no requests and the HPA could not compute CPU or memory utilization. Apply the new CRD before setting them; Helm does not upgrade CRDs.
 - The operator sets an `S3Credentials` condition on each KafscaleCluster.
   - It is `False`, with a warning in the operator log once per change, when `spec.s3.credentialsSecretRef` names a secret that is missing, cannot be read or holds neither the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair nor the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair.
