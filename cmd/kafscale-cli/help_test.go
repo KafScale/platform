@@ -36,6 +36,7 @@ func TestCommandHelpPrintsFlags(t *testing.T) {
 				"[--partitions <list>]",
 				"[--to-auth user:password]",
 				"KAFSCALE_NAMESPACE",
+				"KAFSCALE_S3_NAMESPACE",
 				"KAFSCALE_S3_ACCESS_KEY",
 				"AWS_ACCESS_KEY_ID",
 				"KAFSCALE_S3_KMS_ARN",
@@ -44,20 +45,31 @@ func TestCommandHelpPrintsFlags(t *testing.T) {
 				"KAFSCALE_SCHEMA_IMPORT_AUTH",
 				"KAFSCALE_SCHEMA_REGISTRY_AUTH",
 				"If either is unset",
+				"restore --namespace defaults to KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, then default",
+				"--auth and --to-auth values are visible to other local users in the process list, so prefer the env vars.",
 			},
 			unwant: []string{"Build it from this repository"},
 		},
 		{
 			args: []string{"restore", "--help"},
-			want: []string{"  -namespace string", "  -target-namespace string", "  -partitions string", "  -topic string", "  -target-topic string", "  -to string"},
+			want: []string{
+				restoreUsage,
+				"  -namespace string",
+				"  -target-namespace string",
+				"  -partitions string",
+				"  -topic string",
+				"  -target-topic string",
+				"  -to string",
+				"KAFSCALE_S3_NAMESPACE",
+			},
 		},
 		{
 			args: []string{"prune", "--help"},
-			want: []string{"  -topic string", "  -older-than string", "  -force"},
+			want: []string{pruneUsage, "  -topic string", "  -older-than string", "  -force"},
 		},
 		{
 			args: []string{"schema", "import", "--help"},
-			want: []string{"  -from string", "  -to string", "  -auth string", "  -to-auth string", "  -subjects string", "  -dry-run", "  -force"},
+			want: []string{schemaImportUsage, "  -from string", "  -to string", "  -auth string", "  -to-auth string", "  -subjects string", "  -dry-run", "  -force"},
 		},
 		{
 			args: []string{"schema", "--help"},
@@ -95,6 +107,41 @@ func TestCommandHelpPrintsFlags(t *testing.T) {
 			if strings.Contains(out, unwant) {
 				t.Errorf("%v output still contains %q:\n%s", tc.args, unwant, out)
 			}
+		}
+		var usage string
+		var flagLine string
+		switch {
+		case len(tc.args) >= 1 && tc.args[0] == "restore":
+			usage, flagLine = restoreUsage, "  -topic string"
+		case len(tc.args) >= 1 && tc.args[0] == "prune":
+			usage, flagLine = pruneUsage, "  -topic string"
+		case len(tc.args) >= 2 && tc.args[0] == "schema" && tc.args[1] == "import":
+			usage, flagLine = schemaImportUsage, "  -from string"
+		}
+		if usage != "" {
+			usageIdx := strings.Index(out, usage)
+			flagIdx := strings.Index(out, flagLine)
+			if usageIdx < 0 || flagIdx < 0 || usageIdx > flagIdx {
+				t.Errorf("%v did not print usage before the flag list:\n%s", tc.args, out)
+			}
+		}
+	}
+}
+
+func TestSchemaImportHelpHidesAuthEnv(t *testing.T) {
+	const importSentinel = "SENTINEL_IMPORT_AUTH_VALUE"
+	const registrySentinel = "SENTINEL_REGISTRY_AUTH_VALUE"
+	t.Setenv("KAFSCALE_SCHEMA_IMPORT_AUTH", importSentinel)
+	t.Setenv("KAFSCALE_SCHEMA_REGISTRY_AUTH", registrySentinel)
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{"schema", "import", "--help"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("schema import --help returned %v", err)
+	}
+	combined := stdout.String() + stderr.String()
+	for _, sentinel := range []string{importSentinel, registrySentinel} {
+		if strings.Contains(combined, sentinel) {
+			t.Errorf("schema import --help leaked %q:\nstdout=%s\nstderr=%s", sentinel, stdout.String(), stderr.String())
 		}
 	}
 }

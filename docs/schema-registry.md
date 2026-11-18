@@ -134,10 +134,23 @@ A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it,
 
 To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API, including Apicurio Registry's Confluent compatible API. Build the CLI with `go build -o bin/kafscale-cli ./cmd/kafscale-cli` from the repository root, as described in [operations.md](operations.md#installing-kafscale-cli):
 
-```
+```bash
+printf 'Source registry credentials (user:password or bearer:<token>): '
+read -rs KAFSCALE_SCHEMA_IMPORT_AUTH
+echo
+export KAFSCALE_SCHEMA_IMPORT_AUTH
+printf 'Target registry credentials (user:password or bearer:<token>): '
+read -rs KAFSCALE_SCHEMA_REGISTRY_AUTH
+echo
+export KAFSCALE_SCHEMA_REGISTRY_AUTH
+
 kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081 \
-  [--auth user:password | --auth bearer:<token>] [--to-auth ...] [--subjects '<regex>'] [--dry-run] [--force]
+  [--subjects '<regex>'] [--dry-run] [--force]
+
+unset KAFSCALE_SCHEMA_IMPORT_AUTH KAFSCALE_SCHEMA_REGISTRY_AUTH
 ```
+
+`--auth` and `--to-auth` values are visible to other local users in the process list, so prefer the env vars. Every environment variable `schema import` reads is listed in [kafscale-cli](operations.md#kafscale-cli).
 
 It reads `/subjects?deleted=true` and every version of each subject, including soft deleted ones, and imports them in ascending id order, with every referenced subject version before the schemas that reference it.
 

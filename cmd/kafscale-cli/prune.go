@@ -56,7 +56,7 @@ func runPruneCommand(ctx context.Context, args []string, stdout io.Writer) error
 		olderThan = fs.String("older-than", "", "Only prune incarnations deleted longer ago than this, for example 7d or 24h")
 		force     = fs.Bool("force", false, "Delete the data instead of listing it")
 	)
-	if err := parseCLIFlags(fs, args, stdout); err != nil {
+	if err := parseCLIFlags(fs, args, stdout, pruneUsage); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}

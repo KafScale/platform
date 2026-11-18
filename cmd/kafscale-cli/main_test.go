@@ -787,7 +787,7 @@ func TestExecuteRestoreRefusesWhenSourceHasNoSegments(t *testing.T) {
 		t.Fatal("expected restore to fail when no segments are under the source prefix")
 	}
 	msg := err.Error()
-	for _, want := range []string{"no segments found", "default/orders/", "--namespace", "KAFSCALE_NAMESPACE"} {
+	for _, want := range []string{"no segments found", "default/orders/", "--namespace", "KAFSCALE_NAMESPACE", "KAFSCALE_S3_NAMESPACE"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error %q missing %q", msg, want)
 		}
