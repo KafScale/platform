@@ -144,8 +144,8 @@ It reads `/subjects?deleted=true` and every version of each subject, including s
 - A referenced subject version that `--subjects` does not match is imported too, but its config and mode are not copied.
 - Before the first write it switches the target to `IMPORT` mode, which needs `--force` when the target already holds schemas.
 - Each version keeps its id and version number.
-- Versions that are soft deleted in the source are soft deleted in the target.
-- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. A source that returns HTTP 404 with error code 0 for `GET /mode/{subject}` is treated as having no subject mode, and the import continues. Compatibility levels are still copied. When the source returns a level for a subject that cannot exist, it ignores `defaultToGlobal=false`, so subject levels equal to the source global level are not copied. An explicit subject level equal to the global level on such a source is not copied either.
+- Versions that are soft deleted in the source are soft deleted in the target. Apicurio Registry does not return the versions of a subject whose versions are all soft deleted, so the import skips them with a warning. Their ids are not imported.
+- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. A source that returns HTTP 404 with error code 0 for `GET /mode/{subject}` is treated as having no subject mode, and the import continues. Compatibility levels are still copied. The import first reads the level of a subject that cannot exist. A 40408 answer means the source honors `defaultToGlobal=false`, and every subject level is copied. Otherwise, when every subject returns a level, as Apicurio does, subject levels equal to the source global level are not copied, including an explicit one.
 - The global mode of the target stays `IMPORT`.
 - `--auth` and `--to-auth` can also be set with `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`, and `--to` with `KAFSCALE_SCHEMA_REGISTRY_URL`.
 

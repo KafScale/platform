@@ -699,10 +699,12 @@ func TestSchemaImportTargetModeHTTP404IsError(t *testing.T) {
 }
 
 type rawSchemaVersion struct {
-	ID      int64
-	Version int
-	Schema  string
-	Refs    []srReference
+	ID         int64
+	Version    int
+	Schema     string
+	Refs       []srReference
+	Deleted    bool
+	Unreadable bool
 }
 
 func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) *testRegistry {
@@ -731,9 +733,9 @@ func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) 
 				return
 			}
 			v, ok := bySubject[subject][ver]
-			if !ok {
+			if !ok || v.Unreadable {
 				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(`{"error_code":40402,"message":"version not found"}`))
+				_, _ = w.Write([]byte(fmt.Sprintf(`{"error_code":40401,"message":"No artifact with ID '%s' in group 'null' was found."}`, subject)))
 				return
 			}
 			body := map[string]any{"subject": subject, "version": v.Version, "id": v.ID, "schemaType": "AVRO", "schema": v.Schema}
@@ -745,8 +747,16 @@ func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) 
 			subject := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/subjects/"), "/versions")
 			versions := bySubject[subject]
 			nums := make([]int, 0, len(versions))
-			for n := range versions {
-				nums = append(nums, n)
+			deleted := r.URL.Query().Get("deleted") == "true"
+			for n, v := range versions {
+				if deleted || !v.Deleted {
+					nums = append(nums, n)
+				}
+			}
+			if !deleted && len(nums) == 0 && len(versions) > 0 {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(fmt.Sprintf(`{"error_code":40401,"message":"Subject '%s' not found."}`, subject)))
+				return
 			}
 			_ = json.NewEncoder(w).Encode(nums)
 		case r.Method == http.MethodGet && (r.URL.Path == "/subjects" || r.URL.Path == "/subjects/"):
@@ -961,5 +971,106 @@ func TestSchemaImportSourceMode40401IsError(t *testing.T) {
 	}
 	if strings.Contains(out, "source has no /mode/{subject} endpoint") {
 		t.Fatalf("a Confluent 40401 should not be treated as a missing mode endpoint\n%s", out)
+	}
+}
+
+func TestSchemaImportSkipsUnreadableSoftDeletedVersion(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws":   {{ID: 3, Version: 1, Schema: pretty}},
+		"gone": {{ID: 7, Version: 1, Schema: `{"type":"string"}`, Unreadable: true, Deleted: true}},
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err != nil {
+		t.Fatalf("import: %v\n%s", err, out)
+	}
+	want := "warning: source subject gone version 1 is soft deleted and the source does not return it; skipped"
+	if strings.Count(out, want) != 1 {
+		t.Fatalf("missing or repeated unreadable soft-delete warning\n%s", out)
+	}
+	if !strings.Contains(out, "imported 1, skipped 1") {
+		t.Fatalf("expected the unreadable version to be counted as skipped\n%s", out)
+	}
+	if status, data := dst.call("GET", "/subjects/ws/versions/1", nil); status != http.StatusOK {
+		t.Fatalf("live schema should still be imported: %d %s", status, data)
+	}
+	if status, data := dst.call("GET", "/subjects/gone/versions/1?deleted=true", nil); status != http.StatusNotFound {
+		t.Fatalf("unreadable soft-deleted schema should not be imported: %d %s", status, data)
+	}
+}
+
+func TestSchemaImportLiveVersion40401IsError(t *testing.T) {
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws": {{ID: 3, Version: 1, Schema: `{"type":"string"}`, Unreadable: true}},
+	})
+	dst := startTestRegistry(t, nil)
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "read source subject ws version 1") {
+		t.Fatalf("expected a live version 40401 to stop the run, got %v\n%s", err, out)
+	}
+	if strings.Contains(out, "is soft deleted and the source does not return it") {
+		t.Fatalf("a live version 40401 should not be skipped with a warning\n%s", out)
+	}
+}
+
+func TestSchemaImportSameOnTargetByIDVersionsErrorStopsRun(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws":  {{ID: 3, Version: 1, Schema: pretty}},
+		"ws2": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	dst := startTestRegistry(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/schemas/ids/") && strings.HasSuffix(r.URL.Path, "/versions") {
+				http.Error(w, "versions failed", http.StatusInternalServerError)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "list target versions of schema id 3") {
+		t.Fatalf("expected a versions lookup error to stop the run, got %v\n%s", err, out)
+	}
+	if strings.Contains(out, "conflict:") {
+		t.Fatalf("versions lookup error was reported as a content conflict\n%s", out)
+	}
+}
+
+func TestSchemaImportSameOnTargetByIDEmptyHoldersConflicts(t *testing.T) {
+	pretty := `{
+  "type": "record",
+  "name": "W",
+  "fields": [ {"name": "a", "type": "string"} ]
+}`
+	src := startRawSchemaSource(t, map[string][]rawSchemaVersion{
+		"ws":  {{ID: 3, Version: 1, Schema: pretty}},
+		"ws2": {{ID: 3, Version: 1, Schema: pretty}},
+	})
+	dst := startTestRegistry(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/schemas/ids/") && strings.HasSuffix(r.URL.Path, "/versions") {
+				w.Header().Set("Content-Type", srContentType)
+				_, _ = w.Write([]byte(`[]`))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	out, err := runImport(t, "--from", src.url, "--to", dst.url)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("expected a conflict when the id has no holders, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "conflict: schema id 3 already holds different content") {
+		t.Fatalf("missing by-id conflict message\n%s", out)
 	}
 }

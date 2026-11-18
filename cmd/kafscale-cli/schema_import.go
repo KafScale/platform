@@ -377,6 +377,11 @@ func (im *schemaImport) fetchSubject(ctx context.Context, subject string, only i
 		}
 		v := &srVersion{}
 		if err := im.src.call(ctx, http.MethodGet, fmt.Sprintf("%s/versions/%d?deleted=true", subjectPath(subject), n), nil, v); err != nil {
+			if only == 0 && !slices.Contains(live, n) && isSRCode(err, 40401, 40402) {
+				_, _ = fmt.Fprintf(im.out, "warning: source subject %s version %d is soft deleted and the source does not return it; skipped\n", subject, n)
+				im.skipped++
+				continue
+			}
 			return fmt.Errorf("read source subject %s version %d: %w", subject, n, err)
 		}
 		if v.SchemaType == "" {
