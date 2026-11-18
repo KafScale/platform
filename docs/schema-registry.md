@@ -302,9 +302,9 @@ The chart passes only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys o
 Rotate in this order. The order matters. Update the keys in the Secret, restart the registry, check the rollout, and only then revoke the old keys:
 
 ```bash
-DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
-kubectl rollout restart "$DEPLOY" -n <namespace>
-kubectl rollout status "$DEPLOY" -n <namespace>
+DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)
+kubectl rollout restart "$DEPLOY" -n '<namespace>'
+kubectl rollout status "$DEPLOY" -n '<namespace>'
 ```
 
 `<namespace>` is the namespace of the Helm release and `<release>` is the release name.
