@@ -135,6 +135,12 @@ For S3-compatible endpoints (MinIO, etc), add:
     endpoint: http://minio.kafscale.svc:9000
 ```
 
+The S3 bucket must already exist. Create it if needed:
+
+```bash
+aws s3 mb s3://kafscale-demo --endpoint-url 'http://minio.kafscale.svc:9000'
+```
+
 ## 5) Create a Topic
 
 ```bash
@@ -193,6 +199,11 @@ The operator does not call `DeleteTopics` and does not write a
 its S3 data is not recorded for `kafscale-cli prune`.
 
 If you created the topic with a `KafscaleTopic`, delete that resource first.
+
+```bash
+kubectl -n kafscale delete kafscaletopic orders
+```
+
 Then use the Kafka `DeleteTopics` API from a client that can reach the
 brokers, or the console `DELETE /ui/api/status/topics/<topic>` endpoint after
 signing in (see [Console](operations.md#console)). The console needs
@@ -200,8 +211,7 @@ signing in (see [Console](operations.md#console)). The console needs
 set to the cluster namespace. Without `console.etcdEndpoints`, that delete
 returns `503` with `metadata store not configured`. Without
 `console.s3Namespace`, it returns `503` with `console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace`.
-Without `console.auth.username` and `console.auth.password`, every `/ui/api`
-call returns `503` with `ui auth disabled`. The chart sets those from
+Without `console.auth.username` and `console.auth.password`, login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`. The chart sets those from
 `--set console.auth.username` and `--set console.auth.password`; it does not
 read the console login password from a Secret.
 

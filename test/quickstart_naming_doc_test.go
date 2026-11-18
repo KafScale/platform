@@ -56,6 +56,7 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"metadata store not configured",
 		"console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace",
 		"ui auth disabled",
+		"login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`",
 		"console.auth.username",
 		"console.auth.password",
 		"--set 'console.auth.username=kafscaleadmin'",
@@ -73,10 +74,17 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"/ui/api/status/topics/orders",
 		"-c console.cookies",
 		"-b console.cookies",
+		"kubectl -n kafscale delete kafscaletopic orders",
+		"The S3 bucket must already exist",
+		"aws s3 mb s3://kafscale-demo",
+		"--endpoint-url 'http://minio.kafscale.svc:9000'",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/quickstart.md does not contain %q", want)
 		}
+	}
+	if strings.Contains(text, "every `/ui/api`") && !strings.Contains(text, "every other `/ui/api`") {
+		t.Error("docs/quickstart.md still says every /ui/api call returns 503 ui auth disabled")
 	}
 }
 
