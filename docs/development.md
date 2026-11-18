@@ -186,7 +186,7 @@ go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20260126174
 export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.35.0)"
 ```
 
-`make test-operator-envtest` obtains these assets automatically unless `KUBEBUILDER_ASSETS` is set, and fails if the binaries are missing. CI runs both reconciliation envtests and a separate nftables kind job. The kind suite waits for health across all expected etcd members and every broker's `/readyz` endpoint before its startup produce check. It retries that check once after checking health again, and repeats the health gate after snapshot restore.
+`make test-operator-envtest` obtains these assets automatically unless `KUBEBUILDER_ASSETS` is set, and fails if the binaries are missing. CI runs both reconciliation envtests and a separate nftables kind job. The kind suite waits for health across all expected etcd members and every broker's `/readyz` endpoint before its startup produce check. It retries that check once after checking health again, and repeats the health gate after snapshot restore. It waits for the etcd pods one at a time and counts a pod the StatefulSet has not created yet as not Ready, because the default `OrderedReady` policy creates the next member only after the previous one is Ready. If a pod is not Ready in time, the failure shows the pod status, the StatefulSet revisions, PVCs, namespace events and the container logs.
 
 ### Broker logging levels
 
