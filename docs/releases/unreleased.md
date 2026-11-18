@@ -221,6 +221,8 @@ limitations under the License.
 
 ### Operator and S3 credentials
 
+- Managed etcd snapshot, check and maintenance job pods are labeled `app=kafscale-etcd-job` instead of `app=kafscale-etcd`, so they are not selected by the etcd client Service, the headless Service or the PDB.
+
 - The operator sets an `S3Credentials` condition on each KafscaleCluster.
   - It is `False`, with a warning in the operator log once per change, when `spec.s3.credentialsSecretRef` names a secret that is missing, cannot be read or holds neither the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair nor the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair.
   - The message says what that means: no static keys from the secret and the default AWS credential chain if one is available; for a secret with only part of a pair, the keys found and that the etcd snapshot jobs can fail instead of falling back; for a secret the operator cannot read, only that it could not be verified.
