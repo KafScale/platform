@@ -1270,6 +1270,172 @@ func TestCheckReadyWithStaticBackends(t *testing.T) {
 	}
 }
 
+func TestCheckReadyFetchProbeFailureWithinTTLStaysReady(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	putProxyTestSnapshot(t, endpoints, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "127.0.0.1", Port: 1},
+		},
+		ControllerID: 0,
+	})
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	p := &proxy{
+		store:            store,
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL:         60 * time.Second,
+		readyzFetchProbe: true,
+		dialTimeout:      200 * time.Millisecond,
+		backendRetries:   1,
+		backendBackoff:   time.Millisecond,
+		brokerAddrs:      map[string]string{},
+		topicNames:       map[[16]byte]string{},
+	}
+	p.refreshMetadataCache(ctx)
+	if !p.haveBackend(ctx) || !p.cacheFresh() {
+		t.Fatal("expected a fresh cached backend before the outage")
+	}
+	if p.checkReady(ctx) {
+		t.Fatal("expected NotReady when etcd is up and the fetch probe cannot reach a broker")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !p.checkReady(ctx) {
+		t.Fatal("expected Ready during an etcd outage within the TTL even when the fetch probe fails")
+	}
+	ageBackendCache(p)
+	if p.checkReady(ctx) {
+		t.Fatal("expected NotReady once the backend cache TTL has expired")
+	}
+}
+
+func TestCheckReadyBlackholedEtcdReturnsQuickly(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	proxyURL, blackhole := startEtcdTCPForward(t, endpoints[0])
+	ctx := context.Background()
+	putProxyTestSnapshot(t, endpoints, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: "127.0.0.1", Port: 1},
+		},
+		ControllerID: 0,
+	})
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: []string{proxyURL}})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	p := &proxy{
+		store:            store,
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL:         60 * time.Second,
+		readyzFetchProbe: true,
+		dialTimeout:      200 * time.Millisecond,
+		backendRetries:   1,
+		backendBackoff:   time.Millisecond,
+		brokerAddrs:      map[string]string{},
+		topicNames:       map[[16]byte]string{},
+	}
+	p.refreshMetadataCache(ctx)
+	if !p.haveBackend(ctx) || !p.cacheFresh() {
+		t.Fatal("expected a fresh cached backend before the outage")
+	}
+	blackhole()
+	start := time.Now()
+	ready := p.checkReady(ctx)
+	if d := time.Since(start); d >= time.Second {
+		t.Fatalf("checkReady took %s, want well under 1s", d)
+	}
+	if !ready {
+		t.Fatal("expected Ready during a blackholed etcd outage within the TTL")
+	}
+}
+
+func TestCheckReadyStaticBackendsFetchFailureNotReadyWhenEtcdDown(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatalf("NewEtcdStore: %v", err)
+	}
+	p := &proxy{
+		backends:         []string{"127.0.0.1:1"},
+		store:            store,
+		logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		cacheTTL:         60 * time.Second,
+		readyzFetchProbe: true,
+		dialTimeout:      200 * time.Millisecond,
+		backendRetries:   1,
+		backendBackoff:   time.Millisecond,
+		brokerAddrs:      map[string]string{},
+		topicNames:       map[[16]byte]string{},
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if p.checkReady(ctx) {
+		t.Fatal("expected NotReady with static backends when the fetch probe fails, even if etcd is down")
+	}
+}
+
+func startEtcdTCPForward(t *testing.T, endpoint string) (string, func()) {
+	t.Helper()
+	target := strings.TrimPrefix(strings.TrimPrefix(endpoint, "http://"), "https://")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	var drop bool
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			if drop {
+				mu.Unlock()
+				continue
+			}
+			mu.Unlock()
+			go func(c net.Conn) {
+				d, err := net.Dial("tcp", target)
+				if err != nil {
+					_ = c.Close()
+					return
+				}
+				mu.Lock()
+				conns = append(conns, d)
+				mu.Unlock()
+				go func() { _, _ = io.Copy(d, c); _ = d.Close(); _ = c.Close() }()
+				_, _ = io.Copy(c, d)
+				_ = d.Close()
+				_ = c.Close()
+			}(c)
+		}
+	}()
+	blackhole := func() {
+		mu.Lock()
+		drop = true
+		for _, c := range conns {
+			_ = c.Close()
+		}
+		conns = nil
+		mu.Unlock()
+	}
+	t.Cleanup(func() {
+		blackhole()
+		_ = ln.Close()
+	})
+	return "http://" + ln.Addr().String(), blackhole
+}
+
 func putProxyTestSnapshot(t *testing.T, endpoints []string, snap metadata.ClusterMetadata) {
 	t.Helper()
 	cli, err := clientv3.New(clientv3.Config{

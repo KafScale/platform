@@ -80,6 +80,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 func writeUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "usage: kafscale-cli restore --topic <source> --target-topic <target> --to <RFC3339 timestamp> [--namespace <ns>] [--target-namespace <ns>] [--partitions <list>]")
+	_, _ = fmt.Fprintln(w, "       restore namespace defaults to KAFSCALE_NAMESPACE, then KAFSCALE_S3_NAMESPACE, then default")
 	_, _ = fmt.Fprintln(w, "       kafscale-cli prune [--topic <name>] [--older-than <7d|24h>] [--force]")
 	_, _ = fmt.Fprintln(w, "       kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--to-auth user:password] [--subjects <regex>] [--dry-run] [--force]")
 	_, _ = fmt.Fprintln(w, "")
@@ -116,7 +117,7 @@ func runRestoreCommand(ctx context.Context, args []string, stdout io.Writer) err
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	var (
 		sourceTopic     = fs.String("topic", "", "Source topic to recover from")
-		sourceNamespace = fs.String("namespace", envOrDefault("KAFSCALE_NAMESPACE", "default"), "Source namespace (KAFSCALE_NAMESPACE, otherwise default)")
+		sourceNamespace = fs.String("namespace", defaultRestoreNamespace(), "Source namespace")
 		targetTopic     = fs.String("target-topic", "", "Target topic to create and populate")
 		targetNamespace = fs.String("target-namespace", "", "Target namespace (defaults to source namespace)")
 		restoreToRaw    = fs.String("to", "", "Restore cutoff in RFC3339 format")
@@ -230,6 +231,19 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
+	sourceGeneration, err := store.TopicGeneration(ctx, cfg.SourceTopic)
+	if err != nil {
+		return err
+	}
+	sourcePrefix := restoreSourcePrefix(cfg.SourceNamespace, cfg.SourceTopic, sourceGeneration)
+	objects, err := s3Client.ListSegments(ctx, sourcePrefix)
+	if err != nil {
+		return err
+	}
+	if !sourceSegmentPresent(objects, sourcePrefix, cfg.Partitions) {
+		return fmt.Errorf("no segments found for topic %s under %s; set --namespace or KAFSCALE_NAMESPACE to the cluster namespace", cfg.SourceTopic, sourcePrefix)
+	}
+
 	restoreCommitted := false
 	targetCreated := false
 	defer func() {
@@ -259,10 +273,6 @@ func executeRestore(ctx context.Context, stdout io.Writer, cfg restoreConfig, s3
 		return err
 	}
 
-	sourceGeneration, err := store.TopicGeneration(ctx, cfg.SourceTopic)
-	if err != nil {
-		return err
-	}
 	targetGeneration, err := store.TopicGeneration(ctx, cfg.TargetTopic)
 	if err != nil {
 		return err
@@ -438,4 +448,39 @@ func envIntDefault(key string, fallback int) int {
 		return fallback
 	}
 	return val
+}
+
+func defaultRestoreNamespace() string {
+	return envOrDefault("KAFSCALE_NAMESPACE", envOrDefault("KAFSCALE_S3_NAMESPACE", "default"))
+}
+
+func restoreSourcePrefix(namespace string, topic string, generation int64) string {
+	return path.Join(namespace, metadata.TopicStorageName(topic, generation)) + "/"
+}
+
+func sourceSegmentPresent(objects []storage.S3Object, prefix string, partitions []int32) bool {
+	allowed := make(map[int32]struct{}, len(partitions))
+	for _, partition := range partitions {
+		allowed[partition] = struct{}{}
+	}
+	for _, obj := range objects {
+		if !strings.HasSuffix(obj.Key, ".kfs") || !strings.HasPrefix(obj.Key, prefix) {
+			continue
+		}
+		if len(allowed) == 0 {
+			return true
+		}
+		parts := strings.Split(strings.TrimPrefix(obj.Key, prefix), "/")
+		if len(parts) != 2 {
+			continue
+		}
+		partition, err := strconv.ParseInt(parts[0], 10, 32)
+		if err != nil {
+			continue
+		}
+		if _, ok := allowed[int32(partition)]; ok {
+			return true
+		}
+	}
+	return false
 }

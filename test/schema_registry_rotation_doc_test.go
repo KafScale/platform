@@ -25,9 +25,9 @@ import (
 func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 	root := repoRoot(t)
 	want := []string{
-		"DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)",
-		`kubectl rollout restart "$DEPLOY" -n <namespace>`,
-		`kubectl rollout status "$DEPLOY" -n <namespace>`,
+		"DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)",
+		`kubectl rollout restart "$DEPLOY" -n '<namespace>'`,
+		`kubectl rollout status "$DEPLOY" -n '<namespace>'`,
 	}
 	for _, doc := range []string{"operations.md", "schema-registry.md"} {
 		body, err := os.ReadFile(filepath.Join(root, "docs", doc))

@@ -18,25 +18,17 @@
 package e2e
 
 func etcdMemberPodSelector() string {
-	return "app=kafscale-etcd,cluster=kafscale,!job-name"
+	return "app=kafscale-etcd,cluster=kafscale"
 }
 
 func filterEtcdMemberPods(names []string, labelsByName map[string]map[string]string) []string {
 	members := make([]string, 0, len(names))
 	for _, name := range names {
 		labels := labelsByName[name]
-		if _, isJob := labels["job-name"]; isJob {
+		if labels["app"] != "kafscale-etcd" {
 			continue
 		}
 		members = append(members, name)
 	}
 	return members
-}
-
-func matchesJobNameNotEquals(labels map[string]string, value string) bool {
-	got, ok := labels["job-name"]
-	if !ok {
-		return true
-	}
-	return got != value
 }

@@ -29,13 +29,6 @@ Kafka proxy, and MCP server. LFS is configured on the `KafscaleCluster` CRD
 
 ## Installation
 
-### Add the repository (if published)
-
-```bash
-helm repo add kafscale https://charts.kafscale.io
-helm repo update
-```
-
 ### Install from local chart
 
 ```bash
@@ -63,34 +56,32 @@ helm upgrade --install kafscale ./deploy/helm/kafscale
 
 ### With Kafka Proxy (external access)
 
+Operator-managed etcd and broker Services are named from the
+`KafscaleCluster`: `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`
+and `<cluster>-broker.<namespace>.svc.cluster.local:9092` (metrics on port
+9093). The quickstart cluster `demo` in namespace `kafscale` uses
+`demo-etcd-client` and `demo-broker`. See
+[Service names](../../../docs/operations.md#service-names).
+
 ```bash
 helm upgrade --install kafscale ./deploy/helm/kafscale \
   --set proxy.enabled=true \
   --set proxy.replicaCount=2 \
   --set proxy.service.type=LoadBalancer \
   --set proxy.advertisedHost=kafka.example.com \
-  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+  --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
-### LFS Demo Stack
+### LFS
 
-Deploy the browser demo UI (`lfsDemos`) and enable LFS on your cluster CRD:
-
-```bash
-helm upgrade --install kafscale ./deploy/helm/kafscale \
-  -n kafscale-demo --create-namespace \
-  -f ./deploy/helm/kafscale/values-lfs-demo.yaml
-```
-
-Then apply a `KafscaleCluster` with `spec.lfsProxy.enabled=true` and S3 settings.
-See the [LFS on KafscaleCluster](#lfs-on-kafscalecluster) section below.
+Enable LFS with `spec.lfsProxy` on the `KafscaleCluster`. See
+[LFS on KafscaleCluster](#lfs-on-kafscalecluster).
 
 ## Values Files
 
 | File | Description |
 |------|-------------|
 | `values.yaml` | Default values (production-ready defaults) |
-| `values-lfs-demo.yaml` | LFS demo stack with browser UI enabled |
 
 ## Configuration
 
@@ -101,14 +92,34 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | Section | Description |
 |---------|-------------|
 | `operator.*` | KafScale operator settings |
-| `console.*` | Console UI settings |
+| `console.*` | Console UI settings. `console.auth.existingSecret` names a Secret with `username` and `password` keys for `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. Inline `console.auth.username` and `console.auth.password` are the fallback when `existingSecret` is empty. `console.etcd.existingSecret` names a Secret with `ETCD_USERNAME` and `ETCD_PASSWORD` keys |
 | `proxy.*` | Kafka proxy settings (external entrypoint) |
-| `lfsDemos.*` | Optional LFS browser demo UI |
 | `mcp.*` | MCP server settings |
 | `schemaRegistry.*` | Schema registry settings. Needs `schemaRegistry.etcdEndpoints`. No authentication, ClusterIP Service only. A PodDisruptionBudget with `maxUnavailable: 1` is created when `replicas` is above 1 and `podDisruptionBudget.enabled` is true. `s3.pathStyle` takes `true` or `false`, as a boolean or a string, and empty uses path style addressing when `s3.endpoint` is set. Any other value fails the render |
 | `<component>.podSecurityContext` | Pod-level PSA `restricted` defaults (UID/GID `10001`, `runAsNonRoot`, `seccompProfile`) |
 | `<component>.containerSecurityContext` | Container hardening (`readOnlyRootFilesystem`, dropped capabilities) |
 | `proxy.affinity` | Pod affinity override; when empty the chart applies soft hostname anti-affinity |
+
+### Console auth
+
+Set `console.auth.existingSecret` to a Secret that has `username` and
+`password` keys. The chart maps those to `KAFSCALE_UI_USERNAME` and
+`KAFSCALE_UI_PASSWORD`. When `existingSecret` is empty, set
+`console.auth.username` and `console.auth.password` instead.
+
+```bash
+printf 'Console password: '
+read -rs CONSOLE_PASSWORD
+echo
+printf '%s' "$CONSOLE_PASSWORD" | kubectl create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
+unset CONSOLE_PASSWORD
+
+helm upgrade --install kafscale ./deploy/helm/kafscale \
+  --set console.auth.existingSecret=kafscale-console-auth
+```
+
+Keep the other `--set` flags your install already uses, because an upgrade with only this flag resets them.
 
 ### Proxy Service
 
@@ -190,77 +201,19 @@ name `kafscale-lfs`.
 For local development without Kubernetes, see
 [`deploy/docker-compose/README.md`](../../docker-compose/README.md).
 
-## Browser Demo (E72)
-
-The E72 browser demo provides a web UI for testing LFS uploads:
-
-```yaml
-lfsDemos:
-  enabled: true
-  e72Browser:
-    enabled: true
-    service:
-      type: NodePort
-      nodePort: 30072
-```
-
-Access via: `http://<node-ip>:30072`
-
-## Local Registry (Stage Release)
-
-For air-gapped or LAN installs, you can publish images to a local registry (for example `192.168.0.131:5100`) and point the chart at it.
-
-### 1) Configure Docker to allow the registry (insecure HTTP)
-
-Docker Desktop on macOS:
-
-1. Open Docker Desktop → Settings → Docker Engine.
-2. Add the registry under `insecure-registries`:
-   ```json
-   {
-     "insecure-registries": ["192.168.0.131:5100"]
-   }
-   ```
-3. Apply & Restart Docker.
-
-Verify:
-```bash
-docker info | grep -n "Insecure Registries"
-docker info | grep -n "192.168.0.131"
-```
-
-### 2) Push images to the registry
-
-Use the stage release target (local buildx):
-```bash
-make stage-release STAGE_REGISTRY=192.168.0.131:5100 STAGE_TAG=dev
-```
-
-If you want to run the GitHub Actions workflow locally instead, use:
-```bash
-make stage-release-act STAGE_REGISTRY=192.168.0.131:5100 STAGE_TAG=dev
-```
-This target builds a local `act` runner image first (`make act-image`) and executes the workflow inside that container.
-
-### 3) Install the chart using the staged registry
-
-```bash
-helm upgrade --install kafscale ./deploy/helm/kafscale \
-  -n kafscale-demo --create-namespace \
-  --set global.imageRegistry=192.168.0.131:5100
-```
-
-Note: if you set `global.imageRegistry`, individual component image repositories inherit it.
-
 ## Security
 
 ### Credentials Best Practices
 
 1. **Use Kubernetes secrets** for S3 credentials on the `KafscaleCluster`:
    ```bash
-   kubectl create secret generic s3-creds \
-     --from-literal=AWS_ACCESS_KEY_ID=xxx \
-     --from-literal=AWS_SECRET_ACCESS_KEY=xxx
+   printf 'AWS secret access key: '
+   read -rs AWS_SECRET_ACCESS_KEY
+   echo
+   printf '%s' "$AWS_SECRET_ACCESS_KEY" | kubectl create secret generic s3-creds \
+     --from-literal=AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY \
+     --from-file=AWS_SECRET_ACCESS_KEY=/dev/stdin
+   unset AWS_SECRET_ACCESS_KEY
    ```
    ```yaml
    spec:

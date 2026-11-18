@@ -132,7 +132,7 @@ A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it,
 
 ### Moving schemas into the built in registry
 
-To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API. Build the CLI with `go build -o bin/kafscale-cli ./cmd/kafscale-cli` from the repository root, as described in [operations.md](operations.md#installing-kafscale-cli):
+To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API, including Apicurio Registry's Confluent compatible API. Build the CLI with `go build -o bin/kafscale-cli ./cmd/kafscale-cli` from the repository root, as described in [operations.md](operations.md#installing-kafscale-cli):
 
 ```
 kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081 \
@@ -144,14 +144,14 @@ It reads `/subjects?deleted=true` and every version of each subject, including s
 - A referenced subject version that `--subjects` does not match is imported too, but its config and mode are not copied.
 - Before the first write it switches the target to `IMPORT` mode, which needs `--force` when the target already holds schemas.
 - Each version keeps its id and version number.
-- Versions that are soft deleted in the source are soft deleted in the target.
-- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own.
+- Versions that are soft deleted in the source are soft deleted in the target. Apicurio Registry does not return the versions of a subject whose versions are all soft deleted, so the import skips them with a warning and counts them as skipped in the summary. Their ids are not imported.
+- Afterwards it copies the global compatibility level and the compatibility level and mode of each subject that has its own. A source that returns HTTP 404 with error code 0 for `GET /mode/{subject}` is treated as having no subject mode, and the import continues. Compatibility levels are still copied. The import first reads the level of a subject that cannot exist. A 40408 answer means the source honors `defaultToGlobal=false`, and every subject level is copied. Otherwise, when every subject returns a level, as Apicurio does, subject levels equal to the source global level are not copied, including an explicit one.
 - The global mode of the target stays `IMPORT`.
 - `--auth` and `--to-auth` can also be set with `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`, and `--to` with `KAFSCALE_SCHEMA_REGISTRY_URL`.
 
 The import can be run again at any time, for example to copy schemas registered in the source since the last run or after a run stopped halfway.
 
-- A version that the target already holds with the same id and the same schema is skipped; schemas are compared in their stored form, so formatting differences in the source do not count.
+- A version is skipped when the target already holds it with the same id and the same schema, or when it is soft deleted in the source and the source does not return it. When the stored text differs, the import posts the source schema to `POST /subjects/{subject}` on the target and treats a matching id as the same schema, so formatting and namespace-qualified names that the target normalizes do not count as a conflict. If that id already exists under another subject, the import looks it up under the first subject listed by `GET /schemas/ids/{id}/versions`.
 - When the target holds that subject version with a different id or schema, or holds the id with a different schema, the import reports both schemas as a conflict, imports the rest, prints the counts of imported, skipped and soft deleted versions, changed settings and conflicts, and exits with an error.
 - Two source versions that carry the same id with different schemas are reported as a conflict too, also with `--dry-run`.
 - Any other error, for example a 422 from the target, stops the run.
@@ -280,11 +280,23 @@ schemaRegistry:
   enabled: true
   replicas: 2
   etcdEndpoints:
-    - http://kafscale-etcd-client.kafscale.svc:2379
+    # Operator-managed etcd for a KafscaleCluster named demo in namespace kafscale.
+    # The Service is <cluster>-etcd-client.<namespace>.svc.cluster.local:2379.
+    - http://demo-etcd-client.kafscale.svc.cluster.local:2379
   s3:
     bucket: kafscale-data
     region: us-east-1
+    endpoint: http://minio.kafscale.svc.cluster.local:9000  # set for MinIO or any non-AWS endpoint
+    credentialsSecret: kafscale-s3  # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+    namespace: kafscale  # set it to the KafscaleCluster namespace (the chart default is default)
 ```
+
+Use the full `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379` name
+for operator-managed etcd. See [Service names](operations.md#service-names).
+The chart defaults `schemaRegistry.s3.namespace` to `default`. Set it to the
+cluster namespace, as [operations.md](operations.md#schema-registry) warns.
+`schemaRegistry.s3.endpoint` and `schemaRegistry.s3.credentialsSecret` are
+required for MinIO and other S3-compatible stores.
 
 The chart runs the image `ghcr.io/kafscale/kafscale-schema-registry` with the chart `appVersion` tag unless `schemaRegistry.image.tag` is set. Readiness (`/readyz`) checks that etcd answers. Metrics on `/metrics`:
 
@@ -302,9 +314,29 @@ The chart passes only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys o
 Rotate in this order. The order matters. Update the keys in the Secret, restart the registry, check the rollout, and only then revoke the old keys:
 
 ```bash
-DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
-kubectl rollout restart "$DEPLOY" -n <namespace>
-kubectl rollout status "$DEPLOY" -n <namespace>
+DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)
+kubectl rollout restart "$DEPLOY" -n '<namespace>'
+kubectl rollout status "$DEPLOY" -n '<namespace>'
 ```
 
 `<namespace>` is the namespace of the Helm release and `<release>` is the release name.
+
+### Shutdown
+
+Kubernetes marks a pod as terminating in the Service EndpointSlices as soon as its deletion starts, independent of the readiness probe, so new connections stop once kube-proxy on every node and any load balancer have caught up. Until then traffic can still reach the pod. On SIGTERM or SIGINT the registry shuts down in three steps, so that a rollout restart does not drop requests as long as that catch-up finishes within the drain period:
+
+1. `/readyz` returns 503 at once. This is for anything else that polls readiness, and for the case where every endpoint of the Service is terminating, when proxies may still route to endpoints that are terminating but serving until the readiness probe fails.
+2. The registry keeps serving every request, `/readyz` excepted, for the drain period, `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN` (default `5s`), while kube-proxy and load balancers catch up.
+3. It stops accepting connections and waits up to `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT` (default `10s`) for in-flight requests. Requests still running then are cut off and the registry exits with an error.
+
+Chart values:
+
+```yaml
+schemaRegistry:
+  shutdownDrain: ""                  # sets KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN, empty keeps 5s, 0 or 0s turns it off
+  shutdownTimeout: ""                # sets KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT, empty keeps 10s
+  preStopSleepSeconds: 0             # a preStop hook that sleeps before SIGTERM, 0 adds no hook
+  terminationGracePeriodSeconds: 30  # null leaves it out of the pod spec
+```
+
+The drain period already keeps the pod serving while kube-proxy and load balancers catch up, so the chart adds no preStop hook by default. Set `preStopSleepSeconds` to delay SIGTERM as well, for example with `shutdownDrain: 0s`. Kubernetes kills the pod when `terminationGracePeriodSeconds` runs out, and that time includes the preStop hook. Keep `preStopSleepSeconds` plus the drain period plus the shutdown timeout below it. The defaults use 15 of the 30 seconds. Any value that is set, `0` included, is passed to the registry, so a value it does not accept, such as `5` without a unit or a shutdown timeout of `0`, stops it at startup with an error.
