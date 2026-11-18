@@ -558,7 +558,7 @@ func TestSchemaImportSkipsMissingSourceModeEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dry-run against a source that 404s on /mode: %v\n%s", err, out)
 	}
-	if strings.Count(out, "source has no /mode/{subject} endpoint; subject modes not copied") != 1 {
+	if strings.Count(out, "source returns 404 for GET /mode/{subject}; those subjects are treated as having no mode") != 1 {
 		t.Fatalf("dry-run should print the missing mode notice once\n%s", out)
 	}
 	if strings.Contains(out, "would set mode of") {
@@ -569,7 +569,7 @@ func TestSchemaImportSkipsMissingSourceModeEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import against a source that 404s on /mode: %v\n%s", err, out)
 	}
-	if strings.Count(out, "source has no /mode/{subject} endpoint; subject modes not copied") != 1 {
+	if strings.Count(out, "source returns 404 for GET /mode/{subject}; those subjects are treated as having no mode") != 1 {
 		t.Fatalf("import should print the missing mode notice once\n%s", out)
 	}
 	if status, data := dst.call("GET", "/subjects/user/versions/1", nil); status != http.StatusOK {
@@ -969,7 +969,7 @@ func TestSchemaImportSourceMode40401IsError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "read source mode") {
 		t.Fatalf("expected a source mode read error for 40401, got %v\n%s", err, out)
 	}
-	if strings.Contains(out, "source has no /mode/{subject} endpoint") {
+	if strings.Contains(out, "source returns 404 for GET /mode/{subject}") {
 		t.Fatalf("a Confluent 40401 should not be treated as a missing mode endpoint\n%s", out)
 	}
 }

@@ -663,7 +663,7 @@ func (im *schemaImport) noteMissingSourceMode() {
 		return
 	}
 	im.modeMissingNoted = true
-	_, _ = fmt.Fprintln(im.out, "source has no /mode/{subject} endpoint; subject modes not copied")
+	_, _ = fmt.Fprintln(im.out, "source returns 404 for GET /mode/{subject}; those subjects are treated as having no mode")
 }
 
 func (im *schemaImport) sourceGlobalConfig(ctx context.Context) (string, error) {

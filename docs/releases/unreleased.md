@@ -43,7 +43,7 @@ limitations under the License.
 
 - `schemaregistry.Error` has an unexported field for error details and is not comparable. This package was not present in published v1.6.3; code using intermediate main builds should compare `Code` or use `errors.As`.
 
-- `kafscale-cli schema import --from <url>` copies subjects, versions, ids, references, soft deletes, compatibility levels and subject modes from Confluent Schema Registry or another registry with its REST API into the built in registry, including Apicurio Registry's Confluent compatible API.
+- `kafscale-cli schema import --from <url>` copies subjects, versions, ids, references, soft deletes, compatibility levels and subject modes from Confluent Schema Registry or another registry with the Confluent REST API, such as Apicurio Registry's Confluent compatible API, into the built in registry.
   - It keeps the ids, can be run again, and fails on any id or version that the target holds with a different schema.
   - Subjects in a non-default Confluent context are skipped with a message and make the run exit with an error.
   - A failed run still prints its counts and whether the target is in `IMPORT` mode.
