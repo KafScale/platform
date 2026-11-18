@@ -58,6 +58,10 @@ var (
 		Name: "kafscale_operator_etcd_snapshot_access_ok",
 		Help: "1 if the operator can write to the snapshot bucket.",
 	}, []string{"cluster"})
+	operatorEtcdSnapshotThreshold = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kafscale_operator_etcd_snapshot_threshold_seconds",
+		Help: "Snapshot age in seconds after which kafscale_operator_etcd_snapshot_stale is 1.",
+	})
 	operatorEtcdDbTotalSizeBytes = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kafscale_operator_etcd_db_total_size_bytes",
 		Help: "Physical etcd backend size per managed member.",
@@ -86,11 +90,13 @@ func init() {
 		operatorEtcdSnapshotStale,
 		operatorEtcdSnapshotSuccess,
 		operatorEtcdSnapshotAccessOK,
+		operatorEtcdSnapshotThreshold,
 		operatorEtcdDbTotalSizeBytes,
 		operatorEtcdDbInUseBytes,
 		operatorEtcdDbSizeHigh,
 		operatorEtcdNospaceAlarm,
 	)
+	operatorEtcdSnapshotThreshold.Set(float64(snapshotStaleAfterSeconds()))
 }
 
 func recordClusterCount(ctx context.Context, c client.Client) {

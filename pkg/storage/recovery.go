@@ -145,6 +145,10 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 		segmentsByPartition[segment.Partition] = append(segmentsByPartition[segment.Partition], segment)
 	}
 
+	if len(segmentsByPartition) == 0 {
+		return nil, fmt.Errorf("no source segments found for topic %s under %s", cfg.SourceTopic, sourcePrefix)
+	}
+
 	partitions := make([]int32, 0, len(segmentsByPartition))
 	for partition := range segmentsByPartition {
 		partitions = append(partitions, partition)
@@ -242,6 +246,10 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 			result.SegmentsCopied++
 		}
 		result.Partitions = append(result.Partitions, summary)
+	}
+
+	if result.SegmentsCopied == 0 {
+		return nil, fmt.Errorf("no records at or before %s for topic %s under %s", cfg.RestoreTo.UTC().Format(time.RFC3339), cfg.SourceTopic, sourcePrefix)
 	}
 
 	restoreCommitted = true

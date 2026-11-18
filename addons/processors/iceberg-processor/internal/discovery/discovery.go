@@ -248,12 +248,12 @@ func newEtcdLister(cfg processorconfig.Config, s3Lister *s3Lister, strict bool) 
 		return nil, fmt.Errorf("etcd.endpoints is required for discovery.mode=etcd")
 	}
 
-	client, err := clientv3.New(clientv3.Config{
+	client, err := clientv3.New(metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   cfg.Etcd.Endpoints,
 		Username:    cfg.Etcd.Username,
 		Password:    cfg.Etcd.Password,
 		DialTimeout: 5 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, err
 	}
