@@ -222,6 +222,7 @@ limitations under the License.
 ### Operator and S3 credentials
 
 - The Helm chart sets `LFS_PROXY_IMAGE` and `LFS_PROXY_IMAGE_PULL_POLICY` on the operator from `operator.lfsProxyImage`, which follows `appVersion` like the other image keys. `spec.lfsProxy.image` still overrides the image when it is set, and if neither that field nor the env is set the operator uses `ghcr.io/kafscale/kafscale-proxy:dev`. The chart also sets `KAFSCALE_OPERATOR_ETCD_IMAGE` and `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` from `operator.etcdImage` and `operator.etcdSnapshotImage`, which default to the operator's pinned upstream images and do not follow `appVersion`.
+- Managed etcd snapshot, check and maintenance job pods are labeled `app=kafscale-etcd-job` instead of `app=kafscale-etcd`, so they are not selected by the etcd client Service, the headless Service or the PDB.
 
 - The operator sets an `S3Credentials` condition on each KafscaleCluster.
   - It is `False`, with a warning in the operator log once per change, when `spec.s3.credentialsSecretRef` names a secret that is missing, cannot be read or holds neither the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` pair nor the `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` pair.
