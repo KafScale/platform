@@ -119,9 +119,12 @@ add a persistent manifest. Requests for the restoring partition wait for complet
 - **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, point `console.auth.existingSecret` at a Secret whose keys are `username` and `password`, or set `console.auth.username` and `console.auth.password` directly. For example:
 
 ```bash
-kubectl -n kafscale create secret generic kafscale-console-auth \
-  --from-literal=username=kafscaleadmin \
-  --from-literal=password='use-a-secret'
+printf 'Console password: '
+read -rs CONSOLE_PASSWORD
+echo
+printf '%s' "$CONSOLE_PASSWORD" | kubectl -n kafscale create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
+unset CONSOLE_PASSWORD
 
 helm upgrade --install kafscale deploy/helm/kafscale \
   --set console.auth.existingSecret=kafscale-console-auth

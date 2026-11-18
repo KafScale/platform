@@ -79,25 +79,16 @@ helm upgrade --install kafscale ./deploy/helm/kafscale \
   --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
-### LFS Demo Stack
+### LFS
 
-Deploy the browser demo UI (`lfsDemos`) and enable LFS on your cluster CRD:
-
-```bash
-helm upgrade --install kafscale ./deploy/helm/kafscale \
-  -n kafscale-demo --create-namespace \
-  -f ./deploy/helm/kafscale/values-lfs-demo.yaml
-```
-
-Then apply a `KafscaleCluster` with `spec.lfsProxy.enabled=true` and S3 settings.
-See the [LFS on KafscaleCluster](#lfs-on-kafscalecluster) section below.
+Enable LFS with `spec.lfsProxy` on the `KafscaleCluster`. See
+[LFS on KafscaleCluster](#lfs-on-kafscalecluster).
 
 ## Values Files
 
 | File | Description |
 |------|-------------|
 | `values.yaml` | Default values (production-ready defaults) |
-| `values-lfs-demo.yaml` | LFS demo stack with browser UI enabled |
 
 ## Configuration
 
@@ -110,7 +101,6 @@ See [values.yaml](values.yaml) for the full list of configurable parameters.
 | `operator.*` | KafScale operator settings |
 | `console.*` | Console UI settings. `console.auth.existingSecret` names a Secret with `username` and `password` keys for `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. Inline `console.auth.username` and `console.auth.password` are the fallback when `existingSecret` is empty. `console.etcd.existingSecret` names a Secret with `ETCD_USERNAME` and `ETCD_PASSWORD` keys |
 | `proxy.*` | Kafka proxy settings (external entrypoint) |
-| `lfsDemos.*` | Optional LFS browser demo UI |
 | `mcp.*` | MCP server settings |
 | `schemaRegistry.*` | Schema registry settings. Needs `schemaRegistry.etcdEndpoints`. No authentication, ClusterIP Service only. A PodDisruptionBudget with `maxUnavailable: 1` is created when `replicas` is above 1 and `podDisruptionBudget.enabled` is true. `s3.pathStyle` takes `true` or `false`, as a boolean or a string, and empty uses path style addressing when `s3.endpoint` is set. Any other value fails the render |
 | `<component>.podSecurityContext` | Pod-level PSA `restricted` defaults (UID/GID `10001`, `runAsNonRoot`, `seccompProfile`) |
@@ -125,9 +115,12 @@ Set `console.auth.existingSecret` to a Secret that has `username` and
 `console.auth.username` and `console.auth.password` instead.
 
 ```bash
-kubectl create secret generic kafscale-console-auth \
-  --from-literal=username=kafscaleadmin \
-  --from-literal=password=use-a-secret
+printf 'Console password: '
+read -rs CONSOLE_PASSWORD
+echo
+printf '%s' "$CONSOLE_PASSWORD" | kubectl create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
+unset CONSOLE_PASSWORD
 
 helm upgrade --install kafscale ./deploy/helm/kafscale \
   --set console.auth.existingSecret=kafscale-console-auth
@@ -213,22 +206,6 @@ name `kafscale-lfs`.
 For local development without Kubernetes, see
 [`deploy/docker-compose/README.md`](../../docker-compose/README.md).
 
-## Browser Demo (E72)
-
-The E72 browser demo provides a web UI for testing LFS uploads:
-
-```yaml
-lfsDemos:
-  enabled: true
-  e72Browser:
-    enabled: true
-    service:
-      type: NodePort
-      nodePort: 30072
-```
-
-Access via: `http://<node-ip>:30072`
-
 ## Local Registry (Stage Release)
 
 For air-gapped or LAN installs, you can publish images to a local registry (for example `192.168.0.131:5100`) and point the chart at it.
@@ -281,9 +258,13 @@ Note: if you set `global.imageRegistry`, individual component image repositories
 
 1. **Use Kubernetes secrets** for S3 credentials on the `KafscaleCluster`:
    ```bash
-   kubectl create secret generic s3-creds \
-     --from-literal=AWS_ACCESS_KEY_ID=xxx \
-     --from-literal=AWS_SECRET_ACCESS_KEY=xxx
+   printf 'AWS secret access key: '
+   read -rs AWS_SECRET_ACCESS_KEY
+   echo
+   printf '%s' "$AWS_SECRET_ACCESS_KEY" | kubectl create secret generic s3-creds \
+     --from-literal=AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY \
+     --from-file=AWS_SECRET_ACCESS_KEY=/dev/stdin
+   unset AWS_SECRET_ACCESS_KEY
    ```
    ```yaml
    spec:

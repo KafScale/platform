@@ -254,38 +254,6 @@ proxy:
     # tracked separately.
     nodePort: ""
 
-# NOTE: The standalone lfs-proxy Helm values were removed. Enable LFS on a
-# cluster with spec.lfsProxy on the KafscaleCluster. The chart-deployed
-# proxy does not read a proxy.lfs.enabled setting.
-#
-# lfsDemos is unused. No chart template reads these keys.
-
-lfsDemos:
-  enabled: false
-  e72Browser:
-    enabled: true  # Browser LFS SDK demo
-    lfsProxyEndpoint: ""  # Auto-detected from cluster if empty
-    defaultTopic: browser-uploads
-    image:
-      repository: ghcr.io/kafscale/kafscale-e72-browser-demo
-      tag: ""
-      useLatest: false
-      pullPolicy: IfNotPresent
-    service:
-      type: NodePort
-      port: 80
-      nodePort: 30072
-    ingress:
-      enabled: false
-      className: ""
-      annotations: {}
-      hosts:
-        - host: lfs-demo.local
-          paths:
-            - path: /
-              pathType: Prefix
-      tls: []
-
 mcp:
   enabled: false
   namespace:

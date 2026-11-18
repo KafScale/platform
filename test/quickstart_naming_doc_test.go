@@ -64,7 +64,16 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"--set 'console.auth.existingSecret=kafscale-console-auth'",
 		"kubectl -n kafscale create secret generic kafscale-console-auth",
 		"--from-literal=username=kafscaleadmin",
-		"--from-literal=password=use-a-secret",
+		"--from-file=password=/dev/stdin",
+		"read -rs CONSOLE_PASSWORD",
+		"read -rs AWS_SECRET_ACCESS_KEY",
+		"--from-file=AWS_SECRET_ACCESS_KEY=/dev/stdin",
+		"--from-literal=AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY",
+		"unset AWS_SECRET_ACCESS_KEY",
+		"unset CONSOLE_PASSWORD",
+		`--arg password "$CONSOLE_PASSWORD"`,
+		"jq -n --arg username kafscaleadmin",
+		"-d @-",
 		"--set 'operator.etcdEndpoints={}'",
 		"--set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'",
 		"--set 'console.etcdEndpoints[0]=http://etcd.kafscale.svc:2379'",
@@ -72,7 +81,6 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"svc/kafscale-console",
 		"8080:80",
 		"/ui/api/auth/login",
-		`{"username":"kafscaleadmin","password":"use-a-secret"}`,
 		"kafscale_ui_session",
 		"-X DELETE",
 		"/ui/api/status/topics/orders",
@@ -94,6 +102,8 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"kubectl -n kafscale wait --for=condition=complete job/s3-mb --timeout=120s",
 		"kubectl -n kafscale logs job/s3-mb",
 		"kubectl -n kafscale delete job s3-mb",
+		"backoffLimit: 0",
+		"BucketAlreadyOwnedByYou",
 		"aws s3 mb s3://kafscale-demo --region us-east-1",
 	} {
 		if !strings.Contains(text, want) {
@@ -118,6 +128,37 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 	if strings.Contains(text, "--set 'console.auth.password=use-a-secret'") || strings.Contains(text, "--set 'console.auth.username=kafscaleadmin'") {
 		t.Error("docs/quickstart.md still puts console auth credentials on the helm line")
 	}
+	assertNoSecretsOnCommandLine(t, "docs/quickstart.md", text)
+}
+
+func TestTouchedDocsDoNotPassSecretsOnTheCommandLine(t *testing.T) {
+	for _, doc := range []string{
+		"docs/quickstart.md",
+		"docs/operations.md",
+		"deploy/helm/kafscale/README.md",
+	} {
+		assertNoSecretsOnCommandLine(t, doc, readRepoDoc(t, doc))
+	}
+}
+
+func assertNoSecretsOnCommandLine(t *testing.T, name, text string) {
+	t.Helper()
+	for _, forbid := range []string{
+		"--from-literal=password=",
+		"--from-literal=AWS_SECRET_ACCESS_KEY=",
+		"--from-literal=AWS_SESSION_TOKEN=",
+		`password=use-a-secret`,
+		"AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY",
+		"AWS_SECRET_ACCESS_KEY=xxx",
+		`printf %s "YOUR_SESSION_TOKEN"`,
+		`-d '{"username":"kafscaleadmin","password":`,
+		"--set 'console.auth.password=",
+		"--set console.auth.password=",
+	} {
+		if strings.Contains(text, forbid) {
+			t.Errorf("%s still passes a secret on the command line: %q", name, forbid)
+		}
+	}
 }
 
 func TestImageTagKeysDocumented(t *testing.T) {
@@ -132,11 +173,15 @@ func TestImageTagKeysDocumented(t *testing.T) {
 			t.Errorf("docs/operations.md does not document image key %s", key)
 		}
 	}
-	if strings.Contains(ops, "lfsDemos.e72Browser.image") {
-		t.Error("docs/operations.md documents lfsDemos.e72Browser.image, which no chart template reads")
+	if strings.Contains(ops, "lfsDemos") {
+		t.Error("docs/operations.md still mentions lfsDemos")
 	}
-	if strings.Contains(quick, "LFS browser demo") {
-		t.Error("docs/quickstart.md still lists the LFS browser demo among image keys")
+	if strings.Contains(quick, "LFS browser demo") || strings.Contains(quick, "lfsDemos") {
+		t.Error("docs/quickstart.md still mentions the LFS browser demo or lfsDemos")
+	}
+	readme := readRepoDoc(t, "deploy/helm/kafscale/README.md")
+	if strings.Contains(readme, "lfsDemos") || strings.Contains(readme, "values-lfs-demo.yaml") {
+		t.Error("deploy/helm/kafscale/README.md still mentions lfsDemos or values-lfs-demo.yaml")
 	}
 	if !strings.Contains(ops, "`operator.etcdImage`") || !strings.Contains(ops, "`operator.etcdSnapshotImage`") {
 		t.Error("docs/operations.md does not document operator.etcdImage and operator.etcdSnapshotImage")

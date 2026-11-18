@@ -38,16 +38,25 @@ kubectl create namespace kafscale
 The operator passes the secret through to broker pods as environment variables. Use AWS-style keys.
 
 ```bash
-kubectl -n kafscale create secret generic kafscale-s3 \
+printf 'AWS secret access key: '
+read -rs AWS_SECRET_ACCESS_KEY
+echo
+printf '%s' "$AWS_SECRET_ACCESS_KEY" | kubectl -n kafscale create secret generic kafscale-s3 \
   --from-literal=AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY \
-  --from-literal=AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY
+  --from-file=AWS_SECRET_ACCESS_KEY=/dev/stdin
+unset AWS_SECRET_ACCESS_KEY
 ```
 
 If you need a session token:
 
 ```bash
-kubectl -n kafscale patch secret kafscale-s3 -p \
-  '{"data":{"AWS_SESSION_TOKEN":"'$(printf %s "YOUR_SESSION_TOKEN" | base64)'"}}'
+printf 'AWS session token: '
+read -rs AWS_SESSION_TOKEN
+echo
+printf '%s' "$AWS_SESSION_TOKEN" | jq -n --rawfile t /dev/stdin \
+  '{data:{AWS_SESSION_TOKEN:($t|@base64)}}' | \
+  kubectl -n kafscale patch secret kafscale-s3 --type=merge --patch-file=/dev/stdin
+unset AWS_SESSION_TOKEN
 ```
 
 ## 3) Install the Operator (Cloud Kubernetes)
@@ -147,6 +156,7 @@ kind: Job
 metadata:
   name: s3-mb
 spec:
+  backoffLimit: 0
   template:
     spec:
       restartPolicy: Never
@@ -170,6 +180,8 @@ kubectl -n kafscale wait --for=condition=complete job/s3-mb --timeout=120s
 kubectl -n kafscale logs job/s3-mb
 kubectl -n kafscale delete job s3-mb
 ```
+
+`BucketAlreadyOwnedByYou` means the bucket already exists.
 
 For AWS S3, drop `--endpoint-url`, or run `aws s3 mb s3://kafscale-demo --region us-east-1`.
 
@@ -248,10 +260,15 @@ Without `console.auth.existingSecret`, and without both `console.auth.username` 
 For the quickstart cluster `demo` in namespace `kafscale`, when etcd is
 operator-managed, install or upgrade with:
 
+Enter the console password when prompted. Use the same shell for the login
+command later so `$CONSOLE_PASSWORD` is still set.
+
 ```bash
-kubectl -n kafscale create secret generic kafscale-console-auth \
-  --from-literal=username=kafscaleadmin \
-  --from-literal=password=use-a-secret
+printf 'Console password: '
+read -rs CONSOLE_PASSWORD
+echo
+printf '%s' "$CONSOLE_PASSWORD" | kubectl -n kafscale create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
 ```
 
 ```bash
@@ -276,12 +293,16 @@ kubectl -n kafscale port-forward svc/kafscale-console 8080:80
 ```
 
 ```bash
-curl -sS -c console.cookies -X POST -H 'Content-Type: application/json' \
-  -d '{"username":"kafscaleadmin","password":"use-a-secret"}' \
+jq -n --arg username kafscaleadmin --arg password "$CONSOLE_PASSWORD" \
+  '{username:$username,password:$password}' | \
+  curl -sS -c console.cookies -X POST -H 'Content-Type: application/json' \
+  -d @- \
   http://127.0.0.1:8080/ui/api/auth/login
 
 curl -sS -b console.cookies -X DELETE \
   http://127.0.0.1:8080/ui/api/status/topics/orders
+
+unset CONSOLE_PASSWORD
 ```
 
 `curl -c` stores the `kafscale_ui_session` cookie from login; `curl -b` sends it with the delete. If the CR still exists, the next operator reconcile publishes the topic again.
