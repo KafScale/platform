@@ -111,7 +111,7 @@ console:
     pullPolicy: IfNotPresent
   auth:
     username: ""
-    password: null  # Set via --set or use existingSecret
+    password: null  # Set via --set or a values file
   etcdEndpoints: []
   s3Namespace: ""  # Set to the KafscaleCluster namespace when etcdEndpoints is set. Empty makes the console refuse topic deletes.
   etcd:
