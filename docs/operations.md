@@ -77,24 +77,6 @@ the override returns that cluster to the operator default.
 2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
 3. Expose the console UI (optional) by enabling ingress in `values.yaml` or by creating a LoadBalancer service.
 
-### Scaling brokers
-
-The operator creates a HorizontalPodAutoscaler named `<cluster>-broker`. Its
-minimum is `spec.brokers.replicas` (or 3 if that field is unset) and its
-maximum is four times that minimum. The HPA targets 70% CPU and 80% memory
-utilization.
-
-To raise or lower the minimum replica count, patch the cluster:
-
-```bash
-kubectl -n kafscale patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
-```
-
-The operator updates the HPA (for example, a minimum of 2 with a maximum of 8
-becomes 3/12) and sets the StatefulSet replicas to the new value.
-
-Setting `spec.brokers.replicas` to 0 stops all brokers.
-
 Console and MCP use `/healthz` for liveness. Their Helm readiness probes use `/readyz`, which performs a live etcd read with a one-second deadline and returns HTTP 503 when configured etcd is unreachable, even if metadata is cached. The next successful probe restores readiness without restarting the process. The Kubernetes probe timeout is two seconds. Standalone or metrics-only mode without a metadata store remains ready.
 
 Operator-managed brokers use `/readyz` on the metrics port for Kubernetes readiness. Each check performs a live metadata read with a one-second deadline and checks the broker’s S3 health state. Unreachable etcd or an unavailable S3 state returns HTTP 503; degraded S3 remains ready. Kubernetes uses a two-second HTTP timeout and checks every five seconds, marking the broker NotReady after three failures. A successful check restores readiness. `/healthz` continues to report process liveness independently of etcd.

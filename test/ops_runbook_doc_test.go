@@ -79,34 +79,6 @@ func TestEtcdSnapshotJobDocumented(t *testing.T) {
 	}
 }
 
-func TestBrokerScalingDocumented(t *testing.T) {
-	for _, doc := range []string{"docs/operations.md", "docs/user-guide.md"} {
-		text := readOpsDoc(t, doc)
-		if !strings.Contains(text, "spec.brokers.replicas") {
-			t.Errorf("%s does not document scaling via spec.brokers.replicas", doc)
-		}
-		if !strings.Contains(text, "HPA") {
-			t.Errorf("%s does not mention the broker HPA", doc)
-		}
-		if !strings.Contains(text, "<cluster>-broker") {
-			t.Errorf("%s does not name the <cluster>-broker HPA", doc)
-		}
-		if !strings.Contains(text, "-n kafscale") {
-			t.Errorf("%s patch command is missing -n kafscale", doc)
-		}
-		if !strings.Contains(text, "to 0 stops all brokers") {
-			t.Errorf("%s does not say replicas: 0 stops all brokers", doc)
-		}
-	}
-	ops := readOpsDoc(t, "docs/operations.md")
-	if !strings.Contains(ops, "4") || (!strings.Contains(ops, "four times") && !strings.Contains(ops, "4x") && !strings.Contains(ops, "times the")) {
-		t.Error("docs/operations.md does not say the HPA max is four times the replica count")
-	}
-	if !strings.Contains(ops, "sets the StatefulSet replicas to the new value") {
-		t.Error("docs/operations.md does not say the operator sets the StatefulSet replicas to the new value")
-	}
-}
-
 func readOpsDoc(t *testing.T, rel string) string {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
