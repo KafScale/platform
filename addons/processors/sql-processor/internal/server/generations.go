@@ -24,6 +24,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
+	procmetadata "github.com/kafscale/platform/addons/processors/sql-processor/internal/metadata"
 )
 
 const topicGenerationPrefix = "/kafscale/topic-generations/"
@@ -65,7 +66,7 @@ func (s *Server) getGenerations() (generationSource, error) {
 		s.generationsErr = nil
 		return nil, nil
 	}
-	client, err := clientv3.New(clientv3.Config{Endpoints: s.cfg.Metadata.Etcd.Endpoints, Username: s.cfg.Metadata.Etcd.Username, Password: s.cfg.Metadata.Etcd.Password, DialTimeout: 5 * time.Second})
+	client, err := clientv3.New(procmetadata.EtcdClientConfig(clientv3.Config{Endpoints: s.cfg.Metadata.Etcd.Endpoints, Username: s.cfg.Metadata.Etcd.Username, Password: s.cfg.Metadata.Etcd.Password, DialTimeout: 5 * time.Second}))
 	if err != nil {
 		s.generationsErr = err
 		return nil, err

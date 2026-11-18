@@ -103,10 +103,10 @@ func mergeExistingSnapshot(ctx context.Context, endpoints []string, next metadat
 //nolint:unused // kept for snapshot recovery workflows
 func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.ClusterMetadata, error) {
 	var snap metadata.ClusterMetadata
-	cfg := clientv3.Config{
+	cfg := metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
-	}
+	})
 	if parseBoolEnv(operatorEtcdSilenceLogsEnv) {
 		cfg.Logger = zap.NewNop()
 	}
@@ -216,10 +216,10 @@ func publishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 	if len(endpoints) == 0 {
 		return fmt.Errorf("etcd endpoints required")
 	}
-	cfg := clientv3.Config{
+	cfg := metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 5 * time.Second,
-	}
+	})
 	if parseBoolEnv(operatorEtcdSilenceLogsEnv) {
 		cfg.Logger = zap.NewNop()
 	}

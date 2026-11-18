@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/KafScale/platform/internal/s3env"
+	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/schemaregistry"
 	"github.com/KafScale/platform/pkg/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -145,12 +146,12 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return err
 	}
-	cli, err := clientv3.New(clientv3.Config{
+	cli, err := clientv3.New(metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   s.endpoints,
 		Username:    s.username,
 		Password:    s.password,
 		DialTimeout: 5 * time.Second,
-	})
+	}))
 	if err != nil {
 		return fmt.Errorf("connect to etcd: %w", err)
 	}
