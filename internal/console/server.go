@@ -54,6 +54,7 @@ type MetricsSnapshot struct {
 	OperatorEtcdSnapshotLastScheduleTS float64
 	OperatorEtcdSnapshotStale          float64
 	OperatorEtcdSnapshotAccessOK       float64
+	OperatorEtcdSnapshotAccessReported bool
 	OperatorMetricsAvailable           bool
 }
 
@@ -380,7 +381,9 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 						metrics["etcd_snapshot_last_success_ts"] = snap.OperatorEtcdSnapshotLastSuccessTS
 						metrics["etcd_snapshot_last_schedule_ts"] = snap.OperatorEtcdSnapshotLastScheduleTS
 						metrics["etcd_snapshot_stale"] = snap.OperatorEtcdSnapshotStale
-						metrics["etcd_snapshot_access_ok"] = snap.OperatorEtcdSnapshotAccessOK
+						if snap.OperatorEtcdSnapshotAccessReported {
+							metrics["etcd_snapshot_access_ok"] = snap.OperatorEtcdSnapshotAccessOK
+						}
 						metrics["operator_clusters"] = snap.OperatorClusters
 					}
 				}
