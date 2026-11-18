@@ -43,7 +43,7 @@ spec:
 {{- if $mcpAuth.existingSecret }}
         kafscale.io/mcp-auth-checksum: {{ printf "%s:%s" $mcpAuth.existingSecret (default "token" $mcpAuth.existingSecretKey) | sha256sum | quote }}
 {{- else if $mcpAuth.token }}
-        kafscale.io/mcp-auth-checksum: {{ include (print $.Template.BasePath "/mcp-auth-secret.yaml") $ | sha256sum | quote }}
+        kafscale.io/mcp-auth-checksum: {{ (include (print $.Template.BasePath "/mcp-auth-secret.yaml") $ | fromYaml).stringData | toJson | sha256sum | quote }}
 {{- end }}
 {{- end }}
     spec:

@@ -351,7 +351,7 @@ ones most likely to affect you.
   and restarts. The orphan sweep needs `s3:ListBucketMultipartUploads` and
   `s3:AbortMultipartUpload` (#321).
 
-- If `mcp.auth.token` is set, upgrading the chart moves the token from a plaintext Deployment env value into a chart-managed Secret and rolls the MCP pod once. The env var name is unchanged. The token stays in the Helm release values (`helm get values`). To keep the token out of the release values, set `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey`.
+- If `mcp.auth.token` is set, upgrading the chart moves the token from a plaintext Deployment env value into a chart-managed Secret and rolls the MCP pod once. The env var name is unchanged. The token stays in the Helm release values (`helm get values`). To keep the token out of the release values, set `mcp.auth.existingSecret` (and `existingSecretKey` if the key is not `token`).
 
 ### Deprecations
 

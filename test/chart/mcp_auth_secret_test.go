@@ -208,7 +208,7 @@ func TestMCPAuthNoToken(t *testing.T) {
 		}
 	}
 	for _, s := range secrets {
-		if strings.HasSuffix(s.Name, "-mcp-auth") || strings.Contains(s.Name, "mcp-auth") {
+		if strings.Contains(s.Name, "mcp-auth") {
 			t.Fatalf("chart rendered MCP auth Secret %q when no auth is configured", s.Name)
 		}
 	}
@@ -268,5 +268,41 @@ func TestMCPAuthKeepsPodAnnotationsAndChecksum(t *testing.T) {
 	sum := ann["kafscale.io/mcp-auth-checksum"]
 	if sum == "" || sum == "user-override" {
 		t.Fatalf("checksum annotation %q, want the chart checksum rather than a user override", sum)
+	}
+}
+
+func TestMCPAuthChecksumIgnoresChartVersion(t *testing.T) {
+	chart := mcpAuthChart(t)
+	copyDir := t.TempDir()
+	data, err := exec.Command("cp", "-a", chart+"/.", copyDir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("copy chart: %v\n%s", err, data)
+	}
+	sumFor := func(version string) string {
+		t.Helper()
+		chartYAML := filepath.Join(copyDir, "Chart.yaml")
+		body, err := os.ReadFile(chartYAML)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(body), "\n")
+		for i, line := range lines {
+			if strings.HasPrefix(line, "version:") {
+				lines[i] = "version: " + version
+			}
+		}
+		if err := os.WriteFile(chartYAML, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rendered := helmTemplateMCP(t, copyDir, "--set", "mcp.auth.token=supersecret-mcp-token")
+		dep, _ := mcpDeploymentAndSecrets(t, rendered)
+		sum := dep.Spec.Template.Annotations["kafscale.io/mcp-auth-checksum"]
+		if sum == "" {
+			t.Fatal("pod template has no kafscale.io/mcp-auth-checksum")
+		}
+		return sum
+	}
+	if sumFor("0.1.0") != sumFor("9.9.9") {
+		t.Fatal("checksum changed when only the chart version changed")
 	}
 }
