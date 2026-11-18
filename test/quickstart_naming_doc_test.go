@@ -76,8 +76,14 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"-b console.cookies",
 		"kubectl -n kafscale delete kafscaletopic orders",
 		"The S3 bucket must already exist",
-		"aws s3 mb s3://kafscale-demo",
+		"kubectl -n kafscale run s3-mb",
+		"--image=amazon/aws-cli:2.15.0",
+		"--env AWS_ACCESS_KEY_ID='YOUR_ACCESS_KEY'",
+		"--env AWS_SECRET_ACCESS_KEY='YOUR_SECRET_KEY'",
+		"--env AWS_DEFAULT_REGION=us-east-1",
+		"s3 mb s3://kafscale-demo",
 		"--endpoint-url 'http://minio.kafscale.svc:9000'",
+		"aws s3 mb s3://kafscale-demo --region us-east-1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/quickstart.md does not contain %q", want)
@@ -85,6 +91,9 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 	}
 	if strings.Contains(text, "every `/ui/api`") && !strings.Contains(text, "every other `/ui/api`") {
 		t.Error("docs/quickstart.md still says every /ui/api call returns 503 ui auth disabled")
+	}
+	if strings.Contains(text, "aws s3 mb s3://kafscale-demo --endpoint-url") {
+		t.Error("docs/quickstart.md still runs aws s3 mb against minio.kafscale.svc from the user's terminal")
 	}
 }
 

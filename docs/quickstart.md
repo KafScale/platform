@@ -135,11 +135,18 @@ For S3-compatible endpoints (MinIO, etc), add:
     endpoint: http://minio.kafscale.svc:9000
 ```
 
-The S3 bucket must already exist. Create it if needed:
+The S3 bucket must already exist. Create it if needed. For MinIO and other
+in-cluster S3-compatible endpoints, run the command in the cluster so the
+Service name resolves and the credentials from step 2 are set:
 
 ```bash
-aws s3 mb s3://kafscale-demo --endpoint-url 'http://minio.kafscale.svc:9000'
+kubectl -n kafscale run s3-mb --rm -i --restart=Never --image=amazon/aws-cli:2.15.0 \
+  --env AWS_ACCESS_KEY_ID='YOUR_ACCESS_KEY' --env AWS_SECRET_ACCESS_KEY='YOUR_SECRET_KEY' \
+  --env AWS_DEFAULT_REGION=us-east-1 \
+  -- s3 mb s3://kafscale-demo --endpoint-url 'http://minio.kafscale.svc:9000'
 ```
+
+For AWS S3, drop `--endpoint-url`, or run `aws s3 mb s3://kafscale-demo --region us-east-1`.
 
 ## 5) Create a Topic
 
