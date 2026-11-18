@@ -27,6 +27,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/pkg/metadata"
 )
 
 func (r *ClusterReconciler) pollManagedEtcdHealth(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
@@ -42,10 +43,10 @@ func (r *ClusterReconciler) pollManagedEtcdHealth(ctx context.Context, cluster *
 		return
 	}
 
-	cfg := clientv3.Config{
+	cfg := metadata.EtcdClientConfig(clientv3.Config{
 		Endpoints:   endpoints,
 		DialTimeout: 3 * time.Second,
-	}
+	})
 	cli, err := clientv3.New(cfg)
 	if err != nil {
 		return

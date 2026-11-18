@@ -140,7 +140,7 @@ lsof -i :39092
 
 2. **Stop conflicting service**:
 ```bash
-docker stop <container-id>
+docker stop '<container-id>'
 ```
 
 ## Application Issues

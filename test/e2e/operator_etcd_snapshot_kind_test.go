@@ -517,15 +517,36 @@ func waitForStatefulSetPodsReady(t *testing.T, ctx context.Context, namespace, n
 	t.Helper()
 	for i := 0; i < replicas; i++ {
 		pod := fmt.Sprintf("%s-%d", name, i)
-		if _, err := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "wait", "--for=condition=Ready", "pod/"+pod, "--timeout="+timeout.String()); err != nil {
-			describe := runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "pod/"+pod)
-			downloadLogs, _ := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", "snapshot-download", "--tail=200")
-			restoreLogs, _ := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", "snapshot-restore", "--tail=200")
-			etcdLogs, _ := runCmdWithOutputErr(ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", "etcd", "--tail=200")
-			t.Fatalf("timeout waiting for pod/%s to be Ready\n%s\nsnapshot-download logs:\n%s\nsnapshot-restore logs:\n%s\netcd logs:\n%s",
-				pod, truncateOutput(string(describe)), truncateOutput(string(downloadLogs)), truncateOutput(string(restoreLogs)), truncateOutput(string(etcdLogs)))
+		if err := waitForStatefulSetPodReady(ctx, runCmdWithOutputErr, namespace, pod, timeout, 2*time.Second); err != nil {
+			t.Fatalf("timeout waiting for pod/%s to be Ready: %v\n%s", pod, err, statefulSetPodDiagnostics(t, ctx, namespace, name, pod))
 		}
 	}
+}
+
+func statefulSetPodDiagnostics(t *testing.T, ctx context.Context, namespace, name, pod string) string {
+	t.Helper()
+	var b strings.Builder
+	section := func(title string, out []byte) {
+		fmt.Fprintf(&b, "--- %s:\n%s\n", title, truncateOutput(strings.TrimRight(string(out), "\n")))
+	}
+	section("pods and pvcs", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "pods,pvc", "-o", "wide"))
+	section("statefulset/"+name+" status", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "statefulset", name, "-o",
+		`jsonpath=generation={.metadata.generation} observedGeneration={.status.observedGeneration} podManagementPolicy={.spec.podManagementPolicy} replicas={.status.replicas} readyReplicas={.status.readyReplicas} currentReplicas={.status.currentReplicas} updatedReplicas={.status.updatedReplicas} currentRevision={.status.currentRevision} updateRevision={.status.updateRevision}`))
+	section("controllerrevisions", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "controllerrevisions", "-o", "wide"))
+	section("pod/"+pod+" metadata", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "pod", pod, "-o",
+		`jsonpath=uid={.metadata.uid} created={.metadata.creationTimestamp} revision={.metadata.labels.controller-revision-hash} node={.spec.nodeName}`))
+	podYAML := string(runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "pod", pod, "-o", "yaml"))
+	if idx := strings.Index(podYAML, "\nstatus:"); idx >= 0 {
+		podYAML = podYAML[idx+1:]
+	}
+	section("pod/"+pod+" status", []byte(podYAML))
+	section("events", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "get", "events", "--sort-by=.lastTimestamp"))
+	for _, container := range []string{"snapshot-download", "snapshot-restore", "etcd"} {
+		section(container+" logs", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", container, "--tail=200"))
+		section(container+" previous logs", runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "logs", "pod/"+pod, "-c", container, "--previous", "--tail=200"))
+	}
+	section("describe pod/"+pod, runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "describe", "pod/"+pod))
+	return b.String()
 }
 
 func waitForStatefulSetReplicas(t *testing.T, ctx context.Context, namespace, name string, replicas int32, timeout time.Duration) {

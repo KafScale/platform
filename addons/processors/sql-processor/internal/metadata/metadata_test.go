@@ -18,12 +18,16 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
+	"google.golang.org/grpc/backoff"
 
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
 )
@@ -52,6 +56,13 @@ func TestEtcdResolverSnapshot(t *testing.T) {
 	embedCfg.LogLevel = "error"
 	embedCfg.Logger = "zap"
 	embedCfg.LogOutputs = []string{filepath.Join(embedCfg.Dir, "etcd.log")}
+	clientURL := mustLocalURL(t, freeLocalPort(t))
+	peerURL := mustLocalURL(t, freeLocalPort(t))
+	embedCfg.ListenClientUrls = []url.URL{clientURL}
+	embedCfg.AdvertiseClientUrls = []url.URL{clientURL}
+	embedCfg.ListenPeerUrls = []url.URL{peerURL}
+	embedCfg.AdvertisePeerUrls = []url.URL{peerURL}
+	embedCfg.InitialCluster = embedCfg.InitialClusterFromName(embedCfg.Name)
 	e, err := embed.StartEtcd(embedCfg)
 	if err != nil {
 		t.Fatalf("start etcd: %v", err)
@@ -128,6 +139,51 @@ func TestNewResolverConfigErrors(t *testing.T) {
 	}
 }
 
+func TestEtcdClientConfigSetsReconnectBackoff(t *testing.T) {
+	defaultCfg := EtcdClientConfig(clientv3.Config{
+		Endpoints: []string{"http://127.0.0.1:2379"},
+	})
+	if defaultCfg.DialTimeout != 5*time.Second {
+		t.Fatalf("DialTimeout = %s, want 5s default", defaultCfg.DialTimeout)
+	}
+
+	cfg := EtcdClientConfig(clientv3.Config{
+		Endpoints:   []string{"http://127.0.0.1:2379"},
+		DialTimeout: 4 * time.Second,
+	})
+	if cfg.DialTimeout != 4*time.Second {
+		t.Fatalf("DialTimeout = %s, want 4s", cfg.DialTimeout)
+	}
+	if cfg.DialKeepAliveTime != 0 {
+		t.Fatalf("DialKeepAliveTime = %s, want 0", cfg.DialKeepAliveTime)
+	}
+	if cfg.DialKeepAliveTimeout != 0 {
+		t.Fatalf("DialKeepAliveTimeout = %s, want 0", cfg.DialKeepAliveTimeout)
+	}
+	if cfg.PermitWithoutStream {
+		t.Fatal("PermitWithoutStream must stay false; etcd rejects idle pings")
+	}
+	if len(cfg.DialOptions) == 0 {
+		t.Fatal("expected reconnect DialOptions")
+	}
+	params := etcdConnectParams(cfg.DialTimeout)
+	if params.Backoff.BaseDelay != 100*time.Millisecond {
+		t.Fatalf("BaseDelay = %s, want 100ms", params.Backoff.BaseDelay)
+	}
+	if params.Backoff.MaxDelay != etcdReconnectMaxDelay {
+		t.Fatalf("MaxDelay = %s, want %s", params.Backoff.MaxDelay, etcdReconnectMaxDelay)
+	}
+	if params.Backoff.MaxDelay >= backoff.DefaultConfig.MaxDelay {
+		t.Fatalf("MaxDelay %s is not shorter than the gRPC default %s", params.Backoff.MaxDelay, backoff.DefaultConfig.MaxDelay)
+	}
+	if params.MinConnectTimeout != etcdMinConnectTimeout {
+		t.Fatalf("MinConnectTimeout = %s, want %s when DialTimeout is %s", params.MinConnectTimeout, etcdMinConnectTimeout, cfg.DialTimeout)
+	}
+	if got := etcdConnectParams(10 * time.Second).MinConnectTimeout; got != 10*time.Second {
+		t.Fatalf("MinConnectTimeout = %s, want 10s when DialTimeout is 10s", got)
+	}
+}
+
 type stubResolver struct {
 	topics     []string
 	partitions map[string][]int32
@@ -142,4 +198,23 @@ func (s *stubResolver) Topics(ctx context.Context) ([]string, error) {
 func (s *stubResolver) Partitions(ctx context.Context, topic string) ([]int32, error) {
 	s.calls++
 	return s.partitions[topic], nil
+}
+
+func freeLocalPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func mustLocalURL(t *testing.T, port int) url.URL {
+	t.Helper()
+	parsed, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	return *parsed
 }

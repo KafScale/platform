@@ -56,6 +56,18 @@ spec:
           env:
             - name: KAFSCALE_CONSOLE_HTTP_ADDR
               value: ":8080"
+{{- if .Values.console.auth.existingSecret }}
+            - name: KAFSCALE_UI_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.console.auth.existingSecret }}
+                  key: username
+            - name: KAFSCALE_UI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.console.auth.existingSecret }}
+                  key: password
+{{- else }}
 {{- if .Values.console.auth.username }}
             - name: KAFSCALE_UI_USERNAME
               value: "{{ .Values.console.auth.username }}"
@@ -63,6 +75,7 @@ spec:
 {{- if .Values.console.auth.password }}
             - name: KAFSCALE_UI_PASSWORD
               value: "{{ .Values.console.auth.password }}"
+{{- end }}
 {{- end }}
 {{- if .Values.console.etcdEndpoints }}
             - name: KAFSCALE_CONSOLE_ETCD_ENDPOINTS
@@ -72,6 +85,18 @@ spec:
             - name: KAFSCALE_S3_NAMESPACE
               value: "{{ .Values.console.s3Namespace }}"
 {{- end }}
+{{- if .Values.console.etcd.existingSecret }}
+            - name: KAFSCALE_CONSOLE_ETCD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.console.etcd.existingSecret }}
+                  key: ETCD_USERNAME
+            - name: KAFSCALE_CONSOLE_ETCD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.console.etcd.existingSecret }}
+                  key: ETCD_PASSWORD
+{{- else }}
 {{- if .Values.console.etcd.username }}
             - name: KAFSCALE_CONSOLE_ETCD_USERNAME
               value: "{{ .Values.console.etcd.username }}"
@@ -79,6 +104,7 @@ spec:
 {{- if .Values.console.etcd.password }}
             - name: KAFSCALE_CONSOLE_ETCD_PASSWORD
               value: "{{ .Values.console.etcd.password }}"
+{{- end }}
 {{- end }}
 {{- if .Values.console.metrics.brokerMetricsURL }}
             - name: KAFSCALE_CONSOLE_BROKER_METRICS_URL
