@@ -69,6 +69,14 @@ spec:
               value: "{{ .Values.operator.brokerImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.brokerImage.tag) .Values.operator.brokerImage.useLatest }}"
             - name: BROKER_IMAGE_PULL_POLICY
               value: "{{ ternary "Always" "IfNotPresent" .Values.operator.brokerImage.useLatest }}"
+            - name: LFS_PROXY_IMAGE
+              value: "{{ .Values.operator.lfsProxyImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.lfsProxyImage.tag) .Values.operator.lfsProxyImage.useLatest }}"
+            - name: LFS_PROXY_IMAGE_PULL_POLICY
+              value: "{{ ternary "Always" "IfNotPresent" .Values.operator.lfsProxyImage.useLatest }}"
+            - name: KAFSCALE_OPERATOR_ETCD_IMAGE
+              value: "{{ .Values.operator.etcdImage.repository }}:{{ .Values.operator.etcdImage.tag }}"
+            - name: KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE
+              value: "{{ .Values.operator.etcdSnapshotImage.repository }}:{{ .Values.operator.etcdSnapshotImage.tag }}"
             - name: KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE
               value: "{{ .Values.operator.etcdSnapshotEtcdctlImage.repository }}:{{ ternary "latest" (default .Chart.AppVersion .Values.operator.etcdSnapshotEtcdctlImage.tag) .Values.operator.etcdSnapshotEtcdctlImage.useLatest }}"
             - name: KAFSCALE_OPERATOR_ETCD_REPLICAS

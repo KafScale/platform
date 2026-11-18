@@ -115,6 +115,18 @@ spec:
             - name: KAFSCALE_PROXY_ETCD_ENDPOINTS
               value: "{{ join "," .Values.proxy.etcdEndpoints }}"
 {{- end }}
+{{- if .Values.proxy.etcd.existingSecret }}
+            - name: KAFSCALE_PROXY_ETCD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.proxy.etcd.existingSecret }}
+                  key: ETCD_USERNAME
+            - name: KAFSCALE_PROXY_ETCD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.proxy.etcd.existingSecret }}
+                  key: ETCD_PASSWORD
+{{- else }}
 {{- if .Values.proxy.etcd.username }}
             - name: KAFSCALE_PROXY_ETCD_USERNAME
               value: "{{ .Values.proxy.etcd.username }}"
@@ -122,6 +134,7 @@ spec:
 {{- if .Values.proxy.etcd.password }}
             - name: KAFSCALE_PROXY_ETCD_PASSWORD
               value: "{{ .Values.proxy.etcd.password }}"
+{{- end }}
 {{- end }}
 {{- if .Values.proxy.backends }}
             - name: KAFSCALE_PROXY_BACKENDS

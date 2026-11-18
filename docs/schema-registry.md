@@ -280,11 +280,23 @@ schemaRegistry:
   enabled: true
   replicas: 2
   etcdEndpoints:
-    - http://kafscale-etcd-client.kafscale.svc:2379
+    # Operator-managed etcd for a KafscaleCluster named demo in namespace kafscale.
+    # The Service is <cluster>-etcd-client.<namespace>.svc.cluster.local:2379.
+    - http://demo-etcd-client.kafscale.svc.cluster.local:2379
   s3:
     bucket: kafscale-data
     region: us-east-1
+    endpoint: http://minio.kafscale.svc.cluster.local:9000  # set for MinIO or any non-AWS endpoint
+    credentialsSecret: kafscale-s3  # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+    namespace: kafscale  # set it to the KafscaleCluster namespace (the chart default is default)
 ```
+
+Use the full `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379` name
+for operator-managed etcd. See [Service names](operations.md#service-names).
+The chart defaults `schemaRegistry.s3.namespace` to `default`. Set it to the
+cluster namespace, as [operations.md](operations.md#schema-registry) warns.
+`schemaRegistry.s3.endpoint` and `schemaRegistry.s3.credentialsSecret` are
+required for MinIO and other S3-compatible stores.
 
 The chart runs the image `ghcr.io/kafscale/kafscale-schema-registry` with the chart `appVersion` tag unless `schemaRegistry.image.tag` is set. Readiness (`/readyz`) checks that etcd answers. Metrics on `/metrics`:
 
