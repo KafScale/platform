@@ -282,10 +282,11 @@ limitations under the License.
 ### Go API compatibility
 
 - Restore the exact published v1.6.3 `broker.CoordinatorConfig` shape and comparability. The legacy constructor remains supported and deprecated; use `CoordinatorOptions` and `NewGroupCoordinatorWithOptions` for retention and lease hooks. `metadata.Store` retains its original method set; group offset listing is an optional `GroupConsumerOffsetLister` capability with a filtering adapter (#298).
+- `storage.RecoverTopicToTimestamp` now returns an error when no source segments match the selected partitions, or when no record in those segments is at or before the restore timestamp. It previously returned success with an empty result.
 
 ### CLI
 
-- `kafscale-cli restore` fails when there are no segments for the selected partitions under the source S3 prefix (`<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic), or when none of those segments are at or before `--to`. The error names the prefix it searched and points to `--namespace` and `KAFSCALE_NAMESPACE`. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. The source namespace still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`. The usage text and the restore example in [operations.md](../operations.md#topic-recovery-on-the-dr-spine) now include `--namespace`, `--target-namespace`, `--partitions` and `KAFSCALE_NAMESPACE`.
+- `kafscale-cli restore` fails when there are no segments for the selected partitions under the source S3 prefix (`<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic), or when no record in those segments is at or before `--to`. If the first listing already shows no segments, the error names the prefix it searched and points to `--namespace` and `KAFSCALE_NAMESPACE`, and the target topic is not created. If recovery later finds no segments for those partitions, or no record at or before `--to`, the error names the prefix only and the target is rolled back. The source namespace still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`. The usage text and the restore example in [operations.md](../operations.md#topic-recovery-on-the-dr-spine) now include `--namespace`, `--target-namespace`, `--partitions` and `KAFSCALE_NAMESPACE`.
 
 ### Console
 
@@ -333,7 +334,7 @@ ones most likely to affect you.
 
 ### Behavior changes
 
-- **`kafscale-cli restore` no longer leaves an empty target topic when the source prefix has no segments for the selected partitions, or when nothing is at or before `--to`.** The command exits with an error that names the prefix it searched. If the first listing already shows no segments, the target is not created; otherwise the target is rolled back. This includes a topic that was created but never written. `--namespace` still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`.
+- **`kafscale-cli restore` no longer leaves an empty target topic when the source prefix has no segments for the selected partitions, or when no record in those segments is at or before `--to`.** The command exits with an error that names the prefix it searched. If the first listing already shows no segments, the target is not created; otherwise the target is rolled back. This includes a topic that was created but never written. `--namespace` still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`.
 - **Proxy stops past the etcd TTL.** When etcd cannot be read for longer than
   `KAFSCALE_PROXY_BACKEND_CACHE_TTL_SEC` (default `60`, set with
   `spec.lfsProxy.backendCacheTTLSeconds` or the chart value

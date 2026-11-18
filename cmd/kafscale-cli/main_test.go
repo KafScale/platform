@@ -1070,7 +1070,7 @@ func TestExecuteRestoreRollsBackWhenCutoffIsBeforeEverySegment(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected restore to fail when --to is earlier than every segment")
 	}
-	if !strings.Contains(err.Error(), "no segments at or before") || !strings.Contains(err.Error(), cutoff.UTC().Format(time.RFC3339)) {
+	if !strings.Contains(err.Error(), "no records at or before") || !strings.Contains(err.Error(), cutoff.UTC().Format(time.RFC3339)) {
 		t.Fatalf("expected a cutoff error, got %v", err)
 	}
 

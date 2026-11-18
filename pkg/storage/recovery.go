@@ -249,7 +249,7 @@ func RecoverTopicToTimestamp(ctx context.Context, s3 S3Client, cfg TopicRecovery
 	}
 
 	if result.SegmentsCopied == 0 {
-		return nil, fmt.Errorf("no segments at or before %s for topic %s under %s", cfg.RestoreTo.UTC().Format(time.RFC3339), cfg.SourceTopic, sourcePrefix)
+		return nil, fmt.Errorf("no records at or before %s for topic %s under %s", cfg.RestoreTo.UTC().Format(time.RFC3339), cfg.SourceTopic, sourcePrefix)
 	}
 
 	restoreCommitted = true
