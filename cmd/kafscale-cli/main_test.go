@@ -47,11 +47,31 @@ func newTestEtcdStore(t *testing.T, ctx context.Context, initial metadata.Cluste
 
 type failingListS3 struct {
 	*storage.MemoryS3Client
-	err error
+	err        error
+	failPrefix string
 }
 
-func (f *failingListS3) ListSegments(context.Context, string) ([]storage.S3Object, error) {
-	return nil, f.err
+func (f *failingListS3) ListSegments(ctx context.Context, prefix string) ([]storage.S3Object, error) {
+	if f.failPrefix == "" || strings.HasPrefix(prefix, f.failPrefix) {
+		return nil, f.err
+	}
+	return f.MemoryS3Client.ListSegments(ctx, prefix)
+}
+
+type emptyAfterFirstSourceListS3 struct {
+	*storage.MemoryS3Client
+	sourcePrefix string
+	lists        int
+}
+
+func (s *emptyAfterFirstSourceListS3) ListSegments(ctx context.Context, prefix string) ([]storage.S3Object, error) {
+	if prefix == s.sourcePrefix {
+		s.lists++
+		if s.lists >= 2 {
+			return []storage.S3Object{}, nil
+		}
+	}
+	return s.MemoryS3Client.ListSegments(ctx, prefix)
 }
 
 type failingUploadIndexS3 struct {
@@ -72,8 +92,17 @@ func TestRunHelpAndUnknownCommand(t *testing.T) {
 	if err := run(context.Background(), []string{"help"}, &stdout, &bytes.Buffer{}); err != nil {
 		t.Fatalf("run help: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "usage: kafscale-cli restore") {
-		t.Fatalf("unexpected help output: %s", stdout.String())
+	help := stdout.String()
+	for _, want := range []string{
+		"usage: kafscale-cli restore",
+		"--namespace",
+		"--target-namespace",
+		"--partitions",
+		"KAFSCALE_NAMESPACE",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q: %s", want, help)
+		}
 	}
 
 	err := run(context.Background(), []string{"wat"}, &bytes.Buffer{}, &bytes.Buffer{})
@@ -402,11 +431,26 @@ func TestExecuteRestoreRollsBackTargetTopicOnRecoveryFailure(t *testing.T) {
 		t.Fatalf("CreateTopic: %v", err)
 	}
 
-	s3 := &failingListS3{
-		MemoryS3Client: storage.NewMemoryS3Client(),
-		err:            errors.New("list failed"),
+	mem := storage.NewMemoryS3Client()
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
+	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
 	}
-	err := executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+	if err := mem.UploadSegment(ctx, "default/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := mem.UploadIndex(ctx, "default/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	s3 := &failingListS3{
+		MemoryS3Client: mem,
+		err:            errors.New("list failed"),
+		failPrefix:     "restore-ns/orders-restored/",
+	}
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
 		SourceTopic:     "orders",
 		SourceNamespace: "default",
 		TargetTopic:     "orders-restored",
@@ -696,5 +740,353 @@ func TestExecuteRestoreMorePartitionsThanBrokers(t *testing.T) {
 		if next, err := store.NextOffset(ctx, "restored", partition); err != nil || next != 2 {
 			t.Fatalf("partition %d durable next offset=%d, err=%v", partition, next, err)
 		}
+	}
+}
+
+func TestExecuteRestoreRefusesWhenSourceHasNoSegments(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, endpoints)
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	s3 := storage.NewMemoryS3Client()
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
+	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
+	}
+	if err := s3.UploadSegment(ctx, "kafscale-f18/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := s3.UploadIndex(ctx, "kafscale-f18/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       time.Date(2026, 5, 13, 12, 5, 0, 0, time.UTC),
+	}, s3, store)
+	if err == nil {
+		t.Fatal("expected restore to fail when no segments are under the source prefix")
+	}
+	msg := err.Error()
+	for _, want := range []string{"no segments found", "default/orders/", "--namespace", "KAFSCALE_NAMESPACE"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-restored"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 0 && meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("target topic should not have been created: %+v", meta.Topics)
+	}
+
+	objects, err := s3.ListSegments(ctx, "default/orders-restored/")
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(objects) != 0 {
+		t.Fatalf("expected no target objects, got %+v", objects)
+	}
+}
+
+func TestExecuteRestoreRefusesWhenRequestedPartitionsHaveNoSegments(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, endpoints)
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     2,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	s3 := storage.NewMemoryS3Client()
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
+	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
+	}
+	if err := s3.UploadSegment(ctx, "default/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := s3.UploadIndex(ctx, "default/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-part",
+		TargetNamespace: "default",
+		RestoreTo:       time.Date(2026, 5, 13, 12, 5, 0, 0, time.UTC),
+		Partitions:      []int32{1},
+	}, s3, store)
+	if err == nil || !strings.Contains(err.Error(), "no segments found") || !strings.Contains(err.Error(), "default/orders/") {
+		t.Fatalf("expected no segments error for partition 1, got %v", err)
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-part"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 0 && meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("target topic should not have been created: %+v", meta.Topics)
+	}
+}
+
+func TestRunRestoreUsesS3NamespaceWhenNamespaceUnset(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, endpoints)
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	s3 := storage.NewMemoryS3Client()
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC).UnixMilli(), []int64{0}),
+	}, time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
+	}
+	if err := s3.UploadSegment(ctx, "kafscale-f18/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := s3.UploadIndex(ctx, "kafscale-f18/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	prevS3 := newS3Client
+	prevStore := newEtcdStore
+	prevMemory := newMemoryS3
+	t.Cleanup(func() {
+		newS3Client = prevS3
+		newEtcdStore = prevStore
+		newMemoryS3 = prevMemory
+	})
+	newS3Client = func(context.Context, storage.S3Config) (storage.S3Client, error) {
+		return s3, nil
+	}
+	newEtcdStore = func(ctx context.Context, _ metadata.ClusterMetadata, cfg metadata.EtcdStoreConfig) (*metadata.EtcdStore, error) {
+		return metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{
+			Brokers: []protocol.MetadataBroker{
+				{NodeID: 1, Host: "broker-0", Port: 9092},
+			},
+			ControllerID: 1,
+		}, cfg)
+	}
+	newMemoryS3 = func() storage.S3Client { return s3 }
+
+	t.Setenv("KAFSCALE_S3_BUCKET", "bucket")
+	t.Setenv("KAFSCALE_S3_REGION", "us-east-1")
+	t.Setenv("KAFSCALE_ETCD_ENDPOINTS", strings.Join(endpoints, ","))
+	t.Setenv("KAFSCALE_NAMESPACE", "")
+	t.Setenv("KAFSCALE_S3_NAMESPACE", "kafscale-f18")
+
+	var stdout bytes.Buffer
+	if err := run(context.Background(), []string{
+		"restore",
+		"--topic", "orders",
+		"--target-topic", "orders-s3ns",
+		"--to", "2026-05-13T12:05:00Z",
+	}, &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("run restore: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "orders-s3ns") {
+		t.Fatalf("unexpected restore output: %s", stdout.String())
+	}
+	if _, err := s3.DownloadSegment(ctx, "kafscale-f18/orders-s3ns/0/segment-00000000000000000000.kfs", nil); err != nil {
+		t.Fatalf("DownloadSegment restored under S3 namespace: %v", err)
+	}
+}
+
+func TestDefaultRestoreNamespace(t *testing.T) {
+	t.Setenv("KAFSCALE_NAMESPACE", "")
+	t.Setenv("KAFSCALE_S3_NAMESPACE", "")
+	if got := defaultRestoreNamespace(); got != "default" {
+		t.Fatalf("expected default, got %q", got)
+	}
+
+	t.Setenv("KAFSCALE_S3_NAMESPACE", "kafscale-f18")
+	if got := defaultRestoreNamespace(); got != "kafscale-f18" {
+		t.Fatalf("expected KAFSCALE_S3_NAMESPACE, got %q", got)
+	}
+
+	t.Setenv("KAFSCALE_NAMESPACE", "explicit-ns")
+	if got := defaultRestoreNamespace(); got != "explicit-ns" {
+		t.Fatalf("expected KAFSCALE_NAMESPACE to win, got %q", got)
+	}
+}
+
+func TestExecuteRestoreRollsBackWhenSourceSegmentsDisappear(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, endpoints)
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	mem := storage.NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, created.UnixMilli(), []int64{0}),
+	}, created)
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
+	}
+	if err := mem.UploadSegment(ctx, "default/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := mem.UploadIndex(ctx, "default/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	s3 := &emptyAfterFirstSourceListS3{MemoryS3Client: mem, sourcePrefix: "default/orders/"}
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-restored",
+		TargetNamespace: "default",
+		RestoreTo:       created.Add(5 * time.Minute),
+	}, s3, store)
+	if err == nil {
+		t.Fatal("expected restore to fail when recovery lists no source segments")
+	}
+	if !strings.Contains(err.Error(), "no source segments") || !strings.Contains(err.Error(), "default/orders/") {
+		t.Fatalf("expected a missing source segment error, got %v", err)
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-restored"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 0 && meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("target topic should have been rolled back: %+v", meta.Topics)
+	}
+
+	objects, err := mem.ListSegments(ctx, "default/orders-restored/")
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(objects) != 0 {
+		t.Fatalf("expected no target objects, got %+v", objects)
+	}
+}
+
+func TestExecuteRestoreRollsBackWhenCutoffIsBeforeEverySegment(t *testing.T) {
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	ctx := context.Background()
+
+	store := newTestEtcdStore(t, ctx, metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 1, Host: "broker-0", Port: 9092},
+		},
+		ControllerID: 1,
+	}, endpoints)
+
+	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{
+		Name:              "orders",
+		NumPartitions:     1,
+		ReplicationFactor: 1,
+	}); err != nil {
+		t.Fatalf("CreateTopic: %v", err)
+	}
+
+	s3 := storage.NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	artifact, err := storage.BuildSegment(storage.SegmentWriterConfig{IndexIntervalMessages: 1}, []storage.RecordBatch{
+		makeStorageRecoveryBatch(0, created.UnixMilli(), []int64{0}),
+	}, created)
+	if err != nil {
+		t.Fatalf("BuildSegment: %v", err)
+	}
+	if err := s3.UploadSegment(ctx, "default/orders/0/segment-00000000000000000000.kfs", artifact.SegmentBytes); err != nil {
+		t.Fatalf("UploadSegment: %v", err)
+	}
+	if err := s3.UploadIndex(ctx, "default/orders/0/segment-00000000000000000000.index", artifact.IndexBytes); err != nil {
+		t.Fatalf("UploadIndex: %v", err)
+	}
+
+	cutoff := created.Add(-time.Hour)
+	err = executeRestore(ctx, &bytes.Buffer{}, restoreConfig{
+		SourceTopic:     "orders",
+		SourceNamespace: "default",
+		TargetTopic:     "orders-early",
+		TargetNamespace: "default",
+		RestoreTo:       cutoff,
+	}, s3, store)
+	if err == nil {
+		t.Fatal("expected restore to fail when --to is earlier than every segment")
+	}
+	if !strings.Contains(err.Error(), "no records at or before") || !strings.Contains(err.Error(), cutoff.UTC().Format(time.RFC3339)) {
+		t.Fatalf("expected a cutoff error, got %v", err)
+	}
+
+	meta, err := store.Metadata(ctx, []string{"orders-early"})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+	if len(meta.Topics) != 0 && meta.Topics[0].ErrorCode == 0 {
+		t.Fatalf("target topic should have been rolled back: %+v", meta.Topics)
+	}
+
+	objects, err := s3.ListSegments(ctx, "default/orders-early/")
+	if err != nil {
+		t.Fatalf("ListSegments: %v", err)
+	}
+	if len(objects) != 0 {
+		t.Fatalf("expected no target objects, got %+v", objects)
 	}
 }

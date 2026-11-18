@@ -17,6 +17,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -143,5 +144,50 @@ func uploadRecoverySegment(t *testing.T, s3 *MemoryS3Client, namespace string, t
 	}
 	if err := s3.UploadIndex(context.Background(), segmentIndexKey(namespace, topic, partition, baseOffset), artifact.IndexBytes); err != nil {
 		t.Fatalf("UploadIndex: %v", err)
+	}
+}
+
+func TestRecoverTopicToTimestampErrorsWhenSourcePrefixIsEmpty(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	_, err := RecoverTopicToTimestamp(context.Background(), s3, TopicRecoveryConfig{
+		SourceNamespace: "default",
+		SourceTopic:     "orders",
+		TargetNamespace: "default",
+		TargetTopic:     "orders-restore",
+		RestoreTo:       time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
+	})
+	if err == nil || !strings.Contains(err.Error(), "no source segments found") || !strings.Contains(err.Error(), "default/orders/") {
+		t.Fatalf("expected an empty source prefix error, got %v", err)
+	}
+	objects, listErr := s3.ListSegments(context.Background(), "default/orders-restore/")
+	if listErr != nil {
+		t.Fatalf("ListSegments: %v", listErr)
+	}
+	if len(objects) != 0 {
+		t.Fatalf("expected no target objects, got %+v", objects)
+	}
+}
+
+func TestRecoverTopicToTimestampErrorsWhenNoRecordIsAtOrBeforeRestoreTo(t *testing.T) {
+	s3 := NewMemoryS3Client()
+	created := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	uploadRecoverySegment(t, s3, "default", "orders", 0, 0, created)
+	cutoff := created.Add(-time.Hour)
+	_, err := RecoverTopicToTimestamp(context.Background(), s3, TopicRecoveryConfig{
+		SourceNamespace: "default",
+		SourceTopic:     "orders",
+		TargetNamespace: "default",
+		TargetTopic:     "orders-restore",
+		RestoreTo:       cutoff,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no records at or before") || !strings.Contains(err.Error(), cutoff.UTC().Format(time.RFC3339)) || !strings.Contains(err.Error(), "default/orders/") {
+		t.Fatalf("expected a no-record cutoff error, got %v", err)
+	}
+	objects, listErr := s3.ListSegments(context.Background(), "default/orders-restore/")
+	if listErr != nil {
+		t.Fatalf("ListSegments: %v", listErr)
+	}
+	if len(objects) != 0 {
+		t.Fatalf("expected no target objects, got %+v", objects)
 	}
 }
