@@ -619,7 +619,8 @@ as soon as etcd answers, and `/readyz` turns Ready on the next check.
   seconds and the full TTL before the proxy stops. With a TTL of 10 seconds or
   less it stops almost at once.
 - The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
-- Kubernetes marks the pod NotReady about 30 seconds after `/readyz` starts failing (probe every 5 seconds, failureThreshold 6).
+- Kubernetes marks the pod NotReady about 30 seconds after `/readyz` starts
+  failing (probe every 5 seconds, failureThreshold 6).
 - This is on purpose. When etcd is down the cluster has to stop writing to avoid
   data loss, so past the TTL the proxy stops instead of letting clients write
   through stale routing.
