@@ -62,8 +62,9 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set 'operator.etcdEndpoints={}'
 ```
 
-Image tags follow the chart `appVersion` unless you override them. The current
-chart `appVersion` may be older than this release. For a full list of image
+Image tags follow the chart `appVersion` unless you override them. If you
+install from a checkout of `main`, that tag may be older than the branch; set
+`useLatest=true` on each image the install runs. For a full list of image
 keys, including `useLatest` and `tag` for the operator, broker, etcd-tools,
 console, proxy, schema registry, MCP and the operator-managed LFS proxy, see
 [Installing with Helm](operations.md#installing-with-helm).
@@ -195,22 +196,50 @@ If you created the topic with a `KafscaleTopic`, delete that resource first.
 Then use the Kafka `DeleteTopics` API from a client that can reach the
 brokers, or the console `DELETE /ui/api/status/topics/<topic>` endpoint after
 signing in (see [Console](operations.md#console)). The console needs
-`console.etcdEndpoints` and `console.s3Namespace` set to the cluster
-namespace. Without `console.etcdEndpoints`, that delete returns `503` with
-`metadata store not configured`. Without `console.s3Namespace`, it returns
-`503` with `console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace`.
-For the quickstart cluster `demo` in namespace `kafscale`, install or upgrade
-with:
+`console.etcdEndpoints` set to the cluster's etcd and `console.s3Namespace`
+set to the cluster namespace. Without `console.etcdEndpoints`, that delete
+returns `503` with `metadata store not configured`. Without
+`console.s3Namespace`, it returns `503` with `console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace`.
+Without `console.auth.username` and `console.auth.password`, every `/ui/api`
+call returns `503` with `ui auth disabled`. The chart sets those from
+`--set console.auth.username` and `--set console.auth.password`; it does not
+read the console login password from a Secret.
+
+For the quickstart cluster `demo` in namespace `kafscale`, when etcd is
+operator-managed, install or upgrade with:
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set 'operator.etcdEndpoints={}' \
   --set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379' \
-  --set 'console.s3Namespace=kafscale'
+  --set 'console.s3Namespace=kafscale' \
+  --set 'console.auth.username=kafscaleadmin' \
+  --set 'console.auth.password=use-a-secret'
 ```
 
-If the CR still exists, the next operator reconcile publishes the topic again.
+If you used the external etcd option in step 4, set `console.etcdEndpoints` to
+that etcd endpoint instead, for example
+`--set 'console.etcdEndpoints[0]=http://etcd.kafscale.svc:2379'`.
+
+The Helm release named `kafscale` exposes the console as Service
+`kafscale-console` on port 80. In a second terminal, port-forward it, then
+sign in with `POST /ui/api/auth/login` and delete topic `orders`:
+
+```bash
+kubectl -n kafscale port-forward svc/kafscale-console 8080:80
+```
+
+```bash
+curl -sS -c console.cookies -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"kafscaleadmin","password":"use-a-secret"}' \
+  http://127.0.0.1:8080/ui/api/auth/login
+
+curl -sS -b console.cookies -X DELETE \
+  http://127.0.0.1:8080/ui/api/status/topics/orders
+```
+
+`curl -c` stores the `kafscale_ui_session` cookie from login; `curl -b` sends it with the delete. If the CR still exists, the next operator reconcile publishes the topic again.
 
 ## Next Steps
 

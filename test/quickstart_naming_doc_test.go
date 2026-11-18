@@ -48,14 +48,31 @@ func TestQuickstartTopicDeleteAndClientAccess(t *testing.T) {
 		"-t orders",
 		"kcat-consume",
 		"next operator reconcile publishes the topic again",
-		"console.etcdEndpoints",
+		"set to the cluster's etcd",
+		"set to the cluster namespace",
 		"console.s3Namespace=kafscale",
 		"demo-etcd-client.kafscale.svc.cluster.local:2379",
 		"503",
 		"metadata store not configured",
 		"console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace",
+		"ui auth disabled",
+		"console.auth.username",
+		"console.auth.password",
+		"--set 'console.auth.username=kafscaleadmin'",
+		"--set 'console.auth.password=use-a-secret'",
 		"--set 'operator.etcdEndpoints={}'",
 		"--set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'",
+		"--set 'console.etcdEndpoints[0]=http://etcd.kafscale.svc:2379'",
+		"external etcd option in step 4",
+		"svc/kafscale-console",
+		"8080:80",
+		"/ui/api/auth/login",
+		`{"username":"kafscaleadmin","password":"use-a-secret"}`,
+		"kafscale_ui_session",
+		"-X DELETE",
+		"/ui/api/status/topics/orders",
+		"-c console.cookies",
+		"-b console.cookies",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/quickstart.md does not contain %q", want)
@@ -86,6 +103,12 @@ func TestImageTagKeysDocumented(t *testing.T) {
 	}
 	if !strings.Contains(quick, "operations.md#installing-with-helm") || !strings.Contains(strings.ToLower(quick), "appversion") {
 		t.Error("docs/quickstart.md does not point at operations.md#installing-with-helm or mention appVersion")
+	}
+	if !strings.Contains(quick, "checkout of `main`") || !strings.Contains(quick, "useLatest=true") {
+		t.Error("docs/quickstart.md does not scope image-tag drift to a main checkout or say to set useLatest=true")
+	}
+	if strings.Contains(quick, "may be older than this release") {
+		t.Error("docs/quickstart.md still says the chart appVersion may be older than this release")
 	}
 }
 
