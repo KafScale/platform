@@ -26,6 +26,10 @@ on:
 
 permissions: read-all
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   license-check:
     name: License Header Check
@@ -111,8 +115,8 @@ jobs:
         working-directory: lfs-client-sdk/java
         run: mvn -B test -Dtest='!LfsProducerIntegrationTest' -Dsurefire.failIfNoSpecifiedTests=false
 
-  go-test:
-    name: Go Test Suite
+  go-unit:
+    name: Go Unit Tests
     runs-on: ubuntu-latest
     env:
       GOCACHE: ${{ github.workspace }}/.gocache
@@ -143,17 +147,52 @@ jobs:
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Run go test -race ./...
-        run: go test -race ./...
+        run: go test -race -coverprofile=coverage-auth.out ./...
 
       - name: Require 100% authentication coverage
-        run: bash hack/check_auth_coverage.sh
+        run: bash hack/check_auth_coverage.sh coverage-auth.out
+
+  go-e2e:
+    name: Go Integration Tests (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: kafka
+          - suite: schema-inline
+            schema-test: '^TestSchemaRegistry(JSONConcurrentSlowStorage)?E2E$'
+          - suite: schema-minio
+            schema-test: '^TestSchemaRegistryMinIOE2E$'
+          - suite: operator-api
+          - suite: nested-modules
+    env:
+      GOCACHE: ${{ github.workspace }}/.gocache
+      KAFSCALE_E2E: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            addons/processors/skeleton/go.sum
+            addons/processors/sql-processor/go.sum
+            addons/processors/iceberg-processor/go.sum
+      - name: Prepare Go build cache
+        run: mkdir -p "$GOCACHE"
+      - name: Install Helm
+        if: matrix.suite == 'operator-api'
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Kafka proxy end-to-end tests
+        if: matrix.suite == 'kafka'
         env:
           KAFSCALE_E2E_AUTH: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^TestProxy(MTLS|PlainAutoCreate)E2E$' -v -count=1 -timeout=3m
 
       - name: librdkafka compatibility end-to-end tests
+        if: matrix.suite == 'kafka'
         env:
           KAFSCALE_E2E: "1"
           KCAT_IMAGE: ueisele/kcat:1.7.1-librdkafka2.11.1-alma10.1-20251124-202511291703@sha256:d8a5fe246bfeedf57fb3ed7a1155b1c75576014a87f26cb750d4e382847d2926
@@ -182,26 +221,33 @@ jobs:
           echo "::notice title=kcat client::$(printf '%s\n' "$kcat_version" | sed -n 's/^Version \([^ ]*\) .*librdkafka \([^ ]*\) .*/kcat \1 with librdkafka \2/p') from $kcat_source"
           go test -race -tags=e2e ./test/e2e -run '^TestLibrdkafkaCompatibilityE2E$' -count=1 -v -timeout=3m
 
-      - name: Schema registry end-to-end tests
-        env:
-          KAFSCALE_E2E: "1"
-          KAFSCALE_SR_PYTHON: /tmp/sr-venv/bin/python
-        run: |
-          python3 -m venv /tmp/sr-venv
-          /tmp/sr-venv/bin/pip install --require-hashes -r .github/requirements/schema-registry.txt
-          make test-schema-registry
-
       - name: Consumer group recovery end-to-end tests
+        if: matrix.suite == 'kafka'
         env:
           KAFSCALE_E2E: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^Test(CoordinatorBrokerRestartE2E|DeleteConsumerGroupAfterCoordinatorCrash|DeleteGroupsNonCoordinatorE2E|ConsumerGroupRetentionE2E|OpsAPI|ProxyListTopicsAfterCreateE2E)$' -count=1 -timeout=3m
 
       - name: Kafka CLI simple consumer group end-to-end test
+        if: matrix.suite == 'kafka'
         env:
           KAFSCALE_E2E: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^(TestSimpleOffsetCommitE2E|TestTopicRecreateE2E)$' -v -count=1 -timeout=5m
 
+      - name: Schema registry end-to-end tests
+        if: startsWith(matrix.suite, 'schema-')
+        env:
+          KAFSCALE_SR_PYTHON: ${{ runner.temp }}/sr-venv/bin/python
+          SCHEMA_TEST: ${{ matrix.schema-test }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sr-venv"
+          "$RUNNER_TEMP/sr-venv/bin/pip" install --require-hashes -r .github/requirements/schema-registry.txt
+          go test -race -tags=e2e ./test/e2e -run "$SCHEMA_TEST" -v -count=1 -timeout=40m
+
+      - name: Check operator startup readiness, scaling and retry regressions
+        if: matrix.suite == 'operator-api'
+        run: go test -race -tags=e2e ./test/e2e -run '^Test(OperatorBackendChecks|OperatorResourceExists|WaitForOperatorBackends|WaitForStatefulSetPodReady|ProduceAfterReadiness|KindKubeProxyMode|BrokerScaleRequiresRequestedCountAndCompletedRollout|SingleBrokerEndpointRejectsStaleMetadata|WaitForBrokerScaleAndEndpoint|ReadEtcdSnapshotSelectsContainerAndOnlyValue|CommandStdoutKeepsWarningsOutOfJSON)' -v -count=1 -timeout=2m
       - name: CRD and security reconciliation API tests
+        if: matrix.suite == 'operator-api'
         env:
           KAFSCALE_E2E_AFFINITY: "1"
           KAFSCALE_E2E_AUTH: "1"
@@ -213,7 +259,28 @@ jobs:
           make test-operator-envtest
 
       - name: Run nested module tests
+        if: matrix.suite == 'nested-modules'
         run: make test-nested-modules
+
+      - name: Upload failed end-to-end test logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: go-test-e2e-logs-${{ matrix.suite }}
+          path: test/e2e/logs/*.log
+          if-no-files-found: ignore
+          retention-days: 3
+
+  go-test:
+    name: Go Test Suite
+    if: always()
+    needs: [go-unit, go-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Go test suites to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
 
   go-coverage:
     name: Go Coverage Gate
@@ -351,8 +418,6 @@ jobs:
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
       - name: Install kind
         run: go install sigs.k8s.io/kind@v0.31.0
-      - name: Check operator startup readiness, scaling and retry regressions
-        run: go test -race -tags=e2e ./test/e2e -run '^Test(OperatorBackendChecks|OperatorResourceExists|WaitForOperatorBackends|WaitForStatefulSetPodReady|ProduceAfterReadiness|KindKubeProxyMode|BrokerScaleRequiresRequestedCountAndCompletedRollout|SingleBrokerEndpointRejectsStaleMetadata|WaitForBrokerScaleAndEndpoint|ReadEtcdSnapshotSelectsContainerAndOnlyValue|CommandStdoutKeepsWarningsOutOfJSON)' -v -count=1 -timeout=2m
       - name: Run operator snapshot, restore, durability and HA e2e
         run: make test-operator-kind
       - name: Delete test cluster
