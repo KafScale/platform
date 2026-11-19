@@ -316,7 +316,7 @@ func (m *LeaseManager) Owns(resourceID string) bool {
 // Release explicitly gives up ownership of a single resource.
 func (m *LeaseManager) Release(resourceID string) {
 	m.mu.Lock()
-	_, ok := m.owned[resourceID]
+	token, ok := m.owned[resourceID]
 	session := m.session
 	if ok {
 		if m.onLost != nil {
@@ -330,7 +330,10 @@ func (m *LeaseManager) Release(resourceID string) {
 		leaseKey := m.leaseKey(resourceID)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		checks := []clientv3.Cmp{clientv3.Compare(clientv3.Value(leaseKey), "=", m.brokerID)}
+		checks := []clientv3.Cmp{
+			clientv3.Compare(clientv3.Value(leaseKey), "=", m.brokerID),
+			clientv3.Compare(clientv3.ModRevision(leaseKey), "=", int64(token)),
+		}
 		if session != nil {
 			checks = append(checks, clientv3.Compare(clientv3.LeaseValue(leaseKey), "=", int64(session.Lease())))
 		}

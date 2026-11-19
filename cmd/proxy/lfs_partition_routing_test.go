@@ -39,10 +39,12 @@ import (
 // partitionBroker acks a produce only while it owns the partition and answers
 // NOT_LEADER_OR_FOLLOWER otherwise, like a KafScale broker without the lease.
 type partitionBroker struct {
-	addr     string
-	owns     atomic.Bool
-	produced atomic.Int32
-	refused  atomic.Int32
+	addr         string
+	owns         atomic.Bool
+	produced     atomic.Int32
+	fetched      atomic.Int32
+	produceError atomic.Int32
+	refused      atomic.Int32
 }
 
 func startPartitionBroker(t *testing.T) *partitionBroker {
@@ -88,6 +90,27 @@ func (b *partitionBroker) serve(c net.Conn) {
 		if err != nil {
 			return
 		}
+		if req, ok := parsed.(*kmsg.FetchRequest); ok {
+			code := int16(0)
+			if b.owns.Load() {
+				b.fetched.Add(1)
+			} else {
+				b.refused.Add(1)
+				code = protocol.NOT_LEADER_OR_FOLLOWER
+			}
+			resp := kmsg.NewPtrFetchResponse()
+			for _, topic := range req.Topics {
+				rt := kmsg.FetchResponseTopic{Topic: topic.Topic, TopicID: topic.TopicID}
+				for _, part := range topic.Partitions {
+					rt.Partitions = append(rt.Partitions, kmsg.FetchResponseTopicPartition{Partition: part.Partition, ErrorCode: code})
+				}
+				resp.Topics = append(resp.Topics, rt)
+			}
+			if err := protocol.WriteFrame(c, protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp)); err != nil {
+				return
+			}
+			continue
+		}
 		req, ok := parsed.(*kmsg.ProduceRequest)
 		if !ok {
 			return
@@ -95,6 +118,7 @@ func (b *partitionBroker) serve(c net.Conn) {
 		code := int16(0)
 		if b.owns.Load() {
 			b.produced.Add(1)
+			code = int16(b.produceError.Load())
 		} else {
 			b.refused.Add(1)
 			code = protocol.NOT_LEADER_OR_FOLLOWER

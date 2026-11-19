@@ -136,8 +136,8 @@ func TestBrokerHPAReplicasAPI(t *testing.T) {
 	if hpa.ResourceVersion != hpaVersion {
 		t.Fatalf("HPA rewritten on an unchanged reconcile: %s -> %s", hpaVersion, hpa.ResourceVersion)
 	}
-	if got := NewSnapshotPublisher(c).liveBrokerCount(ctx, cluster); got != 4 {
-		t.Fatalf("live broker count = %d, want 4", got)
+	if got, err := NewSnapshotPublisher(c).liveBrokerCount(ctx, cluster); err != nil || got != 4 {
+		t.Fatalf("live broker count = %d, %v; want 4", got, err)
 	}
 
 	scaleTo(30)

@@ -29,6 +29,15 @@ import (
 	"github.com/KafScale/platform/pkg/protocol"
 )
 
+type preferredMetadataStore struct {
+	metadata.Store
+	snapshot *metadata.ClusterMetadata
+}
+
+func (s preferredMetadataStore) Metadata(context.Context, []string) (*metadata.ClusterMetadata, error) {
+	return s.snapshot, nil
+}
+
 func preferredLeaderTestProxy(t *testing.T, ctx context.Context) *proxy {
 	t.Helper()
 	endpoints := testutil.StartEmbeddedEtcd(t)
@@ -99,5 +108,105 @@ func TestFetchRoutesUnownedPartitionsToPreferredLeader(t *testing.T) {
 	}
 	if len(parts[""]) != 0 || len(parts["127.0.0.1:19091"]) != 2 || len(parts["127.0.0.1:19092"]) != 1 {
 		t.Fatalf("fetch groups = %v, want owner broker 1 for 0 and 1, preferred broker 2 for 2", parts)
+	}
+}
+
+func TestPreferredLeaderFallbacks(t *testing.T) {
+	ctx := context.Background()
+	p := lfsTestProxy(nil, time.Minute)
+	if got := p.preferredLeaders(ctx, "orders"); got != nil {
+		t.Fatalf("leaders without a store: %v", got)
+	}
+	p.store = &failingMetadataStore{fail: true}
+	if got := p.preferredLeaders(ctx, "orders"); got != nil {
+		t.Fatalf("leaders with failed metadata: %v", got)
+	}
+	p.store = preferredMetadataStore{snapshot: &metadata.ClusterMetadata{Topics: []protocol.MetadataTopic{
+		{}, {Topic: kmsg.StringPtr("other")},
+		{Topic: kmsg.StringPtr("orders"), ErrorCode: protocol.UNKNOWN_TOPIC_OR_PARTITION},
+	}}}
+	if got := p.preferredLeaders(ctx, "orders"); got != nil {
+		t.Fatalf("leaders for an unavailable topic: %v", got)
+	}
+	if got := p.preferredLeaderAddr(ctx, nil, 0); got != "" {
+		t.Fatalf("missing preferred leader address = %q", got)
+	}
+}
+
+func TestProduceRetriesCurrentOwnerAfterStaleOwnerRejects(t *testing.T) {
+	f := newPartitionRoutingFixture(t, 0, 1)
+	// The lease has moved to broker 1, but the request was already grouped for
+	// broker 0. The snapshot's preferred leader is still broker 0.
+	f.moveOwner(t, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := makeProduceRequest(map[string][]int32{"orders": {0}})
+	req.Version, req.Acks = 3, 1
+	header := &protocol.RequestHeader{APIKey: 0, APIVersion: 3, CorrelationID: 91}
+	pool := newConnPool(time.Second)
+	defer pool.Close()
+	raw, err := f.p.forwardProduce(ctx, header, req, nil, map[string]*kmsg.ProduceRequest{f.brokers[0].addr: req}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := parseProduceResponse(raw, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatalf("ownership change escaped to the client: error %d", code)
+	}
+	if f.brokers[0].produced.Load() != 0 || f.brokers[1].produced.Load() != 1 {
+		t.Fatal("request was not accepted exactly once by the current owner")
+	}
+}
+
+func TestFetchRetriesCurrentOwnerAfterStaleOwnerRejects(t *testing.T) {
+	f := newPartitionRoutingFixture(t, 0, 1)
+	f.moveOwner(t, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := makeFetchRequest(map[string][]int32{"orders": {0}})
+	req.Version = 11
+	header := &protocol.RequestHeader{APIKey: 1, APIVersion: 11, CorrelationID: 92}
+	pool := newConnPool(time.Second)
+	defer pool.Close()
+	raw, err := f.p.forwardFetch(ctx, header, req, nil, map[string]*kmsg.FetchRequest{f.brokers[0].addr: req}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := parseFetchResponse(raw, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := resp.Topics[0].Partitions[0].ErrorCode; code != 0 {
+		t.Fatalf("ownership change escaped to the client: error %d", code)
+	}
+	if f.brokers[0].fetched.Load() != 0 || f.brokers[1].fetched.Load() != 1 {
+		t.Fatal("fetch did not reach the current owner")
+	}
+}
+
+func TestProduceDoesNotReplayAmbiguousOutcome(t *testing.T) {
+	f := newPartitionRoutingFixture(t, 0, 0)
+	f.brokers[0].produceError.Store(int32(protocol.REQUEST_TIMED_OUT))
+	f.brokers[1].owns.Store(true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := makeProduceRequest(map[string][]int32{"orders": {0}})
+	req.Version, req.Acks = 3, 1
+	header := &protocol.RequestHeader{APIKey: 0, APIVersion: 3, CorrelationID: 93}
+	pool := newConnPool(time.Second)
+	defer pool.Close()
+	raw, err := f.p.forwardProduce(ctx, header, req, nil, map[string]*kmsg.ProduceRequest{f.brokers[0].addr: req}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := parseProduceResponse(raw, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Topics[0].Partitions[0].ErrorCode != protocol.REQUEST_TIMED_OUT || f.brokers[0].produced.Load() != 1 || f.brokers[1].produced.Load() != 0 {
+		t.Fatal("ambiguous durable produce was replayed or falsely acknowledged")
 	}
 }

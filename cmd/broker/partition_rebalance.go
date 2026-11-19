@@ -24,6 +24,16 @@ import (
 
 const defaultPartitionRebalanceInterval = 10 * time.Second
 
+func (h *handler) releasePartitionWhenIdle(topic string, partition int32, release func()) {
+	token := h.leaseManager.OwnershipToken(topic, partition)
+	log := h.cachedPartitionLog(topic, partition, token)
+	if log == nil {
+		release()
+		return
+	}
+	log.DrainAndRelease(release)
+}
+
 func (h *handler) startPartitionRebalance(ctx context.Context) {
 	interval := time.Duration(parseEnvInt("KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS", int(defaultPartitionRebalanceInterval/time.Millisecond))) * time.Millisecond
 	if h.leaseManager == nil || !h.flushOnAck || interval <= 0 {

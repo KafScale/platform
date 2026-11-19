@@ -249,8 +249,8 @@ func TestProduceRejectsLostLeaseAtOffsetCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
-	if response.ErrorCode != protocol.NOT_LEADER_OR_FOLLOWER {
-		t.Fatalf("rejected lease commit was acknowledged: %+v", response)
+	if response.ErrorCode != protocol.REQUEST_TIMED_OUT {
+		t.Fatalf("durable write with a failed lease commit must not be transparently replayed: %+v", response)
 	}
 	if next, err := store.NextOffset(ctx, "orders", 0); err != nil || next != 0 {
 		t.Fatalf("offset=%d err=%v", next, err)
@@ -260,6 +260,42 @@ func TestProduceRejectsLostLeaseAtOffsetCommit(t *testing.T) {
 	h.logMu.RUnlock()
 	if cached != nil {
 		t.Fatal("log retained after failed offset commit")
+	}
+}
+
+func TestProduceOwnershipRejectionBeforeAppendIsReroutable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := metadata.NewEtcdStore(ctx, defaultMetadata(), metadata.EtcdStoreConfig{Endpoints: testutil.StartEmbeddedEtcd(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	s3 := storage.NewMemoryS3Client()
+	h := newHandler(store, s3, protocol.MetadataBroker{NodeID: 0}, testLogger())
+	defer h.coordinator.Stop()
+	defer h.leaseManager.ReleaseAll()
+	if err := h.leaseManager.Acquire(ctx, "orders", 0); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate ownership being lost after the cached handle was selected but
+	// before AppendBatches starts. No record from this request reached S3.
+	log := storage.NewPartitionLogWithOptions("default", "orders", 0, 0, s3, nil, storage.PartitionLogOptions{
+		CheckOwnership: func() error { return metadata.ErrNotOwner },
+	}, nil, nil, nil)
+	h.logs["orders"] = map[int32]*storage.PartitionLog{0: log}
+	h.logTokens = map[metadata.PartitionID]uint64{{Topic: "orders", Partition: 0}: h.leaseManager.OwnershipToken("orders", 0)}
+	raw, err := h.handleProduce(ctx, &protocol.RequestHeader{APIVersion: 3}, &kmsg.ProduceRequest{Acks: -1, TimeoutMillis: 1000, Topics: []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 0, Records: testBatchBytes(0, 0, 1)}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := decodeKmsgResponse(t, 3, raw, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]
+	if response.ErrorCode != protocol.NOT_LEADER_OR_FOLLOWER {
+		t.Fatalf("pre-write rejection was not reroutable: %+v", response)
+	}
+	objects, err := s3.ListSegments(ctx, "default/orders/0/")
+	if err != nil || len(objects) != 0 {
+		t.Fatalf("rejected request wrote S3 objects: %v, %v", objects, err)
 	}
 }
 

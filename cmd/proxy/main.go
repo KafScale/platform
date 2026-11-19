@@ -1159,9 +1159,7 @@ func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHead
 							failedPartitions[topic.Topic] = make(map[int32]bool)
 						}
 						failedPartitions[topic.Topic][part.Partition] = true
-						if p.router != nil {
-							p.router.Invalidate(topic.Topic, part.Partition)
-						}
+						p.refreshPartitionRoute(ctx, topicPartition{topic: topic.Topic, partition: part.Partition}, r.target)
 					} else {
 						tr := findOrAddTopicResponse(merged, topic.Topic)
 						tr.Partitions = append(tr.Partitions, part)
@@ -2300,8 +2298,8 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 							failedPartitions[key] = make(map[int32]bool)
 						}
 						failedPartitions[key][part.Partition] = true
-						if p.router != nil && topicName != "" {
-							p.router.Invalidate(topicName, part.Partition)
+						if topicName != "" {
+							p.refreshPartitionRoute(ctx, topicPartition{topic: topicName, partition: part.Partition}, r.target)
 						}
 					} else {
 						tr := findOrAddFetchTopicResponse(merged, topic.Topic, topic.TopicID)

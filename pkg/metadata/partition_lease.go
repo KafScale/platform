@@ -58,14 +58,18 @@ type PartitionLeaseOptions struct {
 	PartitionLeaseConfig
 	// OnLost invalidates state for an expired or released acquisition. It must not call this manager.
 	OnLost func(topic string, partition int32, token uint64)
+	// OnHandover runs after new acquisitions are blocked. It must finish active
+	// writes and invoke release before returning. It runs without ownership locks.
+	OnHandover func(topic string, partition int32, release func())
 }
 
 // PartitionLeaseManager uses etcd leases to ensure exclusive partition ownership.
 // It delegates to the generic LeaseManager, translating topic+partition pairs
 // into string resource IDs.
 type PartitionLeaseManager struct {
-	lm    *LeaseManager
-	holds *partitionHolds
+	lm         *LeaseManager
+	holds      partitionHolds
+	onHandover func(string, int32, func())
 }
 
 type partitionHolds struct {
@@ -81,7 +85,8 @@ func NewPartitionLeaseManager(client *clientv3.Client, cfg PartitionLeaseConfig)
 // NewPartitionLeaseManagerWithOptions constructs a manager with ownership callbacks.
 func NewPartitionLeaseManagerWithOptions(client *clientv3.Client, cfg PartitionLeaseOptions) *PartitionLeaseManager {
 	return &PartitionLeaseManager{
-		holds: &partitionHolds{until: make(map[string]time.Time)},
+		holds:      partitionHolds{until: make(map[string]time.Time)},
+		onHandover: cfg.OnHandover,
 		lm: NewLeaseManagerWithOptions(client, LeaseManagerOptions{
 			LeaseManagerConfig: LeaseManagerConfig{
 				BrokerID:        cfg.BrokerID,
@@ -126,33 +131,48 @@ func partitionResourceID(topic string, partition int32) string {
 // it returns nil immediately. If another broker owns it, it returns ErrNotOwner.
 func (m *PartitionLeaseManager) Acquire(ctx context.Context, topic string, partition int32) error {
 	id := partitionResourceID(topic, partition)
-	if m.held(id) && !m.lm.Owns(id) {
+	if m.held(id) {
 		return ErrNotOwner
 	}
-	return m.lm.Acquire(ctx, id)
+	if err := m.lm.Acquire(ctx, id); err != nil {
+		return err
+	}
+	// Handover may install the hold while the etcd transaction is in flight.
+	// Release that late acquisition before exposing ownership to a caller.
+	if m.held(id) {
+		m.lm.Release(id)
+		return ErrNotOwner
+	}
+	return nil
 }
 
+// Handover releases a partition and prevents reacquisition for the hold duration.
 func (m *PartitionLeaseManager) Handover(topic string, partition int32, hold time.Duration) {
 	id := partitionResourceID(topic, partition)
-	if m.holds != nil {
-		m.holds.mu.Lock()
-		m.holds.until[id] = time.Now().Add(hold)
-		m.holds.mu.Unlock()
+	m.holds.mu.Lock()
+	// A zero deadline blocks acquisitions throughout draining and release,
+	// even when an append takes longer than the configured hold duration.
+	m.holds.until[id] = time.Time{}
+	m.holds.mu.Unlock()
+	release := func() { m.lm.Release(id) }
+	if m.onHandover != nil {
+		m.onHandover(topic, partition, release)
+	} else {
+		release()
 	}
-	m.lm.Release(id)
+	m.holds.mu.Lock()
+	m.holds.until[id] = time.Now().Add(hold)
+	m.holds.mu.Unlock()
 }
 
 func (m *PartitionLeaseManager) held(id string) bool {
-	if m.holds == nil {
-		return false
-	}
 	m.holds.mu.Lock()
 	defer m.holds.mu.Unlock()
 	until, ok := m.holds.until[id]
 	if !ok {
 		return false
 	}
-	if time.Now().Before(until) {
+	if until.IsZero() || time.Now().Before(until) {
 		return true
 	}
 	delete(m.holds.until, id)

@@ -17,6 +17,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -24,9 +25,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
 	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func hpaTestReconciler(t *testing.T, replicas *int32) (*ClusterReconciler, client.Client, *kafscalev1alpha1.KafscaleCluster) {
@@ -203,7 +208,7 @@ func TestSnapshotFollowsLiveBrokerCount(t *testing.T) {
 	}
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	reconcileBrokerAndHPA(t, r, cluster)
-	for _, live := range []int32{4, 3, 2} {
+	for _, live := range []int32{4, 3, 2, 0} {
 		setBrokerStatefulSetReplicas(t, c, live)
 		if err := r.Publisher.Publish(ctx, cluster, endpoints); err != nil {
 			t.Fatalf("publish: %v", err)
@@ -217,6 +222,9 @@ func TestSnapshotFollowsLiveBrokerCount(t *testing.T) {
 		}
 		leaders := make(map[int32]int)
 		for _, part := range snap.Topics[0].Partitions {
+			if live == 0 && (part.Leader != -1 || part.ErrorCode == 0) {
+				t.Fatalf("stopped cluster advertises an available leader: %+v", part)
+			}
 			leaders[part.Leader]++
 			if len(part.Replicas) != int(live) {
 				t.Fatalf("live %d: partition %d replicas = %v", live, part.Partition, part.Replicas)
@@ -233,13 +241,137 @@ func TestSnapshotFollowsLiveBrokerCount(t *testing.T) {
 	}
 }
 
+func TestSnapshotReadFailureKeepsPublishedBrokerCount(t *testing.T) {
+	r, c, cluster := hpaTestReconciler(t, int32Ptr(2))
+	ctx := context.Background()
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	reconcileBrokerAndHPA(t, r, cluster)
+	setBrokerStatefulSetReplicas(t, c, 4)
+	if err := r.Publisher.Publish(ctx, cluster, endpoints); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("statefulset API unavailable")
+	r.Publisher.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*appsv1.StatefulSet); ok {
+				return wantErr
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+	if err := r.Publisher.Publish(ctx, cluster, endpoints); !errors.Is(err, wantErr) {
+		t.Fatalf("publish = %v, want StatefulSet read error", err)
+	}
+	snap, err := readSnapshotFromEtcd(ctx, endpoints)
+	if err != nil || len(snap.Brokers) != 4 {
+		t.Fatalf("API failure changed the published broker count: %d, %v", len(snap.Brokers), err)
+	}
+}
+
+func TestSnapshotRebalancesKafkaCreatedTopics(t *testing.T) {
+	r, c, cluster := hpaTestReconciler(t, int32Ptr(2))
+	ctx := context.Background()
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	reconcileBrokerAndHPA(t, r, cluster)
+	if err := r.Publisher.Publish(ctx, cluster, endpoints); err != nil {
+		t.Fatal(err)
+	}
+	store, err := metadata.NewEtcdStore(ctx, metadata.ClusterMetadata{}, metadata.EtcdStoreConfig{Endpoints: endpoints})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	topic, err := store.CreateTopic(ctx, metadata.TopicSpec{Name: "kafka-created", NumPartitions: 8, ReplicationFactor: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, live := range []int32{4, 1, 0, 3} {
+		setBrokerStatefulSetReplicas(t, c, live)
+		if err := r.Publisher.Publish(ctx, cluster, endpoints); err != nil {
+			t.Fatal(err)
+		}
+		snap, err := readSnapshotFromEtcd(ctx, endpoints)
+		if err != nil || len(snap.Topics) != 1 || snap.Topics[0].TopicID != topic.TopicID {
+			t.Fatalf("Kafka-created topic identity was not preserved: %+v, %v", snap.Topics, err)
+		}
+		for _, part := range snap.Topics[0].Partitions {
+			if live == 0 {
+				if part.Leader != -1 || len(part.ISR) != 0 || part.ErrorCode == 0 {
+					t.Fatalf("stopped cluster advertises an available partition: %+v", part)
+				}
+				continue
+			}
+			if part.Leader != part.Partition%live || part.ErrorCode != 0 {
+				t.Fatalf("live %d: stale Kafka-created partition placement: %+v", live, part)
+			}
+		}
+	}
+}
+
 func TestSnapshotUsesSpecWithoutBrokerStatefulSet(t *testing.T) {
 	_, c, cluster := hpaTestReconciler(t, int32Ptr(2))
-	if got := NewSnapshotPublisher(c).liveBrokerCount(context.Background(), cluster); got != 0 {
-		t.Fatalf("live broker count without a StatefulSet = %d, want 0", got)
+	got, err := NewSnapshotPublisher(c).liveBrokerCount(context.Background(), cluster)
+	if err != nil || got != 2 {
+		t.Fatalf("live broker count without a StatefulSet = %d, %v; want spec value 2", got, err)
 	}
-	meta := BuildClusterMetadataForBrokers(cluster, nil, 0)
+	meta := BuildClusterMetadata(cluster, nil)
 	if len(meta.Brokers) != 2 {
 		t.Fatalf("brokers = %d, want spec value 2", len(meta.Brokers))
+	}
+}
+
+func TestBrokerCountDefaultsAndHPAReadErrors(t *testing.T) {
+	r, c, cluster := hpaTestReconciler(t, nil)
+	ctx := context.Background()
+	count, err := r.Publisher.liveBrokerCount(ctx, cluster)
+	if err != nil || count != 3 {
+		t.Fatalf("missing StatefulSet default count = %d, %v", count, err)
+	}
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "demo-broker", Namespace: "default"}}
+	if err := c.Create(ctx, sts); err != nil {
+		t.Fatal(err)
+	}
+	count, err = r.Publisher.liveBrokerCount(ctx, cluster)
+	if err != nil || count != 3 {
+		t.Fatalf("unset replica count = %d, %v", count, err)
+	}
+	wantErr := errors.New("HPA API unavailable")
+	r.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler); ok {
+				return wantErr
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+	if err := r.reconcileBrokerDeployment(ctx, cluster, nil); !errors.Is(err, wantErr) {
+		t.Fatalf("broker reconcile swallowed HPA read failure: %v", err)
+	}
+}
+
+func TestSnapshotPlacementPreservesExistingInputAndPartitionErrors(t *testing.T) {
+	existing := metadata.ClusterMetadata{Topics: []protocol.MetadataTopic{
+		{},
+		{Topic: kmsg.StringPtr("kafka-created"), Partitions: []protocol.MetadataPartition{
+			{Partition: 0, Leader: 0, Replicas: []int32{0, 1, 2}},
+			{Partition: 1, Leader: 0},
+			{Partition: -1, ErrorCode: protocol.UNKNOWN_TOPIC_OR_PARTITION},
+			{Partition: 2, ErrorCode: protocol.REQUEST_TIMED_OUT},
+		}},
+	}}
+	next := metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{{NodeID: 7}, {NodeID: 9}},
+		Topics:  []protocol.MetadataTopic{{}, {Topic: kmsg.StringPtr("")}},
+	}
+	got := mergeSnapshots(next, existing)
+	parts := got.Topics[2].Partitions
+	if parts[0].Leader != 7 || len(parts[0].Replicas) != 2 || parts[0].Replicas[1] != 9 || parts[1].Leader != 9 || len(parts[1].Replicas) != 1 {
+		t.Fatalf("placement did not follow available broker IDs: %+v", parts)
+	}
+	if parts[2].Partition != -1 || parts[3].ErrorCode != protocol.REQUEST_TIMED_OUT {
+		t.Fatal("invalid or failed partitions were silently repaired")
+	}
+	if existing.Topics[1].Partitions[0].Leader != 0 || existing.Topics[1].Partitions[0].Replicas[2] != 2 {
+		t.Fatal("placement mutated its existing snapshot input")
 	}
 }
