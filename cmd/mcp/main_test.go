@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,13 +82,19 @@ func TestBuildMetricsProvider(t *testing.T) {
 	}
 }
 
-func TestBuildMetricsProviderSumsEveryBroker(t *testing.T) {
+func TestBuildMetricsProviderAggregatesEveryBroker(t *testing.T) {
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/metrics" {
 			http.NotFound(w, r)
 			return
 		}
 		_, _ = w.Write([]byte("kafscale_produce_rps 5\nkafscale_fetch_rps 7\n"))
+		if requests.Add(1) == 1 {
+			_, _ = w.Write([]byte("kafscale_s3_latency_ms_avg 0\nkafscale_s3_error_rate 0\nkafscale_admin_request_latency_ms_avg 0\n"))
+		} else {
+			_, _ = w.Write([]byte("kafscale_s3_latency_ms_avg 40\nkafscale_s3_error_rate 0.4\nkafscale_admin_request_latency_ms_avg 10\n"))
+		}
 	}))
 	defer server.Close()
 	parsed, err := url.Parse(server.URL)
@@ -111,6 +118,9 @@ func TestBuildMetricsProviderSumsEveryBroker(t *testing.T) {
 	}
 	if snap.ProduceRPS != 10 || snap.FetchRPS != 14 {
 		t.Fatalf("expected the sum over both brokers, got produce %v fetch %v", snap.ProduceRPS, snap.FetchRPS)
+	}
+	if snap.S3LatencyMS != 20 || snap.S3ErrorRate != 0.2 || snap.AdminRequestLatencyMS != 5 {
+		t.Fatalf("zero-valued broker omitted from averages: %+v", snap)
 	}
 }
 

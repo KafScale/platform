@@ -56,6 +56,12 @@ type MetricsSnapshot struct {
 	OperatorEtcdSnapshotAccessOK       float64
 	OperatorEtcdSnapshotAccessReported bool
 	OperatorMetricsAvailable           bool
+
+	// A reported zero is a sample; absent or invalid metrics are not.
+	s3LatencySampleMS    float64
+	s3LatencyReported    bool
+	s3ErrorRateReported  bool
+	adminLatencyReported bool
 }
 
 type MetricsProvider interface {

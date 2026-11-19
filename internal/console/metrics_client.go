@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -187,7 +188,7 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 	}
 	var (
 		state                 string
-		latencySum            int
+		latencySum            float64
 		latencyCount          int
 		errorRateSum          float64
 		errorRateCount        int
@@ -221,11 +222,11 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 			continue
 		}
 		successfulBrokerCount++
-		if snap.S3LatencyMS > 0 {
-			latencySum += snap.S3LatencyMS
+		if snap.s3LatencyReported {
+			latencySum += snap.s3LatencySampleMS
 			latencyCount++
 		}
-		if snap.S3ErrorRate > 0 {
+		if snap.s3ErrorRateReported {
 			errorRateSum += snap.S3ErrorRate
 			errorRateCount++
 		}
@@ -251,7 +252,7 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		fetchRPS += snap.FetchRPS
 		adminReqTotal += snap.AdminRequestsTotal
 		adminErrTotal += snap.AdminRequestErrorsTotal
-		if snap.AdminRequestLatencyMS > 0 {
+		if snap.adminLatencyReported {
 			adminLatencySum += snap.AdminRequestLatencyMS
 			adminLatencySamples++
 		}
@@ -262,9 +263,9 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		}
 		return nil, fmt.Errorf("no broker metrics available")
 	}
-	latencyAvg := 0
+	latencyAvg := 0.0
 	if latencyCount > 0 {
-		latencyAvg = latencySum / latencyCount
+		latencyAvg = latencySum / float64(latencyCount)
 	}
 	adminLatencyAvg := 0.0
 	if adminLatencySamples > 0 {
@@ -275,8 +276,12 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		errorRateAvg = errorRateSum / float64(errorRateCount)
 	}
 	return &MetricsSnapshot{
+		s3LatencySampleMS:       latencyAvg,
+		s3LatencyReported:       latencyCount > 0,
+		s3ErrorRateReported:     errorRateCount > 0,
+		adminLatencyReported:    adminLatencySamples > 0,
 		S3State:                 state,
-		S3LatencyMS:             latencyAvg,
+		S3LatencyMS:             int(latencyAvg),
 		S3ErrorRate:             errorRateAvg,
 		ProduceRPS:              produceRPS,
 		FetchRPS:                fetchRPS,
@@ -404,7 +409,9 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 	}
 	var (
 		state             string
-		latencyMS         int
+		latencyMS         float64
+		latencyReported   bool
+		errorRateReported bool
 		errorRate         float64
 		produceRPS        float64
 		fetchRPS          float64
@@ -428,11 +435,13 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 			}
 		case strings.HasPrefix(line, "kafscale_s3_latency_ms_avg"):
 			if val, ok := parsePromSample(line); ok {
-				latencyMS = int(val)
+				latencyMS = val
+				latencyReported = true
 			}
 		case strings.HasPrefix(line, "kafscale_s3_error_rate"):
 			if val, ok := parsePromSample(line); ok {
 				errorRate = val
+				errorRateReported = true
 			}
 		case strings.HasPrefix(line, "kafscale_produce_rps"):
 			if val, ok := parsePromSample(line); ok {
@@ -477,8 +486,12 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 		adminLatencyAvg = adminLatencySum / float64(adminLatencyCount)
 	}
 	return &MetricsSnapshot{
+		s3LatencySampleMS:       latencyMS,
+		s3LatencyReported:       latencyReported,
+		s3ErrorRateReported:     errorRateReported,
+		adminLatencyReported:    adminLatencyCount > 0,
 		S3State:                 state,
-		S3LatencyMS:             latencyMS,
+		S3LatencyMS:             int(latencyMS),
 		S3ErrorRate:             errorRate,
 		ProduceRPS:              produceRPS,
 		FetchRPS:                fetchRPS,
@@ -504,7 +517,7 @@ func parsePromSample(line string) (float64, bool) {
 	}
 	last := parts[len(parts)-1]
 	val, err := strconv.ParseFloat(last, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(val) || math.IsInf(val, 0) {
 		return 0, false
 	}
 	return val, true
