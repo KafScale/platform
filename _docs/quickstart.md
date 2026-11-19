@@ -5,6 +5,8 @@ description: Install the KafScale operator, create your first topic, and stream 
 permalink: /quickstart/
 nav_title: Quickstart
 nav_order: 2
+redirect_from:
+  - /installation/
 ---
 
 <!--

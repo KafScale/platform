@@ -41,7 +41,7 @@ See the [user guide](/user-guide/) and [FAQ](/faq/) for the full list of limits.
 
 ## 1. Run KafScale
 
-Install KafScale with the [Helm chart](/helm/) against your own S3 bucket, or try it locally with `make demo` from the [platform repo](https://github.com/KafScale/platform). The local demo broker listens on `127.0.0.1:39092`.
+Install KafScale with the [Helm chart](/operations/#installing-with-helm) against your own S3 bucket, or try it locally with `make demo` from the [platform repo](https://github.com/KafScale/platform). The local demo broker listens on `127.0.0.1:39092`.
 
 Create the target topics with the same names and partition counts as on WarpStream.
 

@@ -16,11 +16,13 @@ KafScale brokers continuously monitor S3 availability and publish a health state
 
 ## State definitions
 
-| State | Value | Condition | Broker behavior |
-|-------|-------|-----------|-----------------|
-| Healthy | 0 | Latency < warn AND error rate < warn | Normal operation |
-| Degraded | 1 | Latency >= warn OR error rate >= warn | Accepts requests, emits warnings |
-| Unavailable | 2 | Latency >= crit OR error rate >= crit | Rejects produces, serves cached fetches |
+| State | Metric | Condition | Broker behavior |
+|-------|--------|-----------|-----------------|
+| Healthy | `kafscale_s3_health_state{state="healthy"} 1` | Average latency below warn and error rate below warn | Produce and fetch proceed as usual |
+| Degraded | `kafscale_s3_health_state{state="degraded"} 1` | Average latency at or above warn, or error rate at or above warn, and neither has reached crit | Produce and fetch are rejected with a retriable `REQUEST_TIMED_OUT` |
+| Unavailable | `kafscale_s3_health_state{state="unavailable"} 1` | Average latency at or above crit, or error rate at or above crit | Produce and fetch are rejected with a retriable `KAFKA_STORAGE_ERROR` |
+
+The metric is a labeled gauge: the active state is `1` and the other two states are `0`. It is not a single 0/1/2 value.
 
 <div class="diagram">
   <div class="diagram-label">State transitions</div>
@@ -35,17 +37,17 @@ KafScale brokers continuously monitor S3 availability and publish a health state
     <!-- Healthy -->
     <rect x="50" y="50" width="140" height="70" rx="10" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1.5"/>
     <text x="120" y="78" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Healthy</text>
-    <text x="120" y="98" font-size="10" fill="var(--diagram-label)" text-anchor="middle">state = 0</text>
+    <text x="120" y="98" font-size="10" fill="var(--diagram-label)" text-anchor="middle">healthy</text>
 
     <!-- Degraded -->
     <rect x="280" y="50" width="140" height="70" rx="10" fill="rgba(251, 191, 36, 0.15)" stroke="#fbbf24" stroke-width="1.5"/>
     <text x="350" y="78" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Degraded</text>
-    <text x="350" y="98" font-size="10" fill="var(--diagram-label)" text-anchor="middle">state = 1</text>
+    <text x="350" y="98" font-size="10" fill="var(--diagram-label)" text-anchor="middle">degraded</text>
 
     <!-- Unavailable -->
     <rect x="510" y="50" width="140" height="70" rx="10" fill="rgba(248, 113, 113, 0.15)" stroke="#f87171" stroke-width="1.5"/>
     <text x="580" y="78" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">Unavailable</text>
-    <text x="580" y="98" font-size="10" fill="var(--diagram-label)" text-anchor="middle">state = 2</text>
+    <text x="580" y="98" font-size="10" fill="var(--diagram-label)" text-anchor="middle">unavailable</text>
 
     <!-- Forward arrows -->
     <path d="M190,75 L275,75" stroke="#fbbf24" stroke-width="2" fill="none" marker-end="url(#ay-h)"/>
@@ -66,11 +68,11 @@ KafScale brokers continuously monitor S3 availability and publish a health state
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KAFSCALE_S3_LATENCY_WARN_MS` | `500` | Latency threshold for degraded state |
-| `KAFSCALE_S3_LATENCY_CRIT_MS` | `2000` | Latency threshold for unavailable state |
-| `KAFSCALE_S3_ERROR_RATE_WARN` | `0.01` | Error rate threshold for degraded (1%) |
-| `KAFSCALE_S3_ERROR_RATE_CRIT` | `0.05` | Error rate threshold for unavailable (5%) |
-| `KAFSCALE_S3_HEALTH_WINDOW_SEC` | `60` | Sampling window for health calculation |
+| `KAFSCALE_S3_LATENCY_WARN_MS` | `500` | Average latency (ms) that enters degraded |
+| `KAFSCALE_S3_LATENCY_CRIT_MS` | `3000` | Average latency (ms) that enters unavailable |
+| `KAFSCALE_S3_ERROR_RATE_WARN` | `0.2` | Error rate that enters degraded (20%) |
+| `KAFSCALE_S3_ERROR_RATE_CRIT` | `0.6` | Error rate that enters unavailable (60%) |
+| `KAFSCALE_S3_HEALTH_WINDOW_SEC` | `60` | Sampling window for the average latency and error rate |
 
 Tune these based on your S3 region and latency expectations. Cross-region S3 access may require higher latency thresholds.
 
@@ -78,15 +80,14 @@ Tune these based on your S3 region and latency expectations. Cross-region S3 acc
 
 ## Metrics
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `kafscale_s3_health_state` | Gauge | Current health state (0, 1, or 2) |
-| `kafscale_s3_latency_ms_avg` | Gauge | Average S3 operation latency over window |
-| `kafscale_s3_latency_ms_p99` | Gauge | p99 S3 operation latency |
-| `kafscale_s3_error_rate` | Gauge | Error rate over sampling window (0.0 to 1.0) |
-| `kafscale_s3_state_duration_seconds` | Gauge | Time in current state |
-| `kafscale_s3_state_transitions_total` | Counter | Total state transitions (label: `from`, `to`) |
-| `kafscale_s3_operations_total` | Counter | Total S3 operations (label: `operation`, `status`) |
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `kafscale_s3_health_state` | Gauge | `state` | `1` for the active state (`healthy`, `degraded`, `unavailable`), `0` otherwise |
+| `kafscale_s3_latency_ms_avg` | Gauge | | Average S3 latency (ms) over the sliding window |
+| `kafscale_s3_error_rate` | Gauge | | Fraction of failed S3 operations in the sliding window |
+| `kafscale_s3_state_duration_seconds` | Gauge | | Seconds spent in the current state |
+
+These are the S3 health series the broker exports on the metrics port. See [Metrics](/metrics/) for the full broker list. There is no `kafscale_s3_latency_ms_p99`, `kafscale_s3_state_transitions_total`, or `kafscale_s3_operations_total` metric.
 
 ---
 
@@ -100,22 +101,22 @@ groups:
   - name: kafscale-s3-health
     rules:
       - alert: KafScaleS3Unavailable
-        expr: kafscale_s3_health_state == 2
+        expr: kafscale_s3_health_state{state="unavailable"} == 1
         for: 0m
         labels:
           severity: critical
         annotations:
           summary: "KafScale S3 unavailable"
-          description: "Broker {{ $labels.pod }} cannot reach S3. Produces are rejected."
+          description: "Broker {{ $labels.pod }} cannot reach S3. Produce and fetch are rejected."
 
       - alert: KafScaleS3Degraded
-        expr: kafscale_s3_health_state == 1
+        expr: kafscale_s3_health_state{state="degraded"} == 1
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "KafScale S3 degraded"
-          description: "Broker {{ $labels.pod }} S3 latency or error rate elevated for 5+ minutes."
+          description: "Broker {{ $labels.pod }} S3 latency or error rate elevated for 5+ minutes. Produce and fetch are rejected."
 
       - alert: KafScaleS3LatencyHigh
         expr: kafscale_s3_latency_ms_avg > 300
@@ -147,11 +148,11 @@ Normal operation. All produce and fetch requests are processed.
 
 ### Degraded
 
-Brokers continue to accept requests but emit warning logs and increment `kafscale_s3_degraded_requests_total`. Monitor this state to catch issues before they escalate.
+Brokers reject produce and fetch with `REQUEST_TIMED_OUT` so clients retry. This is not a warning-only state.
 
 ### Unavailable
 
-Brokers protect data integrity by rejecting produce requests with a retriable error code. Clients should retry with exponential backoff. Fetch requests are served from cache when possible.
+Brokers reject produce and fetch with `KAFKA_STORAGE_ERROR`. Clients should retry with exponential backoff. Fetch is not served from cache while the broker is in this state.
 
 ```
 # Client sees this error during unavailable state
@@ -160,36 +161,15 @@ ERROR: [kafka] produce failed: KAFKA_STORAGE_ERROR (retriable)
 
 ---
 
-## Ops API endpoints
+## How to read the state
 
-Query health state via the ops API:
-
-```bash
-# Get current health state
-curl http://localhost:9093/ops/health/s3
-```
-
-Response:
-
-```json
-{
-  "state": "healthy",
-  "state_value": 0,
-  "latency_ms_avg": 87,
-  "latency_ms_p99": 142,
-  "error_rate": 0.0,
-  "state_duration_seconds": 3847,
-  "window_seconds": 60
-}
-```
-
-Query S3 health history:
+There is no `/ops/health/s3` endpoint on the broker. Read the health series from the metrics port (the operator sets `KAFSCALE_METRICS_ADDR=:9093` on broker pods):
 
 ```bash
-# Get health history (last hour)
-curl http://localhost:9093/ops/health/s3/history?minutes=60
+curl -s http://127.0.0.1:9093/metrics | grep kafscale_s3_
 ```
 
+`/healthz` on that port reports process liveness and includes the current S3 state in the body (`ok state=healthy`). `/readyz` returns HTTP 503 when S3 is unavailable or etcd cannot be reached; a degraded S3 state stays ready.
 
 ---
 
@@ -197,15 +177,14 @@ curl http://localhost:9093/ops/health/s3/history?minutes=60
 
 | Scenario | Recommended thresholds |
 |----------|------------------------|
-| Same-region S3 | warn: 500ms / 1%, crit: 2000ms / 5% (defaults) |
-| Cross-region S3 | warn: 1000ms / 1%, crit: 5000ms / 5% |
-| High-throughput | warn: 300ms / 0.5%, crit: 1000ms / 2% |
-| Cost-optimized (S3 Standard-IA) | warn: 800ms / 1%, crit: 3000ms / 5% |
+| Same-region S3 | warn: 500ms / 20%, crit: 3000ms / 60% (defaults) |
+| Cross-region S3 | warn: 1000ms / 20%, crit: 5000ms / 60% |
+| Stricter | warn: 300ms / 10%, crit: 1000ms / 30% |
 
 ---
 
 ## Next steps
 
 - [Operations](/operations/) for monitoring and scaling
-- [Runtime Settings](/configuration/) for all environment variables
+- [Environment variable index](/operations/#environment-variable-index)
 - [Metrics](/metrics/) for complete metrics reference

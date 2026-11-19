@@ -1,7 +1,7 @@
 ---
 layout: doc
 title: "KafScale LFS Demos: Large File Examples"
-description: Runnable demos for the KafScale Large File Support system, from local IDoc processing to full Kubernetes pipelines.
+description: Runnable demos for the KafScale Large File Support system, from Docker Compose to a kind cluster.
 permalink: /lfs-demos/
 nav_title: LFS Demos
 nav_order: 4
@@ -27,212 +27,50 @@ limitations under the License.
 
 # LFS Demos
 
-KafScale ships with a set of runnable demos that exercise the LFS pipeline end-to-end. They range from a lightweight local demo (MinIO only, no cluster) to full Kubernetes deployments with industry-specific content-explosion patterns.
+KafScale ships two supported ways to try Large File Support: `make lfs-demo` on a kind cluster, and the Docker Compose stack in `deploy/docker-compose`.
 
 ## Quick reference
 
-| Make target | What it runs | Needs cluster? |
+| Command | What it runs | Needs cluster? |
 |---|---|---|
-| `make lfs-demo` | Baseline LFS proxy flow | Yes (kind) |
-| `make lfs-demo-idoc` | SAP IDoc explode via LFS | No (MinIO only) |
-| `make lfs-demo-medical` | Healthcare imaging (E60) | Yes (kind) |
-| `make lfs-demo-video` | Video streaming (E61) | Yes (kind) |
-| `make lfs-demo-industrial` | Industrial IoT mixed payloads (E62) | Yes (kind) |
-| `make e72-browser-demo` | Browser SPA uploads (E72) | Yes (kind) |
+| `make lfs-demo` | Kind cluster with a broker, MinIO, and the LFS proxy | Yes (kind) |
+| `docker compose up -d` in `deploy/docker-compose` | Local broker, MinIO, LFS HTTP API, and the browser demo profile | No |
 
-All demos are environment-driven. Override any setting via env vars without touching code.
+Industry-specific make targets such as `lfs-demo-idoc`, `lfs-demo-medical`, `lfs-demo-video`, `lfs-demo-industrial`, and `e72-browser-demo` are not in this repository on main.
 
 ---
 
-## Baseline LFS demo
+## Kind demo
 
 ```bash
 make lfs-demo
 ```
 
-The baseline demo bootstraps a kind cluster, deploys MinIO and the LFS proxy, then runs the full claim-check flow:
+`make lfs-demo` is a wrapper around `demo-platform-bootstrap`. It starts a kind cluster and deploys MinIO, a broker, and the LFS proxy into the demo namespace (`KAFSCALE_DEMO_NAMESPACE`, default `kafscale-demo`). The advertised Kafka address defaults to `kafscale-broker.<namespace>.svc.cluster.local:9092`.
 
-1. Build and load the `kafscale-lfs-proxy` image into kind
-2. Deploy broker, etcd, MinIO, and LFS proxy into the `kafscale-demo` namespace
-3. Create a demo topic and upload binary blobs via the LFS proxy HTTP API
-4. Verify pointer envelopes arrive in Kafka and blobs exist in S3
-
-| Variable | Default | Description |
-|---|---|---|
-| `LFS_DEMO_TOPIC` | `lfs-demo-topic` | Kafka topic for pointer records |
-| `LFS_DEMO_BLOB_SIZE` | `524288` (512 KB) | Size of each test blob |
-| `LFS_DEMO_BLOB_COUNT` | `5` | Number of blobs to upload |
-| `LFS_DEMO_TIMEOUT_SEC` | `120` | Test timeout |
+The target sets `KAFSCALE_DEMO_PROXY=0` and `KAFSCALE_DEMO_CONSOLE=0`, and uses a single broker replica. After it is up, use the LFS HTTP API on the proxy as described in [LFS on Kubernetes](/lfs-helm/#http-api) and the [Docker Compose README](https://github.com/KafScale/platform/blob/main/deploy/docker-compose/README.md).
 
 ---
 
-## IDoc explode demo (local, no cluster)
+## Docker Compose (local, no cluster)
 
 ```bash
-make lfs-demo-idoc
+cd deploy/docker-compose
+docker compose up -d
 ```
 
-This is the fastest way to see the LFS pipeline in action. It only needs a local MinIO container. No Kubernetes cluster is required.
-
-The demo walks through the complete data flow that the [LFS Proxy](/lfs-proxy/) performs in production:
-
-**Step 1: Blob upload.** The demo uploads a realistic SAP ORDERS05 IDoc XML (a purchase order with 3 line items, 3 business partners, 3 dates, and 2 status records) to MinIO, simulating what the LFS proxy does when it receives a large payload.
-
-**Step 2: Envelope creation.** A KafScale LFS envelope is generated. This is the compact JSON pointer record that Kafka consumers receive instead of the raw blob:
-
-```json
-{
-  "kfs_lfs": 1,
-  "bucket": "kafscale",
-  "key": "lfs/idoc-demo/idoc-inbound/0/0-idoc-sample.xml",
-  "content_type": "application/xml",
-  "size": 2706,
-  "sha256": "96985f1043a285..."
-}
-```
-
-**Step 3: Resolve and explode.** The `idoc-explode` processor reads the envelope, resolves the blob from S3 via `pkg/lfs.Resolver`, validates the SHA-256 checksum, then parses the XML and routes segments to topic-specific streams:
-
-```
-Segment routing:
-  E1EDP01, E1EDP19  ->  idoc-items      (order line items)
-  E1EDKA1           ->  idoc-partners   (business partners)
-  E1STATS           ->  idoc-status     (processing status)
-  E1EDK03           ->  idoc-dates      (dates/deadlines)
-  EDI_DC40, E1EDK01 ->  idoc-segments   (all raw segments)
-  (root)            ->  idoc-headers    (IDoc metadata)
-```
-
-**Step 4: Topic streams.** Each output file maps to a Kafka topic. Routed records carry their child fields as a self-contained JSON object:
-
-```json
-{"name":"E1EDP01","path":"IDOC/E1EDP01","fields":{
-  "POSEX":"000010","MATNR":"MAT-HYD-4200",
-  "ARKTX":"Hydraulic Pump HP-4200","MENGE":"5",
-  "NETWR":"12500.00","WAERS":"EUR"}}
-```
-
-```json
-{"name":"E1EDKA1","path":"IDOC/E1EDKA1","fields":{
-  "PARVW":"AG","NAME1":"GlobalParts AG",
-  "STRAS":"Industriestr. 42","ORT01":"Stuttgart",
-  "LAND1":"DE"}}
-```
-
-The sample IDoc produces 94 records across 6 topics.
+This starts MinIO, a KafScale broker, and the LFS proxy. The Compose README documents the ports (LFS HTTP API on `http://localhost:8080`) and example `/lfs/produce` and `/lfs/download` calls. The `demo` profile also starts the browser LFS UI on port 3072.
 
 ---
 
-## Industry demos
+## IDoc explode
 
-The three industry demos build on the baseline flow and demonstrate the **content explosion pattern**: a single large upload that produces multiple derived topic streams for downstream analytics.
-
-### Medical imaging (E60)
-
-```bash
-make lfs-demo-medical
-```
-
-Simulates a radiology department uploading DICOM imaging files (CT/MRI scans, whole-slide pathology images). A single scan upload explodes into:
-
-| Topic | Content | LFS blob? |
-|---|---|---|
-| `medical-images` | Original DICOM blob pointer | Yes |
-| `medical-metadata` | Patient ID, modality, study date | No |
-| `medical-audit` | Access timestamps, user actions | No |
-
-Demonstrates checksum integrity validation and audit trail logging relevant to healthcare compliance scenarios.
-
-### Video streaming (E61)
-
-```bash
-make lfs-demo-video
-```
-
-Simulates a media platform ingesting large video files. A single video upload explodes into:
-
-| Topic | Content | LFS blob? |
-|---|---|---|
-| `video-raw` | Original video blob pointer | Yes |
-| `video-metadata` | Codec, duration, resolution, bitrate | No |
-| `video-frames` | Keyframe timestamps and S3 references | No |
-| `video-ai-tags` | Scene detection, object labels | No |
-
-Uses HTTP streaming upload for memory-efficient transfer of multi-gigabyte files.
-
-### Industrial IoT (E62)
-
-```bash
-make lfs-demo-industrial
-```
-
-Simulates a factory floor with **mixed payload sizes** flowing through the same Kafka interface: small telemetry readings alongside large thermal/visual inspection images:
-
-| Topic | Content | LFS blob? | Typical size |
-|---|---|---|---|
-| `sensor-telemetry` | Real-time sensor readings | No | ~1 KB |
-| `inspection-images` | Thermal/visual inspection photos | Yes | ~200 MB |
-| `defect-events` | Anomaly detection alerts | No | ~2 KB |
-| `quality-reports` | Aggregated quality metrics | No | ~10 KB |
-
-Demonstrates automatic routing based on the `LFS_BLOB` header. Small payloads flow through Kafka directly, and large payloads are offloaded to S3.
+`idoc-explode` (`cmd/idoc-explode`) reads SAP IDoc XML or JSONL envelopes and writes one file per topic. It is a command-line processor, not a make demo. Flags are `-input` (file path; empty reads stdin) and `-out` (output directory). See [idoc-explode](/operations/#idoc-explode) in the operations guide.
 
 ---
-
-## SDK demo applications
-
-### E70: Java SDK
-
-Located in `examples/E70_java-lfs-sdk-demo/`. Demonstrates the Java LFS producer SDK uploading files via the HTTP API, consuming pointer records from Kafka, and resolving blobs from S3.
-
-```bash
-cd examples/E70_java-lfs-sdk-demo
-make run-all   # builds SDK, starts port-forwards, runs demo
-```
-
-Key env vars: `LFS_HTTP_ENDPOINT`, `LFS_TOPIC`, `KAFKA_BOOTSTRAP`, `LFS_PAYLOAD_SIZE`.
-
-### E71: Python SDK
-
-Located in `examples/E71_python-lfs-sdk-demo/`. Demonstrates the Python LFS SDK with three payload size presets for video upload testing:
-
-```bash
-cd examples/E71_python-lfs-sdk-demo
-make run-small    # 1 MB
-make run-midsize  # 50 MB
-make run-large    # 200 MB
-```
-
-Requires `pip install -e lfs-client-sdk/python` for the SDK.
-
-### E72: Browser SDK
-
-Located in `examples/E72_browser-lfs-sdk-demo/`. A single-page application that uploads files directly from the browser to the LFS proxy. No backend server is required.
-
-```bash
-make e72-browser-demo       # local with port-forward
-make e72-browser-demo-k8s   # in-cluster deployment
-```
-
-Features drag-and-drop upload, real-time progress, SHA-256 verification, proxy-verified download, and an inline video player for MP4 content.
-
----
-
-## Common environment
-
-All demos share these defaults:
-
-| Variable | Default | Description |
-|---|---|---|
-| `KAFSCALE_DEMO_NAMESPACE` | `kafscale-demo` | Kubernetes namespace |
-| `MINIO_BUCKET` | `kafscale` | S3 bucket |
-| `MINIO_REGION` | `us-east-1` | S3 region |
-| `MINIO_ROOT_USER` | `minioadmin` | MinIO credentials |
-| `MINIO_ROOT_PASSWORD` | `minioadmin` | MinIO credentials |
-| `LFS_PROXY_IMAGE` | `ghcr.io/kafscale/kafscale-lfs-proxy:dev` | Proxy container image |
 
 ## Related docs
 
 - [LFS Proxy](/lfs-proxy/): architecture and configuration
 - [LFS Helm Deployment](/lfs-helm/): Kubernetes deployment guide
-- [LFS Client SDKs](/lfs-sdks/): SDK API reference for Go, Java, Python, JS
+- [LFS Client SDKs](/lfs-sdks/): SDK API reference for Go, Java, Python, and JavaScript
