@@ -318,6 +318,38 @@ a:visited {
   gap: 0.75rem;
 }
 
+.hero-copy {
+  display: grid;
+  gap: 2rem;
+  min-width: 0;
+}
+
+.hero-media {
+  min-width: 0;
+}
+
+@media (min-width: 901px) {
+  .hero:has(> .hero-media) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 2.5rem;
+  }
+
+  .hero-media .term {
+    max-width: 640px;
+    width: 100%;
+    margin: 0 0 0 auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .hero-media .term {
+    max-width: none;
+    width: 100%;
+    margin: 0;
+  }
+}
+
 .button {
   display: inline-flex;
   align-items: center;

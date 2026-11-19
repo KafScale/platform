@@ -5,31 +5,45 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 ---
 
 <section class="hero">
-  <p class="eyebrow">Apache 2.0 licensed. No vendor lock-in. Self-hosted.</p>
-  <h1>One endpoint. Infinite scale.</h1>
-  <p>Kafka-compatible streaming platform. <br>
-  Scale streaming and analytics cloud-native on S3. Automated.</p>
-  <div class="badge-row">
-    <a href="https://github.com/KafScale/platform/stargazers" target="_blank" rel="noreferrer">
-      <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=flat-square" />
-    </a>
-    <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
-    <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/KafScale/platform" />
-    <a href="https://github.com/KafScale/platform/releases/latest" target="_blank" rel="noreferrer">
-      <img alt="Current release" src="https://img.shields.io/github/v/release/KafScale/platform" />
-    </a>
+  <div class="hero-copy">
+    <p class="eyebrow">Apache 2.0 licensed. No vendor lock-in. Self-hosted.</p>
+    <h1>One endpoint. Infinite scale.</h1>
+    <p>Kafka-compatible streaming platform. <br>
+    Scale streaming and analytics cloud-native on S3. Automated.</p>
+    <div class="badge-row">
+      <a href="https://github.com/KafScale/platform/stargazers" target="_blank" rel="noreferrer">
+        <img alt="GitHub stars" src="https://img.shields.io/github/stars/KafScale/platform?style=flat-square" />
+      </a>
+      <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
+      <img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/KafScale/platform" />
+      <a href="https://github.com/KafScale/platform/releases/latest" target="_blank" rel="noreferrer">
+        <img alt="Current release" src="https://img.shields.io/github/v/release/KafScale/platform" />
+      </a>
+    </div>
+    <div class="hero-actions">
+      <a class="button" href="/quickstart/">Get started</a>
+      <a class="button secondary" href="https://github.com/KafScale/platform" target="_blank" rel="noreferrer">View on GitHub</a>
+    </div>
   </div>
-  <div class="hero-actions">
-    <a class="button" href="/quickstart/">Get started</a>
-    <a class="button secondary" href="https://github.com/KafScale/platform" target="_blank" rel="noreferrer">View on GitHub</a>
+  <div class="hero-media">
+    <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>admin: helm install, cluster, topic</span></div><video autoplay muted loop playsinline preload="metadata" width="960" height="540" poster="/media/demos/admin/admin-poster.webp" aria-label="Terminal demo: KafScale is installed with Helm, a cluster and a topic are created, and records are produced and consumed through a broker and the proxy"><source src="/media/demos/admin/admin.webm" type="video/webm"><source src="/media/demos/admin/admin.mp4" type="video/mp4"></video></div>
+    <script>
+    (function () {
+      if (!window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      var term = document.currentScript.previousElementSibling;
+      var video = term && term.querySelector("video");
+      if (!video) return;
+      video.removeAttribute("autoplay");
+      video.setAttribute("controls", "controls");
+      if (!video.paused) video.pause();
+      try { video.currentTime = 0; } catch (e) {}
+    })();
+    </script>
   </div>
 </section>
 
 <section class="section demo-teaser">
-  <h2>See it run</h2>
-  <p>Install KafScale with Helm, create a topic, then produce and consume, in about two minutes.</p>
-  <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>admin: helm install, cluster, topic</span></div><video autoplay muted loop playsinline preload="metadata" width="960" height="540" poster="/media/demos/admin/admin-poster.webp" aria-label="Terminal demo: KafScale is installed with Helm, a cluster and a topic are created, and records are produced and consumed through a broker and the proxy"><source src="/media/demos/admin/admin.webm" type="video/webm"><source src="/media/demos/admin/admin.mp4" type="video/mp4"></video></div>
-  <div class="hero-actions"><a class="button secondary" href="/demos/">See all demos</a></div>
+  <p><a href="/demos/">See all demos</a> for the CLI, schema registry, MCP and ops walkthroughs.</p>
 </section>
 
 <section class="section">
