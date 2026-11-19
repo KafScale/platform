@@ -22,7 +22,7 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 ## Concepts
 
 - **Topics / Partitions**: match upstream Kafka semantics. All Kafka client libraries continue to work.
-- **Brokers**: stateless pods accepting Kafka protocol traffic on port 9092 and metrics + gRPC control on 9093.
+- **Brokers**: stateless pods accepting Kafka protocol traffic on port 9092 and Prometheus metrics on 9093. The control-plane gRPC listener uses `KAFSCALE_CONTROL_ADDR` (binary default `:19094`). The operator does not set that variable or expose the port on broker pods.
 - **Metadata**: stored in etcd, encoded via protobufs (`kafscale.metadata.*`).
 - **Storage**: message segments live in S3 buckets; brokers only keep in-memory caches.
 - **Operator**: Kubernetes controller that provisions brokers, topics, and wiring based on CRDs.
@@ -148,9 +148,9 @@ kafka-console-consumer --bootstrap-server kafscale-broker:9092 --topic orders --
 
 ## Monitoring
 
-- Metrics via Prometheus on port 9093 (`/metrics`)
-- Structured JSON logs from brokers/operators
-- Control-plane queries via the gRPC service defined in `proto/control/broker.proto`
+- Metrics via Prometheus on port 9093 (`/metrics`). See [Metrics and Dashboards](metrics.md).
+- Structured JSON logs from brokers and the operator.
+- Control-plane gRPC is defined in `proto/control/broker.proto` and listens on `KAFSCALE_CONTROL_ADDR`. The operator does not expose that port.
 
 ## Scaling / Maintenance
 
@@ -165,7 +165,7 @@ The BrokerControl `DrainPartitions` and `TriggerFlush` RPCs are not implemented 
 ## Limits / Non-Goals
 
 - No embedded stream processing features. Pair Kafscale with Flink, Wayang, Spark, etc.
-- Transactions, idempotent producers, and log compaction are out of scope for KafScale.
+- Transactions, idempotent producers, and log compaction are out of scope for KafScale. Supported and unsupported Kafka APIs are listed in [Kafka Protocol Support](protocol.md).
 
 For deployment and operations, read `docs/operations.md`.
 For deeper architectural details or development guidance, read `kafscale-spec.md` and `docs/development.md`.

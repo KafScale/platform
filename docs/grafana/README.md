@@ -17,12 +17,4 @@ limitations under the License.
 
 # Grafana Dashboards
 
-The `broker-dashboard.json` definition ships a minimal overview for the Kafscale broker:
-
-- S3 health/pressure tiles backed by `kafscale_s3_health_state`
-- Produce throughput (success rate per topic)
-- S3 latency/error time series
-- Admin API request/error rates
-
-Import it into Grafana via **Dashboards → Import** and point the Prometheus data source to the
-cluster scraping the broker and operator `/metrics` endpoints.
+The broker dashboard JSON is `broker-dashboard.json` in this directory. Import steps and the metrics it uses are in [Metrics and Dashboards](../metrics.md#grafana-dashboard).
