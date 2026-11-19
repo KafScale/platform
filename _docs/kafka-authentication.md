@@ -7,9 +7,12 @@ nav_title: mTLS authentication
 nav_order: 7
 ---
 
-# Kafka client mTLS and proxy authentication
+<!--
+Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+Licensed under the Apache License, Version 2.0 (the "License").
+-->
 
-Added in [PR #214](https://github.com/KafScale/platform/pull/214), merged to main on 27 October 2026, after v1.6.3. It is not in a tagged release yet. Build from main to use it.
+# Kafka proxy authentication
 
 KafScale can authenticate Kafka clients with mTLS at the Kafka entry proxy.
 Each client certificate maps to a principal, and broker ACLs enforce that principal for topic, group and admin operations.
@@ -194,7 +197,7 @@ Limits:
 | `KAFSCALE_PROXY_IDENTITY_KEY_FILE` | Proxy and brokers | `key` in `identitySecretRef` | none | Shared forwarding key file |
 | `KAFSCALE_PROXY_TLS_MAX_HANDSHAKES` | Proxy | `maxHandshakes` | 64 | Concurrent TLS handshake slots, 1 to 60000 |
 | `KAFSCALE_PROXY_TLS_MAX_HANDSHAKES_PER_IP` | Proxy | `maxHandshakesPerIP` | 8 | Pending connections per source IP, 1 to 60000 |
-| `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` | Proxy | `handshakeTimeoutMs` | 1000 | Total handshake deadline in ms, 1 to 60000 |
+| `KAFSCALE_PROXY_TLS_HANDSHAKE_TIMEOUT_MS` | Proxy | `handshakeTimeoutMs` | 1000 | Total handshake deadline in ms, 1 to 60000. In Helm, 0 or an empty value uses the default. |
 | `KAFSCALE_PROXY_TLS_HANDSHAKE_QUEUE_MS` | Proxy | `handshakeQueueMs` | 100 | Wait for a handshake slot in ms, 1 to 60000 |
 
 Helm values live under `proxy.security`. CRD fields live under `spec.security`.
@@ -333,7 +336,7 @@ Revoked permission during a multipart upload:
 - Cleanup uses a bounded context, independent of request cancellation.
 - A failed abort keeps the session for a retry until it expires or the proxy restarts.
 - An explicit abort returns HTTP 502 if cleanup fails.
-- Expiry does not abort S3 uploads. Configure a bucket lifecycle rule for incomplete multipart uploads, as described in [LFS proxy](/lfs-proxy/).
+- Expiry does not abort S3 uploads. Configure a bucket lifecycle rule for incomplete multipart uploads, as described in [operations](/operations/#lfs-proxy).
 - Objects created before a later Kafka failure are recorded as orphans.
 
 ### LFS module on the Kafka path

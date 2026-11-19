@@ -7,9 +7,8 @@ nav_title: Development
 nav_order: 10
 ---
 
-
 <!--
-Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
+Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,7 +38,7 @@ make commit-check
 
 ## Prerequisites
 
-- Go 1.22+ (the module currently targets Go 1.25)
+- Go 1.26.0+ (required by `go.mod`)
 - `buf` (https://buf.build/docs/installation/) for protobuf builds
 - `protoc` plus the `protoc-gen-go` and `protoc-gen-go-grpc` plugins (installed automatically by `buf` if you use the managed mode)
 - Docker + Kubernetes CLI tools if you plan to iterate on the operator
@@ -68,7 +67,9 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 | `make test-ops-api` | Ops/admin API e2e (embedded etcd + memory S3). |
 | `make test-multi-segment-durability` | Multi-segment restart durability e2e (embedded etcd + MinIO). |
 | `make test-full` | Unit tests plus local e2e suites. |
-| `make test-operator` | Operator envtest + optional kind-based integration. |
+| `make test-operator` | Operator envtest and kind snapshot/restore/HA integration. |
+| `make test-operator-envtest` | Operator reconciliation with a real Kubernetes API; no Docker required. |
+| `make test-operator-kind` | Build required images and run the operator kind suite. Use `KAFSCALE_KIND_KUBE_PROXY_MODE=nftables` on hosts without working iptables. |
 | `make demo` | Local demo with broker + console + embedded etcd. |
 | `make demo-platform` | Kind-based demo (operator HA + managed etcd + console). |
 | `make docker-build` | Build broker/operator/console/sql-processor images locally. |
@@ -166,7 +167,7 @@ Default MinIO settings (used when `KAFSCALE_USE_MEMORY_S3=1` is not set):
 | Region | `us-east-1` |
 | Addressing | Path-style |
 
-To point at a different S3-compatible endpoint, set the `KAFSCALE_S3_*` variables listed under Environment Variables. To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
+To point at a different S3-compatible endpoint, set `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY` (listed under Environment Variables). To skip MinIO entirely, set `KAFSCALE_USE_MEMORY_S3=1` and the broker uses the in-memory S3 client for faster, deterministic runs.
 
 Related targets:
 - `make test-produce-consume` runs the MinIO-backed produce/consume suite plus a Kafka CLI producer smoke test (configure `KAFSCALE_KAFKA_CLI_IMAGE` / `KAFSCALE_KAFKA_CLI_CMD` if needed).
@@ -190,9 +191,11 @@ The broker exports live throughput gauges (`kafscale_produce_rps` / `kafscale_fe
 Recommended setup (using `setup-envtest`):
 
 ```bash
-go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
-export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.29.x)"
+go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20260126174550-f52bbb8bb1a2
+export KUBEBUILDER_ASSETS="$(setup-envtest use -p path 1.35.0)"
 ```
+
+`make test-operator-envtest` obtains these assets automatically unless `KUBEBUILDER_ASSETS` is set, and fails if the binaries are missing. CI runs both reconciliation envtests and a separate nftables kind job. The kind suite waits for health across all expected etcd members and every broker's `/readyz` endpoint before its startup produce check. It retries that check once after checking health again, and repeats the health gate after snapshot restore. It waits for the etcd pods one at a time and counts a pod the StatefulSet has not created yet as not Ready, because the default `OrderedReady` policy creates the next member only after the previous one is Ready. If a pod is not Ready in time, the failure shows the pod status, the StatefulSet revisions, PVCs, namespace events and the container logs.
 
 ### Broker logging levels
 
@@ -202,15 +205,17 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 
 ### Test and E2E
 
-- `KAFSCALE_E2E` – Enable e2e tests.
-- `KAFSCALE_E2E_KIND` – Enable kind-based e2e.
-- `KAFSCALE_KIND_CLUSTER` – Kind cluster name.
-- `KAFSCALE_KIND_RECREATE` – Force kind cluster recreation.
-- `KAFSCALE_E2E_DEMO` – Run demo stack test.
-- `KAFSCALE_E2E_OPEN_UI` – Open UI during demo test.
-- `KAFSCALE_E2E_DEBUG` – Enable debug output in e2e tests.
-- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE` – Image overrides for kind e2e.
-- `KAFSCALE_LOCAL_FRANZ` – Use local franz-go build in tests.
+- `KAFSCALE_E2E`: Enable e2e tests.
+- `KAFSCALE_E2E_KIND`: Enable kind-based e2e.
+- `KAFSCALE_KIND_CLUSTER`: Kind cluster name.
+- `KAFSCALE_KIND_RECREATE`: Force kind cluster recreation.
+- `KAFSCALE_KIND_KUBE_PROXY_MODE` set to `nftables` creates the kind cluster with `networking.kubeProxyMode: nftables`. Leave it unset to keep kind's default. Any other value fails the test.
+- `KAFSCALE_E2E_DEMO`: Run demo stack test.
+- `KAFSCALE_E2E_OPEN_UI`: Open UI during demo test.
+- `KAFSCALE_E2E_DEBUG`: Enable debug output in e2e tests.
+- `KAFSCALE_BROKER_IMAGE`, `KAFSCALE_OPERATOR_IMAGE`, `KAFSCALE_CONSOLE_IMAGE`: Image overrides for kind e2e.
+- `KAFSCALE_MINIO_IMAGE`: MinIO image for kind e2e and the Java LFS integration test (default `kafscale-minio:local`, built by `make docker-build-minio`).
+- `KAFSCALE_LOCAL_FRANZ`: Use local franz-go build in tests.
 
 ### Demo workload tuning
 
@@ -251,21 +256,21 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | API Key | Name | Kafka 3.7 Version | Kafscale Status |
 |---------|------|-------------------|-----------------|
 | 0 | Produce | 9 | ✅ Implemented |
-| 1 | Fetch | 13 | ✅ Implemented |
+| 1 | Fetch | 13 | ✅ Implemented (v4-13) |
 | 2 | ListOffsets | 7 | ✅ Implemented (v0-4) |
 | 3 | Metadata | 12 | ✅ Implemented |
 | 4 | LeaderAndIsr | 5 | ❌ Not needed (internal) |
 | 5 | StopReplica | 3 | ❌ Not needed (internal) |
 | 6 | UpdateMetadata | 7 | ❌ Not needed (internal) |
 | 7 | ControlledShutdown | 3 | ❌ Replaced by Kubernetes rollouts |
-| 8 | OffsetCommit | 3 | ✅ Implemented |
-| 9 | OffsetFetch | 5 | ✅ Implemented |
-| 10 | FindCoordinator | 3 | ✅ Implemented |
-| 11 | JoinGroup | 4 | ✅ Implemented |
-| 12 | Heartbeat | 4 | ✅ Implemented |
-| 13 | LeaveGroup | 4 | ✅ Implemented |
-| 14 | SyncGroup | 4 | ✅ Implemented |
-| 15 | DescribeGroups | 5 | ✅ Implemented |
+| 8 | OffsetCommit | 3 | ✅ Implemented (v1-3) |
+| 9 | OffsetFetch | 5 | ✅ Implemented (v1-5) |
+| 10 | FindCoordinator | 3 | ✅ Implemented (v0-3) |
+| 11 | JoinGroup | 4 | ✅ Implemented (v0-4) |
+| 12 | Heartbeat | 4 | ✅ Implemented (v0-4) |
+| 13 | LeaveGroup | 4 | ✅ Implemented (v0-4) |
+| 14 | SyncGroup | 4 | ✅ Implemented (v0-4) |
+| 15 | DescribeGroups | 0-5 | ✅ Implemented |
 | 16 | ListGroups | 5 | ✅ Implemented |
 | 17 | SaslHandshake | 1 | ❌ Not supported |
 | 18 | ApiVersions | 3 | ✅ Implemented (v0-3) |

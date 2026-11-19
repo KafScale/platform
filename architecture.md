@@ -5,6 +5,23 @@ description: Architecture and data flows for KafScale brokers, metadata, and S3 
 permalink: /architecture/
 ---
 
+<!--
+Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Kafscale Architecture
 
 This document explains how Kafscale is put together and how data flows through the system.
@@ -44,7 +61,7 @@ If caches miss, the broker fetches from S3.
 
 ## S3 Health Backpressure
 
-When the broker detects degraded or unavailable S3 health, it rejects Produce and Fetch requests with backpressure error codes. Producers fail fast so clients can retry; consumers receive fetch errors until S3 recovers.
+When the broker detects degraded or unavailable S3 health, it rejects Produce and Fetch requests with retriable error codes: `REQUEST_TIMED_OUT` (7) while S3 is degraded and `KAFKA_STORAGE_ERROR` (56) while it is unavailable or a request to it fails. Produce v8 and later also return a message such as "object storage unavailable, retry later". Produce below v4 and Fetch v5 or below receive `NOT_LEADER_OR_FOLLOWER` (6) instead of `KAFKA_STORAGE_ERROR`, because those versions predate it, matching Kafka. Errors that do not come from S3 still return `UNKNOWN_SERVER_ERROR`. Clients retry until S3 recovers or their delivery timeout runs out.
 
 ## Multi-Region S3 Reads (CRR)
 

@@ -5,6 +5,23 @@ description: Supported storage backends, Kubernetes versions, and requirements f
 permalink: /supported/
 ---
 
+<!--
+Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Storage Backend Compatibility
 
 KafScale uses S3-compatible object storage as its source of truth. While designed for AWS S3, it works with any storage backend that implements the S3 API.
@@ -16,20 +33,45 @@ KafScale uses S3-compatible object storage as its source of truth. While designe
 | AWS S3 | ✅ Native | Full support, including IRSA |
 | DigitalOcean Spaces | ✅ Native | Drop-in replacement |
 | Cloudflare R2 | ✅ Native | Zero egress fees |
-| Backblaze B2 | ✅ Native | S3-compatible API |
+| Backblaze B2 | ❌ Not supported | No conditional writes (`If-None-Match: *`), see below |
 | Wasabi | ✅ Native | Flat pricing model |
 | Linode Object Storage | ✅ Native | S3-compatible |
 | Vultr Object Storage | ✅ Native | S3-compatible |
 | MinIO | ✅ Native | Self-hosted, any infrastructure |
-| Google Cloud Storage | ⚠️ Interop | Requires HMAC keys, XML API |
+| Google Cloud Storage | ❌ Not supported | XML API supports `If-None-Match` only on reads, see below |
 | Oracle Cloud | ⚠️ Interop | S3 Compatibility API |
 | IBM Cloud Object Storage | ⚠️ Interop | S3-compatible API |
-| Azure Blob Storage | ❌ Proxy | Requires an S3-compatible proxy in front of Azure Blob (MinIO gateway mode is no longer available) |
+| Azure Blob Storage | ❌ Not supported | Not S3-compatible; MinIO has no gateway mode |
 
 **Legend:**
 - ✅ Native: Standard S3 SDK works with endpoint change
 - ⚠️ Interop: Works via compatibility layer, minor config differences
-- ❌ Proxy: Requires additional infrastructure
+- ❌ Not supported: does not work with KafScale
+
+## Conditional writes
+
+Brokers upload every segment with `PutObject` and `If-None-Match: *`. This is
+what stops a broker that lost its partition lease from overwriting segments that
+the new owner already wrote. The schema registry uses the same condition for its
+id records.
+
+The backend must reject a create-only write to an existing key with `412
+Precondition Failed`.
+
+- AWS S3 and MinIO support it and are tested.
+- Cloudflare R2 documents atomic `If-None-Match: *` on `PutObject`. Ceph RGW is
+  reported to support it. Neither was tested here.
+- Backblaze B2 does not support conditional writes. The Google Cloud Storage XML
+  API supports `If-None-Match` only on reads.
+- For other providers, check their documentation before upgrading. A backend
+  that ignores the header turns off this protection without an error. A backend
+  that rejects the header makes every produce fail.
+
+The broker and schema registry check this at startup and refuse to start when
+the condition is not honored. The broker writes the same unique probe key twice
+and requires the second write to return `412 Precondition Failed`. Probe objects
+use the `__health/` prefix and are deleted after each attempt; allow
+`s3:DeleteObject` on this prefix to avoid leaving probe objects behind.
 
 ---
 
@@ -181,6 +223,8 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ## Backblaze B2
 
+> **Not supported in this release.** It does not honor `If-None-Match: *` on `PutObject`, which brokers need for segment uploads. See [Conditional writes](#conditional-writes). The configuration below is kept for reference.
+
 Cost-effective S3-compatible storage.
 
 ### KafScaleCluster
@@ -255,6 +299,8 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ## Google Cloud Storage
 
+> **Not supported in this release.** It does not honor `If-None-Match: *` on `PutObject`, which brokers need for segment uploads. See [Conditional writes](#conditional-writes). The configuration below is kept for reference.
+
 GCS provides S3 interoperability via its XML API. Requires HMAC keys.
 
 ### Setup
@@ -300,22 +346,13 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 ---
 
-
 ## Azure Blob Storage
 
-Azure Blob Storage is not S3-compatible. KafScale needs an S3-compatible proxy in front of Azure Blob. MinIO gateway mode is no longer available, so do not deploy MinIO with `gateway azure`.
+Azure Blob Storage is **not** S3-compatible, and KafScale has no supported Azure path.
 
-Point the cluster at your proxy the same way you point it at any other S3-compatible endpoint. Set `s3.endpoint` to the proxy URL, and store the proxy credentials in `credentialsSecretRef`.
+MinIO no longer has a gateway mode: `minio gateway` is not a subcommand in the MinIO build from `test/e2e/minio.Dockerfile`. Use one of the S3-compatible providers above.
 
-### Trade-offs
-
-- **Added latency:** an extra network hop through the proxy
-- **Operational overhead:** another component to run and monitor
-- **Availability:** the proxy needs a high-availability setup, or it becomes a single point of failure
-- **Cost:** compute for the proxy
-
-Consider a native S3-compatible provider if Azure is not a hard requirement.
-
+---
 
 ## MinIO (Self-Hosted)
 
@@ -323,10 +360,11 @@ Run your own S3-compatible storage on any infrastructure: on-prem, edge, or any 
 
 ### Docker Compose (Development)
 
-The default `docker-compose.yml` includes MinIO:
+`deploy/docker-compose/docker-compose.yaml` builds MinIO from `test/e2e/minio.Dockerfile` as `kafscale-minio:local`:
 
 ```bash
-docker-compose up -d
+cd deploy/docker-compose
+docker compose up -d --build
 ```
 
 MinIO runs on port 9000 with default credentials `minioadmin:minioadmin`.
@@ -352,12 +390,16 @@ spec:
 
 ### Production MinIO
 
-For production, deploy MinIO in distributed mode with erasure coding:
+For production, deploy MinIO in distributed mode with erasure coding. The chart at `https://charts.min.io/` (latest version 5.4.0) still installs, but its default MinIO and `mc` images on quay.io are no longer publicly pullable. Push MinIO and `mc` images to a registry you control and point the chart at them:
 
 ```bash
 helm repo add minio https://charts.min.io/
 helm install minio minio/minio \
   --namespace minio-system --create-namespace \
+  --set image.repository=<registry>/minio \
+  --set image.tag=<minio-tag> \
+  --set mcImage.repository=<registry>/mc \
+  --set mcImage.tag=<mc-tag> \
   --set mode=distributed \
   --set replicas=4 \
   --set persistence.size=100Gi
@@ -377,9 +419,7 @@ For production, always use HTTPS endpoints. Self-signed certificates may require
 
 ### Regional Latency
 
-Place your storage in the same region as your Kubernetes cluster. Every acknowledged produce waits for an S3 write, so storage write latency is most of your produce latency. AWS recommends the same for Amazon S3: "To optimize performance, we recommend that you access the bucket from Amazon EC2 instances in the same AWS Region when possible. This helps reduce network latency and data transfer costs." ([source](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance-guidelines.html))
-
-For Amazon S3, AWS documents small-object latency of roughly 100–200 milliseconds ([source](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html)). The other backends on this page publish their own figures or none, so measure your backend with `kafscale_s3_latency_ms_avg`. See [Latency and batching](/latency/).
+Place your storage in the same region as your Kubernetes cluster. KafScale's ~500ms latency target assumes low-latency storage access.
 
 ### Bucket Lifecycle
 

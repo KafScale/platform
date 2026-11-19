@@ -8,9 +8,8 @@ nav_order: 9
 nav_group: References
 ---
 
-
 <!--
-Copyright 2025-2026 Alexander Alten (novatechflow), KafScale (novatechflow.com).
+Copyright 2025-2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,9 +30,9 @@ limitations under the License.
 This document captures repeatable benchmark scenarios for Kafscale. It focuses
 on end-to-end throughput and latency across the broker and S3-backed storage.
 
-The local runner lives in `docs/benchmarks/scripts/run_local.sh` and can be
+The local runner lives in [`docs/benchmarks/scripts/run_local.sh`](https://github.com/KafScale/platform/blob/main/docs/benchmarks/scripts/run_local.sh) and can be
 used to reproduce the baseline numbers on a demo platform setup. A tiny
-Makefile wrapper is available at `docs/benchmarks/Makefile`.
+Makefile wrapper is available at [`docs/benchmarks/Makefile`](https://github.com/KafScale/platform/blob/main/docs/benchmarks/Makefile).
 
 The runner uses dedicated topics (`bench-hot`, `bench-s3`, `bench-multi`) and
 will create them if `kafka-topics.sh` is available. Otherwise, it falls back to

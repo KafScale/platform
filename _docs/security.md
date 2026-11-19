@@ -7,6 +7,23 @@ nav_title: Security
 nav_order: 7
 ---
 
+<!--
+Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Security Overview
 
 Kafscale is a kubernetes native platform focused on Kafka protocol parity and
@@ -90,6 +107,11 @@ or invalid. Default is fail-closed (deny).
 - **Actions**: `produce`, `fetch`, `group_read`, `group_write`, `group_admin`, `admin`
 - **Resources**: `topic`, `group`, `cluster`
 
+OffsetFetch requires `group_read` on the group and `fetch` on each topic. A null
+topic list returns all committed partitions the principal may fetch. An empty
+topic list returns no partitions. Explicitly named denied topics return
+`TOPIC_AUTHORIZATION_FAILED` without committed offsets or metadata.
+
 ### Client Configuration
 
 In legacy mode, set `client.id` to the principal name used in ACLs. This value
@@ -131,16 +153,10 @@ are rejected.
   TLS setting.
 - SASL is not supported.
 
-## Reporting security issues
+## Reporting Security Issues
 
-If you discover a security vulnerability, please report it responsibly:
-
-1. **Do not** open a public GitHub issue
-2. Email security@novatechflow.com with details
-3. Include steps to reproduce if possible
-4. We will respond within 48 hours
-
-See [SECURITY.md](https://github.com/KafScale/platform/blob/main/SECURITY.md) for full details.
+If you believe you have found a security vulnerability, please follow the
+process in `SECURITY.md`.
 
 ## Secure Development Practices
 
@@ -239,6 +255,7 @@ PVC so kubelet can exercise ownership migration.
 
 The optional LFS proxy defaults to the shipped combined `kafscale-proxy` image
 with its LFS module enabled. Core listener, etcd, backend, and health settings
-are emitted as `KAFSCALE_PROXY_*`; the previous `KAFSCALE_LFS_PROXY_*` names are
-retained for custom legacy images. LFS-specific settings keep their existing
+are emitted under the proxy names, such as `KAFSCALE_PROXY_ADDR`. The previous
+LFS proxy names, such as `KAFSCALE_LFS_PROXY_ADDR`, are retained for custom
+legacy images. LFS-specific settings keep their existing
 names. Set `spec.lfsProxy.advertisedHost` to an address reachable by clients.

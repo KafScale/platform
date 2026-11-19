@@ -32,7 +32,7 @@ Kafscale™ is a Kubernetes-native, S3-backed Kafka-compatible streaming platfor
 
 Most Kafka deployments serve as durable pipes moving data from point A to points B through N. They do not require sub-millisecond latency, exactly-once transactions, or compacted topics. They need messages in, messages out, consumer tracking, and the confidence that data will not be lost.
 
-Kafscale trades latency for operational simplicity. Every acknowledged produce waits for an S3 write, so latency follows S3 request latency, which AWS documents at roughly 100–200 milliseconds for small objects (see [Latency](/latency/)). Brokers are stateless. S3 is the source of truth. Kubernetes handles scaling and failover. The result is a system that can scale down cleanly and does not require dedicated ops expertise.
+Kafscale trades latency for operational simplicity. Brokers are stateless. S3 is the source of truth. Kubernetes handles scaling and failover. The result is a system that can scale down cleanly and does not require dedicated ops expertise.
 
 ## What Kafscale Optimizes For
 
@@ -41,17 +41,11 @@ Kafscale trades latency for operational simplicity. Every acknowledged produce w
 - Compatibility with common Kafka client workflows.
 - Clear operational boundaries (broker compute vs S3 durability).
 
-## Non-Goals
+## Non-Goals (Current)
 
 - Transactions or exactly-once semantics.
 - Log compaction.
 - KRaft or Kafka-internal replication APIs.
-
-These follow from the design. Segments in S3 are immutable and brokers keep no state. See [Trade-offs of the S3 design](/latency/#trade-offs-of-the-s3-design) for what to do instead.
-
-## Commercial Support
-
-Commercial support and an enterprise version of KafScale are available from Scalytics as [Lascaris](https://www.scalytics.io/lascaris).
 
 ## Where to Go Next
 
@@ -59,5 +53,8 @@ Commercial support and an enterprise version of KafScale are available from Scal
 - [`docs/architecture.md`](/architecture/) for system internals.
 - [`docs/protocol.md`](/protocol/) for Kafka protocol coverage.
 - [`docs/security.md`](/security/) for security posture and roadmap.
-- [mTLS authentication](/kafka-authentication/) for Kafka client TLS and mTLS at the proxy.
 - `kafscale-spec.md` for the technical specification.
+
+## Commercial Support
+
+Commercial support and an enterprise version of KafScale are available from Scalytics as [Lascaris](https://www.scalytics.io/lascaris).

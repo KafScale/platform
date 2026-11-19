@@ -34,3 +34,7 @@
 commercial-saas.md
 addons/*
 notes/
+
+# Docs sync tooling
+!.github/scripts/*.py
+!.github/scripts/site-extras/*.md

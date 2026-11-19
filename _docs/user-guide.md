@@ -7,6 +7,23 @@ nav_title: User Guide
 nav_order: 3
 ---
 
+<!--
+Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
 # Kafscale User Guide
 
 Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps brokers stateless, stores data in S3, and relies on Kubernetes for scheduling and scaling. This guide summarizes how to interact with the platform once it is deployed.
@@ -31,7 +48,7 @@ For install + bootstrap steps, follow [`docs/quickstart.md`](/quickstart/).
 
 ### Java (plain)
 
-Start with a minimal set of producer properties. We disable idempotence because Kafscale does not support transactional semantics.
+Start with a minimal set of producer properties. Turn idempotence off: KafScale does not implement `InitProducerId`, so idempotent and transactional producers cannot start.
 ```properties
 # Java producer properties
 bootstrap.servers=kafscale-broker:9092
@@ -146,7 +163,13 @@ kafka-console-consumer --bootstrap-server kafscale-broker:9092 --topic orders --
 
 ## Scaling / Maintenance
 
-The operator uses Kubernetes HPA and the BrokerControl gRPC API to safely drain partitions before restarts. Users can request manual drains or flushes by invoking those RPCs (CLI tooling TBD).
+The operator creates the HPA `<cluster>-broker` with a minimum of `spec.brokers.replicas` (or 3 if unset or 0) and a maximum of four times that minimum. The operator keeps the replica count the HPA sets, within that range. Setting `spec.brokers.replicas` to 0 stops all brokers. New brokers appear in Kafka Metadata and take over the partitions whose preferred leader they are. On scale-down the HPA removes at most one broker per minute; a removed broker releases its partition leases on shutdown and the remaining brokers take them over. See [Scaling brokers](/operations/#scaling-brokers).
+
+```bash
+kubectl -n kafscale patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
+```
+
+The BrokerControl `DrainPartitions` and `TriggerFlush` RPCs are not implemented yet and return `Unimplemented`.
 
 ## Limits / Non-Goals
 
