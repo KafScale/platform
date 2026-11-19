@@ -147,6 +147,7 @@ a:visited {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
+  width: max-content;
 }
 
 .nav-links a {
@@ -1066,6 +1067,7 @@ pre.highlight {
     box-shadow: var(--shadow);
     position: static;
     transform: none;
+    width: auto;
   }
 
   .nav-links.open {
@@ -1150,4 +1152,108 @@ pre.highlight {
     background: #f8fafc;
     box-shadow: inset -5px 0 0 0 var(--bg-alt);
   }
+}
+
+.term {
+  max-width: 720px;
+  margin: 1.5rem auto 0;
+  border: 1px solid #2a313b;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1e1f29;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+}
+
+.term-bar {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  background: #161b22;
+}
+
+.term-bar i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #ff5f57;
+}
+
+.term-bar i:nth-child(2) {
+  background: #febc2e;
+}
+
+.term-bar i:nth-child(3) {
+  background: #28c840;
+}
+
+.term-bar span {
+  margin-left: 8px;
+  color: #9aa3ae;
+  font: 12px "IBM Plex Mono", ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.term video {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.demo-teaser {
+  text-align: center;
+}
+
+.demo-teaser > p {
+  color: var(--muted);
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.demo-teaser .hero-actions,
+.demo .hero-actions {
+  justify-content: center;
+  align-items: center;
+  margin-top: 1.25rem;
+}
+
+@media (min-width: 961px) and (max-width: 1180px) {
+  .nav-links {
+    position: static;
+    transform: none;
+    width: auto;
+    gap: 0.4rem 0.8rem;
+    font-size: 0.95rem;
+  }
+}
+
+.demos-intro {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.demos-intro h1 {
+  font-family: var(--font-display);
+}
+
+.demos-intro p {
+  color: var(--muted);
+}
+
+.demo {
+  max-width: 720px;
+  margin: 3.5rem auto 0;
+}
+
+.demo h2 {
+  font-family: var(--font-display);
+  margin-bottom: 0.5rem;
+}
+
+.demo p {
+  margin: 0.25rem 0;
+  color: var(--muted);
 }

@@ -25,6 +25,13 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
   </div>
 </section>
 
+<section class="section demo-teaser">
+  <h2>See it run</h2>
+  <p>Install KafScale with Helm, create a topic, then produce and consume, in about two minutes.</p>
+  <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>admin: helm install, cluster, topic</span></div><video autoplay muted loop playsinline preload="metadata" width="960" height="540" poster="/media/demos/admin/admin-poster.webp" aria-label="Terminal demo: KafScale is installed with Helm, a cluster and a topic are created, and records are produced and consumed through a broker and the proxy"><source src="/media/demos/admin/admin.webm" type="video/webm"><source src="/media/demos/admin/admin.mp4" type="video/mp4"></video></div>
+  <div class="hero-actions"><a class="button secondary" href="/demos/">See all demos</a></div>
+</section>
+
 <section class="section">
   <h2>Why teams adopt KafScale</h2>
   <div class="grid grid-3x2">

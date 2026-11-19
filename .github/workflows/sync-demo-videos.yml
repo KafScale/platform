@@ -1,0 +1,85 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Sync demo videos
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch or tag of the main repo to copy docs/media/videos from"
+        required: true
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-demo-videos
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out gh-pages
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          ref: gh-pages
+          path: site
+
+      - name: Check out video source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          path: src
+          sparse-checkout: docs/media/videos
+
+      - name: Copy videos
+        run: |
+          set -euo pipefail
+          for p in admin cli schema-registry mcp ops; do
+            from="src/docs/media/videos/$p"
+            to="site/media/demos/$p"
+            mkdir -p "$to"
+            for f in "$p.webm" "$p.mp4" "$p-poster.webp"; do
+              test -s "$from/$f" || { echo "missing $from/$f" >&2; exit 1; }
+              cp "$from/$f" "$to/$f"
+            done
+          done
+
+      - name: Open pull request
+        working-directory: site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- media/demos; then
+            echo "Videos already match $SOURCE_REF."
+            exit 0
+          fi
+          branch="site/sync-demo-videos-$RUN_ID"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add media/demos
+          git commit -m "site: sync demo videos from $SOURCE_REF"
+          git push origin "$branch"
+          gh pr create --base gh-pages --head "$branch" \
+            --title "site: sync demo videos from $SOURCE_REF" \
+            --body "Copies docs/media/videos/<persona>/<persona>.{webm,mp4} and <persona>-poster.webp from $SOURCE_REF into media/demos/. The Demos page links only these paths, so no page edits are needed."
