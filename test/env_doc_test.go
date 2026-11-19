@@ -53,6 +53,15 @@ func repoRoot(t *testing.T) string {
 	return filepath.Dir(wd)
 }
 
+func readRepoDoc(t *testing.T, rel string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
 func extractEnvVars(text string) []string {
 	re := regexp.MustCompile(`KAFSCALE_[A-Z0-9_]+`)
 	matches := re.FindAllString(text, -1)

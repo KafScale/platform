@@ -1,0 +1,126 @@
+// Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+// This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package test
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
+	ops := readRepoDoc(t, "docs/operations.md")
+	for _, want := range []string{
+		"`kafscale-cli` is built from this repository and needs Go 1.26 or later.",
+		"go build -o bin/kafscale-cli ./cmd/kafscale-cli",
+		"### Installing kafscale-cli",
+		"It defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`.",
+		"- S3 credentials are `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, optionally `KAFSCALE_S3_SESSION_TOKEN`. If either is unset, the AWS SDK default credential chain is used: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; the shared config and credentials files with `AWS_PROFILE`; web identity with `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` (EKS IRSA); and ECS or EC2 instance role credentials. Without credentials, restore fails at its first S3 call, listing the source segments, with an error that starts `list objects <prefix>:` and includes `get credentials`, and creates no target.",
+		"- Restore fails when there are no segments for the selected partitions under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, or when no record in those segments is at or before `--to`. The command exits with a non-zero status and names the prefix it searched. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. Set `--namespace`, `KAFSCALE_NAMESPACE` or `KAFSCALE_S3_NAMESPACE` to the cluster namespace (`KAFSCALE_NAMESPACE` wins over `KAFSCALE_S3_NAMESPACE`).",
+		"- `kafscale-cli prune` needs the same S3 and etcd environment as restore. A dry run needs them too, because it calls CheckBucket, lists etcd and lists S3. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.",
+		"- If `kafscale-cli restore` creates the target topic and a later step fails (`UpdateTopicConfig`, `TopicGeneration` or the copy), restore rolls back by retiring that target. That writes a `/kafscale/deleted-topics` record with no objects, or only those copied before the failure, which `kafscale-cli prune` lists. If the rollback itself fails, restore prints `warning: failed to roll back target topic <name>: ...` to stderr, the target stays, and no deleted-topics record is written. `prune --topic <target> --force` removes the record, and every other deleted incarnation of that name.",
+		"Every environment variable `restore` reads is listed in [kafscale-cli](#kafscale-cli).",
+		"Every environment variable `prune` reads is listed in [kafscale-cli](#kafscale-cli):",
+		"### kafscale-cli",
+		"AWS_SESSION_TOKEN",
+		"AWS_PROFILE",
+	} {
+		if !strings.Contains(ops, want) {
+			t.Errorf("docs/operations.md is missing exact sentence:\n%s", want)
+		}
+	}
+
+	sr := readRepoDoc(t, "docs/schema-registry.md")
+	for _, want := range []string{
+		"go build -o bin/kafscale-cli ./cmd/kafscale-cli",
+		"operations.md#installing-kafscale-cli",
+		"`--auth` and `--to-auth` values are visible to other local users in the process list, so prefer the env vars.",
+		"Every environment variable `schema import` reads is listed in [kafscale-cli](operations.md#kafscale-cli).",
+		"read -rs KAFSCALE_SCHEMA_IMPORT_AUTH",
+		"export KAFSCALE_SCHEMA_IMPORT_AUTH",
+		"read -rs KAFSCALE_SCHEMA_REGISTRY_AUTH",
+		"export KAFSCALE_SCHEMA_REGISTRY_AUTH",
+		"kafscale-cli schema import --from https://source-registry:8081 --to http://kafscale-schema-registry:8081",
+		"Optional flags are `--subjects '<regex>'`, `--dry-run` and `--force`.",
+	} {
+		if !strings.Contains(sr, want) {
+			t.Errorf("docs/schema-registry.md is missing exact sentence:\n%s", want)
+		}
+	}
+}
+
+func TestCLIEnvIndexDocumentsEveryCLIEnv(t *testing.T) {
+	ops := readRepoDoc(t, "docs/operations.md")
+	section := cliEnvIndexSection(t, ops)
+	root := filepath.Join(repoRoot(t), "cmd", "kafscale-cli")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	seen := map[string]struct{}{}
+	ident := regexp.MustCompile(`(?:KAFSCALE|AWS)_[A-Z0-9_]+`)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(root, entry.Name())
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			lit, ok := n.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			for _, name := range ident.FindAllString(lit.Value, -1) {
+				seen[name] = struct{}{}
+			}
+			return true
+		})
+	}
+	if len(seen) == 0 {
+		t.Fatal("no KAFSCALE_* or AWS_* string literals found in cmd/kafscale-cli")
+	}
+	var missing []string
+	for name := range seen {
+		if !strings.Contains(section, name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("docs/operations.md ### kafscale-cli is missing %s", strings.Join(missing, ", "))
+	}
+}
+
+func cliEnvIndexSection(t *testing.T, ops string) string {
+	t.Helper()
+	start := strings.Index(ops, "### kafscale-cli\n")
+	if start < 0 {
+		t.Fatal("docs/operations.md has no ### kafscale-cli section")
+	}
+	rest := ops[start+len("### kafscale-cli\n"):]
+	if end := strings.Index(rest, "\n### "); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}

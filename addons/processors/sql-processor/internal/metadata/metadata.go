@@ -29,6 +29,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
 	"github.com/kafscale/platform/addons/processors/sql-processor/internal/metrics"
@@ -255,12 +257,12 @@ func NewEtcdResolver(cfg config.Config) (*EtcdResolver, error) {
 	if len(cfg.Metadata.Etcd.Endpoints) == 0 {
 		return nil, errors.New("metadata.etcd.endpoints is required for discovery=etcd")
 	}
-	cli, err := clientv3.New(clientv3.Config{
+	cli, err := clientv3.New(EtcdClientConfig(clientv3.Config{
 		Endpoints:   cfg.Metadata.Etcd.Endpoints,
 		Username:    cfg.Metadata.Etcd.Username,
 		Password:    cfg.Metadata.Etcd.Password,
 		DialTimeout: 5 * time.Second,
-	})
+	}))
 	if err != nil {
 		return nil, err
 	}
@@ -476,4 +478,34 @@ func normalizePrefix(prefix string) string {
 		return ""
 	}
 	return clean + "/"
+}
+
+const (
+	etcdReconnectMaxDelay = time.Second
+	etcdMinConnectTimeout = 5 * time.Second
+)
+
+func etcdConnectParams(dialTimeout time.Duration) grpc.ConnectParams {
+	minConnect := etcdMinConnectTimeout
+	if dialTimeout > minConnect {
+		minConnect = dialTimeout
+	}
+	return grpc.ConnectParams{
+		Backoff: backoff.Config{
+			BaseDelay:  100 * time.Millisecond,
+			Multiplier: backoff.DefaultConfig.Multiplier,
+			Jitter:     backoff.DefaultConfig.Jitter,
+			MaxDelay:   etcdReconnectMaxDelay,
+		},
+		MinConnectTimeout: minConnect,
+	}
+}
+
+func EtcdClientConfig(cfg clientv3.Config) clientv3.Config {
+	if cfg.DialTimeout == 0 {
+		cfg.DialTimeout = 5 * time.Second
+	}
+	cfg.PermitWithoutStream = false
+	cfg.DialOptions = append(append([]grpc.DialOption{}, cfg.DialOptions...), grpc.WithConnectParams(etcdConnectParams(cfg.DialTimeout)))
+	return cfg
 }

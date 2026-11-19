@@ -545,7 +545,7 @@ func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *
 		cron.Spec.ConcurrencyPolicy = batchv1.ForbidConcurrent
 		cron.Spec.SuccessfulJobsHistoryLimit = int32Ptr(3)
 		cron.Spec.FailedJobsHistoryLimit = int32Ptr(3)
-		cron.Spec.JobTemplate.Spec.Template.Labels = labels
+		cron.Spec.JobTemplate.Spec.Template.Labels = etcdJobLabels(cluster)
 		cron.Spec.JobTemplate.Spec.Template.Spec.RestartPolicy = corev1.RestartPolicyNever
 		cron.Spec.JobTemplate.Spec.Template.Spec.SecurityContext = restrictedPodSecurityContext(true)
 		cron.Spec.JobTemplate.Spec.Template.Spec.Volumes = []corev1.Volume{
@@ -770,7 +770,7 @@ func reconcileEtcdMaintenanceCronJob(ctx context.Context, c client.Client, schem
 }
 
 func etcdMaintenanceLabels(cluster *kafscalev1alpha1.KafscaleCluster, task string) map[string]string {
-	labels := etcdLabels(cluster)
+	labels := etcdJobLabels(cluster)
 	labels["app.kubernetes.io/component"] = "etcd-maintenance"
 	labels["kafscale.io/etcd-task"] = task
 	return labels
@@ -896,6 +896,13 @@ func sanitizeBucketName(raw string) string {
 func etcdLabels(cluster *kafscalev1alpha1.KafscaleCluster) map[string]string {
 	return map[string]string{
 		"app":     "kafscale-etcd",
+		"cluster": cluster.Name,
+	}
+}
+
+func etcdJobLabels(cluster *kafscalev1alpha1.KafscaleCluster) map[string]string {
+	return map[string]string{
+		"app":     "kafscale-etcd-job",
 		"cluster": cluster.Name,
 	}
 }

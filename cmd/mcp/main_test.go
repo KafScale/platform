@@ -20,11 +20,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/KafScale/platform/internal/mcpserver"
 	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/pkg/protocol"
 )
 
 func TestEnvOrDefault(t *testing.T) {
@@ -69,13 +72,71 @@ func TestMcpEtcdConfigFromEnv(t *testing.T) {
 
 func TestBuildMetricsProvider(t *testing.T) {
 	t.Setenv("KAFSCALE_MCP_BROKER_METRICS_URL", "")
-	if got := buildMetricsProvider(); got != nil {
+	if got := buildMetricsProvider(nil); got != nil {
 		t.Fatalf("expected nil metrics provider when env unset")
 	}
 
 	t.Setenv("KAFSCALE_MCP_BROKER_METRICS_URL", "http://127.0.0.1:9093/metrics")
-	if got := buildMetricsProvider(); got == nil {
+	if got := buildMetricsProvider(nil); got == nil {
 		t.Fatalf("expected metrics provider when env set")
+	}
+}
+
+func TestBuildMetricsProviderAggregatesEveryBroker(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte("kafscale_produce_rps 5\nkafscale_fetch_rps 7\n"))
+		if requests.Add(1) == 1 {
+			_, _ = w.Write([]byte("kafscale_s3_latency_ms_avg 0\nkafscale_s3_error_rate 0\nkafscale_admin_request_latency_ms_avg 0\n"))
+		} else {
+			_, _ = w.Write([]byte("kafscale_s3_latency_ms_avg 40\nkafscale_s3_error_rate 0.4\nkafscale_admin_request_latency_ms_avg 10\n"))
+		}
+	}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{
+		Brokers: []protocol.MetadataBroker{
+			{NodeID: 0, Host: parsed.Hostname(), Port: 9092},
+			{NodeID: 1, Host: parsed.Hostname() + ":9092", Port: 9092},
+		},
+	})
+	t.Setenv("KAFSCALE_MCP_BROKER_METRICS_URL", "http://unused.invalid:"+parsed.Port()+"/metrics")
+	provider := buildMetricsProvider(store)
+	if provider == nil {
+		t.Fatal("expected metrics provider")
+	}
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.ProduceRPS != 10 || snap.FetchRPS != 14 {
+		t.Fatalf("expected the sum over both brokers, got produce %v fetch %v", snap.ProduceRPS, snap.FetchRPS)
+	}
+	if snap.S3LatencyMS != 20 || snap.S3ErrorRate != 0.2 || snap.AdminRequestLatencyMS != 5 {
+		t.Fatalf("zero-valued broker omitted from averages: %+v", snap)
+	}
+}
+
+func TestBuildMetricsProviderFallsBackToURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("kafscale_produce_rps 3\n"))
+	}))
+	defer server.Close()
+	store := metadata.NewInMemoryStore(metadata.ClusterMetadata{})
+	t.Setenv("KAFSCALE_MCP_BROKER_METRICS_URL", server.URL+"/metrics")
+	snap, err := buildMetricsProvider(store).Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.ProduceRPS != 3 {
+		t.Fatalf("expected the URL fallback, got produce %v", snap.ProduceRPS)
 	}
 }
 

@@ -74,6 +74,28 @@ func waitForOperatorBackends(ctx context.Context, run kindCommand, namespace, cl
 	return nil
 }
 
+func waitForStatefulSetPodReady(ctx context.Context, run kindCommand, namespace, pod string, timeout, interval time.Duration) error {
+	last := "not checked"
+	err := wait.PollUntilContextTimeout(ctx, interval, timeout, true, func(ctx context.Context) (bool, error) {
+		out, err := run(ctx, "kubectl", "-n", namespace, "get", "pod", pod,
+			"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`, "--request-timeout=10s")
+		if err != nil {
+			last = fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(out)))
+			return false, nil
+		}
+		status := strings.TrimSpace(string(out))
+		if status == "" {
+			status = "unknown"
+		}
+		last = "Ready=" + status
+		return status == "True", nil
+	})
+	if err != nil {
+		return fmt.Errorf("pod/%s not Ready within %s: %w (last check: %s)", pod, timeout, err, last)
+	}
+	return nil
+}
+
 // The startup smoke test may retry once after rechecking dependency health.
 // Other produce checks, including outage assertions, must keep their failures.
 func produceAfterReadiness(ctx context.Context, ready, produce func(context.Context) error) error {
