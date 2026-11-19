@@ -92,6 +92,41 @@ the override returns that cluster to the operator default.
 2. Apply any required `KafscaleTopic` resources.  The operator writes the desired metadata to etcd and the brokers begin serving Kafka clients right away.
 3. Expose the console UI (optional) by enabling ingress in `values.yaml` or by creating a LoadBalancer service.
 
+### Scaling brokers
+
+The operator creates a HorizontalPodAutoscaler named `<cluster>-broker` for the broker StatefulSet. Its minimum is `spec.brokers.replicas` (or 3 if that field is unset or 0) and its maximum is four times that minimum. It targets 70% CPU and 80% memory utilization, so set CPU and memory requests in `spec.brokers.resources`; without requests the HPA cannot compute utilization and does not scale. The HPA also needs a metrics server in the cluster. CRDs from releases before 2.0 have no schema for `spec.brokers.resources.requests` and `limits`, so the API server drops them. Apply the new CRD before you set them (see [Upgrades & rollbacks](#upgrades--rollbacks)), then reapply the cluster.
+
+- **Creating the cluster**: the operator creates the StatefulSet with `spec.brokers.replicas` brokers.
+- **After that**: the operator keeps the replica count the HPA set. It only moves the count back inside the HPA range: a count below the minimum is raised to the minimum and a count above the maximum is lowered to the maximum.
+- **Raising `spec.brokers.replicas`**: raises the HPA minimum, and the operator raises the StatefulSet to the new minimum right away.
+- **Lowering `spec.brokers.replicas`**: lowers the HPA minimum. The operator does not remove brokers itself; the HPA removes them when load allows, as described under scale-down.
+- **Without the HPA**: if the `<cluster>-broker` HPA is missing or is not owned by the cluster, the operator sets the StatefulSet replicas to `spec.brokers.replicas` on every reconcile. Note that the operator recreates its own HPA on the next reconcile.
+- Setting `spec.brokers.replicas` to 0 stops all brokers. The HPA does not scale a StatefulSet with 0 replicas.
+
+```bash
+kubectl -n kafscale patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
+```
+
+Metadata follows the live broker count. The operator publishes the metadata snapshot with as many brokers as the StatefulSet replicas (`<cluster>-broker-0` up to the last ordinal), and each partition's preferred leader is its partition number modulo that count. Metadata responses from the brokers list every broker in the snapshot. A partition that a broker currently holds through its etcd lease reports that broker as leader; an unowned partition reports its preferred leader.
+
+This placement applies to both `KafscaleTopic` resources and topics created through Kafka. At zero replicas, the snapshot has no brokers and partitions report `LEADER_NOT_AVAILABLE`. If the operator cannot read the StatefulSet, it leaves the last published snapshot in place and retries rather than publishing a guessed count.
+
+Partitions move to new brokers:
+
+- Every 10 seconds (`KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS`), each broker checks the partitions it holds. When the preferred leader is another broker in the snapshot that accepts TCP connections, the old owner blocks new acquisitions, lets its active append finish, and then releases the lease. It does not take that partition back for three intervals (30 seconds by default), measured after release. The next produce or fetch goes to the preferred leader, which takes the lease.
+- The proxy sends produce and fetch requests for unowned partitions to the preferred leader and falls back to any broker when it cannot connect. On an ownership rejection it refreshes the current owner and retries the affected partitions internally, up to three attempts. Requests can still receive a retryable error while the old owner is draining or the destination is unavailable.
+- Brokers only hand partitions over this way with `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default). With sync flush off, partitions stay where they are until their broker restarts.
+- A broker whose advertised port is not reachable from the other brokers (for example an external `advertisedPort`) never receives partitions this way; it only gets partitions that are unowned when a client asks for them.
+
+Scale-down:
+
+- The HPA removes at most one broker per 60 seconds, and only after the load has been low enough for 300 seconds (the `scaleDown` rules on the HPA).
+- Scale-up uses a 60 second stabilization window, so a short CPU spike, for example while brokers take over partitions after a scale-down, does not add brokers. After that it adds up to 100% of the brokers or 4 brokers per 15 seconds, whichever is more (the Kubernetes default policies).
+- The StatefulSet removes the highest ordinal first. On SIGTERM the broker stops accepting connections, releases all of its partition and group leases, and waits for requests in flight. A produce that arrives after the release is rejected with `NOT_LEADER_OR_FOLLOWER`, and the client retries on the new owner.
+- The operator then publishes the snapshot without the removed broker, and its partitions get a preferred leader among the remaining brokers, which take the leases on the next request.
+- With `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default) a produce is acknowledged only after its data is in S3, so removing a broker loses no acknowledged write. With `KAFSCALE_PRODUCE_SYNC_FLUSH=false`, records the removed broker acknowledged but had not yet flushed (up to `KAFSCALE_FLUSH_INTERVAL_MS` of data) are lost, as on any broker restart in that mode.
+- Keep client retries enabled for retryable failures. A write rejected before append can be rerouted. If records reached S3 but ownership or offset publication could not be confirmed, the broker returns `REQUEST_TIMED_OUT`; the proxy does not replay that uncertain write automatically. Producer idempotency is not supported, so client retries after uncertain writes or lost responses can still duplicate records. Routing through a planned rebalance does not provide exactly-once delivery.
+
 Console and MCP use `/healthz` for liveness. Their Helm readiness probes use `/readyz`, which performs a live etcd read with a one-second deadline and returns HTTP 503 when configured etcd is unreachable, even if metadata is cached. The next successful probe restores readiness without restarting the process. The Kubernetes probe timeout is two seconds. Standalone or metrics-only mode without a metadata store remains ready.
 
 Operator-managed brokers use `/readyz` on the metrics port for Kubernetes readiness. Each check performs a live metadata read with a one-second deadline and checks the broker’s S3 health state. Unreachable etcd or an unavailable S3 state returns HTTP 503; degraded S3 remains ready. Kubernetes uses a two-second HTTP timeout and checks every five seconds, marking the broker NotReady after three failures. A successful check restores readiness. `/healthz` continues to report process liveness independently of etcd.
@@ -904,6 +939,7 @@ export KAFSCALE_S3_READ_REGION=eu-west-1
   - Retention is checked once per minute under the group coordination lease.
   - Groups are listed for the check from the group index, with a full scan of the group and offset keys once an hour. See [Consumer group keys in etcd](#consumer-group-keys-in-etcd).
 - `KAFSCALE_PRODUCE_SYNC_FLUSH`: Flush to S3 on Produce when `acks != 0` (default `true`).
+- `KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS`: How often a broker hands partitions it holds to their preferred leader (default `10000`; `0` or less turns it off). Only runs with `KAFSCALE_PRODUCE_SYNC_FLUSH=true`. See [Scaling brokers](#scaling-brokers).
 - `KAFSCALE_LOG_LEVEL`: Log level (`debug`, `info`, `warn`, `error`).
 - `KAFSCALE_TRACE_KAFKA`: Enable protocol tracing (`true/false`).
 - `KAFSCALE_THROUGHPUT_WINDOW_SEC`: Throughput window size seconds.
@@ -1319,7 +1355,7 @@ spec:
 
 ## Upgrades & rollbacks
 
-- Use `helm upgrade --install` with the desired image tags.  The operator drains brokers through the gRPC control plane before restarting pods.
+- Use `helm upgrade --install` with the desired image tags. Each restarted broker releases its partition and group leases on shutdown and the other brokers take them over. The BrokerControl `DrainPartitions` RPC is not implemented.
 - Helm installs CRDs on the first installation but does not upgrade CRDs from
   `crds/`. Before upgrading the chart or applying a cluster with `spec.security`,
   apply the new schema explicitly:

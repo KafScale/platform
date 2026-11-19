@@ -429,6 +429,37 @@ func (p *proxy) partitionOwnerAddr(ctx context.Context, topic string, partition 
 	return p.brokerIDToAddr(ctx, ownerID)
 }
 
+func (p *proxy) preferredLeaders(ctx context.Context, topic string) map[int32]int32 {
+	if p.store == nil {
+		return nil
+	}
+	meta, err := p.store.Metadata(ctx, []string{topic})
+	if err != nil || meta == nil {
+		return nil
+	}
+	for _, t := range meta.Topics {
+		if t.Topic == nil || *t.Topic != topic || t.ErrorCode != 0 {
+			continue
+		}
+		leaders := make(map[int32]int32, len(t.Partitions))
+		for _, part := range t.Partitions {
+			if part.ErrorCode == 0 && part.Leader >= 0 {
+				leaders[part.Partition] = part.Leader
+			}
+		}
+		return leaders
+	}
+	return nil
+}
+
+func (p *proxy) preferredLeaderAddr(ctx context.Context, leaders map[int32]int32, partition int32) string {
+	leader, ok := leaders[partition]
+	if !ok {
+		return ""
+	}
+	return p.brokerIDToAddr(ctx, strconv.Itoa(int(leader)))
+}
+
 func (p *proxy) forgetPartitionRoute(topic string, partition int32) {
 	if p.router != nil {
 		p.router.Invalidate(topic, partition)
@@ -945,6 +976,11 @@ func (p *proxy) handleProduceRouting(ctx context.Context, header *protocol.Reque
 	if !ok || len(produceReq.Topics) == 0 {
 		return p.forwardProduceRaw(ctx, payload, pool)
 	}
+	if produceReq.Acks != 0 {
+		var stopWaiting context.CancelFunc
+		ctx, stopWaiting = protocol.ContextUntilClientGone(ctx)
+		defer stopWaiting()
+	}
 
 	// LFS rewrite: detect LFS_BLOB headers, upload to S3, replace values
 	var lfsOrphans []orphanInfo
@@ -1046,6 +1082,8 @@ func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *kmsg.ProduceRe
 	topicIndices := make(map[string]map[string]int) // addr -> topic name -> index in subReq.Topics
 
 	for _, topic := range req.Topics {
+		var leaders map[int32]int32
+		leadersLoaded := false
 		var includeParts map[int32]bool
 		if include != nil {
 			includeParts = include[topic.Topic]
@@ -1061,6 +1099,11 @@ func (p *proxy) groupPartitionsByBroker(ctx context.Context, req *kmsg.ProduceRe
 			if p.router != nil {
 				if ownerID := p.router.LookupOwner(topic.Topic, part.Partition); ownerID != "" {
 					addr = p.brokerIDToAddr(ctx, ownerID)
+				} else {
+					if !leadersLoaded {
+						leaders, leadersLoaded = p.preferredLeaders(ctx, topic.Topic), true
+					}
+					addr = p.preferredLeaderAddr(ctx, leaders, part.Partition)
 				}
 			}
 			subReq, ok := groups[addr]
@@ -1121,9 +1164,7 @@ func (p *proxy) forwardProduce(ctx context.Context, header *protocol.RequestHead
 							failedPartitions[topic.Topic] = make(map[int32]bool)
 						}
 						failedPartitions[topic.Topic][part.Partition] = true
-						if p.router != nil {
-							p.router.Invalidate(topic.Topic, part.Partition)
-						}
+						p.refreshPartitionRoute(ctx, topicPartition{topic: topic.Topic, partition: part.Partition}, r.target)
 					} else {
 						tr := findOrAddTopicResponse(merged, topic.Topic)
 						tr.Partitions = append(tr.Partitions, part)
@@ -2135,6 +2176,8 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.Fetc
 	for _, topic := range req.Topics {
 		topicName := topic.Topic
 		key := fetchTopicKey(topicName, topic.TopicID)
+		var leaders map[int32]int32
+		leadersLoaded := false
 		var includeParts map[int32]bool
 		if include != nil {
 			includeParts = include[key]
@@ -2150,6 +2193,11 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.Fetc
 			if p.router != nil && topicName != "" {
 				if ownerID := p.router.LookupOwner(topicName, part.Partition); ownerID != "" {
 					addr = p.brokerIDToAddr(ctx, ownerID)
+				} else {
+					if !leadersLoaded {
+						leaders, leadersLoaded = p.preferredLeaders(ctx, topicName), true
+					}
+					addr = p.preferredLeaderAddr(ctx, leaders, part.Partition)
 				}
 			}
 			subReq, ok := groups[addr]
@@ -2255,8 +2303,8 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 							failedPartitions[key] = make(map[int32]bool)
 						}
 						failedPartitions[key][part.Partition] = true
-						if p.router != nil && topicName != "" {
-							p.router.Invalidate(topicName, part.Partition)
+						if topicName != "" {
+							p.refreshPartitionRoute(ctx, topicPartition{topic: topicName, partition: part.Partition}, r.target)
 						}
 					} else {
 						tr := findOrAddFetchTopicResponse(merged, topic.Topic, topic.TopicID)

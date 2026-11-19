@@ -521,7 +521,7 @@ spec:
                         an empty object to disable affinity. No automatic merge.
                     replicas:
                       type: integer
-                      minimum: 1
+                      minimum: 0
                       default: 3
                     advertisedHost:
                       type: string
@@ -571,6 +571,23 @@ spec:
                     resources:
                       type: object
                       description: Pod resource requests/limits applied to brokers.
+                      properties:
+                        requests:
+                          type: object
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        limits:
+                          type: object
+                          additionalProperties:
+                            anyOf:
+                              - type: integer
+                              - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
                 s3:
                   type: object
                   required:

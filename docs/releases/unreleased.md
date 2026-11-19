@@ -223,6 +223,14 @@ limitations under the License.
 
 ### Operator and S3 credentials
 
+- The broker HPA now really scales brokers. See [Scaling brokers](../operations.md#scaling-brokers).
+  - Before, the operator set the broker StatefulSet back to `spec.brokers.replicas` on every reconcile, so each HPA scale-up was undone, and the metadata snapshot only listed `spec.brokers.replicas` brokers.
+  - The operator now keeps the replica count the HPA set, inside the HPA minimum and maximum. Lowering `spec.brokers.replicas` no longer removes brokers at once; the HPA removes them. Without an HPA owned by the cluster, and with `spec.brokers.replicas: 0`, the old behavior stays.
+  - The metadata snapshot lists as many brokers as the StatefulSet has replicas, and preferred partition leaders are spread over all of them.
+  - Brokers hand partitions they hold to the preferred leader once it accepts connections (`KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS`, default 10 seconds), and the proxy sends requests for unowned partitions to the preferred leader. After the upgrade, partitions whose current owner is not their preferred leader move once.
+  - Planned handover blocks new acquisitions and finishes the active append before releasing ownership. Produce and Fetch retries refresh the actual lease owner. A Produce already stored in S3 whose ownership or offset publication cannot be confirmed returns `REQUEST_TIMED_OUT` so the proxy does not replay it automatically; client retries after uncertain writes can still duplicate records because producer idempotency is unsupported.
+  - The HPA scale-down rules remove at most one broker per minute after five minutes of low load. Scale-up waits for one minute of high load.
+  - The KafscaleCluster CRD now has a schema for `spec.brokers.resources.requests` and `limits`. Before, the API server dropped them, so broker pods had no requests and the HPA could not compute CPU or memory utilization. Apply the new CRD before setting them; Helm does not upgrade CRDs.
 - The Helm chart sets `LFS_PROXY_IMAGE` and `LFS_PROXY_IMAGE_PULL_POLICY` on the operator from `operator.lfsProxyImage`, which follows `appVersion` like the other image keys. `spec.lfsProxy.image` still overrides the image when it is set, and if neither that field nor the env is set the operator uses `ghcr.io/kafscale/kafscale-proxy:dev`. The chart also sets `KAFSCALE_OPERATOR_ETCD_IMAGE` and `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE` from `operator.etcdImage` and `operator.etcdSnapshotImage`, which default to the operator's pinned upstream images and do not follow `appVersion`.
 - Managed etcd snapshot, check and maintenance job pods are labeled `app=kafscale-etcd-job` instead of `app=kafscale-etcd`, so they are not selected by the etcd client Service, the headless Service or the PDB.
 

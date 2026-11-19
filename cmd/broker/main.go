@@ -1255,7 +1255,9 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-				if errors.Is(err, metadata.ErrNotOwner) {
+				if errors.Is(err, storage.ErrAppendOutcomeUnknown) {
+					p.ErrorCode = protocol.REQUEST_TIMED_OUT
+				} else if errors.Is(err, metadata.ErrNotOwner) {
 					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
 				} else if errors.Is(err, storage.ErrObjectStorage) {
 					code, message := h.backpressureError()
@@ -2418,6 +2420,9 @@ func newHandler(store metadata.Store, s3Client storage.S3Client, brokerInfo prot
 		leaseManager = metadata.NewPartitionLeaseManagerWithOptions(etcdStore.EtcdClient(), metadata.PartitionLeaseOptions{
 			PartitionLeaseConfig: metadata.PartitionLeaseConfig{BrokerID: brokerIDStr, Logger: logger},
 			OnLost:               func(topic string, partition int32, token uint64) { h.dropPartitionLog(topic, partition, token) },
+			OnHandover: func(topic string, partition int32, release func()) {
+				h.releasePartitionWhenIdle(topic, partition, release)
+			},
 		})
 		groupLeaseManager = metadata.NewGroupLeaseManager(etcdStore.EtcdClient(), metadata.GroupLeaseConfig{
 			BrokerID: brokerIDStr,
@@ -2578,6 +2583,7 @@ func main() {
 	}
 	handler.startConsumerLagSampler(ctx)
 	handler.startTopicDeleteWatch(ctx)
+	handler.startPartitionRebalance(ctx)
 	metricsAddr := envOrDefault("KAFSCALE_METRICS_ADDR", defaultMetricsAddr)
 	controlAddr := envOrDefault("KAFSCALE_CONTROL_ADDR", defaultControlAddr)
 	startMetricsServer(ctx, metricsAddr, handler, logger)

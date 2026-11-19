@@ -90,6 +90,10 @@ var ErrObjectStorage = errors.New("object storage request failed")
 // ErrLogFenced marks a terminal handle; create and restore a new log to continue.
 var ErrLogFenced = errors.New("partition log requires reload")
 
+// ErrAppendOutcomeUnknown means records reached S3 but their offset publication
+// could not be confirmed. It must not be treated as a pre-write rejection.
+var ErrAppendOutcomeUnknown = errors.New("append outcome is unknown")
+
 // NewPartitionLog constructs a log for a topic partition.
 func NewPartitionLog(namespace string, topic string, partition int32, startOffset int64, s3Client S3Client, cache *cache.SegmentCache, cfg PartitionLogConfig, onFlush func(context.Context, *SegmentArtifact), onS3Op func(string, time.Duration, error), sem *semaphore.Weighted) *PartitionLog {
 	return NewPartitionLogWithOptions(namespace, topic, partition, startOffset, s3Client, cache, PartitionLogOptions{PartitionLogConfig: cfg}, onFlush, onS3Op, sem)
@@ -301,6 +305,14 @@ func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch,
 	return l.appendBatches(ctx, batches, forceFlush)
 }
 
+// DrainAndRelease waits for the active append, then releases ownership before
+// another append can start. The caller must block new lease acquisitions first.
+func (l *PartitionLog) DrainAndRelease(release func()) {
+	l.appendMu.Lock()
+	defer l.appendMu.Unlock()
+	release()
+}
+
 // appendBatches also accepts an empty set for an explicit Flush.
 func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch, forceFlush bool) (*AppendResult, error) {
 	l.appendMu.Lock()
@@ -356,14 +368,14 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		return nil, failure
 	}
 	if err := l.CheckOwnership(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrAppendOutcomeUnknown, err)
 	}
 	// A Fetch that sees committed offsets must also see the matching local
 	// segment ranges. Hold the read-state lock through offset publication.
 	l.mu.Lock()
 	if l.cfg.CommitOffsets != nil {
 		if err := l.cfg.CommitOffsets(ctx, artifact); err != nil {
-			failure := fmt.Errorf("%w: %w", ErrLogFenced, err)
+			failure := fmt.Errorf("%w: %w: %w", ErrAppendOutcomeUnknown, ErrLogFenced, err)
 			l.uploadConflict.Store(&partitionLogFailure{err: failure})
 			l.mu.Unlock()
 			return nil, failure

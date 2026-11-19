@@ -607,7 +607,7 @@ func TestOffsetCommitFailureFencesDurableHandle(t *testing.T) {
 	injected := context.DeadlineExceeded
 	log := NewPartitionLogWithOptions("default", "orders", 0, 0, s3, nil, PartitionLogOptions{CommitOffsets: func(context.Context, *SegmentArtifact) error { return injected }}, nil, nil, nil)
 	batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
-	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); !errors.Is(err, ErrLogFenced) || !errors.Is(err, injected) {
+	if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); !errors.Is(err, ErrLogFenced) || !errors.Is(err, injected) || !errors.Is(err, ErrAppendOutcomeUnknown) {
 		t.Fatal(err)
 	}
 	if _, err := log.Read(ctx, 0, 1<<20); !errors.Is(err, ErrLogFenced) {
@@ -616,5 +616,34 @@ func TestOffsetCommitFailureFencesDurableHandle(t *testing.T) {
 	recovered := NewPartitionLog("default", "orders", 0, 0, s3, nil, PartitionLogConfig{}, nil, nil, nil)
 	if last, err := recovered.RestoreFromS3(ctx); err != nil || last != 0 {
 		t.Fatalf("durable segment lost: %d %v", last, err)
+	}
+}
+
+func TestAppendDistinguishesOwnershipRejectionFromDurableUncertainty(t *testing.T) {
+	for _, afterUpload := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after_upload_%t", afterUpload), func(t *testing.T) {
+			ctx := context.Background()
+			s3 := NewMemoryS3Client()
+			lost := errors.New("ownership lost")
+			checks := 0
+			log := NewPartitionLogWithOptions("default", "orders", 0, 0, s3, nil, PartitionLogOptions{
+				CheckOwnership: func() error {
+					checks++
+					if afterUpload && checks == 1 {
+						return nil
+					}
+					return lost
+				},
+			}, nil, nil, nil)
+			batch, _ := NewRecordBatchFromBytes(makeBatchBytes(0, 0, 1, 1))
+			_, err := log.AppendBatches(ctx, []RecordBatch{batch}, true)
+			if !errors.Is(err, lost) || errors.Is(err, ErrAppendOutcomeUnknown) != afterUpload {
+				t.Fatalf("incorrect append outcome classification: %v", err)
+			}
+			_, downloadErr := s3.DownloadSegment(ctx, log.segmentKey(0), nil)
+			if (downloadErr == nil) != afterUpload {
+				t.Fatalf("durable record presence does not match outcome: %v", downloadErr)
+			}
+		})
 	}
 }

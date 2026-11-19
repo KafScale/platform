@@ -19,12 +19,157 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestBrokerScaleRequiresRequestedCountAndCompletedRollout(t *testing.T) {
+	for _, mode := range []string{"ready", "previous_count", "unobserved", "old_revision", "not_updated", "extra_pod", "terminating", "unready", "get_error", "bad_json", "pod_error", "bad_pods"} {
+		t.Run(mode, func(t *testing.T) {
+			replicas := int32(1)
+			sts := appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Generation: 2}, Spec: appsv1.StatefulSetSpec{Replicas: &replicas},
+				Status: appsv1.StatefulSetStatus{ObservedGeneration: 2, Replicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1, CurrentRevision: "new", UpdateRevision: "new"}}
+			pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-broker-0"}, Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+			pods := corev1.PodList{Items: []corev1.Pod{pod}}
+			switch mode {
+			case "previous_count":
+				replicas, sts.Status.Replicas, sts.Status.ReadyReplicas, sts.Status.UpdatedReplicas = 3, 3, 3, 3
+			case "unobserved":
+				sts.Status.ObservedGeneration = 1
+			case "old_revision":
+				sts.Status.CurrentRevision = "old"
+			case "not_updated":
+				sts.Status.UpdatedReplicas = 0
+			case "extra_pod":
+				pods.Items = append(pods.Items, pod)
+			case "terminating":
+				now := metav1.Now()
+				pods.Items[0].DeletionTimestamp = &now
+			case "unready":
+				pods.Items[0].Status.Conditions = nil
+			}
+			calls := 0
+			run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+				calls++
+				want := []string{"-n", "test-ns", "get", "statefulset", "demo-broker", "-o", "json", "--request-timeout=5s"}
+				if calls == 2 {
+					want = []string{"-n", "test-ns", "get", "pods", "-l", "app=kafscale-broker,cluster=demo", "-o", "json", "--request-timeout=5s"}
+				}
+				if name != "kubectl" || !reflect.DeepEqual(args, want) {
+					t.Fatalf("unexpected command %s %v", name, args)
+				}
+				if (calls == 1 && mode == "get_error") || (calls == 2 && mode == "pod_error") {
+					return nil, errors.New("API unavailable")
+				}
+				if (calls == 1 && mode == "bad_json") || (calls == 2 && mode == "bad_pods") {
+					return []byte("invalid JSON"), nil
+				}
+				if calls == 1 {
+					return json.Marshal(sts)
+				}
+				return json.Marshal(pods)
+			}
+			err := checkBrokerReplicas(context.Background(), run, "test-ns", "demo", 1)
+			if (err == nil) != (mode == "ready") {
+				t.Fatalf("mode %s: readiness result %v", mode, err)
+			}
+		})
+	}
+}
+
+func TestSingleBrokerEndpointRejectsStaleMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		data  string
+		ready bool
+	}{
+		{`{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`, true},
+		{`{"Brokers":[{"Host":"127.0.0.1","Port":19092},{"Host":"internal","Port":9092}]}`, false},
+		{`{"Brokers":[{"Host":"internal","Port":19092}]}`, false},
+		{`{"Brokers":[{"Host":"127.0.0.1","Port":9092}]}`, false},
+		{`{"Brokers":[]}`, false},
+		{`invalid JSON`, false},
+	} {
+		if err := checkSingleBrokerEndpoint([]byte(tc.data), "127.0.0.1", 19092); (err == nil) != tc.ready {
+			t.Fatalf("snapshot %s: %v", tc.data, err)
+		}
+	}
+}
+
+func TestReadEtcdSnapshotSelectsContainerAndOnlyValue(t *testing.T) {
+	want := []string{"-n", "test-ns", "exec", "demo-etcd-0", "-c", "etcd", "--", "etcdctl",
+		"--endpoints=http://demo-etcd-client.test-ns.svc.cluster.local:2379", "get", "/kafscale/metadata/snapshot", "--print-value-only"}
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "kubectl" || !reflect.DeepEqual(args, want) {
+			t.Fatalf("unexpected snapshot command %s %v", name, args)
+		}
+		return []byte(`{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`), nil
+	}
+	out, err := readEtcdSnapshot(context.Background(), run, "test-ns", "demo", "demo-etcd-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSingleBrokerEndpoint(out, "127.0.0.1", 19092); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommandStdoutKeepsWarningsOutOfJSON(t *testing.T) {
+	for _, exit := range []int{0, 1} {
+		const payload = `{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`
+		command := fmt.Sprintf("printf '%%s' '%s'; printf '%%s' 'Defaulted container etcd' >&2; exit %d", payload, exit)
+		out, err := runCmdWithStdoutErr(context.Background(), "sh", "-c", command)
+		if string(out) != payload {
+			t.Fatalf("stderr contaminated JSON output: %s", out)
+		}
+		if exit == 0 {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := checkSingleBrokerEndpoint(out, "127.0.0.1", 19092); err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "Defaulted container etcd") {
+			t.Fatalf("failed command lost its stderr: %v", err)
+		}
+	}
+}
+
+func TestWaitForBrokerScaleAndEndpoint(t *testing.T) {
+	for _, healthy := range []bool{false, true} {
+		run := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if !healthy {
+				return nil, errors.New("API unavailable")
+			}
+			if strings.Contains(strings.Join(args, " "), "get statefulset") {
+				return []byte(`{"metadata":{"generation":2},"spec":{"replicas":1},"status":{"observedGeneration":2,"replicas":1,"readyReplicas":1,"updatedReplicas":1,"currentRevision":"new","updateRevision":"new"}}`), nil
+			}
+			return []byte(`{"items":[{"metadata":{"name":"demo-broker-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`), nil
+		}
+		err := waitForBrokerReplicas(context.Background(), run, "test-ns", "demo", 1, 5*time.Millisecond)
+		if (err == nil) != healthy {
+			t.Fatalf("scale healthy=%v: %v", healthy, err)
+		}
+		read := func() []byte {
+			if healthy {
+				return []byte(`{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`)
+			}
+			return []byte(`{"Brokers":[]}`)
+		}
+		err = waitForSingleBrokerEndpoint(context.Background(), read, "127.0.0.1", 19092, 5*time.Millisecond)
+		if (err == nil) != healthy {
+			t.Fatalf("endpoint healthy=%v: %v", healthy, err)
+		}
+	}
+}
 
 func TestOperatorBackendChecks(t *testing.T) {
 	failure := errors.New("not healthy")

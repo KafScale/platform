@@ -25,6 +25,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
+	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
@@ -61,7 +62,12 @@ func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alph
 			topics = append(topics, topic)
 		}
 	}
-	meta := BuildClusterMetadata(cluster, topics)
+	brokerCount, err := p.liveBrokerCount(ctx, cluster)
+	if err != nil {
+		operatorSnapshotResults.WithLabelValues("error").Inc()
+		return err
+	}
+	meta := BuildClusterMetadataForBrokers(cluster, topics, brokerCount)
 	if err := PublishMetadataSnapshot(ctx, endpoints, meta); err != nil {
 		operatorSnapshotResults.WithLabelValues("error").Inc()
 		return err
@@ -130,12 +136,27 @@ func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.Clu
 	return snap, nil
 }
 
+func (p *SnapshotPublisher) liveBrokerCount(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (int32, error) {
+	sts := &appsv1.StatefulSet{}
+	if err := p.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, sts); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return 0, err
+		}
+		return desiredBrokerReplicas(cluster, nil, false), nil
+	}
+	if sts.Spec.Replicas == nil {
+		return desiredBrokerReplicas(cluster, nil, false), nil
+	}
+	return *sts.Spec.Replicas, nil
+}
+
 // BuildClusterMetadata converts CRD state into the metadata snapshot consumed by brokers.
 func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic) metadata.ClusterMetadata {
-	replicas := int32(1)
-	if cluster.Spec.Brokers.Replicas != nil && *cluster.Spec.Brokers.Replicas > 0 {
-		replicas = *cluster.Spec.Brokers.Replicas
-	}
+	return BuildClusterMetadataForBrokers(cluster, topics, desiredBrokerReplicas(cluster, nil, false))
+}
+
+func BuildClusterMetadataForBrokers(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic, brokerCount int32) metadata.ClusterMetadata {
+	replicas := max(int32(0), brokerCount)
 	brokers := make([]protocol.MetadataBroker, replicas)
 	brokerPort := int32(9092)
 	if cluster.Spec.Brokers.AdvertisedPort != nil && *cluster.Spec.Brokers.AdvertisedPort > 0 {
@@ -169,11 +190,15 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 	for _, topic := range topics {
 		partitions := make([]protocol.MetadataPartition, topic.Spec.Partitions)
 		for i := int32(0); i < topic.Spec.Partitions; i++ {
-			leader := replicaIDs[0]
+			leader := int32(-1)
+			var errorCode int16
 			if len(replicaIDs) > 0 {
 				leader = replicaIDs[i%int32(len(replicaIDs))]
+			} else {
+				errorCode = protocol.LEADER_NOT_AVAILABLE
 			}
 			partitions[i] = protocol.MetadataPartition{
+				ErrorCode: errorCode,
 				Partition: i,
 				Leader:    leader,
 				Replicas:  replicaIDs,
@@ -187,9 +212,13 @@ func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []ka
 			Partitions: partitions,
 		})
 	}
+	controllerID := int32(-1)
+	if len(brokers) > 0 {
+		controllerID = brokers[0].NodeID
+	}
 	return metadata.ClusterMetadata{
 		Brokers:      brokers,
-		ControllerID: 0,
+		ControllerID: controllerID,
 		Topics:       metaTopics,
 		ClusterName:  clusterNamePtr,
 		ClusterID:    clusterIDPtr,
@@ -301,6 +330,9 @@ func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMet
 	}
 	seen := make(map[string]struct{}, len(next.Topics))
 	for _, topic := range next.Topics {
+		if topic.Topic == nil {
+			continue
+		}
 		name := *topic.Topic
 		if name == "" {
 			continue
@@ -308,12 +340,39 @@ func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMet
 		seen[name] = struct{}{}
 	}
 	for _, topic := range existing.Topics {
+		if topic.Topic == nil {
+			continue
+		}
 		name := *topic.Topic
 		if name == "" || topic.ErrorCode != 0 {
 			continue
 		}
 		if _, ok := seen[name]; ok {
 			continue
+		}
+		// Kafka-created topics do not pass through BuildClusterMetadata. Rebuild
+		// their placement too, without changing the caller's existing snapshot.
+		topic.Partitions = append([]protocol.MetadataPartition(nil), topic.Partitions...)
+		for i := range topic.Partitions {
+			part := &topic.Partitions[i]
+			if part.Partition < 0 || (part.ErrorCode != 0 && part.ErrorCode != protocol.LEADER_NOT_AVAILABLE) {
+				continue
+			}
+			if len(next.Brokers) == 0 {
+				part.Leader = -1
+				part.ErrorCode = protocol.LEADER_NOT_AVAILABLE
+				part.ISR = nil
+				continue
+			}
+			leader := int(part.Partition) % len(next.Brokers)
+			part.Leader = next.Brokers[leader].NodeID
+			part.ErrorCode = 0
+			replicas := make([]int32, min(max(1, len(part.Replicas)), len(next.Brokers)))
+			for j := range replicas {
+				replicas[j] = next.Brokers[(leader+j)%len(next.Brokers)].NodeID
+			}
+			part.Replicas = replicas
+			part.ISR = append([]int32(nil), replicas...)
 		}
 		next.Topics = append(next.Topics, topic)
 	}

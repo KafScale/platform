@@ -192,6 +192,12 @@ func TestSnapshotAccessFailurePublishesScaledDownBrokers(t *testing.T) {
 	}
 
 	scaleBrokers(t, c, 1)
+	scaled := &appsv1.StatefulSet{}
+	assertFound(t, c, scaled, "default", "demo-broker")
+	scaled.Spec.Replicas = int32Ptr(1)
+	if err := c.Update(ctx, scaled); err != nil {
+		t.Fatalf("scale broker StatefulSet: %v", err)
+	}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "demo", Namespace: "default"}}
 	if _, err := r.Reconcile(ctx, req); err == nil {
 		t.Fatal("Reconcile with a denied snapshot bucket returned no error")

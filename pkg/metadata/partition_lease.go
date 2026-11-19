@@ -58,13 +58,28 @@ type PartitionLeaseOptions struct {
 	PartitionLeaseConfig
 	// OnLost invalidates state for an expired or released acquisition. It must not call this manager.
 	OnLost func(topic string, partition int32, token uint64)
+	// OnHandover runs after new acquisitions are blocked. It must finish active
+	// writes and invoke release before returning. It runs without ownership locks.
+	OnHandover func(topic string, partition int32, release func())
 }
 
 // PartitionLeaseManager uses etcd leases to ensure exclusive partition ownership.
 // It delegates to the generic LeaseManager, translating topic+partition pairs
 // into string resource IDs.
 type PartitionLeaseManager struct {
-	lm *LeaseManager
+	lm    *LeaseManager
+	holds *partitionHolds
+}
+
+type partitionHolds struct {
+	mu         sync.Mutex
+	partitions map[string]*partitionHold
+	onHandover func(string, int32, func())
+}
+
+type partitionHold struct {
+	until    time.Time
+	draining bool
 }
 
 // NewPartitionLeaseManager creates a lease manager backed by the given etcd client.
@@ -75,6 +90,7 @@ func NewPartitionLeaseManager(client *clientv3.Client, cfg PartitionLeaseConfig)
 // NewPartitionLeaseManagerWithOptions constructs a manager with ownership callbacks.
 func NewPartitionLeaseManagerWithOptions(client *clientv3.Client, cfg PartitionLeaseOptions) *PartitionLeaseManager {
 	return &PartitionLeaseManager{
+		holds: &partitionHolds{partitions: make(map[string]*partitionHold), onHandover: cfg.OnHandover},
 		lm: NewLeaseManagerWithOptions(client, LeaseManagerOptions{
 			LeaseManagerConfig: LeaseManagerConfig{
 				BrokerID:        cfg.BrokerID,
@@ -118,7 +134,85 @@ func partitionResourceID(topic string, partition int32) string {
 // Acquire tries to grab the partition lease. If this broker already owns it,
 // it returns nil immediately. If another broker owns it, it returns ErrNotOwner.
 func (m *PartitionLeaseManager) Acquire(ctx context.Context, topic string, partition int32) error {
-	return m.lm.Acquire(ctx, partitionResourceID(topic, partition))
+	id := partitionResourceID(topic, partition)
+	if m.held(id) {
+		return ErrNotOwner
+	}
+	if err := m.lm.Acquire(ctx, id); err != nil {
+		return err
+	}
+	return m.finishAcquire(id)
+}
+
+func (m *PartitionLeaseManager) finishAcquire(id string) error {
+	// Handover may install the hold while the etcd transaction is in flight.
+	// Release that late acquisition before exposing ownership to a caller.
+	m.holds.mu.Lock()
+	hold := m.holdLocked(id)
+	if hold == nil {
+		m.holds.mu.Unlock()
+		return nil
+	}
+	var released *releasedLease
+	// Until the active append has drained, the handover callback alone may
+	// release ownership. A late waiter might be using that very same lease.
+	if !hold.draining {
+		released = m.lm.releaseLocal(id)
+	}
+	m.holds.mu.Unlock()
+	m.lm.deleteReleased(id, released)
+	return ErrNotOwner
+}
+
+// Handover releases a partition and prevents reacquisition for the hold duration.
+func (m *PartitionLeaseManager) Handover(topic string, partition int32, holdDuration time.Duration) {
+	id := partitionResourceID(topic, partition)
+	m.holds.mu.Lock()
+	// A zero deadline blocks acquisitions throughout draining and release,
+	// even when an append takes longer than the configured hold duration.
+	hold := &partitionHold{draining: true}
+	m.holds.partitions[id] = hold
+	m.holds.mu.Unlock()
+	release := func() {
+		m.holds.mu.Lock()
+		if m.holds.partitions[id] != hold {
+			m.holds.mu.Unlock()
+			return
+		}
+		hold.draining = false
+		released := m.lm.releaseLocal(id)
+		m.holds.mu.Unlock()
+		m.lm.deleteReleased(id, released)
+	}
+	if m.holds.onHandover != nil {
+		m.holds.onHandover(topic, partition, release)
+	} else {
+		release()
+	}
+	m.holds.mu.Lock()
+	if m.holds.partitions[id] == hold {
+		hold.until = time.Now().Add(holdDuration)
+	}
+	m.holds.mu.Unlock()
+}
+
+func (m *PartitionLeaseManager) held(id string) bool {
+	m.holds.mu.Lock()
+	defer m.holds.mu.Unlock()
+	return m.holdLocked(id) != nil
+}
+
+// holdLocked must be called with the hold-state lock held.
+func (m *PartitionLeaseManager) holdLocked(id string) *partitionHold {
+	hold := m.holds.partitions[id]
+	if hold == nil {
+		return nil
+	}
+	if hold.until.IsZero() || time.Now().Before(hold.until) {
+		return hold
+	}
+	delete(m.holds.partitions, id)
+	return nil
 }
 
 // PartitionID identifies a topic-partition pair.

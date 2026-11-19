@@ -154,7 +154,13 @@ kafka-console-consumer --bootstrap-server kafscale-broker:9092 --topic orders --
 
 ## Scaling / Maintenance
 
-The operator uses Kubernetes HPA and the BrokerControl gRPC API to safely drain partitions before restarts. Users can request manual drains or flushes by invoking those RPCs (CLI tooling TBD).
+The operator creates the HPA `<cluster>-broker` with a minimum of `spec.brokers.replicas` (or 3 if unset or 0) and a maximum of four times that minimum. The operator keeps the replica count the HPA sets, within that range. Setting `spec.brokers.replicas` to 0 stops all brokers. New brokers appear in Kafka Metadata and take over the partitions whose preferred leader they are. On scale-down the HPA removes at most one broker per minute; a removed broker releases its partition leases on shutdown and the remaining brokers take them over. See [Scaling brokers](operations.md#scaling-brokers).
+
+```bash
+kubectl -n kafscale patch kafscalecluster demo --type merge -p '{"spec":{"brokers":{"replicas":3}}}'
+```
+
+The BrokerControl `DrainPartitions` and `TriggerFlush` RPCs are not implemented yet and return `Unimplemented`.
 
 ## Limits / Non-Goals
 
