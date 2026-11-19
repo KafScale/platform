@@ -35,15 +35,19 @@ func NewDiscoveredCompositeMetricsProvider(broker MetricsProvider, metricsURL st
 	// hostname and sends it as SNI. Never disable certificate verification.
 	if parsed, err := url.Parse(metricsURL); err == nil && parsed.Scheme == "https" {
 		if base, ok := http.DefaultTransport.(*http.Transport); ok {
-			transport := base.Clone()
-			if transport.TLSClientConfig == nil {
-				transport.TLSClientConfig = &tls.Config{}
-			}
-			transport.TLSClientConfig.ServerName = parsed.Hostname()
-			provider.client.Transport = transport
+			provider.client.Transport = operatorDiscoveryTransport(base, parsed.Hostname())
 		}
 	}
 	return provider
+}
+
+func operatorDiscoveryTransport(base *http.Transport, hostname string) *http.Transport {
+	transport := base.Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.ServerName = hostname
+	return transport
 }
 
 func (c *compositeMetricsProvider) fetchOperatorSnapshots(ctx context.Context) (*operatorSnapshot, error) {

@@ -214,14 +214,10 @@ func TestOperatorDiscoveryVerifiesServiceTLSHostname(t *testing.T) {
 	}
 }
 
-func TestOperatorDiscoveryInitializesTLSWithoutMutatingDefault(t *testing.T) {
-	previous := http.DefaultTransport
+func TestOperatorDiscoveryInitializesTLSWithoutMutatingSource(t *testing.T) {
 	base := &http.Transport{Protocols: new(http.Protocols)}
 	base.Protocols.SetHTTP1(true)
-	http.DefaultTransport = base
-	defer func() { http.DefaultTransport = previous }()
-	provider := NewDiscoveredCompositeMetricsProvider(nil, "https://operators.test/metrics").(*compositeMetricsProvider)
-	transport := provider.client.Transport.(*http.Transport)
+	transport := operatorDiscoveryTransport(base, "operators.test")
 	defer transport.CloseIdleConnections()
 	if transport == base || transport.TLSClientConfig.ServerName != "operators.test" || transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatal("discovery must clone the transport and verify the Service hostname")
