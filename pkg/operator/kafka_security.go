@@ -20,7 +20,7 @@ import (
 	"errors"
 	"strconv"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,7 +32,7 @@ import (
 
 const kafkaSecurityPath = "/etc/kafscale/security"
 
-func validateKafkaSecurity(s kafscalev1alpha1.KafkaSecuritySpec) error {
+func validateKafkaSecurity(s kafscalev1.KafkaSecuritySpec) error {
 	if s.IdentitySecretRef == "" {
 		if s.ACLSecretRef != "" || s.TLSSecretRef != "" || len(s.ProxyPodSelector) != 0 || s.MaxHandshakes != 0 || s.MaxHandshakesPerIP != 0 || s.HandshakeTimeoutMS != 0 || s.HandshakeQueueMS != 0 {
 			return errors.New("Kafka security requires identitySecretRef")
@@ -55,7 +55,7 @@ func mountSecuritySecret(pod *corev1.PodSpec, container *corev1.Container, name,
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: name, MountPath: kafkaSecurityPath + "/" + name, ReadOnly: true})
 }
 
-func brokerKafkaSecurity(pod *corev1.PodSpec, s kafscalev1alpha1.KafkaSecuritySpec) {
+func brokerKafkaSecurity(pod *corev1.PodSpec, s kafscalev1.KafkaSecuritySpec) {
 	if s.IdentitySecretRef == "" {
 		return
 	}
@@ -78,7 +78,7 @@ func brokerKafkaSecurity(pod *corev1.PodSpec, s kafscalev1alpha1.KafkaSecuritySp
 	)
 }
 
-func proxyKafkaSecurity(pod *corev1.PodSpec, s kafscalev1alpha1.KafkaSecuritySpec) error {
+func proxyKafkaSecurity(pod *corev1.PodSpec, s kafscalev1.KafkaSecuritySpec) error {
 	if s.IdentitySecretRef == "" {
 		return nil
 	}
@@ -102,7 +102,7 @@ func proxyKafkaSecurity(pod *corev1.PodSpec, s kafscalev1alpha1.KafkaSecuritySpe
 	return nil
 }
 
-func (r *ClusterReconciler) reconcileKafkaNetworkPolicy(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileKafkaNetworkPolicy(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	s := cluster.Spec.Security
 	if err := validateKafkaSecurity(s); err != nil {
 		return err
@@ -154,7 +154,7 @@ func replaceSecurityEnv(container *corev1.Container, updates ...corev1.EnvVar) {
 	container.Env = append(env, updates...)
 }
 
-func kafkaHandshakeEnv(s kafscalev1alpha1.KafkaSecuritySpec) []corev1.EnvVar {
+func kafkaHandshakeEnv(s kafscalev1.KafkaSecuritySpec) []corev1.EnvVar {
 	var env []corev1.EnvVar
 	for _, setting := range []struct {
 		name                string

@@ -1307,7 +1307,7 @@ Broker exposure settings (KafscaleCluster `spec.brokers`):
 Example (GKE/AWS/Azure load balancer):
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: kafscale
@@ -1363,7 +1363,7 @@ spec:
   ```sh
   kubectl apply --server-side --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
   kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io
-  kubectl explain kafscalecluster.spec.security --api-version=kafscale.io/v1alpha1
+  kubectl explain kafscalecluster.spec.security --api-version=kafscale.io/v1
   ```
 
   Then run `helm upgrade --install` and reapply the cluster manifest with

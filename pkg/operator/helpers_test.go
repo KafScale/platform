@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
@@ -146,7 +146,7 @@ func TestBoolPtr(t *testing.T) {
 }
 
 func TestBrokerHeadlessServiceName(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo"},
 	}
 	if got := brokerHeadlessServiceName(cluster); got != "demo-broker-headless" {
@@ -168,11 +168,11 @@ func TestGetEnv(t *testing.T) {
 
 func TestReconcileBrokerDeployment(t *testing.T) {
 	replicas := int32(5)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{Replicas: &replicas},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{Replicas: &replicas},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -191,11 +191,11 @@ func TestReconcileBrokerDeployment(t *testing.T) {
 }
 
 func TestReconcileBrokerDeploymentDefaultReplicas(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -216,9 +216,9 @@ func TestReconcileBrokerDeploymentDefaultReplicas(t *testing.T) {
 // --- deleteLegacyBrokerDeployment ---
 
 func TestDeleteLegacyBrokerDeployment(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleClusterSpec{},
+		Spec:       kafscalev1.KafscaleClusterSpec{},
 	}
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
@@ -234,11 +234,11 @@ func TestDeleteLegacyBrokerDeployment(t *testing.T) {
 
 func TestReconcileBrokerHPA(t *testing.T) {
 	replicas := int32(3)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{Replicas: &replicas},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{Replicas: &replicas},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -263,11 +263,11 @@ func TestReconcileBrokerHPA(t *testing.T) {
 }
 
 func TestReconcileBrokerHPADefaultReplicas(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -291,9 +291,9 @@ func TestReconcileBrokerHPADefaultReplicas(t *testing.T) {
 // --- updateStatus ---
 
 func TestUpdateStatus(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleClusterSpec{},
+		Spec:       kafscalev1.KafscaleClusterSpec{},
 	}
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(cluster).Build()
@@ -310,7 +310,7 @@ func TestUpdateStatus(t *testing.T) {
 // --- populateEtcdSnapshotStatus ---
 
 func TestPopulateEtcdSnapshotStatusNotManaged(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -331,7 +331,7 @@ func TestPopulateEtcdSnapshotStatusNotManaged(t *testing.T) {
 }
 
 func TestPopulateEtcdSnapshotStatusCronMissing(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -352,7 +352,7 @@ func TestPopulateEtcdSnapshotStatusCronMissing(t *testing.T) {
 }
 
 func TestPopulateEtcdSnapshotStatusNeverSucceeded(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	cron := &batchv1.CronJob{
@@ -377,7 +377,7 @@ func TestPopulateEtcdSnapshotStatusNeverSucceeded(t *testing.T) {
 
 func TestPopulateEtcdSnapshotStatusHealthy(t *testing.T) {
 	now := metav1.NewTime(time.Now())
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	cron := &batchv1.CronJob{
@@ -407,7 +407,7 @@ func TestPopulateEtcdSnapshotStatusHealthy(t *testing.T) {
 func TestPopulateEtcdSnapshotStatusStale(t *testing.T) {
 	// Use a time well in the past
 	old := metav1.NewTime(time.Now().Add(-30 * 24 * time.Hour))
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	cron := &batchv1.CronJob{
@@ -470,7 +470,7 @@ func TestDefaultEtcdSnapshotBucket(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("%s/%s", tc.namespace, tc.name), func(t *testing.T) {
-			cluster := &kafscalev1alpha1.KafscaleCluster{
+			cluster := &kafscalev1.KafscaleCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: tc.name, Namespace: tc.namespace},
 			}
 			got := defaultEtcdSnapshotBucket(cluster)
@@ -482,7 +482,7 @@ func TestDefaultEtcdSnapshotBucket(t *testing.T) {
 }
 
 func TestBuildEtcdInitialCluster(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo"},
 	}
 
@@ -587,7 +587,7 @@ func TestCleanEndpoints(t *testing.T) {
 // --- lfs_proxy_resources.go helpers ---
 
 func TestLfsProxyName(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo"},
 	}
 	if got := lfsProxyName(cluster); got != "demo-lfs-proxy" {
@@ -596,7 +596,7 @@ func TestLfsProxyName(t *testing.T) {
 }
 
 func TestLfsProxyMetricsName(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo"},
 	}
 	if got := lfsProxyMetricsName(cluster); got != "demo-lfs-proxy-metrics" {
@@ -605,9 +605,9 @@ func TestLfsProxyMetricsName(t *testing.T) {
 }
 
 func TestLfsProxyNamespace(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleClusterSpec{},
+		Spec:       kafscalev1.KafscaleClusterSpec{},
 	}
 	if got := lfsProxyNamespace(cluster); got != "default" {
 		t.Fatalf("expected default, got %q", got)
@@ -620,7 +620,7 @@ func TestLfsProxyNamespace(t *testing.T) {
 }
 
 func TestLfsProxyPortDefaults(t *testing.T) {
-	spec := kafscalev1alpha1.LfsProxySpec{}
+	spec := kafscalev1.LfsProxySpec{}
 	if got := lfsProxyPort(spec); got != defaultLfsProxyPort {
 		t.Fatalf("expected default port %d, got %d", defaultLfsProxyPort, got)
 	}
@@ -637,11 +637,11 @@ func TestLfsProxyPortDefaults(t *testing.T) {
 
 func TestLfsProxyPortCustom(t *testing.T) {
 	p1, p2, p3, p4 := int32(11111), int32(22222), int32(33333), int32(44444)
-	spec := kafscalev1alpha1.LfsProxySpec{
-		Service: kafscalev1alpha1.LfsProxyServiceSpec{Port: &p1},
-		HTTP:    kafscalev1alpha1.LfsProxyHTTPSpec{Port: &p2},
-		Health:  kafscalev1alpha1.LfsProxyHealthSpec{Port: &p3},
-		Metrics: kafscalev1alpha1.LfsProxyMetricsSpec{Port: &p4},
+	spec := kafscalev1.LfsProxySpec{
+		Service: kafscalev1.LfsProxyServiceSpec{Port: &p1},
+		HTTP:    kafscalev1.LfsProxyHTTPSpec{Port: &p2},
+		Health:  kafscalev1.LfsProxyHealthSpec{Port: &p3},
+		Metrics: kafscalev1.LfsProxyMetricsSpec{Port: &p4},
 	}
 	if got := lfsProxyPort(spec); got != 11111 {
 		t.Fatalf("expected 11111, got %d", got)
@@ -660,7 +660,7 @@ func TestLfsProxyPortCustom(t *testing.T) {
 func TestLfsProxyEnabledFlags(t *testing.T) {
 	trueVal, falseVal := true, false
 
-	spec := kafscalev1alpha1.LfsProxySpec{}
+	spec := kafscalev1.LfsProxySpec{}
 	// Defaults
 	if lfsProxyHTTPEnabled(spec) {
 		t.Fatal("expected HTTP disabled by default")
@@ -688,9 +688,9 @@ func TestLfsProxyEnabledFlags(t *testing.T) {
 }
 
 func TestLfsProxyForcePathStyle(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{Endpoint: "http://minio:9000"},
+	cluster := &kafscalev1.KafscaleCluster{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{Endpoint: "http://minio:9000"},
 		},
 	}
 	// When endpoint is set, force path style
@@ -711,7 +711,7 @@ func TestLfsProxyForcePathStyle(t *testing.T) {
 }
 
 func TestLfsProxyEnsureBucket(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{}
+	cluster := &kafscalev1.KafscaleCluster{}
 	if lfsProxyEnsureBucket(cluster) {
 		t.Fatal("expected false by default")
 	}
@@ -732,9 +732,9 @@ func TestServicePort(t *testing.T) {
 // --- reconcileLfsProxyMetricsService ---
 
 func TestReconcileLfsProxyMetricsService(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleClusterSpec{},
+		Spec:       kafscalev1.KafscaleClusterSpec{},
 	}
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
@@ -754,7 +754,7 @@ func TestReconcileLfsProxyMetricsService(t *testing.T) {
 // --- deleteLfsProxyResources ---
 
 func TestDeleteLfsProxyResources(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -770,7 +770,7 @@ func TestDeleteLfsProxyResources(t *testing.T) {
 // --- deleteLfsProxyMetricsService ---
 
 func TestDeleteLfsProxyMetricsService(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -785,10 +785,10 @@ func TestDeleteLfsProxyMetricsService(t *testing.T) {
 // --- reconcileLfsProxyResources ---
 
 func TestReconcileLfsProxyResourcesDisabled(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{Enabled: false},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			LfsProxy: kafscalev1.LfsProxySpec{Enabled: false},
 		},
 	}
 	scheme := testScheme(t)
@@ -801,11 +801,11 @@ func TestReconcileLfsProxyResourcesDisabled(t *testing.T) {
 }
 
 func TestReconcileLfsProxyResourcesEnabled(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3:       kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{Enabled: true},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3:       kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+			LfsProxy: kafscalev1.LfsProxySpec{Enabled: true},
 		},
 	}
 	scheme := testScheme(t)
@@ -913,10 +913,10 @@ func TestFirstSecretValue(t *testing.T) {
 }
 
 func TestLoadS3CredentialsNoSecret(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{CredentialsSecretRef: ""},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{CredentialsSecretRef: ""},
 		},
 	}
 	scheme := testScheme(t)
@@ -930,10 +930,10 @@ func TestLoadS3CredentialsNoSecret(t *testing.T) {
 }
 
 func TestLoadS3CredentialsSecretNotFound(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{CredentialsSecretRef: "missing-secret"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{CredentialsSecretRef: "missing-secret"},
 		},
 	}
 	scheme := testScheme(t)
@@ -955,10 +955,10 @@ func TestLoadS3CredentialsWithSecret(t *testing.T) {
 			s3SecretKeyEnv: []byte("SECRET"),
 		},
 	}
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{CredentialsSecretRef: "creds"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{CredentialsSecretRef: "creds"},
 		},
 	}
 	scheme := testScheme(t)
@@ -975,7 +975,7 @@ func TestLoadS3CredentialsWithSecret(t *testing.T) {
 }
 
 func TestRecordSnapshotAccessFailure(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -996,7 +996,7 @@ func TestRecordSnapshotAccessFailure(t *testing.T) {
 }
 
 func TestVerifySnapshotS3AccessNotManaged(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -1042,7 +1042,7 @@ func TestRecordClusterCount(t *testing.T) {
 }
 
 func TestRecordClusterCountWithClusters(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	scheme := testScheme(t)
@@ -1065,19 +1065,19 @@ func TestBrokerContainerAllOptions(t *testing.T) {
 
 	replicas := int32(1) // single replica to exercise advertisedHost branch
 	port := int32(19092)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{
 				Replicas:       &replicas,
 				AdvertisedHost: "my.broker.host",
 				AdvertisedPort: &port,
-				Resources: kafscalev1alpha1.BrokerResources{
+				Resources: kafscalev1.BrokerResources{
 					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
 					Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
 				},
 			},
-			S3: kafscalev1alpha1.S3Spec{
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				Endpoint:             "http://minio:9000",
@@ -1086,7 +1086,7 @@ func TestBrokerContainerAllOptions(t *testing.T) {
 				ReadEndpoint:         "http://minio-read:9000",
 				CredentialsSecretRef: "s3-creds",
 			},
-			Config: kafscalev1alpha1.ClusterConfigSpec{
+			Config: kafscalev1.ClusterConfigSpec{
 				SegmentBytes:    1048576,
 				FlushIntervalMs: 5000,
 				CacheSize:       "128Mi",
@@ -1172,7 +1172,7 @@ func TestBrokerContainerAllOptions(t *testing.T) {
 // --- deleteLegacyBrokerDeployment: with existing deployment ---
 
 func TestDeleteLegacyBrokerDeploymentExists(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
 	}
 	legacy := &appsv1.Deployment{
@@ -1192,13 +1192,13 @@ func TestDeleteLegacyBrokerDeploymentExists(t *testing.T) {
 
 func TestReconcileLfsProxyResourcesMetricsDisabled(t *testing.T) {
 	falseVal := false
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+			LfsProxy: kafscalev1.LfsProxySpec{
 				Enabled: true,
-				Metrics: kafscalev1alpha1.LfsProxyMetricsSpec{Enabled: &falseVal},
+				Metrics: kafscalev1.LfsProxyMetricsSpec{Enabled: &falseVal},
 			},
 		},
 	}
@@ -1219,10 +1219,10 @@ func TestReconcileLfsProxyResourcesMetricsDisabled(t *testing.T) {
 func TestReconcileEtcdResourcesFullPipeline(t *testing.T) {
 	t.Setenv(operatorEtcdEndpointsEnv, "")
 	t.Setenv(operatorEtcdSnapshotBucketEnv, "snap-bucket")
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -1241,9 +1241,9 @@ func TestReconcileEtcdResourcesFullPipeline(t *testing.T) {
 
 func TestReconcileEtcdStatefulSetMemoryMode(t *testing.T) {
 	t.Setenv(operatorEtcdStorageMemoryEnv, "true")
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleClusterSpec{S3: kafscalev1alpha1.S3Spec{Bucket: "b", Region: "r"}},
+		Spec:       kafscalev1.KafscaleClusterSpec{S3: kafscalev1.S3Spec{Bucket: "b", Region: "r"}},
 	}
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
@@ -1379,16 +1379,16 @@ func TestSnapshotPublisherPublish(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default", UID: types.UID("uid-123")},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
-	topic := &kafscalev1alpha1.KafscaleTopic{
+	topic := &kafscalev1.KafscaleTopic{
 		ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleTopicSpec{
+		Spec: kafscalev1.KafscaleTopicSpec{
 			ClusterRef: "demo",
 			Partitions: 3,
 		},
@@ -1432,17 +1432,17 @@ func TestSnapshotPublisherPublishNoMatchingTopics(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	// Topic belongs to different cluster
-	topic := &kafscalev1alpha1.KafscaleTopic{
+	topic := &kafscalev1.KafscaleTopic{
 		ObjectMeta: metav1.ObjectMeta{Name: "events", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleTopicSpec{
+		Spec: kafscalev1.KafscaleTopicSpec{
 			ClusterRef: "other-cluster",
 			Partitions: 1,
 		},
@@ -1464,11 +1464,11 @@ func TestClusterReconcilerReconcile(t *testing.T) {
 	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -1520,16 +1520,16 @@ func TestTopicReconcilerReconcile(t *testing.T) {
 	t.Setenv(operatorEtcdEndpointsEnv, endpoints[0])
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
-	topic := &kafscalev1alpha1.KafscaleTopic{
+	topic := &kafscalev1.KafscaleTopic{
 		ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleTopicSpec{
+		Spec: kafscalev1.KafscaleTopicSpec{
 			ClusterRef: "demo",
 			Partitions: 2,
 		},
@@ -1570,20 +1570,20 @@ func TestTopicReconcilerReconcileNotFound(t *testing.T) {
 func TestBuildClusterMetadataSingleReplicaAdvertisedHost(t *testing.T) {
 	replicas := int32(1)
 	port := int32(19092)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default", UID: types.UID("test-uid")},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{
 				Replicas:       &replicas,
 				AdvertisedHost: "my.custom.host",
 				AdvertisedPort: &port,
 			},
 		},
 	}
-	topics := []kafscalev1alpha1.KafscaleTopic{
+	topics := []kafscalev1.KafscaleTopic{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "orders"},
-			Spec:       kafscalev1alpha1.KafscaleTopicSpec{Partitions: 2},
+			Spec:       kafscalev1.KafscaleTopicSpec{Partitions: 2},
 		},
 	}
 	meta := BuildClusterMetadata(cluster, topics)
@@ -1612,16 +1612,16 @@ func TestLfsProxyContainerAllOptions(t *testing.T) {
 	cacheTTL := int32(600)
 	maxBlob := int64(1048576)
 	chunkSize := int64(65536)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				Endpoint:             "http://minio:9000",
 				CredentialsSecretRef: "s3-creds",
 			},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{
+			LfsProxy: kafscalev1.LfsProxySpec{
 				Enabled:                true,
 				Image:                  "custom-lfs:latest",
 				ImagePullPolicy:        "Always",
@@ -1629,12 +1629,12 @@ func TestLfsProxyContainerAllOptions(t *testing.T) {
 				AdvertisedPort:         &advPort,
 				BackendCacheTTLSeconds: &cacheTTL,
 				Backends:               []string{"backend1:9092", "backend2:9092"},
-				HTTP: kafscalev1alpha1.LfsProxyHTTPSpec{
+				HTTP: kafscalev1.LfsProxyHTTPSpec{
 					Enabled:         &trueVal,
 					APIKeySecretRef: "api-key-secret",
 					APIKeySecretKey: "MY_KEY",
 				},
-				S3: kafscalev1alpha1.LfsProxyS3Spec{
+				S3: kafscalev1.LfsProxyS3Spec{
 					ForcePathStyle: &trueVal,
 					EnsureBucket:   &trueVal,
 					MaxBlobSize:    &maxBlob,
@@ -1730,7 +1730,7 @@ func TestLfsProxyContainerAllOptions(t *testing.T) {
 
 func TestBrokerContainerOffsetsRetention(t *testing.T) {
 	for _, value := range []int64{0, -1, 60, 10080} {
-		cluster := &kafscalev1alpha1.KafscaleCluster{}
+		cluster := &kafscalev1.KafscaleCluster{}
 		cluster.Spec.Config.OffsetsRetentionMinutes = &value
 		container := (&ClusterReconciler{}).brokerContainer(cluster, []string{"http://etcd:2379"})
 		found := false

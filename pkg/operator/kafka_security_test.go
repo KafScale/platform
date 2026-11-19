@@ -20,7 +20,7 @@ import (
 	"errors"
 	"testing"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -39,7 +39,7 @@ func TestKafkaSecurityReconciliation(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "acl", Namespace: "default"}, Data: map[string][]byte{"acl.json": []byte(`{"default_policy":"deny"}`)}}).Build()
 	r := &ClusterReconciler{Client: c, Scheme: scheme}
 	cluster := testCluster("secure", nil)
-	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy", "app.kubernetes.io/instance": "secure"}}
+	cluster.Spec.Security = kafscalev1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy", "app.kubernetes.io/instance": "secure"}}
 	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestKafkaSecurityReconciliation(t *testing.T) {
 	if len(sts.Spec.Template.Spec.Volumes) != 2 {
 		t.Fatal("duplicate volumes")
 	}
-	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{}
+	cluster.Spec.Security = kafscalev1.KafkaSecuritySpec{}
 	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestKafkaSecurityReconciliation(t *testing.T) {
 	}
 }
 func TestKafkaSecurityValidation(t *testing.T) {
-	for _, s := range []kafscalev1alpha1.KafkaSecuritySpec{{TLSSecretRef: "tls"}, {ACLSecretRef: "acl"}, {ProxyPodSelector: map[string]string{"app": "proxy"}}, {IdentitySecretRef: "identity"}} {
+	for _, s := range []kafscalev1.KafkaSecuritySpec{{TLSSecretRef: "tls"}, {ACLSecretRef: "acl"}, {ProxyPodSelector: map[string]string{"app": "proxy"}}, {IdentitySecretRef: "identity"}} {
 		if validateKafkaSecurity(s) == nil {
 			t.Fatal("invalid configuration accepted", s)
 		}
@@ -150,7 +150,7 @@ func TestKafkaPolicyErrors(t *testing.T) {
 		return errors.New("create denied")
 	}}).Build()
 	r.Client = c
-	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{IdentitySecretRef: "key", ACLSecretRef: "acl"}
+	cluster.Spec.Security = kafscalev1.KafkaSecuritySpec{IdentitySecretRef: "key", ACLSecretRef: "acl"}
 	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err == nil {
 		t.Fatal("create error ignored")
 	}
@@ -160,7 +160,7 @@ func TestKafkaPolicyErrors(t *testing.T) {
 	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err == nil {
 		t.Fatal("owner conflict ignored")
 	}
-	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{}
+	cluster.Spec.Security = kafscalev1.KafkaSecuritySpec{}
 	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err == nil {
 		t.Fatal("deleted policy owned by another resource")
 	}

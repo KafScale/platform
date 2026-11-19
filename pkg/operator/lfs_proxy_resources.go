@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/s3env"
 )
 
@@ -43,7 +43,7 @@ const (
 var lfsProxyImage = getEnv("LFS_PROXY_IMAGE", defaultLfsProxyImage)
 var lfsProxyImagePullPolicy = getEnv("LFS_PROXY_IMAGE_PULL_POLICY", defaultLfsProxyImagePullPolicy)
 
-func (r *ClusterReconciler) reconcileLfsProxyResources(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+func (r *ClusterReconciler) reconcileLfsProxyResources(ctx context.Context, cluster *kafscalev1.KafscaleCluster, endpoints []string) error {
 	if !cluster.Spec.LfsProxy.Enabled {
 		return r.deleteLfsProxyResources(ctx, cluster)
 	}
@@ -59,7 +59,7 @@ func (r *ClusterReconciler) reconcileLfsProxyResources(ctx context.Context, clus
 	return r.deleteLfsProxyMetricsService(ctx, cluster)
 }
 
-func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, cluster *kafscalev1.KafscaleCluster, endpoints []string) error {
 	checksum, err := r.kafkaACLChecksum(ctx, cluster)
 	if err != nil {
 		return err
@@ -98,7 +98,7 @@ func (r *ClusterReconciler) reconcileLfsProxyDeployment(ctx context.Context, clu
 	return err
 }
 
-func (r *ClusterReconciler) reconcileLfsProxyService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileLfsProxyService(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:      lfsProxyName(cluster),
 		Namespace: cluster.Namespace,
@@ -125,7 +125,7 @@ func (r *ClusterReconciler) reconcileLfsProxyService(ctx context.Context, cluste
 	return err
 }
 
-func (r *ClusterReconciler) reconcileLfsProxyMetricsService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileLfsProxyMetricsService(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:      lfsProxyMetricsName(cluster),
 		Namespace: cluster.Namespace,
@@ -144,7 +144,7 @@ func (r *ClusterReconciler) reconcileLfsProxyMetricsService(ctx context.Context,
 	return err
 }
 
-func (r *ClusterReconciler) deleteLfsProxyResources(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) deleteLfsProxyResources(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Name:      lfsProxyName(cluster),
 		Namespace: cluster.Namespace,
@@ -165,7 +165,7 @@ func (r *ClusterReconciler) deleteLfsProxyResources(ctx context.Context, cluster
 	return nil
 }
 
-func (r *ClusterReconciler) deleteLfsProxyMetricsService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) deleteLfsProxyMetricsService(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:      lfsProxyMetricsName(cluster),
 		Namespace: cluster.Namespace,
@@ -176,7 +176,7 @@ func (r *ClusterReconciler) deleteLfsProxyMetricsService(ctx context.Context, cl
 	return nil
 }
 
-func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
+func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1.KafscaleCluster, endpoints []string) corev1.Container {
 	image := lfsProxyImage
 	if strings.TrimSpace(cluster.Spec.LfsProxy.Image) != "" {
 		image = strings.TrimSpace(cluster.Spec.LfsProxy.Image)
@@ -291,85 +291,85 @@ func (r *ClusterReconciler) lfsProxyContainer(cluster *kafscalev1alpha1.Kafscale
 	return container
 }
 
-func lfsProxyName(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func lfsProxyName(cluster *kafscalev1.KafscaleCluster) string {
 	return fmt.Sprintf("%s-lfs-proxy", cluster.Name)
 }
 
-func lfsProxyMetricsName(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func lfsProxyMetricsName(cluster *kafscalev1.KafscaleCluster) string {
 	return fmt.Sprintf("%s-lfs-proxy-metrics", cluster.Name)
 }
 
-func lfsProxyLabels(cluster *kafscalev1alpha1.KafscaleCluster) map[string]string {
+func lfsProxyLabels(cluster *kafscalev1.KafscaleCluster) map[string]string {
 	return map[string]string{
 		"app":     "kafscale-lfs-proxy",
 		"cluster": cluster.Name,
 	}
 }
 
-func lfsProxyNamespace(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func lfsProxyNamespace(cluster *kafscalev1.KafscaleCluster) string {
 	if ns := strings.TrimSpace(cluster.Spec.LfsProxy.S3.Namespace); ns != "" {
 		return ns
 	}
 	return cluster.Namespace
 }
 
-func lfsProxyPort(spec kafscalev1alpha1.LfsProxySpec) int32 {
+func lfsProxyPort(spec kafscalev1.LfsProxySpec) int32 {
 	if spec.Service.Port != nil && *spec.Service.Port > 0 {
 		return *spec.Service.Port
 	}
 	return defaultLfsProxyPort
 }
 
-func lfsProxyHTTPPort(spec kafscalev1alpha1.LfsProxySpec) int32 {
+func lfsProxyHTTPPort(spec kafscalev1.LfsProxySpec) int32 {
 	if spec.HTTP.Port != nil && *spec.HTTP.Port > 0 {
 		return *spec.HTTP.Port
 	}
 	return defaultLfsProxyHTTPPort
 }
 
-func lfsProxyHealthPort(spec kafscalev1alpha1.LfsProxySpec) int32 {
+func lfsProxyHealthPort(spec kafscalev1.LfsProxySpec) int32 {
 	if spec.Health.Port != nil && *spec.Health.Port > 0 {
 		return *spec.Health.Port
 	}
 	return defaultLfsProxyHealthPort
 }
 
-func lfsProxyMetricsPort(spec kafscalev1alpha1.LfsProxySpec) int32 {
+func lfsProxyMetricsPort(spec kafscalev1.LfsProxySpec) int32 {
 	if spec.Metrics.Port != nil && *spec.Metrics.Port > 0 {
 		return *spec.Metrics.Port
 	}
 	return defaultLfsProxyMetricsPort
 }
 
-func lfsProxyHTTPEnabled(spec kafscalev1alpha1.LfsProxySpec) bool {
+func lfsProxyHTTPEnabled(spec kafscalev1.LfsProxySpec) bool {
 	if spec.HTTP.Enabled != nil {
 		return *spec.HTTP.Enabled
 	}
 	return false
 }
 
-func lfsProxyMetricsEnabled(spec kafscalev1alpha1.LfsProxySpec) bool {
+func lfsProxyMetricsEnabled(spec kafscalev1.LfsProxySpec) bool {
 	if spec.Metrics.Enabled != nil {
 		return *spec.Metrics.Enabled
 	}
 	return true
 }
 
-func lfsProxyHealthEnabled(spec kafscalev1alpha1.LfsProxySpec) bool {
+func lfsProxyHealthEnabled(spec kafscalev1.LfsProxySpec) bool {
 	if spec.Health.Enabled != nil {
 		return *spec.Health.Enabled
 	}
 	return true
 }
 
-func lfsProxyForcePathStyle(cluster *kafscalev1alpha1.KafscaleCluster) bool {
+func lfsProxyForcePathStyle(cluster *kafscalev1.KafscaleCluster) bool {
 	if cluster.Spec.LfsProxy.S3.ForcePathStyle != nil {
 		return *cluster.Spec.LfsProxy.S3.ForcePathStyle
 	}
 	return s3env.Trim(cluster.Spec.S3.Endpoint) != ""
 }
 
-func lfsProxyEnsureBucket(cluster *kafscalev1alpha1.KafscaleCluster) bool {
+func lfsProxyEnsureBucket(cluster *kafscalev1.KafscaleCluster) bool {
 	if cluster.Spec.LfsProxy.S3.EnsureBucket != nil {
 		return *cluster.Spec.LfsProxy.S3.EnsureBucket
 	}

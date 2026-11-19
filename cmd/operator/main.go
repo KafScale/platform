@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/pkg/operator"
 )
 
@@ -38,7 +38,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(kafscalev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kafscalev1.AddToScheme(scheme))
 }
 
 func main() {

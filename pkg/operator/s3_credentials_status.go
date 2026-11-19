@@ -28,13 +28,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/s3env"
 )
 
 const s3CredentialsConditionType = "S3Credentials"
 
-func (r *ClusterReconciler) populateS3CredentialsStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) {
+func (r *ClusterReconciler) populateS3CredentialsStatus(ctx context.Context, cluster *kafscalev1.KafscaleCluster) {
 	condition := r.s3CredentialsCondition(ctx, cluster)
 	previous := meta.FindStatusCondition(cluster.Status.Conditions, s3CredentialsConditionType)
 	changed := previous == nil || previous.Status != condition.Status || previous.Reason != condition.Reason
@@ -48,7 +48,7 @@ func (r *ClusterReconciler) populateS3CredentialsStatus(ctx context.Context, clu
 	meta.SetStatusCondition(&cluster.Status.Conditions, condition)
 }
 
-func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) metav1.Condition {
+func (r *ClusterReconciler) s3CredentialsCondition(ctx context.Context, cluster *kafscalev1.KafscaleCluster) metav1.Condition {
 	condition := metav1.Condition{
 		Type:               s3CredentialsConditionType,
 		Status:             metav1.ConditionTrue,

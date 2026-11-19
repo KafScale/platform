@@ -21,13 +21,13 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestVerifySnapshotS3AccessSkipPreflight(t *testing.T) {
 	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "1")
 	scheme := testScheme(t)
-	cluster := &kafscalev1alpha1.KafscaleCluster{}
+	cluster := &kafscalev1.KafscaleCluster{}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
 	r := &ClusterReconciler{
 		Client: c,

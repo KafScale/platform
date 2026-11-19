@@ -19,6 +19,10 @@ limitations under the License.
 
 KafScale uses S3-compatible object storage as its source of truth. While designed for AWS S3, it works with any storage backend that implements the S3 API.
 
+The Kubernetes examples below use `apiVersion: kafscale.io/v1`. `kafscale.io/v1alpha1`
+is still accepted but deprecated; see
+[CRD API version v1](upgrade-compatibility.md#crd-api-version-v1).
+
 ## Compatibility Matrix
 
 | Provider | Compatibility | Notes |
@@ -72,11 +76,11 @@ use the `__health/` prefix and are deleted after each attempt; allow
 
 Native support. No `endpoint` configuration needed.
 
-### KafScaleCluster
+### KafscaleCluster
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: production
   namespace: kafscale
@@ -142,11 +146,11 @@ Required IAM permissions:
 
 Drop-in S3 replacement. Change endpoint and region.
 
-### KafScaleCluster
+### KafscaleCluster
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: production
   namespace: kafscale
@@ -180,11 +184,11 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 S3-compatible with zero egress fees. Ideal for high-read workloads.
 
-### KafScaleCluster
+### KafscaleCluster
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: production
   namespace: kafscale
@@ -220,11 +224,11 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 Cost-effective S3-compatible storage.
 
-### KafScaleCluster
+### KafscaleCluster
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: production
   namespace: kafscale
@@ -258,11 +262,11 @@ kubectl -n kafscale create secret generic kafscale-s3 \
 
 Hot cloud storage with flat pricing and no egress fees.
 
-### KafScaleCluster
+### KafscaleCluster
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: production
   namespace: kafscale
@@ -301,11 +305,11 @@ GCS provides S3 interoperability via its XML API. Requires HMAC keys.
 1. Enable interoperability in GCS console: Storage → Settings → Interoperability
 2. Create HMAC keys for a service account
 
-### KafScaleCluster
+### KafscaleCluster
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: production
   namespace: kafscale
@@ -362,11 +366,11 @@ docker compose up -d --build
 
 MinIO runs on port 9000 with default credentials `minioadmin:minioadmin`.
 
-### KafScaleCluster (Kubernetes)
+### KafscaleCluster (Kubernetes)
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
-kind: KafScaleCluster
+apiVersion: kafscale.io/v1
+kind: KafscaleCluster
 metadata:
   name: demo
   namespace: kafscale

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -52,11 +52,11 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	}
 	ctx := context.Background()
 	cluster := testCluster("auth-api", nil)
-	cluster.Spec.Security = kafscalev1alpha1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", MaxHandshakes: 3, MaxHandshakesPerIP: 2, HandshakeTimeoutMS: 500, HandshakeQueueMS: 20, ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy"}}
+	cluster.Spec.Security = kafscalev1.KafkaSecuritySpec{IdentitySecretRef: "identity", ACLSecretRef: "acl", TLSSecretRef: "tls", MaxHandshakes: 3, MaxHandshakesPerIP: 2, HandshakeTimeoutMS: 500, HandshakeQueueMS: 20, ProxyPodSelector: map[string]string{"app.kubernetes.io/component": "proxy"}}
 	if err := c.Create(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
-	var stored kafscalev1alpha1.KafscaleCluster
+	var stored kafscalev1.KafscaleCluster
 	key := client.ObjectKeyFromObject(cluster)
 	if err := c.Get(ctx, key, &stored); err != nil {
 		t.Fatal(err)
@@ -122,8 +122,8 @@ func TestKafkaSecurityAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test-"+string(stored.UID)).For(&kafscalev1alpha1.KafscaleCluster{}).WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
-		var cluster kafscalev1alpha1.KafscaleCluster
+	if err := ctrl.NewControllerManagedBy(manager).Named("acl-rollout-api-test-"+string(stored.UID)).For(&kafscalev1.KafscaleCluster{}).WatchesMetadata(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.clustersForACLSecret)).Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (ctrl.Result, error) {
+		var cluster kafscalev1.KafscaleCluster
 		if err := c.Get(ctx, req.NamespacedName, &cluster); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
