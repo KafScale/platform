@@ -22,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 var (
@@ -100,7 +100,7 @@ func init() {
 }
 
 func recordClusterCount(ctx context.Context, c client.Client) {
-	var clusters kafscalev1alpha1.KafscaleClusterList
+	var clusters kafscalev1.KafscaleClusterList
 	if err := c.List(ctx, &clusters); err != nil {
 		return
 	}

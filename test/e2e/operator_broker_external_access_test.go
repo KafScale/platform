@@ -41,7 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/pkg/operator"
 )
 
@@ -75,7 +75,7 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 	})
 
 	scheme := k8sruntime.NewScheme()
-	utilruntime.Must(kafscalev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kafscalev1.AddToScheme(scheme))
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(networkingv1.AddToScheme(scheme))
 	utilruntime.Must(appsv1.AddToScheme(scheme))
@@ -108,18 +108,18 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 		}
 	}()
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "external-access",
 			Namespace: "default",
 		},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{
-				Image:          kafscalev1alpha1.BrokerImageSpec{Repository: "ghcr.io/kafscale/kafscale-broker", Tag: "v1.6.0"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{
+				Image:          kafscalev1.BrokerImageSpec{Repository: "ghcr.io/kafscale/kafscale-broker", Tag: "v1.6.0"},
 				AdvertisedHost: "kafka.example.com",
 				AdvertisedPort: &advertisedPort,
 				Replicas:       ptr.To(int32(1)),
-				Service: kafscalev1alpha1.BrokerServiceSpec{
+				Service: kafscalev1.BrokerServiceSpec{
 					Type:                     string(corev1.ServiceTypeLoadBalancer),
 					Annotations:              map[string]string{"cloud.example.com/lb": "external"},
 					LoadBalancerIP:           "203.0.113.10",
@@ -129,12 +129,12 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 					MetricsNodePort:          &metricsNodePort,
 				},
 			},
-			S3: kafscalev1alpha1.S3Spec{
+			S3: kafscalev1.S3Spec{
 				Bucket:               "snapshots",
 				Region:               "us-east-1",
 				CredentialsSecretRef: "creds",
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{
+			Etcd: kafscalev1.EtcdSpec{
 				Endpoints: []string{env.ControlPlane.Etcd.URL.String()},
 			},
 		},
@@ -217,7 +217,7 @@ func TestOperatorBrokerExternalAccessConfig(t *testing.T) {
 		return &sts
 	}
 	original := waitForImage("ghcr.io/kafscale/kafscale-broker:v1.6.0")
-	var stored kafscalev1alpha1.KafscaleCluster
+	var stored kafscalev1.KafscaleCluster
 	if err := apiClient.Get(ctx, client.ObjectKeyFromObject(cluster), &stored); err != nil {
 		t.Fatal(err)
 	}

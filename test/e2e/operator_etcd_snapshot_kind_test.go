@@ -1017,7 +1017,7 @@ stringData:
 func applyClusterManifest(t *testing.T, ctx context.Context, namespace string, replicas int32) {
 	t.Helper()
 	manifest := fmt.Sprintf(`
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: kafscale
@@ -1039,7 +1039,7 @@ spec:
 func applyTopicManifest(t *testing.T, ctx context.Context, namespace, name string, partitions int32) {
 	t.Helper()
 	manifest := fmt.Sprintf(`
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleTopic
 metadata:
   name: %s

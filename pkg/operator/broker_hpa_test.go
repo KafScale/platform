@@ -27,20 +27,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/testutil"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func hpaTestReconciler(t *testing.T, replicas *int32) (*ClusterReconciler, client.Client, *kafscalev1alpha1.KafscaleCluster) {
+func hpaTestReconciler(t *testing.T, replicas *int32) (*ClusterReconciler, client.Client, *kafscalev1.KafscaleCluster) {
 	t.Helper()
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default", UID: "demo-uid"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{Replicas: replicas},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{Replicas: replicas},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1"},
 		},
 	}
 	scheme := testScheme(t)
@@ -71,7 +71,7 @@ func brokerStatefulSetReplicas(t *testing.T, c client.Client) int32 {
 	return *sts.Spec.Replicas
 }
 
-func reconcileBrokerAndHPA(t *testing.T, r *ClusterReconciler, cluster *kafscalev1alpha1.KafscaleCluster) {
+func reconcileBrokerAndHPA(t *testing.T, r *ClusterReconciler, cluster *kafscalev1.KafscaleCluster) {
 	t.Helper()
 	ctx := context.Background()
 	if err := r.reconcileBrokerDeployment(ctx, cluster, []string{"http://etcd:2379"}); err != nil {
@@ -199,9 +199,9 @@ func TestBrokerHPAScaleDownPolicy(t *testing.T) {
 func TestSnapshotFollowsLiveBrokerCount(t *testing.T) {
 	r, c, cluster := hpaTestReconciler(t, int32Ptr(2))
 	ctx := context.Background()
-	topic := &kafscalev1alpha1.KafscaleTopic{
+	topic := &kafscalev1.KafscaleTopic{
 		ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleTopicSpec{ClusterRef: "demo", Partitions: 8},
+		Spec:       kafscalev1.KafscaleTopicSpec{ClusterRef: "demo", Partitions: 8},
 	}
 	if err := c.Create(ctx, topic); err != nil {
 		t.Fatalf("create topic: %v", err)

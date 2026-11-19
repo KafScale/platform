@@ -173,7 +173,7 @@ elif [[ "$MODE" == "cluster" ]]; then
 		advertised_block=$'    advertisedHost: 127.0.0.1\n    advertisedPort: 39092'
 	fi
 	cat <<EOF | kubectl apply --validate=false -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: kafscale
@@ -192,7 +192,7 @@ ${advertised_block}
 EOF
 
 	cat <<EOF | kubectl apply --validate=false -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleTopic
 metadata:
   name: demo-topic-1
@@ -201,7 +201,7 @@ spec:
   clusterRef: kafscale
   partitions: 3
 ---
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleTopic
 metadata:
   name: demo-topic-2
@@ -232,7 +232,7 @@ elif [[ "$MODE" == "wait" ]]; then
 	kubectl -n "${KAFSCALE_DEMO_NAMESPACE}" wait --for=condition=Ready pod -l "${selector}" --timeout=180s
 elif [[ "$MODE" == "lfs" ]]; then
 	cat <<EOF | kubectl apply --validate=false -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleTopic
 metadata:
   name: lfs-demo-topic

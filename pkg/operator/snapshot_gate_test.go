@@ -37,11 +37,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/testutil"
 )
 
-func snapshotDeniedReconciler(t *testing.T) (*ClusterReconciler, client.Client, *kafscalev1alpha1.KafscaleCluster, *corev1.Secret) {
+func snapshotDeniedReconciler(t *testing.T) (*ClusterReconciler, client.Client, *kafscalev1.KafscaleCluster, *corev1.Secret) {
 	t.Helper()
 	t.Setenv(operatorEtcdEndpointsEnv, "")
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
@@ -55,11 +55,11 @@ func snapshotDeniedReconciler(t *testing.T) (*ClusterReconciler, client.Client, 
 	t.Cleanup(denied.Close)
 	t.Setenv(operatorEtcdSnapshotEndpointEnv, denied.URL)
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default", UID: "demo-uid"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3:       kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{Enabled: true},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3:       kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+			LfsProxy: kafscalev1.LfsProxySpec{Enabled: true},
 		},
 	}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "s3-creds", Namespace: "default"}, Data: map[string][]byte{
@@ -113,7 +113,7 @@ func TestSnapshotAccessFailureStillRollsBrokerAndProxy(t *testing.T) {
 		t.Fatalf("broker checksum %q and proxy checksum %q differ", newBroker, newProxy)
 	}
 
-	var stored kafscalev1alpha1.KafscaleCluster
+	var stored kafscalev1.KafscaleCluster
 	if err := c.Get(ctx, req.NamespacedName, &stored); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestSnapshotAccessFailureDoesNotCreateBrokers(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: "demo-lfs-proxy", Namespace: "default"}, &appsv1.Deployment{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("LFS proxy Deployment get err = %v, want NotFound", err)
 	}
-	var stored kafscalev1alpha1.KafscaleCluster
+	var stored kafscalev1.KafscaleCluster
 	if err := c.Get(ctx, req.NamespacedName, &stored); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}
@@ -153,13 +153,13 @@ func TestSnapshotAccessFailureDoesNotCreateBrokers(t *testing.T) {
 func useOperatorEtcdEndpoints(t *testing.T, endpoints []string) {
 	t.Helper()
 	previous := operatorManagedEtcdEndpoints
-	operatorManagedEtcdEndpoints = func(*kafscalev1alpha1.KafscaleCluster) []string { return endpoints }
+	operatorManagedEtcdEndpoints = func(*kafscalev1.KafscaleCluster) []string { return endpoints }
 	t.Cleanup(func() { operatorManagedEtcdEndpoints = previous })
 }
 
-func scaleBrokers(t *testing.T, c client.Client, replicas int32) *kafscalev1alpha1.KafscaleCluster {
+func scaleBrokers(t *testing.T, c client.Client, replicas int32) *kafscalev1.KafscaleCluster {
 	t.Helper()
-	cluster := &kafscalev1alpha1.KafscaleCluster{}
+	cluster := &kafscalev1.KafscaleCluster{}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "demo", Namespace: "default"}, cluster); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}
@@ -175,9 +175,9 @@ func TestSnapshotAccessFailurePublishesScaledDownBrokers(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	useOperatorEtcdEndpoints(t, endpoints)
 	ctx := context.Background()
-	topic := &kafscalev1alpha1.KafscaleTopic{
+	topic := &kafscalev1.KafscaleTopic{
 		ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "default"},
-		Spec:       kafscalev1alpha1.KafscaleTopicSpec{ClusterRef: "demo", Partitions: 6},
+		Spec:       kafscalev1.KafscaleTopicSpec{ClusterRef: "demo", Partitions: 6},
 	}
 	if err := c.Create(ctx, topic); err != nil {
 		t.Fatalf("create topic: %v", err)
@@ -224,7 +224,7 @@ func TestSnapshotAccessFailurePublishesScaledDownBrokers(t *testing.T) {
 		}
 	}
 
-	var stored kafscalev1alpha1.KafscaleCluster
+	var stored kafscalev1.KafscaleCluster
 	if err := c.Get(ctx, req.NamespacedName, &stored); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestSnapshotAccessFailureReportsPublishFailure(t *testing.T) {
 		t.Fatalf("Reconcile error does not join the snapshot and publish errors: %v", err)
 	}
 
-	var stored kafscalev1alpha1.KafscaleCluster
+	var stored kafscalev1.KafscaleCluster
 	if err := c.Get(ctx, req.NamespacedName, &stored); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}

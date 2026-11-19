@@ -392,6 +392,13 @@ ones most likely to affect you.
 
 ### Deprecations
 
+- **CRDs move to `kafscale.io/v1`.** `KafscaleCluster` and `KafscaleTopic` are served
+  and stored as v1 with the same schema. v1alpha1 is still served, returns a
+  deprecation warning, and will be removed in a future release. Apply the new
+  CRDs with `kubectl apply` before upgrading the chart, because Helm does not
+  upgrade `crds/`. Go code should import `api/v1`; `api/v1alpha1` still compiles
+  and is deprecated. See
+  [CRD API version v1](../upgrade-compatibility.md#crd-api-version-v1).
 - `broker.CoordinatorConfig` and `broker.NewGroupCoordinator` are deprecated.
   Use `CoordinatorOptions` with `NewGroupCoordinatorWithOptions`. Both old APIs
   still work in this release and no removal version is set. See

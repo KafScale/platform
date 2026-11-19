@@ -256,7 +256,7 @@ if ! kubectl -n "${ICEBERG_DEMO_NAMESPACE}" get "kafscalecluster/${ICEBERG_DEMO_
 fi
 
 topic_yaml="$(printf '%s\n' \
-  'apiVersion: kafscale.io/v1alpha1' \
+  'apiVersion: kafscale.io/v1' \
   'kind: KafscaleTopic' \
   'metadata:' \
   "  name: ${ICEBERG_DEMO_TOPIC}" \

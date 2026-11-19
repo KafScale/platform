@@ -28,8 +28,11 @@ func TestQuickstartUsesInstalledAPIGroup(t *testing.T) {
 	if strings.Contains(text, "kafscale.novatechflow.io") {
 		t.Fatal("docs/quickstart.md still uses api group kafscale.novatechflow.io; the chart CRDs use kafscale.io")
 	}
-	if !strings.Contains(text, "apiVersion: kafscale.io/v1alpha1") {
-		t.Fatal("docs/quickstart.md has no apiVersion: kafscale.io/v1alpha1 example")
+	if !strings.Contains(text, "apiVersion: kafscale.io/v1\n") {
+		t.Fatal("docs/quickstart.md has no apiVersion: kafscale.io/v1 example")
+	}
+	if strings.Contains(text, "kafscale.io/v1alpha1") {
+		t.Fatal("docs/quickstart.md still uses the deprecated kafscale.io/v1alpha1")
 	}
 }
 

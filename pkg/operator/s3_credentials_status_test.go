@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/testutil"
 )
 
@@ -83,11 +83,11 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cluster := &kafscalev1alpha1.KafscaleCluster{
+			cluster := &kafscalev1.KafscaleCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-				Spec: kafscalev1alpha1.KafscaleClusterSpec{
-					S3:       kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: tc.secretRef},
-					LfsProxy: kafscalev1alpha1.LfsProxySpec{Enabled: true},
+				Spec: kafscalev1.KafscaleClusterSpec{
+					S3:       kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: tc.secretRef},
+					LfsProxy: kafscalev1.LfsProxySpec{Enabled: true},
 				},
 			}
 			objects := []client.Object{cluster}
@@ -131,7 +131,7 @@ func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {
 
 			assertFound(t, c, &appsv1.StatefulSet{}, "default", "demo-broker")
 			assertFound(t, c, &appsv1.Deployment{}, "default", "demo-lfs-proxy")
-			var got kafscalev1alpha1.KafscaleCluster
+			var got kafscalev1.KafscaleCluster
 			if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
 				t.Fatalf("get cluster: %v", err)
 			}
@@ -167,10 +167,10 @@ func TestClusterReconcilerPersistsS3CredentialsOnFailedReconcile(t *testing.T) {
 	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
 	t.Setenv(operatorEtcdSilenceLogsEnv, "true")
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
 		},
 	}
 	scheme := testScheme(t)
@@ -199,7 +199,7 @@ func TestClusterReconcilerPersistsS3CredentialsOnFailedReconcile(t *testing.T) {
 	}
 	persisted := func() *metav1.Condition {
 		t.Helper()
-		var got kafscalev1alpha1.KafscaleCluster
+		var got kafscalev1.KafscaleCluster
 		if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
 			t.Fatalf("get cluster: %v", err)
 		}
@@ -252,10 +252,10 @@ func TestClusterReconcilerPersistsS3CredentialsWhenSetupFails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(operatorEtcdEndpointsEnv, "")
 			t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
-			cluster := &kafscalev1alpha1.KafscaleCluster{
+			cluster := &kafscalev1.KafscaleCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-				Spec: kafscalev1alpha1.KafscaleClusterSpec{
-					S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+				Spec: kafscalev1.KafscaleClusterSpec{
+					S3: kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
 				},
 			}
 			scheme := testScheme(t)
@@ -273,7 +273,7 @@ func TestClusterReconcilerPersistsS3CredentialsWhenSetupFails(t *testing.T) {
 					t.Fatalf("Reconcile %d: err = %v, want %v", i, err, setupErr)
 				}
 			}
-			var got kafscalev1alpha1.KafscaleCluster
+			var got kafscalev1.KafscaleCluster
 			if err := c.Get(context.Background(), req.NamespacedName, &got); err != nil {
 				t.Fatalf("get cluster: %v", err)
 			}
@@ -290,10 +290,10 @@ func TestClusterReconcilerPersistsS3CredentialsWhenSetupFails(t *testing.T) {
 func TestClusterReconcilerFailurePathKeepsConcurrentStatusWrite(t *testing.T) {
 	t.Setenv(operatorEtcdEndpointsEnv, "")
 	t.Setenv(operatorEtcdSnapshotSkipPreflightEnv, "true")
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "s3-creds"},
 		},
 	}
 	scheme := testScheme(t)
@@ -307,7 +307,7 @@ func TestClusterReconcilerFailurePathKeepsConcurrentStatusWrite(t *testing.T) {
 			if _, ok := obj.(*appsv1.StatefulSet); !ok || obj.GetName() != "demo-broker" {
 				return cl.Create(ctx, obj, opts...)
 			}
-			var latest kafscalev1alpha1.KafscaleCluster
+			var latest kafscalev1.KafscaleCluster
 			if err := cl.Get(ctx, key, &latest); err != nil {
 				return err
 			}
@@ -323,7 +323,7 @@ func TestClusterReconcilerFailurePathKeepsConcurrentStatusWrite(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: key}); !errors.Is(err, brokerErr) {
 		t.Fatalf("Reconcile: err = %v, want %v", err, brokerErr)
 	}
-	var got kafscalev1alpha1.KafscaleCluster
+	var got kafscalev1.KafscaleCluster
 	if err := c.Get(context.Background(), key, &got); err != nil {
 		t.Fatalf("get cluster: %v", err)
 	}

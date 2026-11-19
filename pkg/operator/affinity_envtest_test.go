@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 // Real API storage catches CRD pruning/defaulting that fake clients cannot.
@@ -81,7 +81,7 @@ func TestAffinityOverridesAPI(t *testing.T) {
 		{"independent-overrides", custom, other},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var stored kafscalev1alpha1.KafscaleCluster
+			var stored kafscalev1.KafscaleCluster
 			key := client.ObjectKeyFromObject(cluster)
 			if err := c.Get(ctx, key, &stored); err != nil {
 				t.Fatal(err)
@@ -128,7 +128,7 @@ func TestAffinityOverridesAPI(t *testing.T) {
 	}
 	// The CRD must validate the new fields, rather than preserving arbitrary JSON.
 	invalid := &unstructured.Unstructured{}
-	invalid.SetAPIVersion("kafscale.io/v1alpha1")
+	invalid.SetAPIVersion("kafscale.io/v1")
 	invalid.SetKind("KafscaleCluster")
 	if err := c.Get(ctx, client.ObjectKeyFromObject(cluster), invalid); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestAffinityOverridesAPI(t *testing.T) {
 	}
 	t.Run("explicit-null", func(t *testing.T) {
 		raw := &unstructured.Unstructured{Object: map[string]interface{}{
-			"apiVersion": "kafscale.io/v1alpha1", "kind": "KafscaleCluster",
+			"apiVersion": "kafscale.io/v1", "kind": "KafscaleCluster",
 			"metadata": map[string]interface{}{"name": "affinity-null", "namespace": "default"},
 			"spec": map[string]interface{}{
 				"brokers": map[string]interface{}{"affinity": nil},
@@ -152,7 +152,7 @@ func TestAffinityOverridesAPI(t *testing.T) {
 		if err := c.Create(ctx, raw); err != nil {
 			t.Fatal(err)
 		}
-		var stored kafscalev1alpha1.KafscaleCluster
+		var stored kafscalev1.KafscaleCluster
 		if err := c.Get(ctx, client.ObjectKeyFromObject(raw), &stored); err != nil {
 			t.Fatal(err)
 		}

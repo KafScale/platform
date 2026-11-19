@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/s3env"
 )
 
@@ -100,7 +100,7 @@ type EtcdResolution struct {
 	Managed   bool
 }
 
-func EnsureEtcd(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) (EtcdResolution, error) {
+func EnsureEtcd(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) (EtcdResolution, error) {
 	if endpoints := cleanEndpoints(cluster.Spec.Etcd.Endpoints); len(endpoints) > 0 {
 		return EtcdResolution{Endpoints: endpoints}, nil
 	}
@@ -141,12 +141,12 @@ func cleanEndpoints(list []string) []string {
 
 var operatorManagedEtcdEndpoints = managedEtcdEndpoints
 
-func managedEtcdEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
+func managedEtcdEndpoints(cluster *kafscalev1.KafscaleCluster) []string {
 	host := fmt.Sprintf("%s-etcd-client.%s.svc.cluster.local:2379", cluster.Name, cluster.Namespace)
 	return []string{"http://" + host}
 }
 
-func reconcileEtcdResources(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdResources(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	if err := reconcileEtcdHeadlessService(ctx, c, scheme, cluster); err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func reconcileEtcdResources(ctx context.Context, c client.Client, scheme *runtim
 	return nil
 }
 
-func reconcileEtcdHeadlessService(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdHeadlessService(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-etcd", cluster.Name),
 		Namespace: cluster.Namespace,
@@ -189,7 +189,7 @@ func reconcileEtcdHeadlessService(ctx context.Context, c client.Client, scheme *
 	return err
 }
 
-func reconcileEtcdClientService(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdClientService(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-etcd-client", cluster.Name),
 		Namespace: cluster.Namespace,
@@ -206,7 +206,7 @@ func reconcileEtcdClientService(ctx context.Context, c client.Client, scheme *ru
 	return err
 }
 
-func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-etcd", cluster.Name),
 		Namespace: cluster.Namespace,
@@ -454,7 +454,7 @@ func reconcileEtcdStatefulSet(ctx context.Context, c client.Client, scheme *runt
 	return err
 }
 
-func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
+func etcdArgs(cluster *kafscalev1.KafscaleCluster) []string {
 	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
 	initialCluster := buildEtcdInitialCluster(cluster, int(etcdReplicas()))
 	peerURL := fmt.Sprintf("http://$(POD_NAME).%s.$(POD_NAMESPACE).svc.cluster.local:2380", peerSvc)
@@ -484,7 +484,7 @@ func etcdArgs(cluster *kafscalev1alpha1.KafscaleCluster) []string {
 	}
 }
 
-func buildEtcdInitialCluster(cluster *kafscalev1alpha1.KafscaleCluster, replicas int) string {
+func buildEtcdInitialCluster(cluster *kafscalev1.KafscaleCluster, replicas int) string {
 	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
 	if replicas < 1 {
 		replicas = 1
@@ -500,7 +500,7 @@ func buildEtcdInitialCluster(cluster *kafscalev1alpha1.KafscaleCluster, replicas
 	return strings.Join(members, ",")
 }
 
-func reconcileEtcdPDB(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdPDB(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{
 		Name:      fmt.Sprintf("%s-etcd", cluster.Name),
 		Namespace: cluster.Namespace,
@@ -517,7 +517,7 @@ func reconcileEtcdPDB(ctx context.Context, c client.Client, scheme *runtime.Sche
 	return err
 }
 
-func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdSnapshotCronJob(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	bucket := snapshotBucket(cluster)
 	if bucket == "" {
 		return nil
@@ -666,14 +666,14 @@ const snapshotCredentialsSelectScript = "kafscale_trim() {\n" +
 	"if [ -n \"$AWS_SESSION_TOKEN\" ]; then export AWS_SESSION_TOKEN; else unset AWS_SESSION_TOKEN; fi\n" +
 	"unset KS_ACCESS KS_SECRET KS_TOKEN KS_PAIR_TOKEN PAIR_ACCESS PAIR_SECRET PAIR_TOKEN\n"
 
-func snapshotCredentialsScript(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func snapshotCredentialsScript(cluster *kafscalev1.KafscaleCluster) string {
 	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
 		return ""
 	}
 	return snapshotCredentialsSelectScript
 }
 
-func snapshotCredentialsEnvFrom(cluster *kafscalev1alpha1.KafscaleCluster) []corev1.EnvFromSource {
+func snapshotCredentialsEnvFrom(cluster *kafscalev1.KafscaleCluster) []corev1.EnvFromSource {
 	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
 		return nil
 	}
@@ -685,7 +685,7 @@ func snapshotCredentialsEnvFrom(cluster *kafscalev1alpha1.KafscaleCluster) []cor
 	}}
 }
 
-func reconcileEtcdMaintenanceCronJobs(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func reconcileEtcdMaintenanceCronJobs(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster) error {
 	if !etcdMaintenanceEnabled() {
 		return nil
 	}
@@ -730,7 +730,7 @@ type etcdMaintenanceCronSpec struct {
 	taskLabel       string
 }
 
-func reconcileEtcdMaintenanceCronJob(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1alpha1.KafscaleCluster, spec etcdMaintenanceCronSpec) error {
+func reconcileEtcdMaintenanceCronJob(ctx context.Context, c client.Client, scheme *runtime.Scheme, cluster *kafscalev1.KafscaleCluster, spec etcdMaintenanceCronSpec) error {
 	cron := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{
 		Name:      spec.name,
 		Namespace: cluster.Namespace,
@@ -769,7 +769,7 @@ func reconcileEtcdMaintenanceCronJob(ctx context.Context, c client.Client, schem
 	return err
 }
 
-func etcdMaintenanceLabels(cluster *kafscalev1alpha1.KafscaleCluster, task string) map[string]string {
+func etcdMaintenanceLabels(cluster *kafscalev1.KafscaleCluster, task string) map[string]string {
 	labels := etcdJobLabels(cluster)
 	labels["app.kubernetes.io/component"] = "etcd-maintenance"
 	labels["kafscale.io/etcd-task"] = task
@@ -816,7 +816,7 @@ func etcdMaintenanceShellScript() string {
 		"done\n"
 }
 
-func managedEtcdMemberClientEndpoints(cluster *kafscalev1alpha1.KafscaleCluster) []string {
+func managedEtcdMemberClientEndpoints(cluster *kafscalev1.KafscaleCluster) []string {
 	peerSvc := fmt.Sprintf("%s-etcd", cluster.Name)
 	replicas := int(etcdReplicas())
 	if replicas < 1 {
@@ -832,7 +832,7 @@ func managedEtcdMemberClientEndpoints(cluster *kafscalev1alpha1.KafscaleCluster)
 	return endpoints
 }
 
-func snapshotBucket(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func snapshotBucket(cluster *kafscalev1.KafscaleCluster) string {
 	bucket := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotBucketEnv))
 	if bucket == "" {
 		bucket = defaultEtcdSnapshotBucket(cluster)
@@ -840,7 +840,7 @@ func snapshotBucket(cluster *kafscalev1alpha1.KafscaleCluster) string {
 	return strings.TrimSpace(bucket)
 }
 
-func snapshotPrefix(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func snapshotPrefix(cluster *kafscalev1.KafscaleCluster) string {
 	prefix := strings.TrimSpace(os.Getenv(operatorEtcdSnapshotPrefixEnv))
 	if prefix != "" {
 		return strings.Trim(prefix, "/")
@@ -848,7 +848,7 @@ func snapshotPrefix(cluster *kafscalev1alpha1.KafscaleCluster) string {
 	return strings.Trim(defaultSnapshotPrefix, "/")
 }
 
-func defaultEtcdSnapshotBucket(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func defaultEtcdSnapshotBucket(cluster *kafscalev1.KafscaleCluster) string {
 	name := strings.TrimSpace(cluster.Name)
 	namespace := strings.TrimSpace(cluster.Namespace)
 	if name == "" && namespace == "" {
@@ -893,14 +893,14 @@ func sanitizeBucketName(raw string) string {
 	return out
 }
 
-func etcdLabels(cluster *kafscalev1alpha1.KafscaleCluster) map[string]string {
+func etcdLabels(cluster *kafscalev1.KafscaleCluster) map[string]string {
 	return map[string]string{
 		"app":     "kafscale-etcd",
 		"cluster": cluster.Name,
 	}
 }
 
-func etcdJobLabels(cluster *kafscalev1alpha1.KafscaleCluster) map[string]string {
+func etcdJobLabels(cluster *kafscalev1.KafscaleCluster) map[string]string {
 	return map[string]string{
 		"app":     "kafscale-etcd-job",
 		"cluster": cluster.Name,

@@ -38,7 +38,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	consolepkg "github.com/KafScale/platform/internal/console"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/operator"
@@ -55,19 +55,19 @@ func TestDemoStack(t *testing.T) {
 	e, endpoints := startEmbeddedEtcd(t)
 	defer e.Close()
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "demo",
 			Namespace: "default",
 			UID:       "demo-cluster",
 		},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3: kafscalev1.S3Spec{
 				Bucket: envOrDefault("KAFSCALE_S3_BUCKET", "kafscale"),
 				Region: envOrDefault("KAFSCALE_S3_REGION", "us-east-1"),
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{
+			Etcd: kafscalev1.EtcdSpec{
 				Endpoints: endpoints,
 			},
 		},
@@ -207,17 +207,17 @@ func demoTopicNames() []string {
 	return names
 }
 
-func buildDemoTopics(names []string, clusterName string) []kafscalev1alpha1.KafscaleTopic {
+func buildDemoTopics(names []string, clusterName string) []kafscalev1.KafscaleTopic {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	topics := make([]kafscalev1alpha1.KafscaleTopic, 0, len(names))
+	topics := make([]kafscalev1.KafscaleTopic, 0, len(names))
 	for i, name := range names {
 		partitions := int32(rng.Intn(3) + 1)
 		if i == 0 && partitions < 3 {
 			partitions = 3
 		}
-		topics = append(topics, kafscalev1alpha1.KafscaleTopic{
+		topics = append(topics, kafscalev1.KafscaleTopic{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
-			Spec: kafscalev1alpha1.KafscaleTopicSpec{
+			Spec: kafscalev1.KafscaleTopicSpec{
 				ClusterRef: clusterName,
 				Partitions: partitions,
 			},

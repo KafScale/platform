@@ -21,7 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func resolveContainerEnv(t *testing.T, env []corev1.EnvVar, secret map[string]string) map[string]string {
@@ -53,15 +53,15 @@ func lfsProxyEffectiveS3Credentials(env map[string]string) (string, string) {
 }
 
 func TestLfsProxyContainerResolvesS3CredentialSecretKeys(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				CredentialsSecretRef: "s3-creds",
 			},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{Enabled: true},
+			LfsProxy: kafscalev1.LfsProxySpec{Enabled: true},
 		},
 	}
 	r := &ClusterReconciler{}

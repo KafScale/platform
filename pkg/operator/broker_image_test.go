@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -69,14 +69,14 @@ func TestBrokerContainerImageOverride(t *testing.T) {
 func TestReconcileBrokerImageChangesPodTemplate(t *testing.T) {
 	ctx := context.Background()
 	cluster := testCluster("image-pin", []string{"http://etcd:2379"})
-	cluster.Spec.Brokers.Image = kafscalev1alpha1.BrokerImageSpec{Repository: "registry.example.com/team/broker", Tag: "v1"}
+	cluster.Spec.Brokers.Image = kafscalev1.BrokerImageSpec{Repository: "registry.example.com/team/broker", Tag: "v1"}
 	other := testCluster("default-image", []string{"http://etcd:2379"})
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster, other).Build()
 	r := &ClusterReconciler{Client: c, Scheme: scheme}
 	reconcile := func(name, want string) {
 		t.Helper()
-		var current kafscalev1alpha1.KafscaleCluster
+		var current kafscalev1.KafscaleCluster
 		if err := c.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: name}, &current); err != nil {
 			t.Fatal(err)
 		}
@@ -91,7 +91,7 @@ func TestReconcileBrokerImageChangesPodTemplate(t *testing.T) {
 	}
 	reconcile(cluster.Name, "registry.example.com/team/broker:v1")
 	reconcile(other.Name, brokerImage)
-	var current kafscalev1alpha1.KafscaleCluster
+	var current kafscalev1.KafscaleCluster
 	if err := c.Get(ctx, client.ObjectKeyFromObject(cluster), &current); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestReconcileBrokerImageChangesPodTemplate(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(cluster), &current); err != nil {
 		t.Fatal(err)
 	}
-	current.Spec.Brokers.Image = kafscalev1alpha1.BrokerImageSpec{}
+	current.Spec.Brokers.Image = kafscalev1.BrokerImageSpec{}
 	if err := c.Update(ctx, &current); err != nil {
 		t.Fatal(err)
 	}
@@ -113,12 +113,12 @@ func TestReconcileBrokerImageChangesPodTemplate(t *testing.T) {
 
 func TestBrokerImageSurvivesJSONAndDeepCopy(t *testing.T) {
 	original := testCluster("image", nil)
-	original.Spec.Brokers.Image = kafscalev1alpha1.BrokerImageSpec{Repository: "custom/broker", Tag: "v2"}
+	original.Spec.Brokers.Image = kafscalev1.BrokerImageSpec{Repository: "custom/broker", Tag: "v2"}
 	encoded, err := json.Marshal(original)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded kafscalev1alpha1.KafscaleCluster
+	var decoded kafscalev1.KafscaleCluster
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
 	}

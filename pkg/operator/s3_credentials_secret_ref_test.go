@@ -22,15 +22,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestWhitespaceCredentialsSecretRefIsNoReference(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			S3:       kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: " \t "},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{Enabled: true},
+		Spec: kafscalev1.KafscaleClusterSpec{
+			S3:       kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: " \t "},
+			LfsProxy: kafscalev1.LfsProxySpec{Enabled: true},
 		},
 	}
 	scheme := testScheme(t)

@@ -29,8 +29,88 @@ The release recommendation remains withdrawn pending the gates in
 | Go source | Compare exported root-module APIs against published v1.6.3, including interface implementations and comparable types. Unkeyed struct literals are not covered; see [Use keyed struct literals](#use-keyed-struct-literals). This does not compare nested processor modules, binary ABI or all runtime semantics. |
 | Kafka wire | Brokers and proxies advertise the API versions they implement. Focused classic consumer-group, Produce/Fetch and native client tests cover those paths; they do not establish every Kafka API or every client/version. Legacy MessageSets are rejected; magic-2 batches are required. |
 | Schema Registry REST | The built-in service implements the subset documented in [Schema Registry](schema-registry.md), with Avro, Protobuf and JSON Schema. Its compatibility modes describe schema evolution, separately from Go or Kafka compatibility. The reported matrix used Confluent 8.4.0 Java serializers, confluent-kafka-python 2.16.1 and franz-go `pkg/sr` 1.8.0. It is not a claim of full Confluent product parity. |
-| Kubernetes CRDs | Apply the updated CRD before using new fields. Schema validation and Helm rendering checks do not prove a rolling upgrade on every Kubernetes/operator version. |
+| Kubernetes CRDs | `kafscale.io/v1` is the served and stored version. `kafscale.io/v1alpha1` is still served but deprecated; see [CRD API version v1](#crd-api-version-v1). Apply the updated CRD before using new fields. Schema validation and Helm rendering checks do not prove a rolling upgrade on every Kubernetes/operator version. |
 | Persisted data | Existing offset/group metadata and LFS envelopes remain readable in the covered tests. Topic recreation introduces generation-specific S3 prefixes; registry hash/descriptor aliases preserve covered schema IDs. Back up etcd and S3 together. Forward readability does not imply that an older binary can interpret new data on rollback. |
+
+## CRD API version v1
+
+`KafscaleCluster` and `KafscaleTopic` now use `apiVersion: kafscale.io/v1`.
+The v1 schema is identical to v1alpha1, so no conversion webhook is needed
+(conversion strategy `None`).
+
+- Both versions are served. v1 is the storage version.
+- v1alpha1 is deprecated. Requests that use it still work, and the API server
+  returns a warning such as `Warning: kafscale.io/v1alpha1 KafscaleCluster is deprecated; use kafscale.io/v1 KafscaleCluster. v1alpha1 will be removed in a future release.`
+- v1alpha1 will be removed in a future release. No removal date or version is
+  set.
+- The operator uses v1. The console, MCP server and CLI do not read the CRDs.
+- Existing v1alpha1 objects keep working. You can read every object as either
+  version: `kubectl get kafscaleclusters.v1.kafscale.io` or
+  `kubectl get kafscaleclusters.v1alpha1.kafscale.io`.
+- An object stored as v1alpha1 is rewritten as v1 the next time it is written,
+  for example by `kubectl apply` or an operator status update.
+
+### Upgrade steps
+
+Helm does not upgrade CRDs from `crds/`, so apply them first, then upgrade the
+chart. Run these from a checkout of the release you are upgrading to:
+
+```sh
+kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
+kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io crd/kafscaletopics.kafscale.io
+helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale --reuse-values
+```
+
+`--force-conflicts` is required when Helm installed the CRDs, which is the
+default. Without it the apply fails with `conflict with "helm": .spec.versions`.
+
+Then change `apiVersion: kafscale.io/v1alpha1` to `apiVersion: kafscale.io/v1`
+in your manifests, Helm values and GitOps sources. Nothing else in the manifest
+changes.
+
+### Rewrite stored objects
+
+To move every stored object to v1 now instead of on its next write, replace
+each object with its current content, then record that only v1 is stored:
+
+```sh
+kubectl get kafscaleclusters.kafscale.io --all-namespaces -o json | kubectl replace -f -
+kubectl get kafscaletopics.kafscale.io --all-namespaces -o json | kubectl replace -f -
+kubectl patch crd kafscaleclusters.kafscale.io --subresource=status --type=merge -p '{"status":{"storedVersions":["v1"]}}'
+kubectl patch crd kafscaletopics.kafscale.io --subresource=status --type=merge -p '{"status":{"storedVersions":["v1"]}}'
+```
+
+Run the two `kubectl patch` commands only after both `kubectl replace` commands
+succeed. A `kubectl replace` that fails with a conflict means the operator
+updated the object at the same time; run it again. The future release that
+removes v1alpha1 requires this step first.
+
+### Go types
+
+Import `github.com/KafScale/platform/api/v1` in new code:
+
+```go
+import kafscalev1 "github.com/KafScale/platform/api/v1"
+```
+
+The `api/v1` types are aliases of the `api/v1alpha1` types, so they are the
+same Go types and code written against `api/v1alpha1` keeps compiling.
+`api/v1alpha1` is deprecated and will be removed together with the v1alpha1
+CRD version.
+
+The packages differ only in the version they register. `kafscalev1.AddToScheme`
+maps the types to `kafscale.io/v1`, and `v1alpha1.AddToScheme` maps them to
+`kafscale.io/v1alpha1`. Add only one of them to a scheme. With both, each type
+maps to two kinds and controller-runtime clients return an error instead of
+picking one.
+
+### Rollback
+
+Rolling the operator back to a release that only knows v1alpha1 keeps working
+while the new CRDs are installed, because v1alpha1 is still served. Once objects
+are stored as v1, the old v1alpha1-only CRDs from 1.x cannot be reapplied. The
+API server refuses to remove v1 from the CRD while `status.storedVersions` lists
+it. A chart rollback must keep the 2.0 CRDs.
 
 ## Go API migration
 
@@ -100,8 +180,8 @@ compile against both versions.
 | --- | --- |
 | `metadata.ConsumerOffset` | `Metadata` |
 | `metadata.EtcdStoreConfig` | `StorageNamespace` |
-| `v1alpha1.ClusterConfigSpec` | `OffsetsRetentionMinutes` (first field), `ResponseWriteTimeoutMs` |
-| `v1alpha1.KafscaleClusterSpec` | `Security` (first field) |
+| `v1.ClusterConfigSpec`, `v1alpha1.ClusterConfigSpec` | `OffsetsRetentionMinutes` (first field), `ResponseWriteTimeoutMs` |
+| `v1.KafscaleClusterSpec`, `v1alpha1.KafscaleClusterSpec` | `Security` (first field) |
 
 ```go
 offset := metadata.ConsumerOffset{Group: "orders", Topic: "events", Partition: 0, Offset: 42}

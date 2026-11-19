@@ -163,7 +163,7 @@ kubectl -n "${KAFSQL_DEMO_NAMESPACE}" create secret generic kafsql-s3-credential
   --dry-run=client -o yaml | kubectl apply --validate=false -f -
 
 cluster_yaml="$(printf '%s\n' \
-  'apiVersion: kafscale.io/v1alpha1' \
+  'apiVersion: kafscale.io/v1' \
   'kind: KafscaleCluster' \
   'metadata:' \
   "  name: ${KAFSQL_DEMO_CLUSTER}" \
@@ -184,7 +184,7 @@ cluster_yaml="$(printf '%s\n' \
 kubectl apply --validate=false -f - <<<"${cluster_yaml}"
 
 topic_yaml="$(printf '%s\n' \
-  'apiVersion: kafscale.io/v1alpha1' \
+  'apiVersion: kafscale.io/v1' \
   'kind: KafscaleTopic' \
   'metadata:' \
   "  name: ${KAFSQL_DEMO_TOPIC}" \

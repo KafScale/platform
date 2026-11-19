@@ -43,7 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/pkg/operator"
 )
 
@@ -75,7 +75,7 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 	})
 
 	scheme := k8sruntime.NewScheme()
-	utilruntime.Must(kafscalev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kafscalev1.AddToScheme(scheme))
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(networkingv1.AddToScheme(scheme))
 	utilruntime.Must(appsv1.AddToScheme(scheme))
@@ -112,18 +112,18 @@ func TestOperatorManagedEtcdResources(t *testing.T) {
 		}
 	}()
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "etcd-managed",
 			Namespace: "default",
 		},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3: kafscalev1.S3Spec{
 				Bucket: "snapshots",
 				Region: "us-east-1",
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{},
+			Etcd: kafscalev1.EtcdSpec{},
 		},
 	}
 	if err := mgr.GetClient().Create(ctx, cluster); err != nil {

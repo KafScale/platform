@@ -20,6 +20,8 @@ metadata:
 spec:
   group: kafscale.io
   scope: Namespaced
+  conversion:
+    strategy: None
   names:
     plural: kafscaletopics
     singular: kafscaletopic
@@ -27,9 +29,55 @@ spec:
     shortNames:
       - kt
   versions:
-    - name: v1alpha1
+    - name: v1
       served: true
       storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - clusterRef
+                - partitions
+              properties:
+                clusterRef:
+                  type: string
+                partitions:
+                  type: integer
+                  minimum: 1
+                retentionMs:
+                  type: integer
+                retentionBytes:
+                  type: integer
+                config:
+                  type: object
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                partitions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: integer
+                      leader:
+                        type: string
+                      logEndOffset:
+                        type: integer
+    - name: v1alpha1
+      served: true
+      storage: false
+      deprecated: true
+      deprecationWarning: "kafscale.io/v1alpha1 KafscaleTopic is deprecated; use kafscale.io/v1 KafscaleTopic. v1alpha1 will be removed in a future release."
       subresources:
         status: {}
       schema:
