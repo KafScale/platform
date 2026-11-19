@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -99,6 +100,45 @@ func TestSingleBrokerEndpointRejectsStaleMetadata(t *testing.T) {
 	} {
 		if err := checkSingleBrokerEndpoint([]byte(tc.data), "127.0.0.1", 19092); (err == nil) != tc.ready {
 			t.Fatalf("snapshot %s: %v", tc.data, err)
+		}
+	}
+}
+
+func TestReadEtcdSnapshotSelectsContainerAndOnlyValue(t *testing.T) {
+	want := []string{"-n", "test-ns", "exec", "demo-etcd-0", "-c", "etcd", "--", "etcdctl",
+		"--endpoints=http://demo-etcd-client.test-ns.svc.cluster.local:2379", "get", "/kafscale/metadata/snapshot", "--print-value-only"}
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "kubectl" || !reflect.DeepEqual(args, want) {
+			t.Fatalf("unexpected snapshot command %s %v", name, args)
+		}
+		return []byte(`{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`), nil
+	}
+	out, err := readEtcdSnapshot(context.Background(), run, "test-ns", "demo", "demo-etcd-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSingleBrokerEndpoint(out, "127.0.0.1", 19092); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommandStdoutKeepsWarningsOutOfJSON(t *testing.T) {
+	for _, exit := range []int{0, 1} {
+		const payload = `{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`
+		command := fmt.Sprintf("printf '%%s' '%s'; printf '%%s' 'Defaulted container etcd' >&2; exit %d", payload, exit)
+		out, err := runCmdWithStdoutErr(context.Background(), "sh", "-c", command)
+		if string(out) != payload {
+			t.Fatalf("stderr contaminated JSON output: %s", out)
+		}
+		if exit == 0 {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := checkSingleBrokerEndpoint(out, "127.0.0.1", 19092); err != nil {
+				t.Fatal(err)
+			}
+		} else if err == nil || !strings.Contains(err.Error(), "Defaulted container etcd") {
+			t.Fatalf("failed command lost its stderr: %v", err)
 		}
 	}
 }

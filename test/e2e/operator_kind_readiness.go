@@ -32,6 +32,12 @@ import (
 
 type kindCommand func(context.Context, string, ...string) ([]byte, error)
 
+func readEtcdSnapshot(ctx context.Context, run kindCommand, namespace, cluster, pod string) ([]byte, error) {
+	endpoint := fmt.Sprintf("http://%s-etcd-client.%s.svc.cluster.local:2379", cluster, namespace)
+	return run(ctx, "kubectl", "-n", namespace, "exec", pod, "-c", "etcd", "--",
+		"etcdctl", "--endpoints="+endpoint, "get", "/kafscale/metadata/snapshot", "--print-value-only")
+}
+
 func checkSingleBrokerEndpoint(data []byte, host string, port int32) error {
 	var snapshot metadata.ClusterMetadata
 	if err := json.Unmarshal(data, &snapshot); err != nil {

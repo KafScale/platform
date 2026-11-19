@@ -352,7 +352,7 @@ jobs:
       - name: Install kind
         run: go install sigs.k8s.io/kind@v0.31.0
       - name: Check operator startup readiness, scaling and retry regressions
-        run: go test -race -tags=e2e ./test/e2e -run '^Test(OperatorBackendChecks|OperatorResourceExists|WaitForOperatorBackends|WaitForStatefulSetPodReady|ProduceAfterReadiness|KindKubeProxyMode|BrokerScaleRequiresRequestedCountAndCompletedRollout|SingleBrokerEndpointRejectsStaleMetadata|WaitForBrokerScaleAndEndpoint)' -v -count=1 -timeout=2m
+        run: go test -race -tags=e2e ./test/e2e -run '^Test(OperatorBackendChecks|OperatorResourceExists|WaitForOperatorBackends|WaitForStatefulSetPodReady|ProduceAfterReadiness|KindKubeProxyMode|BrokerScaleRequiresRequestedCountAndCompletedRollout|SingleBrokerEndpointRejectsStaleMetadata|WaitForBrokerScaleAndEndpoint|ReadEtcdSnapshotSelectsContainerAndOnlyValue|CommandStdoutKeepsWarningsOutOfJSON)' -v -count=1 -timeout=2m
       - name: Run operator snapshot, restore, durability and HA e2e
         run: make test-operator-kind
       - name: Delete test cluster
