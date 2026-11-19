@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/s3env"
 	"github.com/KafScale/platform/pkg/storage"
 )
@@ -43,7 +43,7 @@ const (
 	awsSessionTokenEnv                   = "AWS_SESSION_TOKEN"
 )
 
-func (r *ClusterReconciler) verifySnapshotS3Access(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) error {
+func (r *ClusterReconciler) verifySnapshotS3Access(ctx context.Context, cluster *kafscalev1.KafscaleCluster, resolution EtcdResolution) error {
 	clusterKey := cluster.Namespace + "/" + cluster.Name
 	now := time.Now()
 	if !resolution.Managed {
@@ -117,7 +117,7 @@ func (r *ClusterReconciler) verifySnapshotS3Access(ctx context.Context, cluster 
 	return nil
 }
 
-func (r *ClusterReconciler) loadS3Credentials(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, cfg *storage.S3Config) error {
+func (r *ClusterReconciler) loadS3Credentials(ctx context.Context, cluster *kafscalev1.KafscaleCluster, cfg *storage.S3Config) error {
 	if s3env.Trim(cluster.Spec.S3.CredentialsSecretRef) == "" {
 		return nil
 	}
@@ -178,7 +178,7 @@ func firstNonBlank(values ...string) string {
 	return ""
 }
 
-func (r *ClusterReconciler) recordSnapshotAccessFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, clusterKey string, err error) {
+func (r *ClusterReconciler) recordSnapshotAccessFailure(ctx context.Context, cluster *kafscalev1.KafscaleCluster, clusterKey string, err error) {
 	operatorEtcdSnapshotAccessOK.WithLabelValues(clusterKey).Set(0)
 	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "EtcdSnapshotAccess",

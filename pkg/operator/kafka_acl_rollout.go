@@ -21,7 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,7 +30,7 @@ import (
 
 const aclChecksumAnnotation = "kafscale.io/acl-checksum"
 
-func (r *ClusterReconciler) kafkaACLChecksum(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (string, error) {
+func (r *ClusterReconciler) kafkaACLChecksum(ctx context.Context, cluster *kafscalev1.KafscaleCluster) (string, error) {
 	if cluster.Spec.Security.ACLSecretRef == "" {
 		return "", nil
 	}
@@ -58,7 +58,7 @@ func setACLChecksum(template *corev1.PodTemplateSpec, checksum string) {
 }
 
 func (r *ClusterReconciler) clustersForACLSecret(ctx context.Context, secret client.Object) []reconcile.Request {
-	var clusters kafscalev1alpha1.KafscaleClusterList
+	var clusters kafscalev1.KafscaleClusterList
 	if err := r.Client.List(ctx, &clusters, client.InNamespace(secret.GetNamespace())); err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "cannot find clusters using ACL Secret")
 		return nil

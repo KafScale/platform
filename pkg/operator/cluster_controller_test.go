@@ -26,21 +26,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestBrokerContainerAdvertisedEndpoint(t *testing.T) {
 	port := int32(19092)
 	replicas := int32(1)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{
 				AdvertisedHost: "kafka.example.com",
 				AdvertisedPort: &port,
 				Replicas:       &replicas,
 			},
-			S3: kafscalev1alpha1.S3Spec{
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				CredentialsSecretRef: "creds",
@@ -58,11 +58,11 @@ func TestBrokerContainerAdvertisedEndpoint(t *testing.T) {
 }
 
 func TestReconcileBrokerHeadlessService(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				CredentialsSecretRef: "creds",
@@ -87,11 +87,11 @@ func TestReconcileBrokerHeadlessService(t *testing.T) {
 func TestReconcileBrokerServiceExternalAccess(t *testing.T) {
 	portKafka := int32(30092)
 	portMetrics := int32(30093)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{
-				Service: kafscalev1alpha1.BrokerServiceSpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{
+				Service: kafscalev1.BrokerServiceSpec{
 					Type:                     string(corev1.ServiceTypeLoadBalancer),
 					Annotations:              map[string]string{"cloud.example.com/lb": "external"},
 					LoadBalancerIP:           "203.0.113.10",
@@ -101,7 +101,7 @@ func TestReconcileBrokerServiceExternalAccess(t *testing.T) {
 					MetricsNodePort:          &portMetrics,
 				},
 			},
-			S3: kafscalev1alpha1.S3Spec{
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				CredentialsSecretRef: "creds",
@@ -152,38 +152,38 @@ func TestReconcileLfsProxyDeployment(t *testing.T) {
 	portHealth := int32(19094)
 	maxBlob := int64(1048576)
 	chunkSize := int64(262144)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3: kafscalev1.S3Spec{
 				Bucket:               "bucket",
 				Region:               "us-east-1",
 				Endpoint:             "http://minio.local",
 				CredentialsSecretRef: "creds",
 			},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{
+			LfsProxy: kafscalev1.LfsProxySpec{
 				Enabled:        true,
 				AdvertisedHost: "proxy.example.com",
 				AdvertisedPort: &portKafka,
-				Service: kafscalev1alpha1.LfsProxyServiceSpec{
+				Service: kafscalev1.LfsProxyServiceSpec{
 					Port: &portKafka,
 				},
-				HTTP: kafscalev1alpha1.LfsProxyHTTPSpec{
+				HTTP: kafscalev1.LfsProxyHTTPSpec{
 					Enabled:         &enabled,
 					Port:            &portHTTP,
 					APIKeySecretRef: "lfs-api",
 					APIKeySecretKey: "token",
 				},
-				Metrics: kafscalev1alpha1.LfsProxyMetricsSpec{
+				Metrics: kafscalev1.LfsProxyMetricsSpec{
 					Enabled: &enabled,
 					Port:    &portMetrics,
 				},
-				Health: kafscalev1alpha1.LfsProxyHealthSpec{
+				Health: kafscalev1.LfsProxyHealthSpec{
 					Enabled: &enabled,
 					Port:    &portHealth,
 				},
-				S3: kafscalev1alpha1.LfsProxyS3Spec{
+				S3: kafscalev1.LfsProxyS3Spec{
 					Namespace:    "lfs-ns",
 					MaxBlobSize:  &maxBlob,
 					ChunkSize:    &chunkSize,
@@ -237,19 +237,19 @@ func TestReconcileLfsProxyService(t *testing.T) {
 	enabled := true
 	portKafka := int32(19092)
 	portHTTP := int32(18080)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "default"},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3:      kafscalev1alpha1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "creds"},
-			LfsProxy: kafscalev1alpha1.LfsProxySpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3:      kafscalev1.S3Spec{Bucket: "bucket", Region: "us-east-1", CredentialsSecretRef: "creds"},
+			LfsProxy: kafscalev1.LfsProxySpec{
 				Enabled: true,
-				Service: kafscalev1alpha1.LfsProxyServiceSpec{
+				Service: kafscalev1.LfsProxyServiceSpec{
 					Type:        string(corev1.ServiceTypeLoadBalancer),
 					Annotations: map[string]string{"cloud.example.com/lb": "external"},
 					Port:        &portKafka,
 				},
-				HTTP: kafscalev1alpha1.LfsProxyHTTPSpec{Enabled: &enabled, Port: &portHTTP},
+				HTTP: kafscalev1.LfsProxyHTTPSpec{Enabled: &enabled, Port: &portHTTP},
 			},
 		},
 	}
@@ -297,7 +297,7 @@ func TestServiceParsingHelpers(t *testing.T) {
 
 func TestReconcileBrokerReadiness(t *testing.T) {
 	ctx := context.Background()
-	cluster := &kafscalev1alpha1.KafscaleCluster{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: "default"}}
+	cluster := &kafscalev1.KafscaleCluster{ObjectMeta: metav1.ObjectMeta{Name: "ready", Namespace: "default"}}
 	scheme := testScheme(t)
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
 	r := &ClusterReconciler{Client: c, Scheme: scheme}

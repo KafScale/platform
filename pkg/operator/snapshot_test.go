@@ -23,35 +23,35 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestBuildClusterMetadata(t *testing.T) {
 	replicas := int32(3)
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "prod",
 			Namespace: "kafscale",
 			UID:       "cluster-uid",
 		},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{
 				Replicas: &replicas,
 			},
-			S3: kafscalev1alpha1.S3Spec{
+			S3: kafscalev1.S3Spec{
 				Bucket: "test",
 				Region: "us-east-1",
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{
+			Etcd: kafscalev1.EtcdSpec{
 				Endpoints: []string{"http://localhost:2379"},
 			},
 		},
 	}
 
-	topics := []kafscalev1alpha1.KafscaleTopic{
+	topics := []kafscalev1.KafscaleTopic{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "orders"},
-			Spec: kafscalev1alpha1.KafscaleTopicSpec{
+			Spec: kafscalev1.KafscaleTopicSpec{
 				ClusterRef: "prod",
 				Partitions: 2,
 			},

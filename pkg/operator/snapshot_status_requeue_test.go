@@ -26,12 +26,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
-func snapshotStatusFor(t *testing.T, cron *batchv1.CronJob, managed bool) (*kafscalev1alpha1.KafscaleCluster, time.Duration) {
+func snapshotStatusFor(t *testing.T, cron *batchv1.CronJob, managed bool) (*kafscalev1.KafscaleCluster, time.Duration) {
 	t.Helper()
-	cluster := &kafscalev1alpha1.KafscaleCluster{ObjectMeta: metav1.ObjectMeta{Name: "requeue", Namespace: "default"}}
+	cluster := &kafscalev1.KafscaleCluster{ObjectMeta: metav1.ObjectMeta{Name: "requeue", Namespace: "default"}}
 	scheme := testScheme(t)
 	builder := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(cluster).WithObjects(cluster)
 	if cron != nil {

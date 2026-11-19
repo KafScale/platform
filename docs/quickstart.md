@@ -101,7 +101,7 @@ This creates the broker deployment and wires S3 + etcd into the broker env.
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: demo
@@ -121,7 +121,7 @@ If you are using external etcd, set `spec.etcd.endpoints` instead:
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: demo
@@ -190,7 +190,7 @@ For AWS S3, drop `--endpoint-url`, or run `aws s3 mb s3://kafscale-demo --region
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleTopic
 metadata:
   name: orders

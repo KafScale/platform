@@ -30,7 +30,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/operator"
 
@@ -43,36 +43,36 @@ func TestSnapshotPublishAndBrokerConsumption(t *testing.T) {
 
 	ctx := context.Background()
 
-	cluster := &kafscalev1alpha1.KafscaleCluster{
+	cluster := &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "production",
 			Namespace: "default",
 			UID:       "cluster-uid",
 		},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3: kafscalev1.S3Spec{
 				Bucket: "test",
 				Region: "us-east-1",
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{
+			Etcd: kafscalev1.EtcdSpec{
 				Endpoints: endpoints,
 			},
 		},
 	}
 
-	topic := kafscalev1alpha1.KafscaleTopic{
+	topic := kafscalev1.KafscaleTopic{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "orders",
 			Namespace: "default",
 		},
-		Spec: kafscalev1alpha1.KafscaleTopicSpec{
+		Spec: kafscalev1.KafscaleTopicSpec{
 			ClusterRef: "production",
 			Partitions: 3,
 		},
 	}
 
-	snapshot := operator.BuildClusterMetadata(cluster, []kafscalev1alpha1.KafscaleTopic{topic})
+	snapshot := operator.BuildClusterMetadata(cluster, []kafscalev1.KafscaleTopic{topic})
 	if err := operator.PublishMetadataSnapshot(ctx, endpoints, snapshot); err != nil {
 		t.Fatalf("publish snapshot: %v", err)
 	}

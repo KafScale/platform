@@ -26,11 +26,11 @@ import (
 	etcdserverpb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/pkg/metadata"
 )
 
-func (r *ClusterReconciler) pollManagedEtcdHealth(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
+func (r *ClusterReconciler) pollManagedEtcdHealth(ctx context.Context, cluster *kafscalev1.KafscaleCluster, resolution EtcdResolution) {
 	clusterKey := cluster.Namespace + "/" + cluster.Name
 	resetEtcdHealthMetrics(clusterKey)
 

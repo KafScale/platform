@@ -20,6 +20,7 @@ MIN_COVERAGE="${1:-85}"
 # Packages excluded from coverage: generated code, test utilities, demo tools,
 # embed-only wrappers, e2e tests, CLI entry points, and addon/skeleton packages.
 EXCLUDE=(
+  "github.com/KafScale/platform/api/v1"
   "github.com/KafScale/platform/api/v1alpha1"
   "github.com/KafScale/platform/pkg/gen/"
   "github.com/KafScale/platform/internal/testutil"

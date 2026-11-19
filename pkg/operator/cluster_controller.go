@@ -40,7 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/internal/s3env"
 )
 
@@ -70,7 +70,7 @@ func NewClusterReconciler(mgr ctrl.Manager, publisher *SnapshotPublisher) *Clust
 
 // Reconcile ensures broker workloads exist for every KafscaleCluster spec.
 func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var cluster kafscalev1alpha1.KafscaleCluster
+	var cluster kafscalev1.KafscaleCluster
 	if err := r.Client.Get(ctx, req.NamespacedName, &cluster); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -142,14 +142,14 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{RequeueAfter: snapshotRecheck}, nil
 }
 
-func (r *ClusterReconciler) reconcileClusterSetup(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (EtcdResolution, error) {
+func (r *ClusterReconciler) reconcileClusterSetup(ctx context.Context, cluster *kafscalev1.KafscaleCluster) (EtcdResolution, error) {
 	if err := r.reconcileKafkaNetworkPolicy(ctx, cluster); err != nil {
 		return EtcdResolution{}, err
 	}
 	return EnsureEtcd(ctx, r.Client, r.Scheme, cluster)
 }
 
-func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, cluster *kafscalev1.KafscaleCluster, endpoints []string) error {
 	if err := r.deleteLegacyBrokerDeployment(ctx, cluster); err != nil {
 		return err
 	}
@@ -168,12 +168,12 @@ func (r *ClusterReconciler) reconcileClusterWorkloads(ctx context.Context, clust
 	return r.reconcileBrokerHPA(ctx, cluster)
 }
 
-func (r *ClusterReconciler) brokerStatefulSetExists(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) bool {
+func (r *ClusterReconciler) brokerStatefulSetExists(ctx context.Context, cluster *kafscalev1.KafscaleCluster) bool {
 	sts := &appsv1.StatefulSet{}
 	return r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, sts) == nil
 }
 
-func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, initial []metav1.Condition) {
+func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, cluster *kafscalev1.KafscaleCluster, initial []metav1.Condition) {
 	var computed []metav1.Condition
 	for _, condition := range cluster.Status.Conditions {
 		if previous := meta.FindStatusCondition(initial, condition.Type); previous == nil || !equality.Semantic.DeepEqual(*previous, condition) {
@@ -184,7 +184,7 @@ func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, clust
 		return
 	}
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		stored := &kafscalev1alpha1.KafscaleCluster{}
+		stored := &kafscalev1.KafscaleCluster{}
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(cluster), stored); err != nil {
 			return err
 		}
@@ -211,7 +211,7 @@ func (r *ClusterReconciler) persistStatusAfterFailure(ctx context.Context, clust
 
 func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kafscalev1alpha1.KafscaleCluster{}).
+		For(&kafscalev1.KafscaleCluster{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&appsv1.Deployment{}).
@@ -222,7 +222,7 @@ func (r *ClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
+func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, cluster *kafscalev1.KafscaleCluster, endpoints []string) error {
 	if err := validateKafkaSecurity(cluster.Spec.Security); err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func (r *ClusterReconciler) reconcileBrokerDeployment(ctx context.Context, clust
 	return err
 }
 
-func (r *ClusterReconciler) brokerHPAActive(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (bool, error) {
+func (r *ClusterReconciler) brokerHPAActive(ctx context.Context, cluster *kafscalev1.KafscaleCluster) (bool, error) {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{}
 	err := r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, hpa)
 	if apierrors.IsNotFound(err) || runtime.IsNotRegisteredError(err) || meta.IsNoMatchError(err) {
@@ -278,7 +278,7 @@ func (r *ClusterReconciler) brokerHPAActive(ctx context.Context, cluster *kafsca
 	return metav1.IsControlledBy(hpa, cluster), nil
 }
 
-func desiredBrokerReplicas(cluster *kafscalev1alpha1.KafscaleCluster, live *int32, hpaActive bool) int32 {
+func desiredBrokerReplicas(cluster *kafscalev1.KafscaleCluster, live *int32, hpaActive bool) int32 {
 	replicas := int32(3)
 	if cluster.Spec.Brokers.Replicas != nil {
 		replicas = *cluster.Spec.Brokers.Replicas
@@ -290,7 +290,7 @@ func desiredBrokerReplicas(cluster *kafscalev1alpha1.KafscaleCluster, live *int3
 	return min(max(*live, minReplicas), maxReplicas)
 }
 
-func brokerHPABounds(cluster *kafscalev1alpha1.KafscaleCluster) (int32, int32) {
+func brokerHPABounds(cluster *kafscalev1.KafscaleCluster) (int32, int32) {
 	minReplicas := int32(3)
 	if cluster.Spec.Brokers.Replicas != nil && *cluster.Spec.Brokers.Replicas > 0 {
 		minReplicas = *cluster.Spec.Brokers.Replicas
@@ -329,7 +329,7 @@ func softPodAntiAffinity(labels map[string]string) *corev1.Affinity {
 	}
 }
 
-func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-broker", cluster.Name),
@@ -342,7 +342,7 @@ func (r *ClusterReconciler) deleteLegacyBrokerDeployment(ctx context.Context, cl
 	return nil
 }
 
-func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) corev1.Container {
+func (r *ClusterReconciler) brokerContainer(cluster *kafscalev1.KafscaleCluster, endpoints []string) corev1.Container {
 	image := strings.TrimSpace(cluster.Spec.Brokers.Image.Repository)
 	if image == "" {
 		image = brokerImage
@@ -528,11 +528,11 @@ func copyStringMap(source map[string]string) map[string]string {
 	return dest
 }
 
-func brokerHeadlessServiceName(cluster *kafscalev1alpha1.KafscaleCluster) string {
+func brokerHeadlessServiceName(cluster *kafscalev1.KafscaleCluster) string {
 	return fmt.Sprintf("%s-broker-headless", cluster.Name)
 }
 
-func (r *ClusterReconciler) reconcileBrokerHeadlessService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileBrokerHeadlessService(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      brokerHeadlessServiceName(cluster),
@@ -554,7 +554,7 @@ func (r *ClusterReconciler) reconcileBrokerHeadlessService(ctx context.Context, 
 	return err
 }
 
-func (r *ClusterReconciler) reconcileBrokerService(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileBrokerService(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-broker", cluster.Name),
@@ -598,7 +598,7 @@ func (r *ClusterReconciler) reconcileBrokerService(ctx context.Context, cluster 
 	return err
 }
 
-func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) error {
+func (r *ClusterReconciler) reconcileBrokerHPA(ctx context.Context, cluster *kafscalev1.KafscaleCluster) error {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-broker", cluster.Name),
@@ -671,7 +671,7 @@ func brokerHPAScaleDown() *autoscalingv2.HPAScalingRules {
 	}
 }
 
-func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, status metav1.ConditionStatus, reason, message string) error {
+func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *kafscalev1.KafscaleCluster, status metav1.ConditionStatus, reason, message string) error {
 	condition := metav1.Condition{
 		Type:               "Ready",
 		Status:             status,
@@ -688,7 +688,7 @@ func (r *ClusterReconciler) updateStatus(ctx context.Context, cluster *kafscalev
 	return nil
 }
 
-func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) time.Duration {
+func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, cluster *kafscalev1.KafscaleCluster, resolution EtcdResolution) time.Duration {
 	clusterKey := cluster.Namespace + "/" + cluster.Name
 	now := time.Now()
 	if !resolution.Managed {
@@ -782,7 +782,7 @@ func (r *ClusterReconciler) populateEtcdSnapshotStatus(ctx context.Context, clus
 	return recheck
 }
 
-func (r *ClusterReconciler) populateEtcdMaintenanceStatus(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, resolution EtcdResolution) {
+func (r *ClusterReconciler) populateEtcdMaintenanceStatus(ctx context.Context, cluster *kafscalev1.KafscaleCluster, resolution EtcdResolution) {
 	now := time.Now()
 	if !resolution.Managed || !etcdMaintenanceEnabled() {
 		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{

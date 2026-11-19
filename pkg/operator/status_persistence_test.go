@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestFailurePathStatusSkipsChangedCluster(t *testing.T) {
@@ -56,7 +56,7 @@ func TestFailurePathStatusSkipsChangedCluster(t *testing.T) {
 					if _, ok := obj.(*networkingv1.NetworkPolicy); !ok {
 						return cl.Get(ctx, requestedKey, obj, opts...)
 					}
-					latest := &kafscalev1alpha1.KafscaleCluster{}
+					latest := &kafscalev1.KafscaleCluster{}
 					if err := cl.Get(ctx, key, latest); err != nil {
 						return err
 					}
@@ -93,7 +93,7 @@ func TestFailurePathStatusSkipsChangedCluster(t *testing.T) {
 			if !mutated {
 				t.Fatal("concurrent resource change was not exercised")
 			}
-			latest := &kafscalev1alpha1.KafscaleCluster{}
+			latest := &kafscalev1.KafscaleCluster{}
 			if err := c.Get(context.Background(), key, latest); err != nil {
 				t.Fatal(err)
 			}
@@ -135,7 +135,7 @@ func TestFailurePathStatusRechecksSpecOnConflict(t *testing.T) {
 					}
 					writes++
 					if writes == 1 {
-						latest := &kafscalev1alpha1.KafscaleCluster{}
+						latest := &kafscalev1.KafscaleCluster{}
 						if err := cl.Get(ctx, key, latest); err != nil {
 							return err
 						}
@@ -156,14 +156,14 @@ func TestFailurePathStatusRechecksSpecOnConflict(t *testing.T) {
 				},
 			}).Build()
 			r := &ClusterReconciler{Client: c, Scheme: scheme}
-			original := &kafscalev1alpha1.KafscaleCluster{}
+			original := &kafscalev1.KafscaleCluster{}
 			if err := c.Get(ctx, key, original); err != nil {
 				t.Fatal(err)
 			}
 			initial := append([]metav1.Condition(nil), original.Status.Conditions...)
 			r.populateS3CredentialsStatus(ctx, original)
 			r.persistStatusAfterFailure(ctx, original, initial)
-			latest := &kafscalev1alpha1.KafscaleCluster{}
+			latest := &kafscalev1.KafscaleCluster{}
 			if err := c.Get(ctx, key, latest); err != nil {
 				t.Fatal(err)
 			}

@@ -16,12 +16,12 @@
 package operator
 
 import (
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"testing"
 )
 
 func TestBrokerResponseWriteTimeoutConfig(t *testing.T) {
-	cluster := &kafscalev1alpha1.KafscaleCluster{}
+	cluster := &kafscalev1.KafscaleCluster{}
 	cluster.Spec.Config.ResponseWriteTimeoutMs = 100
 	container := (&ClusterReconciler{}).brokerContainer(cluster, []string{"http://etcd:2379"})
 	for _, env := range container.Env {

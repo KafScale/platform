@@ -51,28 +51,32 @@ def main():
             + (" Applies only to operator-managed etcd." if workload == "etcd" else "")
         )
         lines = updated.splitlines(keepends=True)
-        section = lines.index(f"                {workload}:\n")
-        insertion = next(i for i in range(section + 1, len(lines)) if lines[i] == "                  properties:\n") + 1
-        # Remove an earlier generated field while preserving every other field.
-        end_section = next((i for i in range(insertion, len(lines)) if lines[i].startswith("                ") and not lines[i].startswith("                 ") and lines[i].strip()), len(lines))
-        for i in range(insertion, end_section):
-            if lines[i] == "                    affinity:\n":
-                end = i + 1
-                while end < len(lines) and (not lines[end].strip() or lines[end].startswith("                      ")):
-                    end += 1
-                del lines[i:end]
-                break
-        block = "                    affinity:\n" + "".join(
-            "                      " + line + "\n"
-            for line in yaml.safe_dump(schema, sort_keys=False).splitlines()
-        )
-        lines.insert(insertion, block)
+        sections = [i for i, line in enumerate(lines) if line == f"                {workload}:\n"]
+        for section in reversed(sections):
+            insert_affinity(lines, section, schema)
         updated = "".join(lines)
     if args.check:
         if updated != original:
             raise SystemExit("Affinity CRD schema is stale; run python3 hack/update_affinity_schema.py")
     else:
         CRD.write_text(updated)
+
+
+def insert_affinity(lines, section, schema):
+    insertion = next(i for i in range(section + 1, len(lines)) if lines[i] == "                  properties:\n") + 1
+    end_section = next((i for i in range(insertion, len(lines)) if lines[i].startswith("                ") and not lines[i].startswith("                 ") and lines[i].strip()), len(lines))
+    for i in range(insertion, end_section):
+        if lines[i] == "                    affinity:\n":
+            end = i + 1
+            while end < len(lines) and (not lines[end].strip() or lines[end].startswith("                      ")):
+                end += 1
+            del lines[i:end]
+            break
+    block = "                    affinity:\n" + "".join(
+        "                      " + line + "\n"
+        for line in yaml.safe_dump(schema, sort_keys=False).splitlines()
+    )
+    lines.insert(insertion, block)
 
 
 if __name__ == "__main__":

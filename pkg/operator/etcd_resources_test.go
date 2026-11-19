@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestEnsureEtcdUsesSpecEndpoints(t *testing.T) {
@@ -468,19 +468,19 @@ func labelSelectorMatches(selector, labels map[string]string) bool {
 	return true
 }
 
-func testCluster(name string, endpoints []string) *kafscalev1alpha1.KafscaleCluster {
-	return &kafscalev1alpha1.KafscaleCluster{
+func testCluster(name string, endpoints []string) *kafscalev1.KafscaleCluster {
+	return &kafscalev1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: "default",
 		},
-		Spec: kafscalev1alpha1.KafscaleClusterSpec{
-			Brokers: kafscalev1alpha1.BrokerSpec{},
-			S3: kafscalev1alpha1.S3Spec{
+		Spec: kafscalev1.KafscaleClusterSpec{
+			Brokers: kafscalev1.BrokerSpec{},
+			S3: kafscalev1.S3Spec{
 				Bucket: "bucket",
 				Region: "us-east-1",
 			},
-			Etcd: kafscalev1alpha1.EtcdSpec{Endpoints: endpoints},
+			Etcd: kafscalev1.EtcdSpec{Endpoints: endpoints},
 		},
 	}
 }
@@ -491,7 +491,7 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	if err := networkingv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := kafscalev1alpha1.AddToScheme(scheme); err != nil {
+	if err := kafscalev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add kafscale scheme: %v", err)
 	}
 	if err := appsv1.AddToScheme(scheme); err != nil {

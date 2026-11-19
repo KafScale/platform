@@ -25,7 +25,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 // TopicReconciler ensures topic metadata is reflected in the etcd snapshot.
@@ -44,11 +44,11 @@ func NewTopicReconciler(mgr ctrl.Manager, publisher *SnapshotPublisher) *TopicRe
 }
 
 func (r *TopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var topic kafscalev1alpha1.KafscaleTopic
+	var topic kafscalev1.KafscaleTopic
 	if err := r.Get(ctx, req.NamespacedName, &topic); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	var cluster kafscalev1alpha1.KafscaleCluster
+	var cluster kafscalev1.KafscaleCluster
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      topic.Spec.ClusterRef,
 		Namespace: topic.Namespace,
@@ -87,7 +87,7 @@ func (r *TopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 
 func (r *TopicReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&kafscalev1alpha1.KafscaleTopic{}).
+		For(&kafscalev1.KafscaleTopic{}).
 		Complete(r)
 }
 

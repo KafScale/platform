@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: demo

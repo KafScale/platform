@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 )
 
 func TestBrokerHPAReplicasAPI(t *testing.T) {
@@ -66,7 +66,7 @@ func TestBrokerHPAReplicasAPI(t *testing.T) {
 	ctx := context.Background()
 	cluster := testCluster("hpa-api", nil)
 	cluster.Spec.Brokers.Replicas = int32Ptr(2)
-	cluster.Spec.Brokers.Resources = kafscalev1alpha1.BrokerResources{
+	cluster.Spec.Brokers.Resources = kafscalev1.BrokerResources{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
 	}

@@ -28,7 +28,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	kafscalev1alpha1 "github.com/KafScale/platform/api/v1alpha1"
+	kafscalev1 "github.com/KafScale/platform/api/v1"
 	"github.com/KafScale/platform/pkg/metadata"
 	"github.com/KafScale/platform/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -50,13 +50,13 @@ func NewSnapshotPublisher(c client.Client) *SnapshotPublisher {
 }
 
 // Publish renders the current metadata for the cluster and puts it into etcd.
-func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster, endpoints []string) error {
-	var topicList kafscalev1alpha1.KafscaleTopicList
+func (p *SnapshotPublisher) Publish(ctx context.Context, cluster *kafscalev1.KafscaleCluster, endpoints []string) error {
+	var topicList kafscalev1.KafscaleTopicList
 	if err := p.Client.List(ctx, &topicList, client.InNamespace(cluster.Namespace)); err != nil {
 		operatorSnapshotResults.WithLabelValues("error").Inc()
 		return err
 	}
-	topics := make([]kafscalev1alpha1.KafscaleTopic, 0, len(topicList.Items))
+	topics := make([]kafscalev1.KafscaleTopic, 0, len(topicList.Items))
 	for _, topic := range topicList.Items {
 		if topic.Spec.ClusterRef == cluster.Name {
 			topics = append(topics, topic)
@@ -136,7 +136,7 @@ func readSnapshotFromEtcd(ctx context.Context, endpoints []string) (metadata.Clu
 	return snap, nil
 }
 
-func (p *SnapshotPublisher) liveBrokerCount(ctx context.Context, cluster *kafscalev1alpha1.KafscaleCluster) (int32, error) {
+func (p *SnapshotPublisher) liveBrokerCount(ctx context.Context, cluster *kafscalev1.KafscaleCluster) (int32, error) {
 	sts := &appsv1.StatefulSet{}
 	if err := p.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: fmt.Sprintf("%s-broker", cluster.Name)}, sts); err != nil {
 		if client.IgnoreNotFound(err) != nil {
@@ -151,11 +151,11 @@ func (p *SnapshotPublisher) liveBrokerCount(ctx context.Context, cluster *kafsca
 }
 
 // BuildClusterMetadata converts CRD state into the metadata snapshot consumed by brokers.
-func BuildClusterMetadata(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic) metadata.ClusterMetadata {
+func BuildClusterMetadata(cluster *kafscalev1.KafscaleCluster, topics []kafscalev1.KafscaleTopic) metadata.ClusterMetadata {
 	return BuildClusterMetadataForBrokers(cluster, topics, desiredBrokerReplicas(cluster, nil, false))
 }
 
-func BuildClusterMetadataForBrokers(cluster *kafscalev1alpha1.KafscaleCluster, topics []kafscalev1alpha1.KafscaleTopic, brokerCount int32) metadata.ClusterMetadata {
+func BuildClusterMetadataForBrokers(cluster *kafscalev1.KafscaleCluster, topics []kafscalev1.KafscaleTopic, brokerCount int32) metadata.ClusterMetadata {
 	replicas := max(int32(0), brokerCount)
 	brokers := make([]protocol.MetadataBroker, replicas)
 	brokerPort := int32(9092)
