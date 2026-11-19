@@ -97,7 +97,7 @@ The chart runs the image tag that matches the chart `appVersion` unless you set 
 
 ```text
 KAFSCALE_MCP_HTTP_ADDR=:8090
-KAFSCALE_MCP_AUTH_TOKEN=<bearer-token>
+# Read KAFSCALE_MCP_AUTH_TOKEN as shown under "Creating a bearer token" below.
 KAFSCALE_MCP_ETCD_ENDPOINTS=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 KAFSCALE_MCP_ETCD_USERNAME=
 KAFSCALE_MCP_ETCD_PASSWORD=
@@ -124,9 +124,12 @@ Example (base64, 32 bytes):
 openssl rand -base64 32
 ```
 
-Then set the value in Helm. The chart stores it in a Secret named `kafscale-mcp-auth` for
-release `kafscale` (`<release>-kafscale-mcp-auth` otherwise) and sets `KAFSCALE_MCP_AUTH_TOKEN`
-from that Secret. Changing `mcp.auth.token` rolls the MCP pod. The pod annotation
+Then set the value in Helm. The chart stores it in a Secret named after the rendered
+MCP Deployment with `-auth` appended and sets `KAFSCALE_MCP_AUTH_TOKEN` from that Secret.
+Both names use the chart's `kafscale.componentName` helper, so `nameOverride`,
+`fullnameOverride`, and name truncation affect them. With release `kafscale` and no
+overrides, the Deployment is `kafscale-mcp` and the Secret is `kafscale-mcp-auth`.
+Changing `mcp.auth.token` rolls the MCP pod. The pod annotation
 `kafscale.io/mcp-auth-checksum` is a SHA-256 hash of the Secret's token data. Anyone
 who can read the Deployment can test guesses against it, so a short or guessable token
 can be recovered. Prefer `mcp.auth.existingSecret` and a long random token if you do not
@@ -154,14 +157,16 @@ mcp:
 ```
 
 Changing the token inside an existing Secret does not restart MCP. After you
-update the Secret, run:
+update the Secret, replace the release value below with your Helm release name and
+use your `mcp.namespace.name` if you changed it. Select the Deployment by its release
+and component labels so the command also works with name overrides:
 
 ```bash
-kubectl -n kafscale-mcp rollout restart deployment/<release>-kafscale-mcp
+release='<release>'
+namespace='kafscale-mcp'
+kubectl -n "$namespace" rollout restart deployment \
+  --selector="app.kubernetes.io/instance=$release,app.kubernetes.io/component=mcp"
 ```
-
-The Deployment name is `kafscale-mcp` for release `kafscale`. Use your
-`mcp.namespace.name` if you changed it.
 
 There is no overlap: only one token is valid at a time. To rotate: update the Secret
 and run the rollout restart above, or set `mcp.auth.token` and run `helm upgrade`,

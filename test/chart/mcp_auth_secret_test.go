@@ -20,11 +20,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/yaml"
 )
 
@@ -304,5 +306,103 @@ func TestMCPAuthChecksumIgnoresChartVersion(t *testing.T) {
 	}
 	if sumFor("0.1.0") != sumFor("9.9.9") {
 		t.Fatal("checksum changed when only the chart version changed")
+	}
+}
+
+func TestMCPAuthDocumentedRestartMatchesRenderedDeployment(t *testing.T) {
+	chart := mcpAuthChart(t)
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "ops-mcp.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var script string
+	for _, block := range strings.Split(string(doc), "```bash\n")[1:] {
+		body, _, ok := strings.Cut(block, "```")
+		if ok && strings.Contains(body, "rollout restart") {
+			script = body
+			break
+		}
+	}
+	if script == "" {
+		t.Fatal("missing token rotation Bash example")
+	}
+	for _, tc := range []struct {
+		name      string
+		namespace string
+		sets      []string
+	}{
+		{name: "default", namespace: "kafscale-mcp"},
+		{name: "name_override", namespace: "kafscale-mcp", sets: []string{"--set", "nameOverride=custom"}},
+		{name: "fullname_override", namespace: "kafscale-mcp", sets: []string{"--set", "fullnameOverride=custom-full"}},
+		{name: "both_overrides_custom_namespace", namespace: "custom-mcp", sets: []string{"--set", "nameOverride=custom", "--set", "fullnameOverride=custom-full"}},
+		{name: "truncated_name", namespace: "kafscale-mcp", sets: []string{"--set", "fullnameOverride=" + strings.Repeat("a", 63)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sets := append([]string{"--set", "mcp.auth.token=test-token", "--set", "mcp.namespace.name=" + tc.namespace}, tc.sets...)
+			dep, secrets := mcpDeploymentAndSecrets(t, helmTemplateMCP(t, chart, sets...))
+			env := mcpAuthEnv(t, dep)
+			if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+				t.Fatal("MCP auth environment variable has no Secret reference")
+			}
+			ref := env.ValueFrom.SecretKeyRef
+			if ref.Name != dep.Name+"-auth" {
+				t.Fatalf("Secret reference %q, want Deployment name plus -auth (%s-auth)", ref.Name, dep.Name)
+			}
+			found := false
+			for _, secret := range secrets {
+				if secret.Name == ref.Name && secret.Namespace == dep.Namespace {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("documented chart-managed auth Secret is missing")
+			}
+			// Fill in the documented values, then execute the example without a cluster.
+			example := strings.ReplaceAll(script, "'<release>'", "'mcpauth'")
+			example = strings.ReplaceAll(example, "namespace='kafscale-mcp'", "namespace='"+tc.namespace+"'")
+			cmd := exec.Command("bash", "-ec", `kubectl() { printf '%s\0' "$@"; }
+`+example)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("documented restart failed: %v\n%s", err, output)
+			}
+			args := strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00")
+			if len(args) != 6 || !slices.Equal(args[:5], []string{"-n", dep.Namespace, "rollout", "restart", "deployment"}) || !strings.HasPrefix(args[5], "--selector=") {
+				t.Fatalf("unexpected restart arguments: %q", args)
+			}
+			selector, err := labels.Parse(strings.TrimPrefix(args[5], "--selector="))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !selector.Matches(labels.Set(dep.Labels)) {
+				t.Fatalf("documented selector %s does not match rendered MCP Deployment %s", selector, dep.Name)
+			}
+			for _, other := range []labels.Set{
+				{"app.kubernetes.io/instance": "other-release", "app.kubernetes.io/component": "mcp"},
+				{"app.kubernetes.io/instance": "mcpauth", "app.kubernetes.io/component": "console"},
+			} {
+				if selector.Matches(other) {
+					t.Fatalf("documented selector %s also targets unrelated Deployment labels %v", selector, other)
+				}
+			}
+		})
+	}
+}
+
+func TestMCPRunbookBashSyntax(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "ops-mcp.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, block := range strings.Split(string(doc), "```bash\n")[1:] {
+		script, _, ok := strings.Cut(block, "```")
+		if !ok {
+			t.Fatalf("Bash block %d has no closing fence", i+1)
+		}
+		cmd := exec.Command("bash", "-n")
+		cmd.Stdin = strings.NewReader(script)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("Bash block %d has invalid syntax: %v\n%s", i+1, err, output)
+		}
 	}
 }
