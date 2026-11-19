@@ -432,15 +432,17 @@ The operator tunes managed etcd automatically:
 - `<cluster>-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
 - `<cluster>-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
 
-To take a snapshot now, start a Job from the snapshot CronJob:
+To take a snapshot now, replace the namespace and cluster values below and start a Job from the snapshot CronJob:
 
 ```bash
-kubectl -n <namespace> create job --from=cronjob/<cluster>-etcd-snapshot snapshot-now
-kubectl -n <namespace> wait --for=condition=complete --timeout=5m job/snapshot-now
-kubectl -n <namespace> logs job/snapshot-now
+namespace='<namespace>'
+cluster='<cluster>'
+kubectl -n "$namespace" create job --from=cronjob/"$cluster"-etcd-snapshot snapshot-now
+kubectl -n "$namespace" wait --for=condition=complete --timeout=5m job/snapshot-now
+kubectl -n "$namespace" logs job/snapshot-now
 ```
 
-Use a new Job name for each manual snapshot. Verify the manual Job's `Complete` condition and its logs, which show the snapshot and checksum uploads. If the wait times out, inspect the Job with `kubectl -n <namespace> describe job/snapshot-now` and check its logs before relying on the snapshot. A manual Job created with `--from=cronjob` does not update the CronJob's `status.lastSuccessfulTime`, so it does not refresh the cluster's `EtcdSnapshot` condition.
+Use a new Job name for each manual snapshot. Verify the manual Job's `Complete` condition and its logs, which show the snapshot and checksum uploads. If the wait times out, inspect the Job with `kubectl -n "$namespace" describe job/snapshot-now` and check its logs before relying on the snapshot. A manual Job created with `--from=cronjob` does not update the CronJob's `status.lastSuccessfulTime`, so it does not refresh the cluster's `EtcdSnapshot` condition.
 
 The `KafscaleCluster` condition `EtcdSnapshot` tracks scheduled snapshots through the CronJob's `status.lastSuccessfulTime`. A recent scheduled success sets `EtcdSnapshot=True` with reason `SnapshotHealthy`; no recorded success or an older success produces `SnapshotNeverSucceeded` or `SnapshotStale`. With operator-managed etcd, the operator watches CronJob status changes and requests a recheck at most one minute later, but reconciliation delays can postpone the condition update.
 
@@ -987,10 +989,16 @@ These topic endpoints require a console session cookie, not HTTP basic auth. A r
 kubectl -n kafscale port-forward svc/kafscale-console 8080:80
 ```
 
+In Bash, enter the configured credentials when prompted. This example requires `jq`; the password is read silently and the JSON body is sent through stdin.
+
 ```bash
-curl -c cookies.txt -X POST http://127.0.0.1:8080/ui/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"<user>","password":"<password>"}'
+IFS= read -rp 'Console username: ' CONSOLE_USERNAME
+IFS= read -rsp 'Console password: ' CONSOLE_PASSWORD
+printf '\n'
+printf '%s' "$CONSOLE_PASSWORD" | jq -cRs --arg username "$CONSOLE_USERNAME" '{username:$username,password:.}' | \
+  curl -c cookies.txt -X POST http://127.0.0.1:8080/ui/api/auth/login \
+    -H 'Content-Type: application/json' --data-binary @-
+unset CONSOLE_PASSWORD CONSOLE_USERNAME
 ```
 
 Use the same credentials as `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`.
