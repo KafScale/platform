@@ -976,6 +976,11 @@ func (p *proxy) handleProduceRouting(ctx context.Context, header *protocol.Reque
 	if !ok || len(produceReq.Topics) == 0 {
 		return p.forwardProduceRaw(ctx, payload, pool)
 	}
+	if produceReq.Acks != 0 {
+		var stopWaiting context.CancelFunc
+		ctx, stopWaiting = protocol.ContextUntilClientGone(ctx)
+		defer stopWaiting()
+	}
 
 	// LFS rewrite: detect LFS_BLOB headers, upload to S3, replace values
 	var lfsOrphans []orphanInfo

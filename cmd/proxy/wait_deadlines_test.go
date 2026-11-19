@@ -174,3 +174,65 @@ func TestBackendRetryStopsOnCancellation(t *testing.T) {
 		t.Fatal("canceled request remained in backend retry sleep")
 	}
 }
+
+func TestDisconnectedAcknowledgedProduceStopsBackendWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	entered := make(chan struct{})
+	closed := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			closed <- err
+			return
+		}
+		defer conn.Close()
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
+		if _, err := protocol.ReadFrame(conn); err != nil {
+			closed <- err
+			return
+		}
+		close(entered)
+		var b [1]byte
+		_, err = conn.Read(b[:])
+		closed <- err
+	}()
+	p := &proxy{backends: []string{listener.Addr().String()}, dialTimeout: time.Second, backendRetries: 1, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.setReady(true)
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() { defer close(done); p.handleConnection(ctx, server) }()
+	req := kmsg.NewPtrProduceRequest()
+	req.Version, req.Acks = 3, 1
+	req.Topics = []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Records: []byte{1}}}}}
+	if _, err := client.Write(kmsg.NewRequestFormatter().AppendRequest(nil, req, 1)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Produce did not reach backend")
+	}
+	client.Close()
+	select {
+	case err := <-closed:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("backend disconnect: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("disconnected Produce kept waiting on its backend")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy did not stop after Produce client disconnected")
+	}
+}

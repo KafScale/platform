@@ -19,12 +19,89 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestBrokerScaleRequiresRequestedCountAndCompletedRollout(t *testing.T) {
+	for _, mode := range []string{"ready", "previous_count", "unobserved", "old_revision", "not_updated", "extra_pod", "terminating", "unready", "get_error", "bad_json", "pod_error", "bad_pods"} {
+		t.Run(mode, func(t *testing.T) {
+			replicas := int32(1)
+			sts := appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Generation: 2}, Spec: appsv1.StatefulSetSpec{Replicas: &replicas},
+				Status: appsv1.StatefulSetStatus{ObservedGeneration: 2, Replicas: 1, ReadyReplicas: 1, UpdatedReplicas: 1, CurrentRevision: "new", UpdateRevision: "new"}}
+			pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-broker-0"}, Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+			pods := corev1.PodList{Items: []corev1.Pod{pod}}
+			switch mode {
+			case "previous_count":
+				replicas, sts.Status.Replicas, sts.Status.ReadyReplicas, sts.Status.UpdatedReplicas = 3, 3, 3, 3
+			case "unobserved":
+				sts.Status.ObservedGeneration = 1
+			case "old_revision":
+				sts.Status.CurrentRevision = "old"
+			case "not_updated":
+				sts.Status.UpdatedReplicas = 0
+			case "extra_pod":
+				pods.Items = append(pods.Items, pod)
+			case "terminating":
+				now := metav1.Now()
+				pods.Items[0].DeletionTimestamp = &now
+			case "unready":
+				pods.Items[0].Status.Conditions = nil
+			}
+			calls := 0
+			run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+				calls++
+				want := []string{"-n", "test-ns", "get", "statefulset", "demo-broker", "-o", "json", "--request-timeout=5s"}
+				if calls == 2 {
+					want = []string{"-n", "test-ns", "get", "pods", "-l", "app=kafscale-broker,cluster=demo", "-o", "json", "--request-timeout=5s"}
+				}
+				if name != "kubectl" || !reflect.DeepEqual(args, want) {
+					t.Fatalf("unexpected command %s %v", name, args)
+				}
+				if (calls == 1 && mode == "get_error") || (calls == 2 && mode == "pod_error") {
+					return nil, errors.New("API unavailable")
+				}
+				if (calls == 1 && mode == "bad_json") || (calls == 2 && mode == "bad_pods") {
+					return []byte("invalid JSON"), nil
+				}
+				if calls == 1 {
+					return json.Marshal(sts)
+				}
+				return json.Marshal(pods)
+			}
+			err := checkBrokerReplicas(context.Background(), run, "test-ns", "demo", 1)
+			if (err == nil) != (mode == "ready") {
+				t.Fatalf("mode %s: readiness result %v", mode, err)
+			}
+		})
+	}
+}
+
+func TestSingleBrokerEndpointRejectsStaleMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		data  string
+		ready bool
+	}{
+		{`{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`, true},
+		{`{"Brokers":[{"Host":"127.0.0.1","Port":19092},{"Host":"internal","Port":9092}]}`, false},
+		{`{"Brokers":[{"Host":"internal","Port":19092}]}`, false},
+		{`{"Brokers":[{"Host":"127.0.0.1","Port":9092}]}`, false},
+		{`{"Brokers":[]}`, false},
+		{`invalid JSON`, false},
+	} {
+		if err := checkSingleBrokerEndpoint([]byte(tc.data), "127.0.0.1", 19092); (err == nil) != tc.ready {
+			t.Fatalf("snapshot %s: %v", tc.data, err)
+		}
+	}
+}
 
 func TestOperatorBackendChecks(t *testing.T) {
 	failure := errors.New("not healthy")

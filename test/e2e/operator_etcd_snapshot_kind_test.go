@@ -183,11 +183,21 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	externalPort := findFreePort(t)
 	t.Log("scaling brokers to 1 for external access test")
 	patchClusterReplicas(t, ctx, kindNamespace, "kafscale", 1)
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
+	// Lowering the CR minimum does not remove brokers. This test has no
+	// metrics server, so emulate the HPA's scale-subresource update explicitly.
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "wait", "hpa/kafscale-broker", "--for=jsonpath={.spec.minReplicas}=1", "--timeout=2m")
+	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "scale", "statefulset/kafscale-broker", "--replicas=1")
+	if err := waitForBrokerReplicas(ctx, runCmdWithOutputErr, kindNamespace, "kafscale", 1, 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("testing external access via port-forward (advertised 127.0.0.1:%d)", externalPort)
 	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", "127.0.0.1", externalPort)
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
+	if err := waitForSingleBrokerEndpoint(ctx, func() []byte { return getEtcdSnapshot(t, ctx, kindNamespace) }, "127.0.0.1", int32(externalPort), 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := waitForBrokerReplicas(ctx, runCmdWithOutputErr, kindNamespace, "kafscale", 1, 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 	t.Log("waiting for broker service ports after advertised endpoint update")
 	if err := runPortCheckPod(t, ctx, kindNamespace, e2eClientImage, "kafscale-broker."+kindNamespace+".svc.cluster.local", []int{9092, 9093}); err != nil {
@@ -209,8 +219,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	internalHost := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local", kindNamespace)
 	patchClusterAdvertisedEndpoint(t, ctx, kindNamespace, "kafscale", internalHost, 9092)
 	patchClusterReplicas(t, ctx, kindNamespace, "kafscale", 3)
-	waitForStatefulSetReadyByName(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
-	waitForReadyPods(t, ctx, kindNamespace, "app=kafscale-broker,cluster=kafscale", 2*time.Minute)
+	if err := waitForBrokerReplicas(ctx, runCmdWithOutputErr, kindNamespace, "kafscale", 3, 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
 	waitForServiceEndpoints(t, ctx, kindNamespace, "kafscale-broker", 2*time.Minute)
 
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "job", "etcd-snapshot-manual", "--ignore-not-found=true")
@@ -1259,7 +1270,7 @@ func getEtcdSnapshot(t *testing.T, ctx context.Context, namespace string) []byte
 	}
 	endpoint := fmt.Sprintf("http://kafscale-etcd-client.%s.svc.cluster.local:2379", namespace)
 	return runCmdWithOutput(t, ctx, "kubectl", "-n", namespace, "exec", pod, "--",
-		"etcdctl", "--endpoints="+endpoint, "get", "/kafscale/metadata/snapshot")
+		"etcdctl", "--endpoints="+endpoint, "get", "/kafscale/metadata/snapshot", "--print-value-only")
 }
 
 func splitImage(image string) (string, string) {

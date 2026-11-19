@@ -315,27 +315,40 @@ func (m *LeaseManager) Owns(resourceID string) bool {
 
 // Release explicitly gives up ownership of a single resource.
 func (m *LeaseManager) Release(resourceID string) {
-	m.mu.Lock()
-	token, ok := m.owned[resourceID]
-	session := m.session
-	if ok {
-		if m.onLost != nil {
-			m.onLost(resourceID, m.owned[resourceID])
-		}
-		delete(m.owned, resourceID)
-	}
-	m.mu.Unlock()
+	m.deleteReleased(resourceID, m.releaseLocal(resourceID))
+}
 
-	if ok {
+type releasedLease struct {
+	token   uint64
+	session *concurrency.Session
+}
+
+// releaseLocal fences callers before the slower, conditional etcd delete.
+func (m *LeaseManager) releaseLocal(resourceID string) *releasedLease {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	token, ok := m.owned[resourceID]
+	if !ok {
+		return nil
+	}
+	if m.onLost != nil {
+		m.onLost(resourceID, token)
+	}
+	delete(m.owned, resourceID)
+	return &releasedLease{token: token, session: m.session}
+}
+
+func (m *LeaseManager) deleteReleased(resourceID string, released *releasedLease) {
+	if released != nil {
 		leaseKey := m.leaseKey(resourceID)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		checks := []clientv3.Cmp{
 			clientv3.Compare(clientv3.Value(leaseKey), "=", m.brokerID),
-			clientv3.Compare(clientv3.ModRevision(leaseKey), "=", int64(token)),
+			clientv3.Compare(clientv3.ModRevision(leaseKey), "=", int64(released.token)),
 		}
-		if session != nil {
-			checks = append(checks, clientv3.Compare(clientv3.LeaseValue(leaseKey), "=", int64(session.Lease())))
+		if released.session != nil {
+			checks = append(checks, clientv3.Compare(clientv3.LeaseValue(leaseKey), "=", int64(released.session.Lease())))
 		}
 		if _, err := m.client.Txn(ctx).If(checks...).Then(clientv3.OpDelete(leaseKey)).Commit(); err != nil {
 			m.logger.Warn(fmt.Sprintf("failed to delete %s lease key", m.resourceKind),
