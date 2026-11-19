@@ -90,7 +90,7 @@ Two other modes change this:
 
 ### The fetch path
 
-- **Recent data.** When a segment flushes, the broker keeps it in the hot segment cache (`KAFSCALE_CACHE_BYTES`, default 1 GB), so consumers that keep up read from memory and make no S3 request.
+- **Recent data.** When a segment flushes, the broker keeps it in the hot segment cache (`KAFSCALE_CACHE_BYTES`, default 32 MiB), so consumers that keep up read from memory and make no S3 request.
 - **Older data.** A cache miss is one S3 GET for that segment, or a byte range of it. The broker prefetches the next `KAFSCALE_READAHEAD_SEGMENTS` segments (default 2), so sequential consumers mostly hit memory after the first read.
 - **Analytics and AI agents.** Processors can skip the broker and read `.kfs` segments from S3 directly. That keeps replays and backfills off the streaming path.
 
@@ -169,14 +169,14 @@ compression.type=snappy
 - **`compression.type`** shrinks what you store and upload. KafScale stores the client's record batches as they arrive, so compression on the producer is compression in S3.
 - **`enable.idempotence=false`** is required. See the trade-offs below.
 
-Broker-side settings (see [Runtime settings](/configuration/)):
+Broker-side settings (see [Environment variable index](/operations/#environment-variable-index)):
 
 | Setting | Default | What it controls |
 |---------|---------|------------------|
 | `KAFSCALE_PRODUCE_SYNC_FLUSH` | `true` | Flush to S3 before acking each produce with `acks != 0` |
 | `KAFSCALE_SEGMENT_BYTES` | `4194304` (4 MB) | Buffer size that triggers a flush |
 | `KAFSCALE_FLUSH_INTERVAL_MS` | `500` | Longest time data waits in the buffer |
-| `KAFSCALE_CACHE_BYTES` | `1073741824` (1 GB) | Hot segment cache for consumers |
+| `KAFSCALE_CACHE_BYTES` | `33554432` (32 MiB) | Hot segment cache for consumers |
 | `KAFSCALE_READAHEAD_SEGMENTS` | `2` | Segments prefetched for sequential reads |
 
 On the `KafscaleCluster` resource the same buffer settings are `spec.config.segmentBytes` and `spec.config.flushIntervalMs`.
@@ -215,7 +215,7 @@ Every flush is an S3 object, and S3 charges per request. Many tiny produce reque
 ### What to do instead
 
 - **Run both.** Keep compacted and transactional topics on a regular Kafka cluster, and run KafScale beside it for the high-volume logs, telemetry and analytics topics. Standard Kafka clients talk to both. [kaf-mirror](https://github.com/scalytics/kaf-mirror) can copy topics between them.
-- **Dedupe on the consumer.** Give each record a stable key or ID and make the consumer idempotent, for example an upsert by key in the target database. The [Iceberg processor](/processors/iceberg/#record-ids-and-idempotency) adds a `record_id` of the form `<topic>:<partition>:<offset>` for exactly this.
+- **Dedupe on the consumer.** Give each record a stable key or ID and make the consumer idempotent, for example an upsert by key in the target database. The [Iceberg processor](/processors/iceberg/) adds a `record_id` of the form `<topic>:<partition>:<offset>` for exactly this.
 - **Keep latest-value state outside the log.** If you need the current value per key, materialize the topic into a table or a key-value store and query that.
 
 ## Commercial support
@@ -227,5 +227,5 @@ Commercial support and an enterprise version of KafScale are available from Scal
 - [Comparison](/comparison/) with other Kafka-compatible platforms
 - [Migrate from WarpStream](/migrate-from-warpstream/)
 - [Storage format](/storage-format/) and [flush triggers](/storage-format/#flush-triggers)
-- [Runtime settings](/configuration/) and [Operations](/operations/)
+- [Environment variable index](/operations/#environment-variable-index) and [Operations](/operations/)
 - [FAQ](/faq/)

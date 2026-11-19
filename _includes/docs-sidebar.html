@@ -8,6 +8,27 @@
       {% endif %}
     {% endfor %}
 
+
+    {% assign lfs = items | where: "nav_group", "LFS" %}
+    {% if lfs.size > 0 %}
+      {% assign lfs_current = false %}
+      {% for item in lfs %}
+        {% if page.url == item.url %}
+          {% assign lfs_current = true %}
+        {% endif %}
+      {% endfor %}
+      <details class="doc-sidebar-group" {% if lfs_current %}open{% endif %}>
+        <summary class="doc-sidebar-group-title">LFS</summary>
+        <div class="doc-sidebar-group-links">
+          {% for item in lfs %}
+            {% if item.nav_title %}
+            <a href="{{ item.url }}" {% if page.url == item.url %}aria-current="page"{% endif %}>{{ item.nav_title }}</a>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
     {% assign processors = items | where: "nav_group", "Processors" %}
     {% if processors.size > 0 %}
       {% assign processors_current = false %}

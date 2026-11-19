@@ -19,12 +19,11 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Quickstart](/quickstart/)
 - [User guide](/user-guide/)
 - [Onboarding Guide](/onboarding-guide/): E10–E50 progressive tutorial
-- [Installation](/installation/)
 - [Architecture](/architecture/)
 
 ## Configure and operate
 
-- [Runtime Settings](/configuration/)
+- [Environment variable index](/operations/#environment-variable-index)
 - [MCP](/ops-mcp/)
 - [Operations](/operations/)
 - [Schema registry](/schema-registry/)
@@ -38,7 +37,7 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Grafana](/grafana/)
 - [Latency and batching](/latency/)
 - [Benchmarks](/benchmarks/)
-- [Helm](/helm/)
+- [Installing with Helm](/operations/#installing-with-helm)
 - [Storage format](/storage-format/)
 - [Storage layer](/storage/)
 - [S3 health](/s3-health/)

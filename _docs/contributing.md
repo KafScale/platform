@@ -7,38 +7,101 @@ nav_title: Contributing
 nav_order: 11
 ---
 
-# Contributing
+<!--
+Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
-## Development setup
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-Prerequisites:
+    http://www.apache.org/licenses/LICENSE-2.0
 
-- Go 1.22+ (module targets Go 1.25)
-- `buf` for protobuf builds
-- `protoc` and plugins (`protoc-gen-go`, `protoc-gen-go-grpc`)
-- Docker + Kubernetes CLI tools if iterating on the operator
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
 
-## Running tests
+# Contributing to Kafscale
 
-```bash
-make build
-make test
-make test-produce-consume
-make test-consumer-group
-```
+Thanks for your interest in Kafscale! This project follows Apache 2.0 conventions for licensing and contributions.
 
-## Code style / linting
+## Before You Start
 
-```bash
-make lint
-```
+- Use the issue tracker to discuss larger changes.
+- Keep changes focused and add tests for non-trivial logic.
+- Contributions, issues, and code reviews are handled in English so the community can participate globally.
+- Development happens on `main` via PRs; releases are tagged, but the repository always includes interim commits between releases.
 
-## PR process
+## Bug Reports and Feature Requests
 
-- Add or extend unit tests for non-trivial logic.
-- Run relevant e2e suites (broker changes should run `make test-produce-consume`).
-- Add regression coverage when fixing bugs.
+We track bugs and enhancements in GitHub Issues:
 
-## Roadmap and open issues
+- Report a bug: https://github.com/KafScale/platform/issues/new?template=bug_report.md
+- Request an enhancement: https://github.com/KafScale/platform/issues/new?template=feature_request.md
+- Browse the public archive: https://github.com/KafScale/platform/issues
 
-See `/roadmap` and the GitHub issue tracker.
+We aim to acknowledge new bug reports and enhancement requests within 7 days.
+
+## License and Headers
+
+All source and documentation files must include the Apache 2.0 license header used in this repo. Generated files under `pkg/gen/` are exempt and should not be edited manually. JSON files under [`docs/grafana/`](https://github.com/KafScale/platform/tree/main/docs/grafana) are excluded because the format does not support comments.
+
+The CI workflow checks for missing headers and fails if new files are added without them.
+
+## Tests and Coverage
+
+Pull requests must include strict test coverage for the changes they introduce. At a minimum:
+
+- Add or extend unit tests for all non-trivial logic.
+- Run `make commit-check` before opening or updating a PR.
+- Run the relevant e2e suite(s). Broker changes should run:
+  - `make test-produce-consume`
+  - `make test-consumer-group` (if group behavior is affected)
+- Extend e2e coverage when fixing bugs so regressions are caught earlier.
+
+CI will run `go test ./...` and enforce a coverage floor. It also runs the LFS SDK unit tests for Node, the browser (`lfs-client-sdk/js-browser`), Python and Java. The Java `LfsProducerIntegrationTest` needs Docker images that CI does not build, so CI excludes it; run it locally with `mvn test` in `lfs-client-sdk/java` when those images exist.
+
+## Build and Test Tooling (FLOSS)
+
+Kafscale builds and tests with FLOSS tools only:
+
+- Build: Go toolchain + Makefiles (`make build`)
+- Tests: `go test`, `go vet`, Go race detector (`make test`)
+- CI: GitHub Actions workflows (`.github/workflows/ci.yml`)
+
+Common invocations:
+
+- `make build`
+- `make test`
+- `make commit-check`
+- `make test-full`
+
+The policy above (tests for new functionality) is enforced in code review and CI.
+
+## Compiler/Linter Warnings
+
+We run `go vet` and the Go race detector in CI (`make test`) and treat warnings as
+fix‑before‑merge. Optional linting is available via `make lint` for contributors
+with `golangci-lint` installed.
+
+## Coding Standards
+
+Contributions must follow the coding standards described in [`docs/development.md`](/development/)
+(see the "Coding Standards" section).
+
+## Release Notes
+
+Each release should include a human-readable note in [`docs/releases/`](/releases/) that summarizes
+major changes and explicitly lists any known CVE fixes (or "None").
+
+## Development Workflow
+
+See [`docs/development.md`](/development/) for build/test commands, environment variables, and local setup.
+Before submitting a PR, run `make commit-check` and fix any reported issues.
+
+## Code of Conduct
+
+By participating, you agree to follow `CODE_OF_CONDUCT.md`.

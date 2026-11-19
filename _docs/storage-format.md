@@ -114,7 +114,7 @@ Sparse index for fast offset-to-position lookups. One entry per N messages.
 ### Index header (16 bytes)
 
 <div class="format-card">
-  <div class="format-row"><span>Magic</span><span>4 bytes</span><span><code>0x4944580A</code> ("IDX\n")</span></div>
+  <div class="format-row"><span>Magic</span><span>4 bytes</span><span><code>0x49445800</code> ("IDX\0")</span></div>
   <div class="format-row"><span>Version</span><span>2 bytes</span><span><code>1</code></span></div>
   <div class="format-row"><span>Entry count</span><span>4 bytes</span><span>Number of index entries</span></div>
   <div class="format-row"><span>Interval</span><span>4 bytes</span><span>Messages between entries</span></div>
@@ -149,8 +149,8 @@ To locate offset N: binary search index entries, then scan forward from nearest 
     <!-- L2 Cache -->
     <rect x="260" y="30" width="200" height="90" rx="10" fill="rgba(52, 211, 153, 0.15)" stroke="#34d399" stroke-width="1.5"/>
     <text x="360" y="55" font-size="12" font-weight="600" fill="var(--diagram-text)" text-anchor="middle">L2: Index Cache</text>
-    <text x="360" y="75" font-size="10" fill="var(--diagram-label)" text-anchor="middle">All indexes for assigned partitions</text>
-    <text x="360" y="92" font-size="10" fill="var(--diagram-label)" text-anchor="middle">Refreshed on segment roll · 100 MB</text>
+    <text x="360" y="75" font-size="10" fill="var(--diagram-label)" text-anchor="middle">Parsed indexes for loaded segments</text>
+    <text x="360" y="92" font-size="10" fill="var(--diagram-label)" text-anchor="middle">Held with partition metadata</text>
     <text x="360" y="108" font-size="9" fill="#34d399" text-anchor="middle">&lt;1ms latency</text>
 
     <!-- S3 -->
@@ -178,9 +178,10 @@ To locate offset N: binary search index entries, then scan forward from nearest 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `KAFSCALE_CACHE_BYTES` | `1073741824` | L1 hot segment cache size (1GB) |
-| `KAFSCALE_INDEX_CACHE_BYTES` | `104857600` | L2 index cache size (100MB) |
-| `KAFSCALE_READAHEAD_SEGMENTS` | `2` | Segments to prefetch |
+| `KAFSCALE_CACHE_BYTES` | `33554432` (32 MiB) | In-memory hot segment cache. `KAFSCALE_CACHE_SIZE` is a legacy alias when `KAFSCALE_CACHE_BYTES` is unset or not positive. The operator sets this from `spec.config.cacheSize` when that field is set. |
+| `KAFSCALE_READAHEAD_SEGMENTS` | `2` | Segments to prefetch after a cold fetch |
+
+There is no `KAFSCALE_INDEX_CACHE_BYTES` setting. Indexes are parsed when a segment is read and kept with the partition's in-memory metadata, not in a separate sized cache.
 
 ## Flush triggers
 
@@ -203,9 +204,9 @@ Segments are sealed and flushed to S3 when **any** condition is met:
     <span><code>KAFSCALE_FLUSH_INTERVAL_MS</code></span>
   </div>
   <div class="format-row">
-    <span>Explicit flush request</span>
-    <span>none</span>
-    <span>Admin API or graceful shutdown</span>
+    <span>Sync produce flush</span>
+    <span>on (default)</span>
+    <span><code>KAFSCALE_PRODUCE_SYNC_FLUSH</code></span>
   </div>
 </div>
 
@@ -216,7 +217,7 @@ Segments are sealed and flushed to S3 when **any** condition is met:
 3. **Build** sparse index file
 4. **Upload** segment + index to S3 (both must succeed)
 5. **Update** etcd with new segment metadata
-6. **Ack** waiting producers (if `acks=all`)
+6. **Ack** waiting producers when `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default) and the client used `acks=1` or `acks=all`
 7. **Clear** flushed data from buffer
 
 ## S3 lifecycle configuration
@@ -309,7 +310,7 @@ KafScale supports batch-level compression using Kafka-compatible codecs.
 | Codec | ID | Notes |
 |-------|-----|-------|
 | None | 0 | No compression |
-| Snappy | 1 | **Default**: fast, moderate ratio |
+| Snappy | 1 | Fast, moderate ratio. A common producer setting |
 | LZ4 | 3 | Faster decompression |
 | ZSTD | 4 | Best ratio, slower |
 
@@ -317,14 +318,14 @@ Set per-topic in CRD:
 
 ```yaml
 apiVersion: kafscale.io/v1alpha1
-kind: KafScaleTopic
+kind: KafscaleTopic
 metadata:
   name: logs
   namespace: kafscale
 spec:
   clusterRef: demo
   partitions: 6
-  config:
-    retention.ms: "86400000"
-    compression.type: "zstd"
+  retentionMs: 86400000
 ```
+
+Compression is chosen by the producer (`compression.type` on the client). KafScale stores record batches as the producer sent them, so producer compression is the compression in S3. `spec.retentionMs` is the topic field; object expiry is still configured with S3 lifecycle rules, as in the examples above.

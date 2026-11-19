@@ -64,14 +64,19 @@ Total time: ~2 hours for the full path, or ~35 minutes for the minimal path (E10
 The starting point. Uses the standard `kafka-clients` library to list topics, create a topic, produce 25 messages, and consume 5 messages.
 
 **Key KafScale configuration:**
-- `acks=0`. KafScale brokers are stateless; acknowledgement semantics differ from traditional Kafka
-- `enable.idempotence=false`. KafScale does not support idempotent producers
-- Bootstrap server: `127.0.0.1:39092` (default local dev port)
+- `enable.idempotence=false`. KafScale does not implement `InitProducerId`, so idempotent and transactional producers cannot start.
+- The sample defaults to `acks=0` for a quick demo. For durable produces, use `acks=all` or `acks=1` (with `KAFSCALE_PRODUCE_SYNC_FLUSH=true`, the broker default).
+- Bootstrap server: `127.0.0.1:39092` (default local demo port)
 
 ```bash
 cd examples/E10_java-kafka-client-demo
-mvn clean package
-java -jar target/kafka-client-demo-*.jar
+mvn clean package exec:java
+```
+
+Or run the shaded jar:
+
+```bash
+java -jar target/java-kafka-client-demo-1.0-SNAPSHOT.jar --bootstrap=127.0.0.1:39092 --acks=all --idempotence=false
 ```
 
 ---
@@ -168,15 +173,17 @@ npm start
 
 ## Common configuration
 
-All Java examples (E10–E40) use Spring-style deployment profiles:
+The Spring Boot examples use deployment profiles. E10 is a plain Java client and takes `--bootstrap=` (or `KAFSCALE_BOOTSTRAP_SERVERS`) instead.
 
 | Profile | Bootstrap server | Use case |
 |---------|-----------------|----------|
-| `default` | `localhost:39092` | Local development |
-| `cluster` | `kafscale-broker:9092` | In-cluster Kubernetes |
+| `default` | `localhost:39092` | Local development (`make demo`) |
+| `cluster` | `kafscale-broker:39092` | The E20 in-cluster profile, as documented in that example |
 | `local-lb` | `localhost:59092` | Remote via load balancer |
 
-Activate a profile with `--spring.profiles.active=cluster` or the `SPRING_PROFILES_ACTIVE` environment variable.
+Activate a Spring profile with `--spring.profiles.active=cluster` or the `SPRING_PROFILES_ACTIVE` environment variable.
+
+A cluster created with the operator exposes brokers on `<cluster>-broker.<namespace>.svc.cluster.local:9092`. For the quickstart `demo` cluster in namespace `kafscale`, that is `demo-broker.kafscale.svc.cluster.local:9092`.
 
 Environment variables common across examples:
 

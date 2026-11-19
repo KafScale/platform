@@ -97,17 +97,9 @@ The tradeoff: if KafScale's internal segment layout evolves, processors need upd
 
 ### Does KafScale work with clouds other than AWS?
 
-Yes. KafScale works with any S3-compatible storage backend. See [Supported storage](/supported/) for configuration examples.
+Yes, on S3-compatible backends that support conditional writes (`If-None-Match: *` on `PutObject`). See [Supported storage](/supported/) for the compatibility matrix and configuration examples.
 
-| Provider | Compatibility | Notes |
-|----------|--------------|-------|
-| AWS S3 | ✅ Native | Full support including IRSA |
-| DigitalOcean Spaces | ✅ Native | Drop-in replacement |
-| Cloudflare R2 | ✅ Native | Zero egress fees |
-| Backblaze B2 | ✅ Native | S3-compatible API |
-| MinIO | ✅ Native | Self-hosted, any infrastructure |
-| Google Cloud Storage | ⚠️ Interop | Requires HMAC keys |
-| Azure Blob Storage | ❌ Proxy | Requires an S3-compatible proxy in front of Azure Blob (MinIO gateway mode is no longer available) |
+Backblaze B2, Google Cloud Storage, and Azure Blob Storage are not supported in this release. B2 does not honor conditional writes. The GCS XML API supports `If-None-Match` only on reads. Azure Blob is not S3-compatible.
 
 ---
 
@@ -163,7 +155,7 @@ When S3 latency exceeds thresholds, brokers enter `DEGRADED` state. If S3 become
 
 ### Can I use existing Kafka clients?
 
-Yes. KafScale implements the Kafka wire protocol for core APIs. Any client that speaks Kafka protocol works without modification.
+Yes. KafScale implements the Kafka wire protocol for core APIs. Standard Kafka clients work. Producers must set `enable.idempotence=false`, because KafScale does not implement `InitProducerId`.
 
 Tested clients include kafka-python, franz-go, librdkafka, Sarama, and the official Java client.
 
@@ -226,7 +218,7 @@ Yes. The `.kfs` segment format is documented, and processors coordinate via etcd
 
 ### How durable is my data?
 
-S3 provides 99.999999999% (11 nines) durability. Once data is acknowledged to the producer, it exists in S3 with the same durability guarantees as any S3 object.
+S3 provides 99.999999999% (11 nines) durability. With `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default), a produce is acknowledged only after the segment is written to S3 and its metadata is committed to etcd, so acknowledged data has the same durability as the S3 object. If sync flush is off, a broker crash can lose the unflushed tail.
 
 <svg class="diagram" viewBox="0 0 700 160" role="img" aria-label="Data durability flow">
   <style>
@@ -261,19 +253,21 @@ S3 provides 99.999999999% (11 nines) durability. Once data is acknowledged to th
 
 ### What happens if S3 goes down?
 
-Brokers monitor S3 health continuously. Based on error rates and latency:
+Brokers monitor S3 health over a sliding window (default 60 seconds). Defaults come from `cmd/broker/main.go`:
 
-| State | Condition | Behavior |
-|-------|-----------|----------|
-| Healthy | Error rate < 1%, latency < 500ms | Normal operation |
-| Degraded | Error rate 1-5% or latency 500-2000ms | Accepts requests with warnings |
-| Unavailable | Error rate > 5% or latency > 2000ms | Rejects produces, serves cached fetches |
+| State | Condition (defaults) | Behavior |
+|-------|----------------------|----------|
+| Healthy | Average latency below 500 ms and error rate below 20% | Produce and fetch proceed as usual |
+| Degraded | Average latency at least 500 ms, or error rate at least 20%, and neither has reached the critical threshold | Produce and fetch are rejected with a retriable `REQUEST_TIMED_OUT` |
+| Unavailable | Average latency at least 3000 ms, or error rate at least 60% | Produce and fetch are rejected with a retriable `KAFKA_STORAGE_ERROR` |
 
-Monitor `kafscale_s3_health_state` (0=healthy, 1=degraded, 2=unavailable) and implement client-side retries.
+Monitor `kafscale_s3_health_state{state="healthy|degraded|unavailable"}`. The active state has value `1`, the others `0`. See [S3 health](/s3-health/) and implement client-side retries.
 
 ### What happens if a broker crashes?
 
-Nothing is lost. Brokers are stateless. All data lives in S3, all metadata lives in etcd. When a broker restarts (or a new pod schedules), it reads state from etcd and resumes serving requests. No partition rebalancing required.
+Acknowledged data is safe when `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default): a produce is acked only after the segment is in S3 and its metadata is in etcd. If sync flush is off, a crash can lose the unflushed tail (up to `KAFSCALE_FLUSH_INTERVAL_MS`).
+
+Brokers are otherwise stateless. After a restart, the new pod takes partition leases and continues serving. Preferred leaders are reassigned as the broker set changes; the log data itself stays in S3. See [Scaling brokers](/operations/#scaling-brokers).
 
 ### How do I set retention?
 
@@ -298,28 +292,17 @@ Per-topic retention is possible using prefix-based rules (e.g., `kafscale/defaul
 
 ### How do I scale KafScale?
 
-Horizontally. Add more broker replicas. Since brokers are stateless and S3 is the source of truth, there's no partition rebalancing or data migration. New brokers immediately start serving requests.
+Scale the broker StatefulSet through the `KafscaleCluster`. Set `spec.brokers.replicas`, or let the operator-managed HorizontalPodAutoscaler named `<cluster>-broker` add and remove brokers. The HPA minimum is `spec.brokers.replicas` (or 3 if that field is unset or 0) and the maximum is four times that minimum. It targets 70% CPU and 80% memory, so set requests in `spec.brokers.resources`.
 
-```bash
-kubectl scale deployment demo-broker --replicas=5
-```
+Log data stays in S3. Partition leadership does move: the operator publishes a metadata snapshot for the live broker count, and brokers hand leases to the preferred leader. See [Scaling brokers](/operations/#scaling-brokers).
 
-Or use HPA for automatic scaling based on CPU or custom metrics.
+Do not `kubectl scale` the broker StatefulSet or Deployment directly. The operator reconciles replicas from the cluster resource and the HPA.
 
 ### What do I need to back up?
 
 Only etcd. Broker state is ephemeral. S3 data is durable by default. etcd stores topic metadata, consumer offsets, and cluster configuration.
 
-The operator can automate etcd snapshots to S3:
-
-```yaml
-spec:
-  etcd:
-    backup:
-      enabled: true
-      bucket: kafscale-backups
-      interval: 1h
-```
+When etcd is operator-managed, the operator creates an hourly CronJob (`<cluster>-etcd-snapshot`) that writes snapshots to a dedicated bucket (default `kafscale-etcd-<namespace>-<cluster>`). There is no `spec.etcd.backup` field. See [Backups](/operations/#operator-managed-etcd-default-path) for the schedule, manual snapshot Job, and restore steps.
 
 ### Can I restore a topic to an earlier point in time?
 
@@ -378,22 +361,28 @@ Use S3 server-side encryption (SSE-S3 or SSE-KMS). KafScale writes standard S3 o
 
 ### Brokers won't start
 
-Check etcd connectivity and S3 credentials:
+Check etcd connectivity and that the S3 credentials Secret exists. Brokers run as a StatefulSet named `<cluster>-broker` (for the `demo` cluster, `demo-broker`):
 
 ```bash
-kubectl logs -n kafscale deployment/demo-broker
-kubectl get secret kafscale-s3 -o yaml
+kubectl -n kafscale logs statefulset/demo-broker
+kubectl -n kafscale get secret kafscale-s3
 ```
 
-Common issues: wrong etcd endpoints, expired AWS credentials, S3 bucket doesn't exist.
+Common issues: wrong etcd endpoints, expired AWS credentials, or the S3 bucket does not exist.
 
 ### High produce latency
 
 Check S3 latency and broker resources:
 
 ```bash
-kubectl exec -n kafscale deployment/demo-broker -- curl localhost:9093/metrics | grep s3_latency
-kubectl top pods -n kafscale
+kubectl -n kafscale port-forward pod/demo-broker-0 9093:9093
+```
+
+In another terminal:
+
+```bash
+curl -s http://127.0.0.1:9093/metrics | grep s3_latency
+kubectl -n kafscale top pods
 ```
 
 If S3 latency is high, verify the bucket is in the same region as your cluster.
@@ -403,7 +392,7 @@ If S3 latency is high, verify the bucket is in the same region as your cluster.
 Check session timeout and network stability:
 
 ```bash
-kubectl logs -n kafscale deployment/demo-broker | grep -i rebalance
+kubectl -n kafscale logs statefulset/demo-broker | grep -i rebalance
 ```
 
 Increase `session.timeout.ms` on clients if pods are slow to respond to heartbeats.
@@ -414,7 +403,7 @@ Increase `session.timeout.ms` on clients if pods are slow to respond to heartbea
 
 ### How can I contribute?
 
-See [CONTRIBUTING.md](https://github.com/KafScale/platform/blob/main/CONTRIBUTING.md) in the repository. We welcome bug reports, feature requests, documentation improvements, and code contributions.
+See [Contributing](/contributing/). We welcome bug reports, feature requests, documentation improvements, and code contributions.
 
 ### Where do I report bugs?
 

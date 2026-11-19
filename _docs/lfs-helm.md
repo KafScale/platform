@@ -36,8 +36,8 @@ cluster CRD, not via chart values.
 
 ## Prerequisites
 
-- Kubernetes 1.24+
-- Helm 3.x
+- Kubernetes 1.26+
+- Helm 3.12+
 - S3-compatible storage (AWS S3 or MinIO)
 - KafScale operator installed
 
@@ -77,17 +77,28 @@ spec:
 `spec.lfsProxy.s3.bucket` and `region` are required. The bucket name
 `kafscale-lfs` is permanently blocklisted at startup. Use your own name.
 
-## LFS demo UI (optional)
+## Console LFS dashboard (optional)
 
-The chart can deploy a browser demo UI via `lfsDemos`:
+The operator-managed LFS proxy is configured only on `spec.lfsProxy`. The
+console can also show an LFS dashboard when `console.lfs.enabled` is true.
+Set the tracker topic, broker list, and S3 location in your values file. Put
+S3 credentials in a mode-600 values file; do not pass them on the command line
+with `--set`.
 
-```bash
-helm upgrade --install kafscale deploy/helm/kafscale \
-  -f deploy/helm/kafscale/values-lfs-demo.yaml
+```yaml
+console:
+  lfs:
+    enabled: true
+    kafkaBrokers:
+      - demo-broker.kafscale.svc.cluster.local:9092
+    trackerTopic: "__lfs_ops_state"
+    s3:
+      bucket: my-lfs-bucket
+      region: us-east-1
 ```
 
-This enables the demo UI only. LFS itself still requires `spec.lfsProxy` on your
-`KafscaleCluster`.
+See [Installing with Helm](/operations/#installing-with-helm) for the chart
+install itself.
 
 ## Core CRD settings
 
