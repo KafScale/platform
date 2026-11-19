@@ -318,7 +318,7 @@ limitations under the License.
 
 - The LFS status endpoint remains available when LFS is disabled. The console shows the disabled state without starting LFS data requests or event streams, and closes streams on tab changes and logout. A bundled favicon is served at both `/favicon.ico` and `/ui/favicon.ico` (#339).
 
-- The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358). With more than one operator replica (`operator.replicaCount` of `2` or more), the console etcd snapshot panel no longer flaps to access FAIL with age `0`. Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges, and the operator metrics Service balances console scrapes across the replicas. When a scrape reaches a standby replica, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age 0, stale NO, and n/a for last success and last schedule.
+- The Helm chart renders `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` with a numeric port, such as `http://<release>-kafscale-operator-metrics.<namespace>.svc.cluster.local:8080/metrics`. It rendered the port as `%!d(float64=8080)`, so the console etcd snapshot panel showed n/a (#358). With more than one operator replica (`operator.replicaCount` of `2` or more), the console etcd snapshot panel no longer flaps to access FAIL with age `0`. Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges. By default, the console resolves the headless operator metrics Service and scrapes every ready pod directly on each refresh, selecting a pod that reports snapshot gauges. If only standby replicas respond, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age 0, stale NO, and n/a for last success and last schedule.
 
 - The operator `EtcdSnapshot` condition and the `kafscale_operator_etcd_snapshot_*` gauges stay current between CronJob changes. The operator watches the snapshot CronJob and reconciles when its status changes, at least once a minute while a managed snapshot CronJob exists, including when snapshots are stale or have never succeeded, and again when the last successful snapshot passes `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, so `kafscale_operator_etcd_snapshot_age_seconds` stays current and `kafscale_operator_etcd_snapshot_stale` and the `KafscaleSnapshotStale` alert fire when snapshots stop (#357).
 
@@ -355,6 +355,25 @@ rollback limits and the tested compatibility scope. The points below are the
 ones most likely to affect you.
 
 ### Behavior changes
+
+- **2.0 console operator metrics discovery:** Helm adds a headless operator metrics
+  Service and configures the console to scrape each ready operator pod. This fixes
+  snapshot panels that stay n/a when a persistent connection reaches a standby (#387).
+  The existing metrics Service remains in place.
+
+  **Upgrade action:** if you set `console.metrics.operatorMetricsURL` (or
+  `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`) to a load-balanced operator Service, clear
+  that override and use `console.metrics.operatorMetricsDiscoveryURL` (or
+  `KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL`) with a headless Service. Explicit
+  direct overrides retain their behavior and take precedence. Custom network policies
+  must allow console DNS lookups and access to the operator pod metrics port. Deploy
+  the updated console image and chart together; older console images do not recognize
+  the discovery setting.
+
+  The existing operator metrics Service now uses the component-specific
+  `app.kubernetes.io/name` expected by the ServiceMonitor. If custom scrapers selected
+  that Service by its previous chart-only name label, update that selector or select
+  by release and `app.kubernetes.io/component=operator`.
 
 - The unused `lfsDemos` Helm values and `values-lfs-demo.yaml` were removed. Installs that use `-f values-lfs-demo.yaml` must drop that file and enable LFS with `spec.lfsProxy`.
 - **`kafscale-cli restore` no longer leaves an empty target topic when the source prefix has no segments for the selected partitions, or when no record in those segments is at or before `--to`.** The command exits with an error that names the prefix it searched. If the first listing already shows no segments, the target is not created; otherwise the target is rolled back. This includes a topic that was created but never written. `--namespace` still defaults to `KAFSCALE_NAMESPACE` when that is set. If that is unset, it now falls back to `KAFSCALE_S3_NAMESPACE` when that is set, otherwise to `default`.

@@ -29,6 +29,37 @@ In local development, the console can scrape broker metrics if you set
 `KAFSCALE_CONSOLE_BROKER_METRICS_URL`. Operator metrics can be wired into the
 console via `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`.
 
+### Operator metrics discovery
+
+Helm now sets `KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL` to the chart's
+headless operator metrics Service when `operator.metrics.enabled=true`. On each
+refresh, the console resolves all ready pod addresses and scrapes them concurrently
+within a shared three-second deadline. It selects a pod reporting snapshot gauges;
+standby-only responses do not become zero-valued snapshot data. During a handover,
+newer snapshot schedule and success timestamps take precedence over older samples.
+The existing three-minute cache still bridges standby-only responses, and its age
+continues to advance until it expires.
+
+The headless Service is added alongside the existing metrics Service, so Helm does
+not need to change an existing Service's immutable `clusterIP`. Both use the configured
+`operator.metrics.port` and the operator pod selector. Prometheus ServiceMonitor
+configuration selects the existing metrics Service, not the additional discovery Service.
+The existing Service's `app.kubernetes.io/name` label now matches the operator component
+selector used by ServiceMonitor. Update custom scrapers that selected its previous
+chart-only name label, or select by release and `app.kubernetes.io/component=operator`.
+
+Set `console.metrics.operatorMetricsDiscoveryURL` to use another headless Service.
+Without Helm, set `KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL` yourself. Discovery
+requires DNS resolution and HTTP access from the console to each operator pod's metrics
+port. HTTPS discovery preserves the Service hostname for the HTTP Host header and TLS
+certificate verification while connecting separately to each pod address.
+
+An explicit `console.metrics.operatorMetricsURL` or
+`KAFSCALE_CONSOLE_OPERATOR_METRICS_URL` keeps the previous direct-scrape behavior and
+takes precedence over discovery. A load-balanced Service override cannot guarantee a
+leader scrape: clear that override and use discovery for reliable HA snapshot metrics.
+When operator metrics are disabled, Helm supplies neither default endpoint.
+
 ## ISR Terminology
 
 The broker advertises ISR (in-sync replica) values as part of metadata responses

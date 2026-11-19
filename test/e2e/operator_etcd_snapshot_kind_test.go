@@ -18,6 +18,7 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -25,6 +26,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +102,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	chartPath := filepath.Join(repoRoot(t), "deploy", "helm", "kafscale")
 	operatorRepo, operatorTag := splitImage(operatorImage)
 	consoleRepo, consoleTag := splitImage(consoleImage)
+	consoleUser := "snapshot-e2e"
+	consolePassword := fmt.Sprintf("snapshot-e2e-%d", time.Now().UnixNano())
 
 	runCmdGetOutput(t, ctx, "helm", "upgrade", "--install", "kafscale", chartPath,
 		"--namespace", kindNamespace,
@@ -109,6 +113,9 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		"--set", fmt.Sprintf("operator.image.tag=%s", operatorTag),
 		"--set", fmt.Sprintf("console.image.repository=%s", consoleRepo),
 		"--set", fmt.Sprintf("console.image.tag=%s", consoleTag),
+		"--set", "operator.replicaCount=2",
+		"--set", "console.auth.username="+consoleUser,
+		"--set-string", "console.auth.password="+consolePassword,
 		"--set", "operator.etcdEndpoints[0]=",
 	)
 	waitForCRDs(t, ctx, 2*time.Minute)
@@ -294,6 +301,25 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	waitForServiceEndpoints(t, ctx, kindNamespace, "minio", 2*time.Minute)
 	touchClusterAnnotation(t, ctx, kindNamespace, "kafscale")
 	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 3*time.Minute)
+
+	consoleDeployment := getComponentDeployment(t, ctx, kindNamespace, "console")
+	waitForRollout(t, ctx, kindNamespace, "deployment/"+consoleDeployment, 2*time.Minute)
+	consoleAddr := freeAddr(t)
+	_, consolePortText, err := net.SplitHostPort(consoleAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consolePort, err := strconv.Atoi(consolePortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consoleForwardCtx, consoleForwardCancel := context.WithCancel(ctx)
+	consoleForward := startPortForward(t, consoleForwardCtx, kindNamespace, "deployment/"+consoleDeployment, consolePort, 8080)
+	defer func() { consoleForwardCancel(); _ = consoleForward.Wait() }()
+	waitForLocalPort(t, consoleAddr, 10*time.Second)
+	consoleURL := "http://" + consoleAddr
+	consoleSession := loginConsole(t, consoleURL, consoleUser, consolePassword)
+	assertConsoleSnapshotMetrics(t, ctx, consoleURL, consoleSession)
 	metricsAddr := fmt.Sprintf("kafscale-broker.%s.svc.cluster.local:9093", kindNamespace)
 	if err := runE2EMetricsProbe(t, ctx, kindNamespace, e2eClientImage, metricsAddr, 90); err != nil {
 		t.Fatalf("expected broker S3 health to recover after MinIO restart: %v", err)
@@ -311,6 +337,7 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", operatorPod)
 	waitForRollout(t, ctx, kindNamespace, "deployment/"+operatorDeployment, 2*time.Minute)
 	waitForConditionStatus(t, ctx, kindNamespace, "kafscalecluster/kafscale", "EtcdSnapshotAccess", "True", 2*time.Minute)
+	assertConsoleSnapshotMetrics(t, ctx, consoleURL, consoleSession)
 
 	t.Log("testing etcd HA: deleting one member and waiting for ready")
 	runCmdGetOutput(t, ctx, "kubectl", "-n", kindNamespace, "delete", "pod", "kafscale-etcd-0")
@@ -345,6 +372,40 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	if !bytes.Contains(postFailoverListing, []byte(".sha256")) {
 		t.Fatalf("expected snapshot .db.sha256 object in minio after failover, got:\n%s", string(postFailoverListing))
 	}
+}
+
+func assertConsoleSnapshotMetrics(t *testing.T, ctx context.Context, baseURL string, session *http.Cookie) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/ui/api/metrics", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.AddCookie(session)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("console metrics returned %s", response.Status)
+	}
+	scanner := bufio.NewScanner(response.Body)
+	for scanner.Scan() {
+		if !strings.HasPrefix(scanner.Text(), "data: ") {
+			continue
+		}
+		var event struct{ Metrics map[string]json.RawMessage }
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(scanner.Text(), "data: ")), &event); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := event.Metrics["etcd_snapshot_age_s"]; !ok {
+			t.Fatalf("console did not discover snapshot metrics from two operator replicas: %s", scanner.Text())
+		}
+		return
+	}
+	t.Fatalf("console metrics stream ended without a sample: %v", scanner.Err())
 }
 
 func requireBinaries(t *testing.T, names ...string) {
