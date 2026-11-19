@@ -60,7 +60,7 @@ func TestUpgradeGuideDocumentsV1Migration(t *testing.T) {
 	text := readRepoDoc(t, "docs/upgrade-compatibility.md")
 	for _, want := range []string{
 		"## CRD API version v1",
-		"kubectl apply --server-side --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/",
+		"kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/",
 		"kubectl get kafscaleclusters.kafscale.io --all-namespaces -o json | kubectl replace -f -",
 		"kubectl get kafscaletopics.kafscale.io --all-namespaces -o json | kubectl replace -f -",
 		`'{"status":{"storedVersions":["v1"]}}'`,

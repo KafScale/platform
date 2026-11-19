@@ -56,14 +56,13 @@ Helm does not upgrade CRDs from `crds/`, so apply them first, then upgrade the
 chart. Run these from a checkout of the release you are upgrading to:
 
 ```sh
-kubectl apply --server-side --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
+kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
 kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io crd/kafscaletopics.kafscale.io
 helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale --reuse-values
 ```
 
-If the CRDs were first installed by `kubectl apply` without
-`--server-side`, the server-side apply can report conflicts on
-`spec.versions`. Add `--force-conflicts` to take ownership of those fields.
+`--force-conflicts` is required when Helm installed the CRDs, which is the
+default. Without it the apply fails with `conflict with "helm": .spec.versions`.
 
 Then change `apiVersion: kafscale.io/v1alpha1` to `apiVersion: kafscale.io/v1`
 in your manifests, Helm values and GitOps sources. Nothing else in the manifest

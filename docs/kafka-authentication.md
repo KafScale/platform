@@ -72,7 +72,7 @@ Helm does not upgrade schemas stored under the chart's `crds/` directory.
 Apply the CRDs before you install the new operator or add `spec.security`:
 
 ```sh
-kubectl apply --server-side --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
+kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
 kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io
 kubectl explain kafscalecluster.spec.security --api-version=kafscale.io/v1
 ```
