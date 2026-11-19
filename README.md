@@ -40,6 +40,10 @@ The Kafka protocol remains intact.
 KafScale is open source under the Apache 2.0 license and implemented in Go.  
 (KafScale is not a registered trademark.)
 
+[![Terminal demo: an admin installs KafScale on kind with Helm, creates a 3 broker cluster backed by MinIO, adds the orders topic, and produces and consumes through the brokers and the Kafka proxy](docs/media/videos/admin/admin.gif)](https://kafscale.io/demos/)
+
+[See all demos](https://kafscale.io/demos/)
+
 ---
 
 For upgrades, see the [upgrade and compatibility guide](docs/upgrade-compatibility.md).
