@@ -40,14 +40,16 @@ and `docs/mcp.md`.
 
 Read-only tools exposed by the MCP service:
 
-- `cluster_status`
-- `cluster_metrics`
-- `list_topics`
-- `describe_topics`
-- `list_groups`
-- `describe_group`
-- `fetch_offsets`
-- `describe_configs`
+- `cluster_status`: no arguments.
+- `cluster_metrics`: no arguments. Needs `KAFSCALE_MCP_BROKER_METRICS_URL`.
+- `list_topics`: no arguments. Returns every topic.
+- `describe_topics`: optional `names`, an array of topic names. Omit it to describe every topic.
+- `list_groups`: no arguments.
+- `describe_group`: required `group_id`.
+- `fetch_offsets`: required `group_id`, optional `topics` (an array of topic names). Omit `topics` to fetch offsets for every topic in the group.
+- `describe_configs`: optional `topics`, an array of topic names. Omit it to describe every topic.
+
+A call that omits a required argument returns the validator error, for example `describe_group` without `group_id` returns `invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`. `cluster_metrics` without a metrics URL returns `metrics provider not configured`.
 
 ### Response shapes
 
@@ -77,25 +79,29 @@ mcp:
     create: true
   image:
     repository: ghcr.io/kafscale/kafscale-mcp
-    tag: v1.6.3
   auth:
     token: "<bearer-token>"
   etcdEndpoints:
-    - "http://etcd.kafscale.svc:2379"
+    # Operator-managed etcd for KafscaleCluster demo in namespace kafscale.
+    # The Service is <cluster>-etcd-client.<namespace>.svc.cluster.local:2379.
+    - "http://demo-etcd-client.kafscale.svc.cluster.local:2379"
   metrics:
-    brokerMetricsURL: "http://kafscale-broker.kafscale.svc:9093/metrics"
+    # Broker metrics Service: <cluster>-broker.<namespace>.svc.cluster.local:9093
+    brokerMetricsURL: "http://demo-broker.kafscale.svc.cluster.local:9093/metrics"
   sessionTimeout: 10m
 ```
 
+The chart runs the image tag that matches the chart `appVersion` unless you set `mcp.image.tag`.
+
 ### Environment Variables
 
-```bash
+```text
 KAFSCALE_MCP_HTTP_ADDR=:8090
 KAFSCALE_MCP_AUTH_TOKEN=<bearer-token>
-KAFSCALE_MCP_ETCD_ENDPOINTS=http://etcd.kafscale.svc:2379
+KAFSCALE_MCP_ETCD_ENDPOINTS=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 KAFSCALE_MCP_ETCD_USERNAME=
 KAFSCALE_MCP_ETCD_PASSWORD=
-KAFSCALE_MCP_BROKER_METRICS_URL=http://kafscale-broker.kafscale.svc:9093/metrics
+KAFSCALE_MCP_BROKER_METRICS_URL=http://demo-broker.kafscale.svc.cluster.local:9093/metrics
 KAFSCALE_MCP_SESSION_TIMEOUT=10m
 ```
 
@@ -103,6 +109,9 @@ Notes:
 
 - Metadata tools require `KAFSCALE_MCP_ETCD_ENDPOINTS`.
 - Metrics require `KAFSCALE_MCP_BROKER_METRICS_URL`.
+- With `KAFSCALE_MCP_ETCD_ENDPOINTS` set, `cluster_metrics` and the metrics part of `cluster_status` read every broker registered in etcd, at the broker host with the scheme, port and path of `KAFSCALE_MCP_BROKER_METRICS_URL`. They sum produce and fetch RPS and the admin request counters, average S3 latency, S3 error rate and admin latency, and report the worst S3 state. Each average includes every broker reporting that metric, including zero. Missing, malformed and non-finite samples are excluded from that metric’s average. S3 latency is averaged before converting to integer milliseconds. Brokers that do not answer are skipped. If etcd lists no brokers or none answers, they read the URL itself. Without etcd they read only the URL.
+- See [Environment variable index](operations.md#environment-variable-index) for defaults.
+- The examples use the quickstart cluster `demo` in namespace `kafscale`. Operator-managed etcd is `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`. Broker metrics are on `<cluster>-broker.<namespace>.svc.cluster.local:9093`. Use the full `.svc.cluster.local` name. See [Service names](operations.md#service-names).
 
 ### Creating a bearer token
 
@@ -123,25 +132,45 @@ mcp:
     token: "<generated-token>"
 ```
 
-Or export it for local runs:
+Or set it for local runs. `read -rs` keeps the token out of your shell history:
 
 ```bash
-export KAFSCALE_MCP_AUTH_TOKEN="<generated-token>"
+read -rs KAFSCALE_MCP_AUTH_TOKEN
+export KAFSCALE_MCP_AUTH_TOKEN
 ```
 
 ### Quick Test (port-forward)
 
 ```bash
 kubectl -n kafscale-mcp get svc
-kubectl -n kafscale-mcp port-forward svc/<mcp-service> 8090:80
+kubectl -n kafscale-mcp port-forward svc/kafscale-mcp 8090:80
 ```
 
+The Service is `kafscale-mcp` for the quickstart release name `kafscale`. For another release name, use the name `kubectl get svc` lists.
+
 You can then connect an MCP client to `http://127.0.0.1:8090/mcp`.
+
+Claude Desktop and IDE examples follow. From a shell, the MCP Inspector
+CLI talks to the same endpoint. Keep the token off the command line: read it
+without echo, write it to a config file only you can read, and delete the
+file when you are done:
+
+```bash
+read -rs KAFSCALE_MCP_AUTH_TOKEN
+(umask 077; cat > mcp-inspector.json <<EOF
+{"mcpServers":{"kafscale":{"type":"streamable-http","url":"http://127.0.0.1:8090/mcp","headers":{"Authorization":"Bearer ${KAFSCALE_MCP_AUTH_TOKEN}"}}}}
+EOF
+)
+npx -y @modelcontextprotocol/inspector --cli --config mcp-inspector.json --server kafscale --method tools/list
+npx -y @modelcontextprotocol/inspector --cli --config mcp-inspector.json --server kafscale --method tools/call --tool-name describe_group --tool-arg 'group_id=<group>'
+rm mcp-inspector.json
+```
 
 ### Local run (no Helm)
 
 ```bash
-export KAFSCALE_MCP_AUTH_TOKEN="<token>"
+read -rs KAFSCALE_MCP_AUTH_TOKEN
+export KAFSCALE_MCP_AUTH_TOKEN
 export KAFSCALE_MCP_ETCD_ENDPOINTS="http://127.0.0.1:2379"
 export KAFSCALE_MCP_BROKER_METRICS_URL="http://127.0.0.1:9093/metrics"
 ./kafscale-mcp

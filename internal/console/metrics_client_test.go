@@ -17,9 +17,14 @@ package console
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/KafScale/platform/pkg/metadata"
@@ -62,6 +67,11 @@ func TestParsePromSample(t *testing.T) {
 	}
 	if _, ok := parsePromSample("kafscale_produce_rps not-a-number"); ok {
 		t.Fatalf("expected parse failure")
+	}
+	for _, sample := range []string{"NaN", "+Inf", "-Inf"} {
+		if _, ok := parsePromSample("kafscale_produce_rps " + sample); ok {
+			t.Fatalf("non-finite sample accepted: %s", sample)
+		}
 	}
 }
 
@@ -365,5 +375,88 @@ kafscale_operator_etcd_snapshot_access_ok{cluster="default/kafscale"} 1
 	}
 	if snap.EtcdSnapshotAccessOK != 1 {
 		t.Fatalf("expected access ok 1 got %f", snap.EtcdSnapshotAccessOK)
+	}
+}
+
+type metricsRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f metricsRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestAggregatedMetricsIncludesReportedZero(t *testing.T) {
+	zero := "kafscale_s3_latency_ms_avg 0\nkafscale_s3_error_rate 0\nkafscale_admin_request_latency_ms_avg{api=\"metadata\"} 0\n"
+	positive := "kafscale_s3_latency_ms_avg 40\nkafscale_s3_error_rate 0.4\nkafscale_admin_request_latency_ms_avg{api=\"metadata\"} 10\n"
+	for _, tc := range []struct {
+		name            string
+		bodies          []string
+		failed, offline bool
+		latency         int
+		rate, admin     float64
+	}{
+		{name: "mixed zero and nonzero", bodies: []string{zero, positive}, latency: 20, rate: 0.2, admin: 5},
+		{name: "all zero", bodies: []string{zero, zero}},
+		{name: "fractional latency averaged before truncation", bodies: []string{"kafscale_s3_latency_ms_avg 0.5\n", "kafscale_s3_latency_ms_avg 1.5\n"}, latency: 1},
+		{name: "missing samples excluded", bodies: []string{zero, positive, "kafscale_produce_rps 1\n"}, latency: 20, rate: 0.2, admin: 5},
+		{name: "malformed samples excluded", bodies: []string{positive, "kafscale_s3_latency_ms_avg invalid\nkafscale_s3_error_rate invalid\nkafscale_admin_request_latency_ms_avg invalid\n"}, latency: 40, rate: 0.4, admin: 10},
+		{name: "nonfinite samples excluded", bodies: []string{positive, "kafscale_s3_latency_ms_avg NaN\nkafscale_s3_error_rate +Inf\nkafscale_admin_request_latency_ms_avg -Inf\n"}, latency: 40, rate: 0.4, admin: 10},
+		{name: "independent metric presence", bodies: []string{"kafscale_s3_latency_ms_avg 0\n", "kafscale_s3_error_rate 0.4\nkafscale_admin_request_latency_ms_avg 10\n", "kafscale_s3_latency_ms_avg 40\nkafscale_s3_error_rate 0\nkafscale_admin_request_latency_ms_avg 0\n"}, latency: 20, rate: 0.2, admin: 5},
+		{name: "HTTP failure excluded", bodies: []string{zero, positive, "ignored"}, failed: true, latency: 20, rate: 0.2, admin: 5},
+		{name: "transport failure excluded", bodies: []string{zero, positive, "ignored"}, offline: true, latency: 20, rate: 0.2, admin: 5},
+		{name: "no samples", bodies: []string{"# no samples\n", "# no samples\n"}},
+		{name: "zero admin API sample", bodies: []string{"kafscale_admin_request_latency_ms_avg{api=\"metadata\"} 0\nkafscale_admin_request_latency_ms_avg{api=\"produce\"} 20\n", "kafscale_admin_request_latency_ms_avg{api=\"metadata\"} 0\n"}, admin: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			brokers := make([]protocol.MetadataBroker, len(tc.bodies))
+			for i := range brokers {
+				brokers[i] = protocol.MetadataBroker{NodeID: int32(i), Host: fmt.Sprintf("broker-%d", i)}
+			}
+			store := metadata.NewInMemoryStore(metadata.ClusterMetadata{Brokers: brokers})
+			provider := NewAggregatedPromMetricsClient(store, "").(*aggregatedPromMetricsClient)
+			provider.client.Transport = metricsRoundTripper(func(r *http.Request) (*http.Response, error) {
+				var i int
+				if _, err := fmt.Sscanf(r.URL.Hostname(), "broker-%d", &i); err != nil {
+					t.Fatal(err)
+				}
+				if tc.offline && i == len(tc.bodies)-1 {
+					return nil, errors.New("broker offline")
+				}
+				status := http.StatusOK
+				if tc.failed && i == len(tc.bodies)-1 {
+					status = http.StatusServiceUnavailable
+				}
+				return &http.Response{StatusCode: status, Status: http.StatusText(status), Body: io.NopCloser(strings.NewReader(tc.bodies[i])), Header: make(http.Header), Request: r}, nil
+			})
+			snap, err := provider.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.S3LatencyMS != tc.latency || math.IsNaN(snap.S3ErrorRate) || math.IsInf(snap.S3ErrorRate, 0) || math.IsNaN(snap.AdminRequestLatencyMS) || math.IsInf(snap.AdminRequestLatencyMS, 0) || math.Abs(snap.S3ErrorRate-tc.rate) > 1e-12 || math.Abs(snap.AdminRequestLatencyMS-tc.admin) > 1e-12 {
+				t.Fatalf("got latency=%d rate=%v admin=%v, want %d %v %v", snap.S3LatencyMS, snap.S3ErrorRate, snap.AdminRequestLatencyMS, tc.latency, tc.rate, tc.admin)
+			}
+		})
+	}
+}
+
+func TestFetchPromSnapshotTracksReportedMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name, body           string
+		latency, rate, admin bool
+	}{
+		{name: "zero", body: "kafscale_s3_latency_ms_avg 0\nkafscale_s3_error_rate 0\nkafscale_admin_request_latency_ms_avg 0\n", latency: true, rate: true, admin: true},
+		{name: "missing", body: "# no samples\n"},
+		{name: "invalid", body: "kafscale_s3_latency_ms_avg invalid\nkafscale_s3_error_rate invalid\nkafscale_admin_request_latency_ms_avg invalid\n"},
+		{name: "nonfinite", body: "kafscale_s3_latency_ms_avg +Inf\nkafscale_s3_error_rate NaN\nkafscale_admin_request_latency_ms_avg -Inf\n"},
+		{name: "one metric", body: "kafscale_s3_error_rate 0\n", rate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, tc.body) }))
+			defer server.Close()
+			snap, err := fetchPromSnapshot(context.Background(), server.Client(), server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snap.s3LatencyReported != tc.latency || snap.s3ErrorRateReported != tc.rate || snap.adminLatencyReported != tc.admin {
+				t.Fatalf("presence latency=%v rate=%v admin=%v", snap.s3LatencyReported, snap.s3ErrorRateReported, snap.adminLatencyReported)
+			}
+		})
 	}
 }
