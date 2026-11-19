@@ -52,3 +52,9 @@ app.kubernetes.io/name: {{ printf "%s-%s" (include "kafscale.name" .root) .compo
 app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
+
+{{- define "kafscale.operatorMetricsHeadlessName" -}}
+{{- $suffix := "-metrics-headless" -}}
+{{- $limit := sub 63 (len $suffix) | int -}}
+{{- printf "%s%s" (include "kafscale.componentName" (dict "root" . "component" "operator") | trunc $limit | trimSuffix "-") $suffix -}}
+{{- end -}}

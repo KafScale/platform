@@ -60,9 +60,10 @@ type aggregatedPromMetricsClient struct {
 }
 
 type compositeMetricsProvider struct {
-	broker      MetricsProvider
-	operatorURL string
-	client      *http.Client
+	broker          MetricsProvider
+	operatorURL     string
+	client          *http.Client
+	resolveOperator func(context.Context, string) ([]string, error)
 
 	now            func() time.Time
 	mu             sync.Mutex
@@ -141,7 +142,7 @@ func (c *compositeMetricsProvider) Snapshot(ctx context.Context) (*MetricsSnapsh
 }
 
 func (c *compositeMetricsProvider) operatorSnapshot(ctx context.Context) *operatorSnapshot {
-	op, err := fetchOperatorSnapshot(ctx, c.client, c.operatorURL)
+	op, err := c.fetchOperatorSnapshots(ctx)
 	if err != nil || op == nil {
 		return nil
 	}
@@ -305,9 +306,16 @@ type operatorSnapshot struct {
 }
 
 func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL string) (*operatorSnapshot, error) {
+	return fetchOperatorSnapshotHost(ctx, client, metricsURL, "")
+}
+
+func fetchOperatorSnapshotHost(ctx context.Context, client *http.Client, metricsURL, host string) (*operatorSnapshot, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metricsURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	if host != "" {
+		req.Host = host
 	}
 	resp, err := client.Do(req)
 	if err != nil {

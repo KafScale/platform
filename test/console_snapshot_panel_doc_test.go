@@ -63,6 +63,8 @@ func TestConsoleSnapshotPanelReplicaBehaviorDocumented(t *testing.T) {
 		t.Fatalf("operations.md and unreleased.md describe the panel differently:\n%s\n%s", rowText, noteText)
 	}
 	for _, want := range []string{
+		"headless operator metrics Service",
+		"scrapes every ready pod directly",
 		"up to 3 minutes",
 		"adds the time since that read to the snapshot age",
 		"`kafscale_operator_etcd_snapshot_threshold_seconds`",
@@ -73,6 +75,15 @@ func TestConsoleSnapshotPanelReplicaBehaviorDocumented(t *testing.T) {
 	} {
 		if !strings.Contains(rowText, want) {
 			t.Errorf("replica behavior text does not mention %q", want)
+		}
+	}
+	if strings.Contains(rowText, "Service balances console scrapes") {
+		t.Error("snapshot discovery must not rely on Service load balancing")
+	}
+	release := read("docs", "releases", "unreleased.md")
+	for _, warning := range []string{"2.0 console operator metrics discovery", "Upgrade action:", "KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL", "older console images"} {
+		if !strings.Contains(release, warning) {
+			t.Errorf("release notes missing %q", warning)
 		}
 	}
 	if !strings.Contains(read("docs", "metrics.md"), "| `kafscale_operator_etcd_snapshot_threshold_seconds` |") {

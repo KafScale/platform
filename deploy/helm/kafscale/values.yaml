@@ -122,6 +122,7 @@ console:
   metrics:
     brokerMetricsURL: ""
     operatorMetricsURL: ""
+    operatorMetricsDiscoveryURL: ""  # Headless Service URL; direct operatorMetricsURL takes precedence.
   # LFS Dashboard configuration
   lfs:
     enabled: false

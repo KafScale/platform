@@ -98,7 +98,8 @@ func buildMetadataStore(ctx context.Context) (metadata.Store, error) {
 func buildMetricsProvider(store metadata.Store) consolepkg.MetricsProvider {
 	metricsURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL"))
 	operatorURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL"))
-	if metricsURL == "" && store == nil && operatorURL == "" {
+	discoveryURL := strings.TrimSpace(os.Getenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL"))
+	if metricsURL == "" && store == nil && operatorURL == "" && discoveryURL == "" {
 		return nil
 	}
 	var brokerProvider consolepkg.MetricsProvider
@@ -109,6 +110,9 @@ func buildMetricsProvider(store metadata.Store) consolepkg.MetricsProvider {
 	}
 	if operatorURL != "" {
 		return consolepkg.NewCompositeMetricsProvider(brokerProvider, operatorURL)
+	}
+	if discoveryURL != "" {
+		return consolepkg.NewDiscoveredCompositeMetricsProvider(brokerProvider, discoveryURL)
 	}
 	return brokerProvider
 }

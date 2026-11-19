@@ -17,6 +17,9 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -43,6 +46,7 @@ func TestBuildMetadataStoreUsesEtcdEnv(t *testing.T) {
 }
 
 func TestBuildMetricsProvider(t *testing.T) {
+	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL", "")
 	t.Setenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL", "")
 	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL", "")
 	if got := buildMetricsProvider(nil); got != nil {
@@ -58,6 +62,35 @@ func TestBuildMetricsProvider(t *testing.T) {
 	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL", "http://127.0.0.1:8080/metrics")
 	if got := buildMetricsProvider(nil); got == nil {
 		t.Fatalf("expected metrics provider when operator metrics env set")
+	}
+}
+
+func TestBuildMetricsProviderWithOperatorDiscovery(t *testing.T) {
+	t.Setenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL", "")
+	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL", "")
+	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL", "http://operators.test:8080/metrics")
+	if got := buildMetricsProvider(nil); got == nil {
+		t.Fatal("discovery-only provider must be enabled")
+	}
+}
+
+func TestBuildMetricsProviderDirectOverridePrecedesDiscovery(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "kafscale_operator_etcd_snapshot_age_seconds 42\n")
+	}))
+	defer server.Close()
+	t.Setenv("KAFSCALE_CONSOLE_BROKER_METRICS_URL", "")
+	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL", "")
+	t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL", server.URL)
+	for _, direct := range []bool{false, true} {
+		if direct {
+			t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_URL", server.URL)
+			t.Setenv("KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL", "http://invalid.invalid/metrics")
+		}
+		snap, err := buildMetricsProvider(nil).Snapshot(context.Background())
+		if err != nil || !snap.OperatorMetricsAvailable || snap.OperatorEtcdSnapshotAgeSeconds != 42 {
+			t.Fatalf("direct=%t snapshot=%+v err=%v", direct, snap, err)
+		}
 	}
 }
 
