@@ -164,8 +164,17 @@ exist in `mcp.namespace.name` (default `kafscale-mcp`) before install or upgrade
 pod gets `CreateContainerConfigError`. Setting `existingSecretKey` without
 `existingSecret` fails the render.
 
+For a first install into a namespace you created, set `mcp.namespace.create: false`
+as shown below. This overrides `create: true` in the earlier example, so Helm
+does not try to adopt the pre-existing Namespace. For upgrades, retain the release's
+namespace ownership setting: a Namespace already managed by that Helm release
+should keep `create: true`.
+
 ```yaml
 mcp:
+  namespace:
+    name: kafscale-mcp
+    create: false
   auth:
     existingSecret: my-mcp-token
     existingSecretKey: mcp-token

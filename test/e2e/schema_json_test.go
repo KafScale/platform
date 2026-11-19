@@ -18,18 +18,68 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/pkg/schemaregistry"
+	"github.com/KafScale/platform/pkg/storage"
 	"github.com/twmb/franz-go/pkg/sr"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
+
+// Exercise the same concurrency assertions with storage that takes longer than
+// the sr client's default five-second timeout, but less than the server budget.
+func TestSchemaRegistryJSONConcurrentSlowStorageE2E(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	endpoints := testutil.StartEmbeddedEtcd(t)
+	release := make(chan struct{})
+	store := &srSlowJSONStore{MemoryS3Client: storage.NewMemoryS3Client(), release: release}
+	var urls []string
+	for range 3 {
+		cli, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 5 * time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cli.Close() })
+		reg, err := schemaregistry.New(schemaregistry.Config{Client: cli, S3: store, Namespace: "json-slow", InlineLimit: 64})
+		if err != nil {
+			t.Fatal(err)
+		}
+		server := httptest.NewServer(schemaregistry.NewServer(reg, 10*time.Second))
+		t.Cleanup(server.Close)
+		urls = append(urls, server.URL)
+	}
+	timer := time.AfterFunc(6*time.Second, func() { close(release) })
+	defer timer.Stop()
+	h := &srHarness{t: t, ctx: ctx}
+	h.jsonConcurrent(t, urls)
+}
+
+type srSlowJSONStore struct {
+	*storage.MemoryS3Client
+	release <-chan struct{}
+}
+
+func (s *srSlowJSONStore) UploadSegment(ctx context.Context, key string, body []byte) error {
+	select {
+	case <-s.release:
+		return s.MemoryS3Client.UploadSegment(ctx, key, body)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
 // Recheck the independently authored corpus against a real Confluent server,
 // rather than relying only on its recorded responses in the unit suite.
@@ -107,15 +157,19 @@ func (h *srHarness) jsonParity(t *testing.T, cpURL, url string) {
 }
 
 func (h *srHarness) jsonConcurrent(t *testing.T, urls []string) {
+	ctx, cancel := context.WithTimeout(h.ctx, 15*time.Second)
+	defer cancel()
 	clients := make([]*sr.Client, len(urls))
 	for i, url := range urls {
-		client, err := sr.NewClient(sr.URLs(url))
+		// The server allows ten seconds for a registration. Use the bounded
+		// scenario context instead of the client's shorter five-second default.
+		client, err := sr.NewClient(sr.URLs(url), sr.HTTPClient(&http.Client{}))
 		if err != nil {
 			t.Fatal(err)
 		}
 		clients[i] = client
 	}
-	result := clients[0].SetCompatibility(h.ctx, sr.SetCompatibility{Level: sr.CompatNone}, "json-concurrent")
+	result := clients[0].SetCompatibility(ctx, sr.SetCompatibility{Level: sr.CompatNone}, "json-concurrent")
 	if len(result) != 1 || result[0].Err != nil {
 		t.Fatalf("set compatibility %+v", result)
 	}
@@ -124,6 +178,7 @@ func (h *srHarness) jsonConcurrent(t *testing.T, urls []string) {
 		schema      string
 		id, version int
 		err         error
+		duration    time.Duration
 	}
 	claims := make(chan claim, 60)
 	for i := range 60 {
@@ -131,8 +186,12 @@ func (h *srHarness) jsonConcurrent(t *testing.T, urls []string) {
 		go func() {
 			defer wg.Done()
 			text := fmt.Sprintf(`{"type":"object","title":"json-concurrent-%d","description":"schema text stored outside the process and shared across three independent registry processes","properties":{"name":{"type":"string"}}}`, i%20)
-			ss, err := clients[i%len(clients)].CreateSchema(h.ctx, "json-concurrent", sr.Schema{Type: sr.TypeJSON, Schema: text})
-			claims <- claim{text, ss.ID, ss.Version, err}
+			start := time.Now()
+			ss, err := clients[i%len(clients)].CreateSchema(ctx, "json-concurrent", sr.Schema{Type: sr.TypeJSON, Schema: text})
+			if err != nil {
+				err = fmt.Errorf("schema %d on %s: %w", i%20, urls[i%len(urls)], err)
+			}
+			claims <- claim{text, ss.ID, ss.Version, err, time.Since(start)}
 		}()
 	}
 	wg.Wait()
@@ -140,7 +199,9 @@ func (h *srHarness) jsonConcurrent(t *testing.T, urls []string) {
 	ids := map[string]int{}
 	owners := map[int]string{}
 	versions := map[int]int{}
+	var longest time.Duration
 	for c := range claims {
+		longest = max(longest, c.duration)
 		if c.err != nil {
 			t.Fatal(c.err)
 		}
@@ -160,8 +221,9 @@ func (h *srHarness) jsonConcurrent(t *testing.T, urls []string) {
 	if len(ids) != 20 || len(versions) != 20 {
 		t.Fatalf("unique schemas=%d versions=%d", len(ids), len(versions))
 	}
+	t.Logf("60 concurrent registrations completed; longest request %s", longest)
 	for _, client := range clients {
-		all, err := client.Schemas(h.ctx, "json-concurrent")
+		all, err := client.Schemas(ctx, "json-concurrent")
 		if err != nil || len(all) != 20 {
 			t.Fatalf("read versions %d: %v", len(all), err)
 		}
