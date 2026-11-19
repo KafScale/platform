@@ -14,6 +14,9 @@
 # limitations under the License.
 
 {{- if .Values.mcp.enabled }}
+{{- if and (not .Values.mcp.auth.existingSecret) .Values.mcp.auth.existingSecretKey }}
+{{- fail "mcp.auth.existingSecretKey requires mcp.auth.existingSecret to be set" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,9 +34,17 @@ spec:
     metadata:
       labels:
 {{ include "kafscale.componentSelectorLabels" (dict "root" . "component" "mcp") | indent 8 }}
-{{- with .Values.mcp.podAnnotations }}
+{{- $mcpAuth := .Values.mcp.auth }}
+{{- if or .Values.mcp.podAnnotations $mcpAuth.token $mcpAuth.existingSecret }}
       annotations:
+{{- with (omit (default dict .Values.mcp.podAnnotations) "kafscale.io/mcp-auth-checksum") }}
 {{ toYaml . | indent 8 }}
+{{- end }}
+{{- if $mcpAuth.existingSecret }}
+        kafscale.io/mcp-auth-checksum: {{ printf "%s:%s" $mcpAuth.existingSecret (default "token" $mcpAuth.existingSecretKey) | sha256sum | quote }}
+{{- else if $mcpAuth.token }}
+        kafscale.io/mcp-auth-checksum: {{ (include (print $.Template.BasePath "/mcp-auth-secret.yaml") $ | fromYaml).stringData | toJson | sha256sum | quote }}
+{{- end }}
 {{- end }}
     spec:
 {{- if .Values.imagePullSecrets }}
@@ -91,9 +102,17 @@ spec:
             - name: KAFSCALE_MCP_SESSION_TIMEOUT
               value: "{{ .Values.mcp.sessionTimeout }}"
 {{- end }}
-{{- if .Values.mcp.auth.token }}
+{{- if or .Values.mcp.auth.existingSecret .Values.mcp.auth.token }}
             - name: KAFSCALE_MCP_AUTH_TOKEN
-              value: "{{ .Values.mcp.auth.token }}"
+              valueFrom:
+                secretKeyRef:
+{{- if .Values.mcp.auth.existingSecret }}
+                  name: {{ .Values.mcp.auth.existingSecret }}
+                  key: {{ default "token" .Values.mcp.auth.existingSecretKey }}
+{{- else }}
+                  name: {{ include "kafscale.componentName" (dict "root" . "component" "mcp") }}-auth
+                  key: token
+{{- end }}
 {{- end }}
           ports:
             - name: http

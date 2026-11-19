@@ -97,7 +97,7 @@ The chart runs the image tag that matches the chart `appVersion` unless you set 
 
 ```text
 KAFSCALE_MCP_HTTP_ADDR=:8090
-KAFSCALE_MCP_AUTH_TOKEN=<bearer-token>
+# Read KAFSCALE_MCP_AUTH_TOKEN as shown under "Creating a bearer token" below.
 KAFSCALE_MCP_ETCD_ENDPOINTS=http://demo-etcd-client.kafscale.svc.cluster.local:2379
 KAFSCALE_MCP_ETCD_USERNAME=
 KAFSCALE_MCP_ETCD_PASSWORD=
@@ -116,7 +116,7 @@ Notes:
 ### Creating a bearer token
 
 The MCP server expects a static bearer token string (for now). Generate a strong random
-token and configure it via `KAFSCALE_MCP_AUTH_TOKEN`.
+token and configure it via `KAFSCALE_MCP_AUTH_TOKEN`. Only one token is valid at a time.
 
 Example (base64, 32 bytes):
 
@@ -124,7 +124,17 @@ Example (base64, 32 bytes):
 openssl rand -base64 32
 ```
 
-Then set the value in Helm:
+Then set the value in Helm. The chart stores it in a Secret named after the rendered
+MCP Deployment with `-auth` appended and sets `KAFSCALE_MCP_AUTH_TOKEN` from that Secret.
+Both names use the chart's `kafscale.componentName` helper, so `nameOverride`,
+`fullnameOverride`, and name truncation affect them. With release `kafscale` and no
+overrides, the Deployment is `kafscale-mcp` and the Secret is `kafscale-mcp-auth`.
+Changing `mcp.auth.token` rolls the MCP pod. The pod annotation
+`kafscale.io/mcp-auth-checksum` is a SHA-256 hash of the Secret's token data. Anyone
+who can read the Deployment can test guesses against it, so a short or guessable token
+can be recovered. Prefer `mcp.auth.existingSecret` and a long random token if you do not
+want a token-derived hash on the Deployment. With `mcp.auth.token`, the token also stays
+in the Helm release values (`helm get values`).
 
 ```yaml
 mcp:
@@ -132,7 +142,39 @@ mcp:
     token: "<generated-token>"
 ```
 
-Or set it for local runs. `read -rs` keeps the token out of your shell history:
+To use a Secret you already created, set `mcp.auth.existingSecret` to its name and
+`mcp.auth.existingSecretKey` to the key (default `token`). The chart does not create a
+Secret in that case, and `mcp.auth.token` is ignored. The existing Secret must already
+exist in `mcp.namespace.name` (default `kafscale-mcp`) before install or upgrade, or the
+pod gets `CreateContainerConfigError`. Setting `existingSecretKey` without
+`existingSecret` fails the render.
+
+```yaml
+mcp:
+  auth:
+    existingSecret: my-mcp-token
+    existingSecretKey: mcp-token
+```
+
+Changing the token inside an existing Secret does not restart MCP. After you
+update the Secret, replace the release value below with your Helm release name and
+use your `mcp.namespace.name` if you changed it. Select the Deployment by its release
+and component labels so the command also works with name overrides:
+
+```bash
+release='<release>'
+namespace='kafscale-mcp'
+kubectl -n "$namespace" rollout restart deployment \
+  --selector="app.kubernetes.io/instance=$release,app.kubernetes.io/component=mcp"
+```
+
+There is no overlap: only one token is valid at a time. To rotate: update the Secret
+and run the rollout restart above, or set `mcp.auth.token` and run `helm upgrade`,
+which rolls the pod. Then update every client right away. During the rollout clients
+using either token can get 401s. Once the old pod is gone the old token is rejected,
+so there is no separate revoke step.
+
+For local runs without Helm, read and export the token. `read -rs` keeps the token out of your shell history:
 
 ```bash
 read -rs KAFSCALE_MCP_AUTH_TOKEN

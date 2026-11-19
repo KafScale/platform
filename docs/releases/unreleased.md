@@ -69,6 +69,8 @@ limitations under the License.
 - Bound proxy advertised ports and address-derived fallbacks to `1..65535` before narrowing to Kafka's `int32` port field. The two CodeQL conversion warnings exposed a configuration-validation defect, not a confirmed vulnerability (#298).
 - Protobuf descriptor printing uses `jhump/protoreflect/v2`, removing the v1 dependency. Map-entry repair rejects references to entries in the wrong scope instead of silently rewriting them (#284).
 
+- The Helm chart stores `mcp.auth.token` in a Secret and sets `KAFSCALE_MCP_AUTH_TOKEN` from it through a secretKeyRef. Before, the token was a plaintext env value on the Deployment. `mcp.auth.existingSecret` and `mcp.auth.existingSecretKey` use an existing Secret instead. Changing the chart-managed token, or the existing Secret name or key, rolls the MCP pod. Changing the token inside an existing Secret does not; restart the MCP Deployment using the release and component label selector in the [MCP token rotation instructions](../ops-mcp.md#creating-a-bearer-token), which also works with `nameOverride` and `fullnameOverride`. With `mcp.auth.token` the token also stays in the Helm release values (`helm get values`); `mcp.auth.existingSecret` keeps it out.
+
 ### Broker produce, storage and topics
 
 - Conditional segment conflicts evict only the failed cached log, allowing the next request to adopt the immutable winner and continue under the same lease. Retained handles remain fenced for reads and writes. Restore rebuilds all read indexes from validated segment bytes instead of trusting sidecar offset/position pairs, and rejects overlapping segment ranges. This adds full-segment reads during restore within the existing concurrency limits. Failed index uploads also fence the handle without deleting an immutable claim another owner may have adopted. Winning S3 objects remain unchanged; producer retries can still duplicate records because idempotent producers are unsupported (#343).
@@ -377,6 +379,8 @@ ones most likely to affect you.
   requests up to 10 seconds instead of 5. Set
   `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN=0s` for the old immediate stop. See
   [Shutdown](../schema-registry.md#shutdown).
+
+- If `mcp.auth.token` is set, upgrading the chart moves the token from a plaintext Deployment env value into a chart-managed Secret and rolls the MCP pod once. The env var name is unchanged. The token stays in the Helm release values (`helm get values`). To keep the token out of the release values, set `mcp.auth.existingSecret` (and `existingSecretKey` if the key is not `token`).
 
 ### Deprecations
 
