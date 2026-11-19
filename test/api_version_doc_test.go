@@ -66,6 +66,7 @@ func TestUpgradeGuideDocumentsV1Migration(t *testing.T) {
 		`'{"status":{"storedVersions":["v1"]}}'`,
 		"will be removed in a future release",
 		"github.com/KafScale/platform/api/v1",
+		"A chart rollback must keep the 2.0 CRDs.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/upgrade-compatibility.md does not contain %q", want)

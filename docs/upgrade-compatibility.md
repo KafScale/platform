@@ -107,9 +107,10 @@ picking one.
 ### Rollback
 
 Rolling the operator back to a release that only knows v1alpha1 keeps working
-while the new CRDs are installed, because v1alpha1 is still served. Do not apply
-the old CRDs while any object is stored as v1: the API server refuses to remove
-v1 from the CRD while `status.storedVersions` lists it.
+while the new CRDs are installed, because v1alpha1 is still served. Once objects
+are stored as v1, the old v1alpha1-only CRDs from 1.x cannot be reapplied. The
+API server refuses to remove v1 from the CRD while `status.storedVersions` lists
+it. A chart rollback must keep the 2.0 CRDs.
 
 ## Go API migration
 
