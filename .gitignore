@@ -17,6 +17,8 @@
 !*.jpeg
 !*.svg
 !*.webp
+!*.webm
+!*.mp4
 !*.ico
 !*.txt
 !CNAME
