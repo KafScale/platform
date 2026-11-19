@@ -27,6 +27,7 @@ import (
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -144,6 +145,53 @@ func TestBrokerHPAReplicasAPI(t *testing.T) {
 	reconcile()
 	if got := replicas(); got != 8 {
 		t.Fatalf("replicas above the HPA max = %d, want 8", got)
+	}
+
+	// Exercise admission and persistence, rather than only changing the local
+	// object: zero must be accepted by the CRD while the cluster owns its HPA.
+	for _, desired := range []int32{0, 2} {
+		cluster.Spec.Brokers.Replicas = int32Ptr(desired)
+		if err := c.Update(ctx, cluster); err != nil {
+			t.Fatalf("API rejected spec.brokers.replicas=%d: %v", desired, err)
+		}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(cluster), cluster); err != nil {
+			t.Fatal(err)
+		}
+		if cluster.Spec.Brokers.Replicas == nil || *cluster.Spec.Brokers.Replicas != desired {
+			t.Fatalf("API changed explicit replicas=%d: %v", desired, cluster.Spec.Brokers.Replicas)
+		}
+		reconcile()
+		if got := replicas(); got != desired {
+			t.Fatalf("replicas after API update to %d = %d", desired, got)
+		}
+		if got, err := r.Publisher.liveBrokerCount(ctx, cluster); err != nil || got != desired {
+			t.Fatalf("live broker count after API update to %d = %d, %v", desired, got, err)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		value *int32
+		want  int32
+	}{
+		{"hpa-start-stopped", int32Ptr(0), 0},
+		{"hpa-default-count", nil, 3},
+	} {
+		created := testCluster(tc.name, nil)
+		created.Spec.Brokers.Replicas = tc.value
+		if err := c.Create(ctx, created); err != nil {
+			t.Fatalf("create cluster %s: %v", tc.name, err)
+		}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(created), created); err != nil {
+			t.Fatal(err)
+		}
+		if created.Spec.Brokers.Replicas == nil || *created.Spec.Brokers.Replicas != tc.want {
+			t.Fatalf("created cluster %s replicas = %v, want %d", tc.name, created.Spec.Brokers.Replicas, tc.want)
+		}
+	}
+	invalid := testCluster("hpa-negative-count", nil)
+	invalid.Spec.Brokers.Replicas = int32Ptr(-1)
+	if err := c.Create(ctx, invalid); !apierrors.IsInvalid(err) {
+		t.Fatalf("negative replicas must fail CRD admission: %v", err)
 	}
 
 	if err := c.Delete(ctx, hpa); err != nil {

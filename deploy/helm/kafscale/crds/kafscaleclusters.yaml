@@ -521,7 +521,7 @@ spec:
                         an empty object to disable affinity. No automatic merge.
                     replicas:
                       type: integer
-                      minimum: 1
+                      minimum: 0
                       default: 3
                     advertisedHost:
                       type: string
