@@ -103,6 +103,34 @@ func TestSingleBrokerEndpointRejectsStaleMetadata(t *testing.T) {
 	}
 }
 
+func TestWaitForBrokerScaleAndEndpoint(t *testing.T) {
+	for _, healthy := range []bool{false, true} {
+		run := func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			if !healthy {
+				return nil, errors.New("API unavailable")
+			}
+			if strings.Contains(strings.Join(args, " "), "get statefulset") {
+				return []byte(`{"metadata":{"generation":2},"spec":{"replicas":1},"status":{"observedGeneration":2,"replicas":1,"readyReplicas":1,"updatedReplicas":1,"currentRevision":"new","updateRevision":"new"}}`), nil
+			}
+			return []byte(`{"items":[{"metadata":{"name":"demo-broker-0"},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`), nil
+		}
+		err := waitForBrokerReplicas(context.Background(), run, "test-ns", "demo", 1, 5*time.Millisecond)
+		if (err == nil) != healthy {
+			t.Fatalf("scale healthy=%v: %v", healthy, err)
+		}
+		read := func() []byte {
+			if healthy {
+				return []byte(`{"Brokers":[{"Host":"127.0.0.1","Port":19092}]}`)
+			}
+			return []byte(`{"Brokers":[]}`)
+		}
+		err = waitForSingleBrokerEndpoint(context.Background(), read, "127.0.0.1", 19092, 5*time.Millisecond)
+		if (err == nil) != healthy {
+			t.Fatalf("endpoint healthy=%v: %v", healthy, err)
+		}
+	}
+}
+
 func TestOperatorBackendChecks(t *testing.T) {
 	failure := errors.New("not healthy")
 	for _, tc := range []struct {
