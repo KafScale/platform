@@ -19,7 +19,7 @@ limitations under the License.
 
 Kafscale is a kubernetes native platform focused on Kafka protocol parity and
 operational stability. This document summarizes the current security posture
-and the boundaries of what is and is not supported in v1.
+and the boundaries of what is and is not supported today.
 
 ## Current Security Posture
 
@@ -29,7 +29,7 @@ and the boundaries of what is and is not supported in v1.
   Legacy deployments accept unauthenticated Kafka connections. The console UI
   supports basic auth via
   `KAFSCALE_UI_USERNAME` / `KAFSCALE_UI_PASSWORD`.
-- **Authorization**: optional in v1.5. When ACLs are enabled, broker APIs are
+- **Authorization**: optional. When ACLs are enabled, broker APIs are
   authorized by the configured rules; when disabled, all broker APIs are
   implicitly allowed (including admin APIs like CreatePartitions/DeleteGroups).
 - **Transport Security**: TLS can terminate at the Kafka proxy, ingress, or
@@ -50,7 +50,7 @@ and the boundaries of what is and is not supported in v1.
 - Use least-privilege IAM roles for S3 access and restrict etcd endpoints.
 - Treat the console as privileged; do not expose it publicly without auth.
 
-## v1.5 Auth (Basic ACLs)
+## Broker ACLs
 
 Kafscale supports optional, basic ACL enforcement at the broker. TLS
 can terminate at the native Kafka proxy listener or your load balancer / service mesh.

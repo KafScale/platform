@@ -99,6 +99,13 @@ Helm can emit `KafscaleEtcdBackendSizeHigh` and `KafscaleEtcdNOSPACE` Prometheus
 The Grafana template lives in `docs/grafana/broker-dashboard.json`. It expects
 Prometheus to scrape both broker and operator metrics endpoints.
 
+Import it in Grafana with **Dashboards → Import** and point the Prometheus data source at the cluster scraping those `/metrics` endpoints. The dashboard includes:
+
+- S3 health and pressure tiles backed by `kafscale_s3_health_state`
+- Produce throughput (success rate per topic)
+- S3 latency and error time series
+- Admin API request and error rates
+
 ## Metric Coverage
 
 Metric names and behavior evolve as the platform grows. When in doubt, consult

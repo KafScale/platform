@@ -21,19 +21,17 @@ import (
 )
 
 func TestMCPToolArgumentsDocumented(t *testing.T) {
-	for _, doc := range []string{"docs/ops-mcp.md", "docs/mcp.md"} {
-		text := readRepoDoc(t, doc)
-		for _, want := range []string{
-			"`describe_topics`: optional `names`",
-			"`describe_group`: required `group_id`",
-			"required `group_id`, optional `topics`",
-			"`describe_configs`: optional `topics`",
-			`invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`,
-			"metrics provider not configured",
-		} {
-			if !strings.Contains(text, want) {
-				t.Errorf("%s does not document %q", doc, want)
-			}
+	text := readRepoDoc(t, "docs/ops-mcp.md")
+	for _, want := range []string{
+		"`describe_topics`: optional `names`",
+		"`describe_group`: required `group_id`",
+		"required `group_id`, optional `topics`",
+		"`describe_configs`: optional `topics`",
+		`invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`,
+		"metrics provider not configured",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("docs/ops-mcp.md does not document %q", want)
 		}
 	}
 }

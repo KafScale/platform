@@ -42,7 +42,7 @@ make commit-check
 - `pkg/gen/`: auto-generated protobuf + gRPC Go code (ignored until `buf generate` runs)
 - `docs/`: specs and this guide
 - `test/`: integration + e2e suites
-- `docs/storage.md`: deeper design notes for the storage subsystem, including S3 client expectations
+- `docs/architecture.md`: current write path, read path, and cache. Produce flush policy is in `docs/operations.md`.
 
 Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 
@@ -215,30 +215,9 @@ The broker reads `KAFSCALE_LOG_LEVEL` at start-up. If the variable is unset we o
 - `KAFSCALE_DEMO_MESSAGES_PER_SEC`
 - `KAFSCALE_DEMO_GROUP`
 
-### Broker / S3
+### Broker, S3, logging, and operator
 
-- `KAFSCALE_S3_BUCKET`
-- `KAFSCALE_S3_REGION`
-- `KAFSCALE_S3_NAMESPACE`
-- `KAFSCALE_S3_ENDPOINT`
-- `KAFSCALE_S3_PATH_STYLE`
-- `KAFSCALE_S3_KMS_ARN`
-- `KAFSCALE_S3_ACCESS_KEY`
-- `KAFSCALE_S3_SECRET_KEY`
-- `KAFSCALE_S3_SESSION_TOKEN`
-- `KAFSCALE_USE_MEMORY_S3`
-- `KAFSCALE_THROUGHPUT_WINDOW_SEC`
-
-### Broker logging
-
-- `KAFSCALE_LOG_LEVEL`
-- `KAFSCALE_TRACE_KAFKA`
-
-### Operator / etcd
-
-- `KAFSCALE_ETCD_ENDPOINTS`
-- `KAFSCALE_ETCD_USERNAME`
-- `KAFSCALE_ETCD_PASSWORD`
+Production and runtime environment variables, including defaults and behavior, are in the [Environment variable index](operations.md#environment-variable-index).
 
 ## Kafka Compatibility Tracking
 

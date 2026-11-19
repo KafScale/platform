@@ -58,6 +58,8 @@ When the broker detects degraded or unavailable S3 health, it rejects Produce an
 
 ## Multi-Region S3 Reads (CRR)
 
+Setup, per-region configuration, and consistency notes are in [Multi-region S3 (CRR) for global reads](operations.md#multi-region-s3-crr-for-global-reads).
+
 ```
                 +-----------------------+
                 |  Producers (Any RG)   |

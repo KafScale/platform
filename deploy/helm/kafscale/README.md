@@ -23,17 +23,19 @@ Kafka proxy, and MCP server. LFS is configured on the `KafscaleCluster` CRD
 
 ## Prerequisites
 
-- Kubernetes 1.24+
-- Helm 3.x
+- Kubernetes 1.26+
+- Helm 3.12+
 - (Optional) Prometheus Operator for ServiceMonitor resources
 
 ## Installation
+
+For a first install, follow the [Quickstart](../../../docs/quickstart.md). Production values, image tags, and `useLatest` are in [Installing with Helm](../../../docs/operations.md#installing-with-helm). Both use namespace `kafscale`.
 
 ### Install from local chart
 
 ```bash
 helm upgrade --install kafscale ./deploy/helm/kafscale \
-  -n kafscale-system --create-namespace
+  --namespace kafscale --create-namespace
 ```
 
 ## Components
@@ -50,9 +52,7 @@ helm upgrade --install kafscale ./deploy/helm/kafscale \
 
 ### Minimal Installation
 
-```bash
-helm upgrade --install kafscale ./deploy/helm/kafscale
-```
+Use the local-chart command above, or the [Quickstart](../../../docs/quickstart.md) for the full first-install path, including the S3 secret and `KafscaleCluster`.
 
 ### With Kafka Proxy (external access)
 
@@ -230,11 +230,12 @@ For local development without Kubernetes, see
 ## Uninstall
 
 ```bash
-helm uninstall kafscale -n kafscale-system
+helm uninstall kafscale --namespace kafscale
 ```
 
 ## Documentation
 
+- [Quickstart](../../../docs/quickstart.md): first install
 - [Operations Guide](../../../docs/operations.md): external access, proxy, TLS
 - [Docker Compose (local LFS)](../../docker-compose/README.md)
 - [OpenAPI spec](../../../api/lfs-proxy/openapi.yaml)

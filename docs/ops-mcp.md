@@ -33,8 +33,8 @@ for ops workflows such as:
   workflows.
 
 The MCP service is **not** embedded in the broker and does **not** expose any
-mutation tools in v1. For security posture and roadmap, see `docs/security.md`
-and `docs/mcp.md`.
+mutation tools. For design limits and the current security posture, see
+[Design and limits](#design-and-limits) and `docs/security.md`.
 
 ## What It Exposes (v1)
 
@@ -64,6 +64,21 @@ Field notes:
 
 - `cluster_status` includes `cluster_name` when available; clients can use it as the primary label and fall back to `cluster_id`.
 - `describe_group` includes an `offsets` array sorted by topic and partition, with `topic`, `partition`, `offset` and `metadata` for each committed offset. A group with commits but no group metadata is returned with state `empty`, protocol type `consumer` and no members, matching `list_groups`. A group with neither metadata nor offsets is reported as not found.
+
+## Design and limits
+
+The MCP service is a standalone process (`kafscale-mcp`). It is not embedded in the broker. It reads cluster metadata from etcd and scrapes Prometheus metrics from brokers. It is not a replacement for the Kafka protocol or the ops admin APIs.
+
+The Helm chart deploys it only when `mcp.enabled` is true (disabled by default) and defaults to the dedicated namespace `kafscale-mcp`.
+
+The HTTP API is:
+
+- `/mcp`: MCP streamable HTTP transport (SSE).
+- `/healthz` and `/readyz`: unauthenticated probes, described under [Security Notes](#security-notes).
+
+Only the read-only tools listed above are registered. Mutation tools such as `create_topic`, `delete_topic`, `create_partitions`, `update_topic_config`, `delete_group`, and broker drain or flush actions are not implemented.
+
+Auth is an optional static bearer token, `KAFSCALE_MCP_AUTH_TOKEN`. If it is unset, the server is unauthenticated and logs a warning. OIDC, short-lived tokens, RBAC tool allowlists, and audit logging are not implemented.
 
 ## Deployment and Configuration
 

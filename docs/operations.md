@@ -184,7 +184,7 @@ Keep the other `--set` flags your install already uses, because an upgrade with 
   - Replicas spread across nodes on multi-node clusters and still schedule on single-node dev clusters.
   - Set `proxy.affinity` explicitly to replace the chart default.
   - For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
-- **ACLs (v1.5)**: Optional, basic ACL enforcement is available at the broker.
+- **ACLs**: Optional, basic ACL enforcement is available at the broker.
   - With proxy mTLS enabled, identity comes from the client certificate mapping. Without it, identity comes from Kafka `client.id` or network identity, which is not authentication.
   - Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`.
   - Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
@@ -416,28 +416,7 @@ the default chain because its provider may resolve credentials later.
 ## Ops API examples
 
 Kafscale exposes Kafka admin APIs for operator workflows (consumer group visibility,
-config inspection, cleanup). The canonical plan and scope live in `docs/ops-api.md`.
-
-```bash
-# List consumer groups
-kafka-consumer-groups.sh --bootstrap-server '<broker>' --list
-
-# Describe a consumer group
-kafka-consumer-groups.sh --bootstrap-server '<broker>' --describe --group '<group-id>'
-
-# Delete a consumer group
-kafka-consumer-groups.sh --bootstrap-server '<broker>' --delete --group '<group-id>'
-
-# Read topic configs
-kafka-configs.sh --bootstrap-server '<broker>' --describe --entity-type topics --entity-name '<topic>'
-
-# Increase partition count for a topic (additive only)
-kafka-topics.sh --bootstrap-server '<broker>' --alter --topic '<topic>' --partitions '<count>'
-
-# Update topic retention (whitelist only)
-kafka-configs.sh --bootstrap-server '<broker>' --alter --entity-type topics --entity-name '<topic>' \
-  --add-config retention.ms=604800000
-```
+config inspection, cleanup). Command examples, API coverage, and config whitelists live in [Ops API](ops-api.md#ops-examples).
 
 ## etcd availability & storage
 
