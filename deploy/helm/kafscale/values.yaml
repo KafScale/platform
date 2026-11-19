@@ -37,6 +37,16 @@ operator:
     repository: ghcr.io/kafscale/kafscale-etcd-tools
     tag: ""
     useLatest: false
+  lfsProxyImage:
+    repository: ghcr.io/kafscale/kafscale-proxy
+    tag: ""
+    useLatest: false
+  etcdImage:
+    repository: gcr.io/etcd-development/etcd
+    tag: "v3.6.14@sha256:a491baeaa0cb0c9cd89c0062ac44ece53886e3e5bddad18d2daf36678ce665b6"
+  etcdSnapshotImage:
+    repository: amazon/aws-cli
+    tag: "2.15.0"
   etcdReplicas: 3
   etcdStorageSize: ""
   etcdStorageClass: ""
@@ -100,8 +110,9 @@ console:
     useLatest: false
     pullPolicy: IfNotPresent
   auth:
+    existingSecret: ""  # Name of existing Secret with username and password keys
     username: ""
-    password: null  # Set via --set or use existingSecret
+    password: null  # Set via --set or a values file when existingSecret is empty
   etcdEndpoints: []
   s3Namespace: ""  # Set to the KafscaleCluster namespace when etcdEndpoints is set. Empty makes the console refuse topic deletes.
   etcd:
@@ -243,36 +254,6 @@ proxy:
     # tracked separately.
     nodePort: ""
 
-# NOTE: The standalone lfs-proxy has been removed.
-# LFS is now a feature-flag on the unified proxy: set proxy.lfs.enabled=true.
-# See proxy values above for LFS configuration.
-
-lfsDemos:
-  enabled: false
-  e72Browser:
-    enabled: true  # Browser LFS SDK demo
-    lfsProxyEndpoint: ""  # Auto-detected from cluster if empty
-    defaultTopic: browser-uploads
-    image:
-      repository: ghcr.io/kafscale/kafscale-e72-browser-demo
-      tag: ""
-      useLatest: false
-      pullPolicy: IfNotPresent
-    service:
-      type: NodePort
-      port: 80
-      nodePort: 30072
-    ingress:
-      enabled: false
-      className: ""
-      annotations: {}
-      hosts:
-        - host: lfs-demo.local
-          paths:
-            - path: /
-              pathType: Prefix
-      tls: []
-
 mcp:
   enabled: false
   namespace:
@@ -289,6 +270,8 @@ mcp:
     name: ""
   auth:
     token: ""
+    existingSecret: ""  # Name of an existing Secret; when set, token is ignored
+    existingSecretKey: ""  # Key in existingSecret; defaults to token when existingSecret is set
   etcdEndpoints: []
   etcd:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
@@ -347,6 +330,10 @@ schemaRegistry:
     existingSecret: ""  # Name of existing Secret with ETCD_USERNAME and ETCD_PASSWORD keys
   requestTimeout: ""  # Go duration, for example 10s
   inlineLimitBytes: ""  # Schema text above this size goes to S3, default 65536
+  shutdownDrain: ""  # Go duration the registry keeps serving after SIGTERM with /readyz failing, default 5s, 0 or 0s turns it off
+  shutdownTimeout: ""  # Go duration in-flight requests get to finish after the drain, default 10s
+  preStopSleepSeconds: 0  # Seconds a preStop hook sleeps before SIGTERM, 0 adds no hook
+  terminationGracePeriodSeconds: 30
   s3:
     bucket: ""
     region: ""

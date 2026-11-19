@@ -139,6 +139,9 @@ jobs:
       - name: Run go vet ./...
         run: go vet ./...
 
+      - name: Install Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+
       - name: Run go test -race ./...
         run: go test -race ./...
 
@@ -349,7 +352,7 @@ jobs:
       - name: Install kind
         run: go install sigs.k8s.io/kind@v0.31.0
       - name: Check operator startup readiness and retry regressions
-        run: go test -race -tags=e2e ./test/e2e -run '^Test(OperatorBackendChecks|OperatorResourceExists|WaitForOperatorBackends|ProduceAfterReadiness|KindKubeProxyMode)' -v -count=1 -timeout=2m
+        run: go test -race -tags=e2e ./test/e2e -run '^Test(OperatorBackendChecks|OperatorResourceExists|WaitForOperatorBackends|WaitForStatefulSetPodReady|ProduceAfterReadiness|KindKubeProxyMode)' -v -count=1 -timeout=2m
       - name: Run operator snapshot, restore, durability and HA e2e
         run: make test-operator-kind
       - name: Delete test cluster

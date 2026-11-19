@@ -501,12 +501,26 @@ func (p *proxy) checkReady(ctx context.Context) bool {
 	// traffic that silently returns zero records. Require a Fetch round-trip
 	// that actually decodes before reporting Ready.
 	if p.readyzFetchProbe {
+		if len(p.backends) == 0 && p.etcdUnreachable(ctx) {
+			p.logger.Debug("readyz fetch probe skipped during an etcd outage; staying Ready")
+			return true
+		}
 		if err := p.fetchProbe(ctx); err != nil {
 			p.logger.Warn("readyz fetch probe failed; staying NotReady", "error", err)
 			return false
 		}
 	}
 	return true
+}
+
+func (p *proxy) etcdUnreachable(ctx context.Context) bool {
+	store, ok := p.store.(interface{ CheckReadiness(context.Context) error })
+	if !ok {
+		return false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	return store.CheckReadiness(checkCtx) != nil
 }
 
 // haveBackend reports whether the proxy knows of at least one broker backend.

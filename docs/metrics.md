@@ -82,6 +82,7 @@ Operator metrics are exported by the controller runtime metrics server.
 | `kafscale_operator_etcd_snapshot_stale` | Gauge | `cluster` | 1 when the snapshot age exceeds the staleness threshold. |
 | `kafscale_operator_etcd_snapshot_success` | Gauge | `cluster` | 1 if at least one successful snapshot was recorded. |
 | `kafscale_operator_etcd_snapshot_access_ok` | Gauge | `cluster` | 1 if the snapshot bucket preflight succeeds. |
+| `kafscale_operator_etcd_snapshot_threshold_seconds` | Gauge | - | `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, the age after which `kafscale_operator_etcd_snapshot_stale` is 1. Every replica exports it, including standby replicas. |
 | `kafscale_operator_etcd_db_total_size_bytes` | Gauge | `cluster`, `member` | Physical etcd backend size per managed member. |
 | `kafscale_operator_etcd_db_in_use_bytes` | Gauge | `cluster`, `member` | Logical in-use etcd backend size per managed member. |
 | `kafscale_operator_etcd_db_size_high` | Gauge | `cluster` | 1 when any member exceeds the maintenance size threshold. |

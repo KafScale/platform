@@ -404,6 +404,70 @@ func envValue(env []corev1.EnvVar, key string) string {
 	return ""
 }
 
+func TestEtcdJobPodTemplatesDoNotMatchMemberSelectors(t *testing.T) {
+	t.Setenv(operatorEtcdEndpointsEnv, "")
+	cluster := testCluster("managed", nil)
+	scheme := testScheme(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cluster).Build()
+	if _, err := EnsureEtcd(context.Background(), c, scheme, cluster); err != nil {
+		t.Fatalf("EnsureEtcd: %v", err)
+	}
+
+	clientSvc := &corev1.Service{}
+	assertFound(t, c, clientSvc, cluster.Namespace, cluster.Name+"-etcd-client")
+	headless := &corev1.Service{}
+	assertFound(t, c, headless, cluster.Namespace, cluster.Name+"-etcd")
+	pdb := &policyv1.PodDisruptionBudget{}
+	assertFound(t, c, pdb, cluster.Namespace, cluster.Name+"-etcd")
+
+	selectors := []struct {
+		name     string
+		selector map[string]string
+	}{
+		{"client Service", clientSvc.Spec.Selector},
+		{"headless Service", headless.Spec.Selector},
+		{"PDB", pdb.Spec.Selector.MatchLabels},
+	}
+
+	for _, cronName := range []string{
+		cluster.Name + "-etcd-snapshot",
+		cluster.Name + "-etcd-maintenance",
+		cluster.Name + "-etcd-maintenance-check",
+	} {
+		cron := &batchv1.CronJob{}
+		assertFound(t, c, cron, cluster.Namespace, cronName)
+		labels := cron.Spec.JobTemplate.Spec.Template.Labels
+		for _, sel := range selectors {
+			if labelSelectorMatches(sel.selector, labels) {
+				t.Errorf("%s pod template labels %v match the %s selector %v", cronName, labels, sel.name, sel.selector)
+			}
+		}
+	}
+
+	sts := &appsv1.StatefulSet{}
+	assertFound(t, c, sts, cluster.Namespace, cluster.Name+"-etcd")
+	for _, sel := range selectors {
+		if !labelSelectorMatches(sel.selector, sts.Spec.Template.Labels) {
+			t.Errorf("StatefulSet pod labels %v do not match the %s selector %v", sts.Spec.Template.Labels, sel.name, sel.selector)
+		}
+		if !labelSelectorMatches(sel.selector, sts.Spec.Selector.MatchLabels) {
+			t.Errorf("StatefulSet selector %v does not match the %s selector %v", sts.Spec.Selector.MatchLabels, sel.name, sel.selector)
+		}
+	}
+}
+
+func labelSelectorMatches(selector, labels map[string]string) bool {
+	if len(selector) == 0 {
+		return false
+	}
+	for key, value := range selector {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
 func testCluster(name string, endpoints []string) *kafscalev1alpha1.KafscaleCluster {
 	return &kafscalev1alpha1.KafscaleCluster{
 		ObjectMeta: metav1.ObjectMeta{

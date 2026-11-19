@@ -32,14 +32,29 @@ This guide explains how to install the Kafscale control plane with Helm, configu
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
-  --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
+  --set 'operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379' \
   --set operator.image.tag=v1.6.3 \
   --set console.image.tag=v1.6.3
 ```
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
 
-By default, image tags follow the chart `appVersion`. Override `operator.image.tag` and `console.image.tag` to pin a specific release (for example, `v1.6.3`). For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always` for those images).
+By default, image tags follow the chart `appVersion`. Every image key below uses that tag when `tag` is empty, unless `useLatest` is true, in which case the tag is `latest` and `imagePullPolicy` is `Always`:
+
+- `operator.image`
+- `operator.brokerImage`
+- `operator.etcdSnapshotEtcdctlImage`
+- `operator.lfsProxyImage`
+- `console.image`
+- `proxy.image`
+- `schemaRegistry.image`
+- `mcp.image`
+
+Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v1.6.3`). If you install from a checkout of `main`, that tag may be older than the branch; set `useLatest=true` on each image the install runs.
+
+The operator-managed LFS proxy image comes from `spec.lfsProxy.image` if that field is set, otherwise from the operator's `LFS_PROXY_IMAGE` env (the chart sets it from `operator.lfsProxyImage`, which follows `appVersion` like the other image keys). If neither is set, it falls back to `ghcr.io/kafscale/kafscale-proxy:dev`. The same order applies to the pull policy: `spec.lfsProxy.imagePullPolicy` if that field is set, otherwise `LFS_PROXY_IMAGE_PULL_POLICY` (the chart sets it to `Always` when `operator.lfsProxyImage.useLatest` is true, and to `IfNotPresent` otherwise). If that env is also unset, the pull policy is `IfNotPresent`.
+
+The operator also reads `KAFSCALE_OPERATOR_ETCD_IMAGE` and `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_IMAGE`. The chart sets them from `operator.etcdImage` and `operator.etcdSnapshotImage`. Those keys default to the pinned upstream images the operator already uses when the env is unset, `gcr.io/etcd-development/etcd:v3.6.14@sha256:a491baeaa0cb0c9cd89c0062ac44ece53886e3e5bddad18d2daf36678ce665b6` and `amazon/aws-cli:2.15.0`. They do not follow `appVersion`.
 
 ### Per-cluster broker image
 
@@ -65,10 +80,10 @@ the override returns that cluster to the operator default.
 
 | Value | Purpose |
 |-------|---------|
-| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. |
+| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. Console etcd snapshot panel: Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges, and the operator metrics Service balances console scrapes across the replicas. When a scrape reaches a standby replica, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age 0, stale NO, and n/a for last success and last schedule. |
 | `operator.leaderKey` | Kubernetes leader election lock name. Use a DNS-1123 compatible name. |
 | `console.service.*` | Type/port used to expose the UI. Combine with `.console.ingress` to publish via an ingress controller. |
-| `console.auth.*` | Console login credentials. Set both `console.auth.username` and `console.auth.password` to enable the UI. |
+| `console.auth.*` | Console login credentials. Set `console.auth.existingSecret` to a Secret with `username` and `password` keys, or set both `console.auth.username` and `console.auth.password`, to enable the UI. |
 | `imagePullSecrets` | Provide if your container registry (e.g., GHCR) is private. |
 
 ## Post-install steps
@@ -133,13 +148,22 @@ add a persistent manifest. Requests for the restoring partition wait for complet
 
 - **RBAC**: The Helm chart creates a scoped service account and RBAC role so the operator only touches its CRDs, Secrets, and Deployments inside the release namespace.
 - **S3 credentials**: Credentials live in user-managed Kubernetes secrets. The operator never writes them to etcd. Snapshot jobs map `KAFSCALE_S3_ACCESS_KEY`/`KAFSCALE_S3_SECRET_KEY` into the AWS CLI env vars (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) automatically.
-- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, set `console.auth.username` and `console.auth.password`, for example:
+- **Console auth**: The UI requires `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. There are no defaults; if unset, the login screen shows a warning and the API blocks access. In Helm, point `console.auth.existingSecret` at a Secret whose keys are `username` and `password`, or set `console.auth.username` and `console.auth.password` directly. For example:
 
 ```bash
+printf 'Console password: '
+read -rs CONSOLE_PASSWORD
+echo
+printf '%s' "$CONSOLE_PASSWORD" | kubectl -n kafscale create secret generic kafscale-console-auth \
+  --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
+unset CONSOLE_PASSWORD
+
 helm upgrade --install kafscale deploy/helm/kafscale \
-  --set console.auth.username=kafscaleadmin \
-  --set console.auth.password='use-a-secret'
+  --namespace kafscale \
+  --set console.auth.existingSecret=kafscale-console-auth
 ```
+
+Keep the other `--set` flags your install already uses, because an upgrade with only this flag resets them.
 
 - **TLS**: For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
 - **Admin APIs**: Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
@@ -324,17 +348,21 @@ Rotate the keys in this order. The order matters.
 2. Find the registry Deployment by its labels and restart it:
 
    ```bash
-   DEPLOY=$(kubectl get deployment -n <namespace> -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry -o name)
-   kubectl rollout restart "$DEPLOY" -n <namespace>
+   DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)
+   kubectl rollout restart "$DEPLOY" -n '<namespace>'
    ```
 
 3. Check that the rollout finished:
 
    ```bash
-   kubectl rollout status "$DEPLOY" -n <namespace>
+   kubectl rollout status "$DEPLOY" -n '<namespace>'
    ```
 
 4. Only then revoke the old keys.
+
+During the restart each old pod leaves the Service endpoints when its deletion
+starts, and keeps serving for a short drain period while kube-proxy and load
+balancers catch up, before it stops listening. See [Shutdown](schema-registry.md#shutdown).
 
 `<namespace>` is the namespace of the Helm release and `<release>` is the
 release name. The labels do not depend on `nameOverride` or `fullnameOverride`.
@@ -389,22 +417,22 @@ config inspection, cleanup). The canonical plan and scope live in `docs/ops-api.
 
 ```bash
 # List consumer groups
-kafka-consumer-groups.sh --bootstrap-server <broker> --list
+kafka-consumer-groups.sh --bootstrap-server '<broker>' --list
 
 # Describe a consumer group
-kafka-consumer-groups.sh --bootstrap-server <broker> --describe --group <group-id>
+kafka-consumer-groups.sh --bootstrap-server '<broker>' --describe --group '<group-id>'
 
 # Delete a consumer group
-kafka-consumer-groups.sh --bootstrap-server <broker> --delete --group <group-id>
+kafka-consumer-groups.sh --bootstrap-server '<broker>' --delete --group '<group-id>'
 
 # Read topic configs
-kafka-configs.sh --bootstrap-server <broker> --describe --entity-type topics --entity-name <topic>
+kafka-configs.sh --bootstrap-server '<broker>' --describe --entity-type topics --entity-name '<topic>'
 
 # Increase partition count for a topic (additive only)
-kafka-topics.sh --bootstrap-server <broker> --alter --topic <topic> --partitions <count>
+kafka-topics.sh --bootstrap-server '<broker>' --alter --topic '<topic>' --partitions '<count>'
 
 # Update topic retention (whitelist only)
-kafka-configs.sh --bootstrap-server <broker> --alter --entity-type topics --entity-name <topic> \
+kafka-configs.sh --bootstrap-server '<broker>' --alter --entity-type topics --entity-name '<topic>' \
   --add-config retention.ms=604800000
 ```
 
@@ -432,8 +460,25 @@ If no etcd endpoints are supplied, the operator will provision a 3-node etcd Sta
 The operator tunes managed etcd automatically:
 
 - In-process periodic compaction (5m retention) and a 4 GiB backend quota on the etcd StatefulSet.
-- `{cluster}-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
-- `{cluster}-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
+- `<cluster>-etcd-snapshot` CronJob (hourly, `0 * * * *`): writes `etcd-snapshots/<timestamp>.db` and a matching `.sha256` into the snapshot bucket (default `kafscale-etcd-<namespace>-<cluster>`, prefix `etcd-snapshots`). Override the schedule with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SCHEDULE`.
+- `<cluster>-etcd-maintenance` CronJob (every 6h): per-member defrag and NOSPACE alarm disarm.
+- `<cluster>-etcd-maintenance-check` CronJob (every 15m): runs maintenance only when backend size crosses 75% of quota or a NOSPACE alarm is active.
+
+To take a snapshot now, replace the namespace and cluster values below and start a Job from the snapshot CronJob:
+
+```bash
+namespace='<namespace>'
+cluster='<cluster>'
+kubectl -n "$namespace" create job --from=cronjob/"$cluster"-etcd-snapshot snapshot-now
+kubectl -n "$namespace" wait --for=condition=complete --timeout=5m job/snapshot-now
+kubectl -n "$namespace" logs job/snapshot-now
+```
+
+Use a new Job name for each manual snapshot. Verify the manual Job's `Complete` condition and its logs, which show the snapshot and checksum uploads. If the wait times out, inspect the Job with `kubectl -n "$namespace" describe job/snapshot-now` and check its logs before relying on the snapshot. A manual Job created with `--from=cronjob` does not update the CronJob's `status.lastSuccessfulTime`, so it does not refresh the cluster's `EtcdSnapshot` condition.
+
+The `KafscaleCluster` condition `EtcdSnapshot` tracks scheduled snapshots through the CronJob's `status.lastSuccessfulTime`. A recent scheduled success sets `EtcdSnapshot=True` with reason `SnapshotHealthy`; no recorded success or an older success produces `SnapshotNeverSucceeded` or `SnapshotStale`. With operator-managed etcd, the operator watches CronJob status changes and requests a recheck at most one minute later, but reconciliation delays can postpone the condition update.
+
+The snapshot bucket defaults to `kafscale-etcd-<namespace>-<cluster>`. The CronJob is created only when etcd is operator-managed. External etcd gets `EtcdSnapshot=False` with reason `SnapshotNotManaged` on the next reconcile.
 
 Override schedules and thresholds via the operator etcd env vars listed below.
 
@@ -445,6 +490,26 @@ The operator resolves etcd endpoints in this order:
 2. `KAFSCALE_OPERATOR_ETCD_ENDPOINTS`
 3. Managed etcd (operator creates a 3-node StatefulSet)
 
+### Service names
+
+On an operator-managed cluster, Kubernetes Service names come from the
+`KafscaleCluster` name (`<cluster>`) and its namespace (`<namespace>`):
+
+- etcd client: `<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`
+- broker (Kafka): `<cluster>-broker.<namespace>.svc.cluster.local:9092`
+- broker (metrics): `<cluster>-broker.<namespace>.svc.cluster.local:9093`
+- per-broker DNS: `<cluster>-broker-<n>.<cluster>-broker-headless.<namespace>.svc.cluster.local:9092`
+
+The quickstart cluster `demo` in namespace `kafscale` uses
+`demo-etcd-client.kafscale.svc.cluster.local:2379` and
+`demo-broker.kafscale.svc.cluster.local:9092` (metrics on port 9093).
+
+Helm values such as `proxy.etcdEndpoints`, `schemaRegistry.etcdEndpoints`,
+`mcp.etcdEndpoints` and `mcp.metrics.brokerMetricsURL` must use these
+Services when etcd is operator-managed. Examples that use
+`etcd.kafscale.svc` are for an external etcd you already run, not for
+managed etcd.
+
 ### etcd schema direction
 
 Kafscale uses a snapshot-based metadata schema today: the operator publishes a full metadata snapshot to etcd and brokers consume it. We avoid per-key writes for broker registrations and assignments until the ops surface requires it.
@@ -454,6 +519,20 @@ Kafscale uses a snapshot-based metadata schema today: the operator publishes a f
 - `/kafscale/consumers/<group>/metadata` holds the group metadata.
 - `/kafscale/consumers/<group>/offsets/<topic>/<partition>` holds each committed offset.
 - `/kafscale/consumer-groups/<group>` is an empty index key. Brokers write it in the same etcd transaction as a group's metadata when they create the group, when a member joins a group that has no index key, and when the retention sweep sets or refreshes a group's `EmptySince` time. They delete it with the group.
+
+### Partition leases
+
+Each in-use partition is owned by one broker through an etcd lease. The key is
+`/kafscale/partition-leases/<topic>/<partition>` and the value is the broker
+id, as a decimal string (the broker NodeID). The keys share one etcd session
+on the owning broker. The default lease TTL is 10 seconds. The broker refreshes
+that session lease while it runs, so its keys, including keys for a deleted
+topic, stay until it shuts down, or 10 seconds after it stops refreshing. To
+see who owns the partitions of a topic:
+
+```bash
+kubectl -n kafscale exec demo-etcd-0 -c etcd -- etcdctl get --prefix /kafscale/partition-leases/orders/
+```
 
 The retention sweep runs on the broker that holds the `/kafscale/retention-sweeper` lease.
 
@@ -498,6 +577,18 @@ The schema registry keeps its state in the same etcd.
 
 The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-revision` and `--mark-compacted`. The default image ships etcdutl 3.6.14. Override with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_ETCDCTL_IMAGE` if you use a custom image.
 
+### Installing kafscale-cli
+
+`kafscale-cli` is built from this repository and needs Go 1.26 or later. There is no container image or
+released binary for it. From the repository root:
+
+```bash
+go build -o bin/kafscale-cli ./cmd/kafscale-cli
+```
+
+`kafscale-cli --help` and `kafscale-cli <command> --help` print the commands,
+flags and environment variables.
+
 ### Topic recovery on the DR spine
 
 For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
@@ -508,12 +599,19 @@ Use `kafscale-cli restore` to create a fresh target topic, copy `.kfs` segment/i
 kafscale-cli restore \
   --topic orders \
   --target-topic orders-restore-20260513 \
+  --namespace kafscale \
   --to 2026-05-13T14:23:00Z
 ```
+
+`--namespace` is the S3 prefix namespace for the source topic, which on an operator cluster is the `KafscaleCluster` namespace. It defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`. `--target-namespace` defaults to the source namespace. `--partitions` is an optional comma-separated list of partitions to restore.
+
+Every environment variable `restore` reads is listed in [kafscale-cli](#kafscale-cli).
 
 Operational semantics:
 
 - Recovery runs against the existing KafScale S3 + etcd control plane, including `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, and `KAFSCALE_ETCD_ENDPOINTS`.
+- S3 credentials are `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`, optionally `KAFSCALE_S3_SESSION_TOKEN`. If either is unset, the AWS SDK default credential chain is used: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; the shared config and credentials files with `AWS_PROFILE`; web identity with `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` (EKS IRSA); and ECS or EC2 instance role credentials. Without credentials, restore fails at its first S3 call, listing the source segments, with an error that starts `list objects <prefix>:` and includes `get credentials`, and creates no target.
+- Restore fails when there are no segments for the selected partitions under `<namespace>/<topic>/`, or `<namespace>/<topic>@<generation>/` for a re-created topic, or when no record in those segments is at or before `--to`. The command exits with a non-zero status and names the prefix it searched. If the first listing already shows no segments, the target topic is not created; otherwise the target is rolled back. Set `--namespace`, `KAFSCALE_NAMESPACE` or `KAFSCALE_S3_NAMESPACE` to the cluster namespace (`KAFSCALE_NAMESPACE` wins over `KAFSCALE_S3_NAMESPACE`).
 - The target topic must be new. KafScale refuses to restore over an existing persisted topic.
 - Recovery copies every fully eligible segment/index pair, then inspects the first intersecting segment and truncates it at the first record whose timestamp exceeds the cutoff.
 - If the intersecting batch is compressed, exact truncation is not safe, so the restore fails and the operator should choose an earlier cutoff or a segment boundary instead.
@@ -522,7 +620,7 @@ Operational semantics:
 
 ### Pruning deleted topic data
 
-DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`:
+DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`. Every environment variable `prune` reads is listed in [kafscale-cli](#kafscale-cli):
 
 ```bash
 kafscale-cli prune
@@ -532,7 +630,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 
 - `--topic` limits the run to deleted incarnations of one topic. `--older-than` limits it to incarnations deleted longer ago than the given age, such as `7d` or `24h`.
 - The output has one line per deleted incarnation with the topic, generation, S3 prefix, object count, bytes and `deleted_at`, then the totals. A dry run says that nothing was deleted.
-- Prune uses the same environment as `kafscale-cli restore`. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.
+- `kafscale-cli prune` needs the same S3 and etcd environment as restore. A dry run needs them too, because it calls CheckBucket, lists etcd and lists S3. It talks to etcd and S3 directly and does not go through the brokers, so access to prune is controlled by the etcd and S3 credentials. `KAFSCALE_ALLOW_ADMIN_APIS` and Kafka ACLs do not apply.
 - Each incarnation is matched by its exact prefix with a trailing slash, such as `default/orders@1/`, so it never matches `orders@10` or `orders-x`.
 - Prune only counts and deletes partition segment and index files, `<prefix><partition>/segment-<offset>.kfs` and `.index`. It skips every other key under the prefix, including LFS objects that older proxies wrote under `<namespace>/<topic>/lfs/`. LFS objects written now live under `<namespace>/@lfs/`, outside every topic prefix.
 - Prune checks that the bucket exists before it lists anything, and fails instead of creating it.
@@ -541,6 +639,7 @@ kafscale-cli prune --topic orders --older-than 7d --force
 - Prune is safe while brokers run, because brokers only write to the current generation's prefix.
 - On a bucket with versioning enabled, prune only adds delete markers. Add a lifecycle rule that expires noncurrent versions to free the space.
 - Prune does not delete LFS objects. Topics deleted before the upgrade that added generations have no record, so prune does not cover their data.
+- If `kafscale-cli restore` creates the target topic and a later step fails (`UpdateTopicConfig`, `TopicGeneration` or the copy), restore rolls back by retiring that target. That writes a `/kafscale/deleted-topics` record with no objects, or only those copied before the failure, which `kafscale-cli prune` lists. If the rollback itself fails, restore prints `warning: failed to roll back target topic <name>: ...` to stderr, the target stays, and no deleted-topics record is written. `prune --topic <target> --force` removes the record, and every other deleted incarnation of that name.
 
 ### Consumer offsets after restore
 
@@ -553,7 +652,7 @@ Minimal env + spec checklist for a smooth run:
 - Operator env: `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_BUCKET` (optional override), `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_S3_ENDPOINT` (if non-AWS), optionally `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_CREATE_BUCKET=1`.
 - Cluster spec: `spec.s3.bucket`, `spec.s3.region`, `spec.s3.credentialsSecretRef`, `spec.s3.endpoint` (if non-AWS). Optional read replica: `spec.s3.readBucket`, `spec.s3.readRegion`, `spec.s3.readEndpoint`.
 - Secret keys: `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`.
-- Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`.
+- Console auth env: `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`. The Helm chart sets them from `console.auth.existingSecret` or from `console.auth.username` and `console.auth.password`.
 
 Recommended operator alerting (when using Prometheus Operator):
 - `KafscaleSnapshotAccessFailed`: S3 snapshot writes failing.
@@ -575,7 +674,9 @@ startup waits, and the pod stays up and NotReady.
 1. **Is a backend known?** Cached backend state when fresh, otherwise a live
    metadata fetch from etcd.
 2. **Does that backend actually serve Fetch?** A Fetch round-trip on a fresh
-   connection that must decode cleanly.
+   connection that must decode cleanly. Skipped during an etcd outage within
+   the TTL, see
+   [Proxy behavior when etcd is down](#proxy-behavior-when-etcd-is-down).
 
 The second question exists because the proxy is a full Fetch codec: it decodes,
 merges and re-encodes broker Fetch responses. A proxy-to-broker Fetch
@@ -612,6 +713,10 @@ successful read.
 - Clients still get metadata and reach a broker, but their produces wait. Brokers
   reject produces with `REQUEST_TIMED_OUT` while etcd is down, and clients keep
   retrying, so the TTL does not keep produces working.
+- `/readyz` stays Ready while etcd does not answer within 200 ms, even if the
+  Fetch probe cannot reach a broker. The probe still has to succeed when etcd
+  answers, and always when `KAFSCALE_PROXY_BACKENDS` lists static brokers. This
+  applies to the chart proxy and the LFS proxy.
 - The LFS HTTP API already fails. `/lfs/produce` and `/lfs/uploads` read the
   topic generation from etcd on every request, so they return 503
   `metadata_unavailable` as soon as etcd cannot be read.
@@ -636,8 +741,10 @@ successful read.
 
 ### Recovery
 
-Before it rejects a request, the proxy tries to read etcd again. It serves again
-as soon as etcd answers, and `/readyz` turns Ready on the next check.
+Before it rejects a request, the proxy tries to read etcd again. etcd clients
+reconnect with a one-second maximum gRPC backoff, and each connection attempt
+is given at least five seconds, so the proxy serves again within a few seconds
+after etcd answers, and `/readyz` turns Ready on the next check.
 
 ### Notes
 
@@ -645,6 +752,8 @@ as soon as etcd answers, and `/readyz` turns Ready on the next check.
   seconds and the full TTL before the proxy stops. With a TTL of 10 seconds or
   less it stops almost at once.
 - The limit does not apply when `KAFSCALE_PROXY_BACKENDS` lists static brokers.
+- Kubernetes marks the pod NotReady about 30 seconds after `/readyz` starts
+  failing (probe every 5 seconds, failureThreshold 6).
 - This is on purpose. When etcd is down the cluster has to stop writing to avoid
   data loss, so past the TTL the proxy stops instead of letting clients write
   through stale routing.
@@ -718,6 +827,33 @@ advertised address.
   `advertisedPort` set to the forwarded address. `make lfs-demo` does this.
 
 ## Environment variable index
+
+### kafscale-cli
+
+- `KAFSCALE_NAMESPACE`: First default for `restore --namespace`. If unset or blank, `KAFSCALE_S3_NAMESPACE` is used, then `default`. Optional. Used by `restore`.
+- `KAFSCALE_S3_NAMESPACE`: Second default for `restore --namespace` when `KAFSCALE_NAMESPACE` is unset or blank. Optional. Used by `restore`.
+- `KAFSCALE_S3_BUCKET`: S3 bucket. Required for `restore` and `prune` unless `KAFSCALE_USE_MEMORY_S3` is set. No default; the CLI fails with `s3 bucket required` if it is unset.
+- `KAFSCALE_S3_REGION`: S3 region. Required for `restore` and `prune` unless `KAFSCALE_USE_MEMORY_S3` is set. No default; the CLI fails with `s3 region required` if it is unset.
+- `KAFSCALE_S3_ENDPOINT`: Optional S3 endpoint override for `restore` and `prune`. No default.
+- `KAFSCALE_S3_PATH_STYLE`: Optional path-style addressing for `restore` and `prune`. Defaults to true when `KAFSCALE_S3_ENDPOINT` is set, and to false when it is not.
+- `KAFSCALE_S3_KMS_ARN`: Optional KMS key ARN for SSE-KMS. Used by `restore` and `prune`. No default.
+- `KAFSCALE_S3_CONCURRENCY`: Optional cap on concurrent S3 operations for `restore` and `prune` (default `16`).
+- `KAFSCALE_S3_ACCESS_KEY` and `KAFSCALE_S3_SECRET_KEY`: Optional static S3 credentials for `restore` and `prune`. They are used only when both are set. If either is unset, the AWS SDK default credential chain is used: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; the shared config and credentials files with `AWS_PROFILE`; web identity with `AWS_ROLE_ARN` and `AWS_WEB_IDENTITY_TOKEN_FILE` (EKS IRSA); and ECS or EC2 instance role credentials.
+- `KAFSCALE_S3_SESSION_TOKEN`: Optional session token sent with those static credentials. Used by `restore` and `prune`. No default.
+- `KAFSCALE_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Required for `restore` and `prune`. No default; the CLI fails with `etcd endpoints required` if it is unset.
+- `KAFSCALE_ETCD_USERNAME` and `KAFSCALE_ETCD_PASSWORD`: Optional etcd basic auth for `restore` and `prune`.
+- `KAFSCALE_SCHEMA_REGISTRY_URL`: Optional target registry URL for `schema import` (default `http://localhost:8081`), used when `--to` is omitted.
+- `KAFSCALE_SCHEMA_IMPORT_AUTH` and `KAFSCALE_SCHEMA_REGISTRY_AUTH`: Optional source and target registry credentials for `schema import`, used when `--auth` or `--to-auth` is empty. This is the recommended way to pass credentials.
+- `KAFSCALE_USE_MEMORY_S3`: Optional in-memory S3 client for `restore` and `prune` (default false). Dev and test only.
+
+### MCP server
+
+- `KAFSCALE_MCP_HTTP_ADDR`: Listen address (default `:8090`). The Helm chart sets `:8090`.
+- `KAFSCALE_MCP_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Optional. If unset, the metadata tools return `metadata store not configured`. Helm value `mcp.etcdEndpoints`.
+- `KAFSCALE_MCP_ETCD_USERNAME` and `KAFSCALE_MCP_ETCD_PASSWORD`: Optional etcd basic auth. Helm values `mcp.etcd.existingSecret` (keys `ETCD_USERNAME` and `ETCD_PASSWORD`), or `mcp.etcd.username` and `mcp.etcd.password`.
+- `KAFSCALE_MCP_BROKER_METRICS_URL`: Broker Prometheus metrics URL. Optional. If unset, `cluster_metrics` returns `metrics provider not configured`. With `KAFSCALE_MCP_ETCD_ENDPOINTS` set, every broker registered in etcd is read with this URL's scheme, port and path and the results are summed, and the URL itself is the fallback when no broker answers. Without etcd only this URL is read. Helm value `mcp.metrics.brokerMetricsURL`.
+- `KAFSCALE_MCP_SESSION_TIMEOUT`: Idle session timeout as a Go duration such as `10m`. Optional. If unset, idle sessions are never closed. An invalid value stops the server at startup. Helm value `mcp.sessionTimeout`.
+- `KAFSCALE_MCP_AUTH_TOKEN`: Static bearer token for `/mcp`. Optional. If unset, the server is unauthenticated and logs a warning. Helm value `mcp.auth.token`.
 
 ### Operator
 
@@ -851,6 +987,8 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_ENDPOINTS`: Comma-separated etcd endpoints. Required.
 - `KAFSCALE_SCHEMA_REGISTRY_ETCD_USERNAME`, `KAFSCALE_SCHEMA_REGISTRY_ETCD_PASSWORD`: Etcd auth for the registry.
 - `KAFSCALE_SCHEMA_REGISTRY_REQUEST_TIMEOUT`: Time limit for one request as a Go duration (default `10s`). A write that is still retrying when it runs out fails with error code 50002.
+- `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_DRAIN`: How long the registry keeps serving after SIGTERM or SIGINT, with `/readyz` failing, before it stops accepting connections, as a Go duration (default `5s`, `0` or `0s` turns it off). See [Shutdown](schema-registry.md#shutdown).
+- `KAFSCALE_SCHEMA_REGISTRY_SHUTDOWN_TIMEOUT`: How long in-flight requests get to finish after the drain period, as a Go duration (default `10s`). Requests still running then are cut off and the registry exits with an error.
 - `KAFSCALE_SCHEMA_REGISTRY_INLINE_LIMIT_BYTES`: Schema text above this size is stored in S3 instead of etcd (default `65536`).
 - `KAFSCALE_S3_BUCKET`, `KAFSCALE_S3_REGION`, `KAFSCALE_S3_ENDPOINT`, `KAFSCALE_S3_PATH_STYLE`, `KAFSCALE_S3_ACCESS_KEY`, `KAFSCALE_S3_SECRET_KEY`, `KAFSCALE_S3_SESSION_TOKEN`, `KAFSCALE_S3_KMS_ARN`, `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker.
   - Used for schema text above the inline limit and for the schema id records described in [schema-registry.md](schema-registry.md#storage).
@@ -870,13 +1008,42 @@ See [Schema Registry](schema-registry.md) for what the registry does.
 - `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD`: Etcd auth for console.
 - `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. Set it to the `KafscaleCluster` namespace, which the operator gives the brokers. The console writes it into the deleted topic record that `kafscale-cli prune` uses. When it is unset or blank, the console refuses topic deletes with `503`. The Helm chart sets it from `console.s3Namespace` and prints a warning in the install notes when `console.etcdEndpoints` is set and `console.s3Namespace` is empty.
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL`: Broker Prometheus endpoint.
-- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials.
+- `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials. The Helm chart sets them from the Secret named by `console.auth.existingSecret` (keys `username` and `password`), or from `console.auth.username` and `console.auth.password`.
 - `KAFSCALE_CONSOLE_LFS_ENABLED`: Enable the LFS views and API (`true` to enable; any other value disables them).
 - `KAFSCALE_CONSOLE_KAFKA_BROKERS`: Comma-separated brokers used to consume the LFS tracker topic.
 - `KAFSCALE_LFS_TRACKER_TOPIC`: Tracker topic to read (default `__lfs_ops_state`).
 - `KAFSCALE_CONSOLE_LFS_S3_BUCKET`, `KAFSCALE_CONSOLE_LFS_S3_REGION`, `KAFSCALE_CONSOLE_LFS_S3_ENDPOINT`: S3 location for browsing LFS objects. Path-style addressing is used when an endpoint is set.
 - `KAFSCALE_CONSOLE_LFS_S3_ACCESS_KEY`, `KAFSCALE_CONSOLE_LFS_S3_SECRET_KEY`: S3 credentials for the console.
 - `KAFSCALE_CONSOLE_LFS_S3_PRESIGN_TTL`: Presigned URL lifetime in seconds (default `300`).
+
+These topic endpoints require a console session cookie, not HTTP basic auth. A request with basic auth, or with no session, returns `401` `unauthorized`. The Helm release name `kafscale` creates the console Service `kafscale-console` on port 80. In a second terminal, forward that Service, then sign in with `POST /ui/api/auth/login`:
+
+```bash
+kubectl -n kafscale port-forward svc/kafscale-console 8080:80
+```
+
+In Bash, enter the configured credentials when prompted. This example requires `jq`; the password is read silently and the JSON body is sent through stdin.
+
+```bash
+IFS= read -rp 'Console username: ' CONSOLE_USERNAME
+IFS= read -rsp 'Console password: ' CONSOLE_PASSWORD
+printf '\n'
+printf '%s' "$CONSOLE_PASSWORD" | jq -cRs --arg username "$CONSOLE_USERNAME" '{username:$username,password:.}' | \
+  curl -c cookies.txt -X POST http://127.0.0.1:8080/ui/api/auth/login \
+    -H 'Content-Type: application/json' --data-binary @-
+unset CONSOLE_PASSWORD CONSOLE_USERNAME
+```
+
+Use the same credentials as `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`.
+A successful login sets an HttpOnly cookie named `kafscale_ui_session` (12 hour
+lifetime) and returns `{"authenticated":true}`. Pass that cookie on later
+requests, for example `curl -b cookies.txt ...`. `POST /ui/api/auth/logout`
+clears it. Login is `POST` only.
+
+If `KAFSCALE_UI_USERNAME` or `KAFSCALE_UI_PASSWORD` is unset, login and the
+topic endpoints return `503`. A wrong password returns `401` with `invalid credentials`. More than 20 logins per minute from one IP return `429`.
+Sessions are in memory on each console pod, so if `console.replicaCount` is
+above 1 a cookie issued by one pod can get `401` from another.
 
 The console serves these authenticated topic endpoints when `KAFSCALE_CONSOLE_ETCD_ENDPOINTS` is set. They use the same etcd metadata path as the broker Kafka `CreateTopics` and `DeleteTopics` APIs.
 
@@ -1084,8 +1251,11 @@ Recommended settings:
 
 Helm values to enable:
 - `proxy.enabled=true`
-- `proxy.etcdEndpoints[0]=http://kafscale-etcd-client.<namespace>.svc.cluster.local:2379`
+- `proxy.etcdEndpoints[0]=http://<cluster>-etcd-client.<namespace>.svc.cluster.local:2379`
 - `proxy.advertisedHost=<public DNS>`
+
+The examples below use the quickstart cluster `demo` in namespace `kafscale`.
+Replace `demo-etcd-client` when your `KafscaleCluster` has a different name.
 
 Example (HA proxy + external access):
 
@@ -1098,7 +1268,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.service.port=9092 \
   --set proxy.advertisedHost=kafka.example.com \
   --set proxy.advertisedPort=9092 \
-  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+  --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
 For local clusters (kind, minikube), pin the proxy NodePort so host port mappings
@@ -1116,7 +1286,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
   --set proxy.service.nodePort=30092 \
   --set proxy.advertisedHost=127.0.0.1 \
   --set proxy.advertisedPort=30092 \
-  --set proxy.etcdEndpoints[0]=http://kafscale-etcd-client.kafscale.svc.cluster.local:2379
+  --set 'proxy.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379'
 ```
 
 Helm chart docs: `deploy/helm/kafscale/README.md`.
