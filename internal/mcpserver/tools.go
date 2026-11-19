@@ -42,7 +42,7 @@ const (
 type emptyInput struct{}
 
 type TopicNameInput struct {
-	Names []string `json:"names" jsonschema:"Optional list of topic names to filter"`
+	Names []string `json:"names,omitempty" jsonschema:"Optional list of topic names to filter. Omit to describe every topic."`
 }
 
 type GroupInput struct {
@@ -51,11 +51,11 @@ type GroupInput struct {
 
 type FetchOffsetsInput struct {
 	GroupID string   `json:"group_id" jsonschema:"Consumer group identifier"`
-	Topics  []string `json:"topics" jsonschema:"Optional list of topics to fetch offsets for"`
+	Topics  []string `json:"topics,omitempty" jsonschema:"Optional list of topics to fetch offsets for. Omit to fetch offsets for every topic."`
 }
 
 type TopicConfigInput struct {
-	Topics []string `json:"topics" jsonschema:"Optional list of topics to describe"`
+	Topics []string `json:"topics,omitempty" jsonschema:"Optional list of topics to describe. Omit to describe every topic."`
 }
 
 type ClusterStatusOutput struct {

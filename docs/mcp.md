@@ -57,7 +57,7 @@ Environment variables:
 - `KAFSCALE_MCP_ETCD_ENDPOINTS` (comma-separated)
 - `KAFSCALE_MCP_ETCD_USERNAME`
 - `KAFSCALE_MCP_ETCD_PASSWORD`
-- `KAFSCALE_MCP_BROKER_METRICS_URL` (Prometheus metrics endpoint)
+- `KAFSCALE_MCP_BROKER_METRICS_URL` (Prometheus metrics endpoint; with etcd configured, every registered broker is read with its scheme, port and path and the results are summed)
 - `KAFSCALE_MCP_SESSION_TIMEOUT` (optional, duration string)
 - `KAFSCALE_MCP_AUTH_TOKEN` (optional bearer token; if unset, server is open)
 
@@ -65,12 +65,14 @@ Environment variables:
 
 Read-only tools (default):
 
-- `cluster_status` (summary view; similar to console status).
-- `cluster_metrics` (S3 latency, produce/fetch RPS, admin error rates).
-- `list_topics` / `describe_topics`.
-- `list_groups` / `describe_group`.
-- `fetch_offsets` (consumer group offsets).
-- `describe_configs` (topic configs).
+- `cluster_status` (summary view; similar to console status). No arguments.
+- `cluster_metrics` (S3 latency, produce/fetch RPS, admin error rates). No arguments. Needs `KAFSCALE_MCP_BROKER_METRICS_URL`.
+- `list_topics`: no arguments. `describe_topics`: optional `names`, an array of topic names. Omit `names` to describe every topic.
+- `list_groups`: no arguments. `describe_group`: required `group_id`.
+- `fetch_offsets` (consumer group offsets): required `group_id`, optional `topics` (an array of topic names). Omit `topics` to fetch offsets for every topic in the group.
+- `describe_configs`: optional `topics`, an array of topic names. Omit it to describe every topic.
+
+A call that omits a required argument returns the validator error, for example `describe_group` without `group_id` returns `invalid params: validating "arguments": validating root: required: missing properties: ["group_id"]`. `cluster_metrics` without a metrics URL returns `metrics provider not configured`.
 
 Not implemented. MCP has no mutation tools such as:
 

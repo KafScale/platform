@@ -19,12 +19,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/KafScale/platform/pkg/metadata"
@@ -61,7 +63,14 @@ type compositeMetricsProvider struct {
 	broker      MetricsProvider
 	operatorURL string
 	client      *http.Client
+
+	now            func() time.Time
+	mu             sync.Mutex
+	lastOperator   *operatorSnapshot
+	lastOperatorAt time.Time
 }
+
+const operatorSnapshotCacheTTL = 3 * time.Minute
 
 func NewAggregatedPromMetricsClient(store metadata.Store, metricsURL string) MetricsProvider {
 	client := &http.Client{Timeout: 3 * time.Second}
@@ -100,6 +109,7 @@ func NewCompositeMetricsProvider(broker MetricsProvider, operatorURL string) Met
 		broker:      broker,
 		operatorURL: operatorURL,
 		client:      &http.Client{Timeout: 3 * time.Second},
+		now:         time.Now,
 	}
 }
 
@@ -116,17 +126,53 @@ func (c *compositeMetricsProvider) Snapshot(ctx context.Context) (*MetricsSnapsh
 		snap = &MetricsSnapshot{}
 	}
 	if c.operatorURL != "" {
-		if op, err := fetchOperatorSnapshot(ctx, c.client, c.operatorURL); err == nil && op != nil {
+		if op := c.operatorSnapshot(ctx); op != nil {
 			snap.OperatorClusters = op.Clusters
 			snap.OperatorEtcdSnapshotAgeSeconds = op.EtcdSnapshotAgeSeconds
 			snap.OperatorEtcdSnapshotLastSuccessTS = op.EtcdSnapshotLastSuccessTS
 			snap.OperatorEtcdSnapshotLastScheduleTS = op.EtcdSnapshotLastScheduleTS
 			snap.OperatorEtcdSnapshotStale = op.EtcdSnapshotStale
 			snap.OperatorEtcdSnapshotAccessOK = op.EtcdSnapshotAccessOK
+			snap.OperatorEtcdSnapshotAccessReported = op.EtcdSnapshotAccessReported
 			snap.OperatorMetricsAvailable = true
 		}
 	}
 	return snap, nil
+}
+
+func (c *compositeMetricsProvider) operatorSnapshot(ctx context.Context) *operatorSnapshot {
+	op, err := fetchOperatorSnapshot(ctx, c.client, c.operatorURL)
+	if err != nil || op == nil {
+		return nil
+	}
+	now := c.now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if op.EtcdSnapshotReported {
+		cached := *op
+		c.lastOperator = &cached
+		c.lastOperatorAt = now
+		return op
+	}
+	if c.lastOperator == nil {
+		return nil
+	}
+	elapsed := now.Sub(c.lastOperatorAt)
+	if elapsed > operatorSnapshotCacheTTL {
+		c.lastOperator = nil
+		return nil
+	}
+	cached := *c.lastOperator
+	if op.EtcdSnapshotStaleAfterSeconds > 0 {
+		cached.EtcdSnapshotStaleAfterSeconds = op.EtcdSnapshotStaleAfterSeconds
+	}
+	if cached.EtcdSnapshotLastSuccessTS > 0 && elapsed > 0 {
+		cached.EtcdSnapshotAgeSeconds += elapsed.Seconds()
+	}
+	if cached.EtcdSnapshotStaleAfterSeconds > 0 && cached.EtcdSnapshotAgeSeconds > cached.EtcdSnapshotStaleAfterSeconds {
+		cached.EtcdSnapshotStale = 1
+	}
+	return &cached
 }
 
 func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSnapshot, error) {
@@ -142,7 +188,7 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 	}
 	var (
 		state                 string
-		latencySum            int
+		latencySum            float64
 		latencyCount          int
 		errorRateSum          float64
 		errorRateCount        int
@@ -176,11 +222,11 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 			continue
 		}
 		successfulBrokerCount++
-		if snap.S3LatencyMS > 0 {
-			latencySum += snap.S3LatencyMS
+		if snap.s3LatencyReported {
+			latencySum += snap.s3LatencySampleMS
 			latencyCount++
 		}
-		if snap.S3ErrorRate > 0 {
+		if snap.s3ErrorRateReported {
 			errorRateSum += snap.S3ErrorRate
 			errorRateCount++
 		}
@@ -206,7 +252,7 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		fetchRPS += snap.FetchRPS
 		adminReqTotal += snap.AdminRequestsTotal
 		adminErrTotal += snap.AdminRequestErrorsTotal
-		if snap.AdminRequestLatencyMS > 0 {
+		if snap.adminLatencyReported {
 			adminLatencySum += snap.AdminRequestLatencyMS
 			adminLatencySamples++
 		}
@@ -217,9 +263,9 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		}
 		return nil, fmt.Errorf("no broker metrics available")
 	}
-	latencyAvg := 0
+	latencyAvg := 0.0
 	if latencyCount > 0 {
-		latencyAvg = latencySum / latencyCount
+		latencyAvg = latencySum / float64(latencyCount)
 	}
 	adminLatencyAvg := 0.0
 	if adminLatencySamples > 0 {
@@ -230,8 +276,12 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		errorRateAvg = errorRateSum / float64(errorRateCount)
 	}
 	return &MetricsSnapshot{
+		s3LatencySampleMS:       latencyAvg,
+		s3LatencyReported:       latencyCount > 0,
+		s3ErrorRateReported:     errorRateCount > 0,
+		adminLatencyReported:    adminLatencySamples > 0,
 		S3State:                 state,
-		S3LatencyMS:             latencyAvg,
+		S3LatencyMS:             int(latencyAvg),
 		S3ErrorRate:             errorRateAvg,
 		ProduceRPS:              produceRPS,
 		FetchRPS:                fetchRPS,
@@ -243,12 +293,15 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 }
 
 type operatorSnapshot struct {
-	Clusters                   float64
-	EtcdSnapshotAgeSeconds     float64
-	EtcdSnapshotLastSuccessTS  float64
-	EtcdSnapshotLastScheduleTS float64
-	EtcdSnapshotStale          float64
-	EtcdSnapshotAccessOK       float64
+	Clusters                      float64
+	EtcdSnapshotAgeSeconds        float64
+	EtcdSnapshotLastSuccessTS     float64
+	EtcdSnapshotLastScheduleTS    float64
+	EtcdSnapshotStale             float64
+	EtcdSnapshotAccessOK          float64
+	EtcdSnapshotAccessReported    bool
+	EtcdSnapshotStaleAfterSeconds float64
+	EtcdSnapshotReported          bool
 }
 
 func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL string) (*operatorSnapshot, error) {
@@ -270,8 +323,10 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 		lastSuccessMax  float64
 		lastScheduleMax float64
 		staleMax        float64
-		accessMin       = 1.0
+		accessMin       = 0.0
+		staleAfter      float64
 		accessSeen      bool
+		snapshotSeen    bool
 	)
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -281,21 +336,37 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 			if val, ok := parsePromSample(line); ok {
 				clusters = val
 			}
+		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_threshold_seconds"):
+			if val, ok := parsePromSample(line); ok {
+				staleAfter = val
+			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_age_seconds"):
-			if val, ok := parsePromSample(line); ok && val > ageMax {
-				ageMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > ageMax {
+					ageMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_last_success_timestamp"):
-			if val, ok := parsePromSample(line); ok && val > lastSuccessMax {
-				lastSuccessMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > lastSuccessMax {
+					lastSuccessMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_last_schedule_timestamp"):
-			if val, ok := parsePromSample(line); ok && val > lastScheduleMax {
-				lastScheduleMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > lastScheduleMax {
+					lastScheduleMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_stale"):
-			if val, ok := parsePromSample(line); ok && val > staleMax {
-				staleMax = val
+			if val, ok := parsePromSample(line); ok {
+				snapshotSeen = true
+				if val > staleMax {
+					staleMax = val
+				}
 			}
 		case strings.HasPrefix(line, "kafscale_operator_etcd_snapshot_access_ok"):
 			if val, ok := parsePromSample(line); ok {
@@ -303,22 +374,23 @@ func fetchOperatorSnapshot(ctx context.Context, client *http.Client, metricsURL 
 					accessMin = val
 				}
 				accessSeen = true
+				snapshotSeen = true
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if !accessSeen {
-		accessMin = 0
-	}
 	return &operatorSnapshot{
-		Clusters:                   clusters,
-		EtcdSnapshotAgeSeconds:     ageMax,
-		EtcdSnapshotLastSuccessTS:  lastSuccessMax,
-		EtcdSnapshotLastScheduleTS: lastScheduleMax,
-		EtcdSnapshotStale:          staleMax,
-		EtcdSnapshotAccessOK:       accessMin,
+		Clusters:                      clusters,
+		EtcdSnapshotAgeSeconds:        ageMax,
+		EtcdSnapshotLastSuccessTS:     lastSuccessMax,
+		EtcdSnapshotLastScheduleTS:    lastScheduleMax,
+		EtcdSnapshotStale:             staleMax,
+		EtcdSnapshotAccessOK:          accessMin,
+		EtcdSnapshotAccessReported:    accessSeen,
+		EtcdSnapshotStaleAfterSeconds: staleAfter,
+		EtcdSnapshotReported:          snapshotSeen,
 	}, nil
 }
 
@@ -337,7 +409,9 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 	}
 	var (
 		state             string
-		latencyMS         int
+		latencyMS         float64
+		latencyReported   bool
+		errorRateReported bool
 		errorRate         float64
 		produceRPS        float64
 		fetchRPS          float64
@@ -361,11 +435,13 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 			}
 		case strings.HasPrefix(line, "kafscale_s3_latency_ms_avg"):
 			if val, ok := parsePromSample(line); ok {
-				latencyMS = int(val)
+				latencyMS = val
+				latencyReported = true
 			}
 		case strings.HasPrefix(line, "kafscale_s3_error_rate"):
 			if val, ok := parsePromSample(line); ok {
 				errorRate = val
+				errorRateReported = true
 			}
 		case strings.HasPrefix(line, "kafscale_produce_rps"):
 			if val, ok := parsePromSample(line); ok {
@@ -410,8 +486,12 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 		adminLatencyAvg = adminLatencySum / float64(adminLatencyCount)
 	}
 	return &MetricsSnapshot{
+		s3LatencySampleMS:       latencyMS,
+		s3LatencyReported:       latencyReported,
+		s3ErrorRateReported:     errorRateReported,
+		adminLatencyReported:    adminLatencyCount > 0,
 		S3State:                 state,
-		S3LatencyMS:             latencyMS,
+		S3LatencyMS:             int(latencyMS),
 		S3ErrorRate:             errorRate,
 		ProduceRPS:              produceRPS,
 		FetchRPS:                fetchRPS,
@@ -437,7 +517,7 @@ func parsePromSample(line string) (float64, bool) {
 	}
 	last := parts[len(parts)-1]
 	val, err := strconv.ParseFloat(last, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(val) || math.IsInf(val, 0) {
 		return 0, false
 	}
 	return val, true

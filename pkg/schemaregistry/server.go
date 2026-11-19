@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,6 +40,7 @@ type Server struct {
 	timeout  time.Duration
 	mux      *http.ServeMux
 	requests *prometheus.CounterVec
+	draining atomic.Bool
 }
 
 type schemaBody struct {
@@ -119,6 +121,10 @@ func NewServer(reg *Registry, timeout time.Duration) *Server {
 		w.WriteHeader(http.StatusOK)
 	})
 	s.mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if s.draining.Load() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := reg.Ready(ctx); err != nil {
@@ -131,6 +137,10 @@ func NewServer(reg *Registry, timeout time.Duration) *Server {
 		return nil, newError(404, 404, "HTTP 404 Not Found")
 	}))
 	return s
+}
+
+func (s *Server) SetDraining() {
+	s.draining.Store(true)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

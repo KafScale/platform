@@ -174,3 +174,45 @@ func TestProduceAfterReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestWaitForStatefulSetPodReady(t *testing.T) {
+	notFound := errors.New("exit status 1")
+	t.Run("pod created after the wait starts", func(t *testing.T) {
+		calls := 0
+		run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+			calls++
+			want := []string{"-n", "ns", "get", "pod", "demo-etcd-1", "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`, "--request-timeout=10s"}
+			if name != "kubectl" || !reflect.DeepEqual(args, want) {
+				t.Fatalf("command: %s %v", name, args)
+			}
+			switch calls {
+			case 1:
+				return []byte(`Error from server (NotFound): pods "demo-etcd-1" not found`), notFound
+			case 2:
+				return nil, nil
+			case 3:
+				return []byte("False"), nil
+			}
+			return []byte("True"), nil
+		}
+		if err := waitForStatefulSetPodReady(context.Background(), run, "ns", "demo-etcd-1", 5*time.Second, time.Millisecond); err != nil || calls != 4 {
+			t.Fatalf("calls=%d err=%v", calls, err)
+		}
+	})
+	t.Run("bounded with last check", func(t *testing.T) {
+		run := func(context.Context, string, ...string) ([]byte, error) {
+			return []byte(`Error from server (NotFound): pods "demo-etcd-2" not found`), notFound
+		}
+		err := waitForStatefulSetPodReady(context.Background(), run, "ns", "demo-etcd-2", 20*time.Millisecond, time.Millisecond)
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), `pods "demo-etcd-2" not found`) || !strings.Contains(err.Error(), "pod/demo-etcd-2 not Ready within 20ms") {
+			t.Fatal(err)
+		}
+	})
+	t.Run("not ready reports status", func(t *testing.T) {
+		run := func(context.Context, string, ...string) ([]byte, error) { return []byte("False"), nil }
+		err := waitForStatefulSetPodReady(context.Background(), run, "ns", "demo-etcd-0", 20*time.Millisecond, time.Millisecond)
+		if err == nil || !strings.Contains(err.Error(), "last check: Ready=False") {
+			t.Fatal(err)
+		}
+	})
+}

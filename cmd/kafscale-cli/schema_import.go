@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -77,6 +78,11 @@ func (e *srError) Error() string {
 func isSRCode(err error, codes ...int) bool {
 	var e *srError
 	return errors.As(err, &e) && slices.Contains(codes, e.Code)
+}
+
+func isSRStatus(err error, status int) bool {
+	var e *srError
+	return errors.As(err, &e) && e.Status == status
 }
 
 type srClient struct {
@@ -168,28 +174,36 @@ func subjectPath(subject string) string {
 	return "/subjects/" + url.PathEscape(subject)
 }
 
+const schemaImportUsage = "usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--to-auth user:password] [--subjects <regex>] [--dry-run] [--force]"
+
 func runSchemaCommand(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] != "import" {
-		return errors.New("usage: kafscale-cli schema import --from <url> [--to <url>] [--auth user:password] [--subjects <regex>] [--dry-run]")
+		if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
+			_, _ = fmt.Fprintln(stdout, schemaImportUsage)
+			return nil
+		}
+		return errors.New(schemaImportUsage)
 	}
 	fs := flag.NewFlagSet("schema import", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	var (
 		from     = fs.String("from", "", "Source schema registry URL, for example a Confluent Schema Registry")
 		to       = fs.String("to", envOrDefault("KAFSCALE_SCHEMA_REGISTRY_URL", "http://localhost:8081"), "Target KafScale schema registry URL")
-		fromAuth = fs.String("auth", envOrDefault("KAFSCALE_SCHEMA_IMPORT_AUTH", ""), "Source credentials as user:password or bearer:<token>")
-		toAuth   = fs.String("to-auth", envOrDefault("KAFSCALE_SCHEMA_REGISTRY_AUTH", ""), "Target credentials as user:password or bearer:<token>")
+		fromAuth = fs.String("auth", "", "Source credentials as user:password or bearer:<token> (or KAFSCALE_SCHEMA_IMPORT_AUTH)")
+		toAuth   = fs.String("to-auth", "", "Target credentials as user:password or bearer:<token> (or KAFSCALE_SCHEMA_REGISTRY_AUTH)")
 		subjects = fs.String("subjects", "", "Only import subjects matching this regular expression")
 		dryRun   = fs.Bool("dry-run", false, "Report what would change without writing to the target")
 		force    = fs.Bool("force", false, "Switch a target that already holds schemas to IMPORT mode")
 	)
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseCLIFlags(fs, args[1:], stdout, schemaImportUsage); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *from == "" {
 		return errors.New("--from is required")
 	}
-	cfg := schemaImportConfig{From: *from, To: *to, FromAuth: *fromAuth, ToAuth: *toAuth, DryRun: *dryRun, Force: *force}
+	cfg := schemaImportConfig{From: *from, To: *to, FromAuth: flagOrEnv(*fromAuth, "KAFSCALE_SCHEMA_IMPORT_AUTH"), ToAuth: flagOrEnv(*toAuth, "KAFSCALE_SCHEMA_REGISTRY_AUTH"), DryRun: *dryRun, Force: *force}
 	if *subjects != "" {
 		re, err := regexp.Compile(*subjects)
 		if err != nil {
@@ -212,6 +226,12 @@ type schemaImport struct {
 	planned   map[int64]*srVersion
 
 	imported, skipped, deleted, settings, conflicts int
+
+	modeMissingNoted       bool
+	defaultToGlobalKnown   bool
+	defaultToGlobalIgnored bool
+	sourceGlobalKnown      bool
+	sourceGlobal           string
 }
 
 func itemKey(subject string, version int) string {
@@ -365,6 +385,11 @@ func (im *schemaImport) fetchSubject(ctx context.Context, subject string, only i
 		}
 		v := &srVersion{}
 		if err := im.src.call(ctx, http.MethodGet, fmt.Sprintf("%s/versions/%d?deleted=true", subjectPath(subject), n), nil, v); err != nil {
+			if only == 0 && !slices.Contains(live, n) && isSRCode(err, 40401, 40402) {
+				_, _ = fmt.Fprintf(im.out, "warning: source subject %s version %d is soft deleted and the source does not return it; skipped\n", subject, n)
+				im.skipped++
+				continue
+			}
 			return fmt.Errorf("read source subject %s version %d: %w", subject, n, err)
 		}
 		if v.SchemaType == "" {
@@ -427,6 +452,43 @@ func sameSchema(a, b *srVersion) bool {
 	return a.Schema == b.Schema || (a.GUID != "" && a.GUID == b.GUID)
 }
 
+func (im *schemaImport) sameOnTarget(ctx context.Context, subject string, v *srVersion) (bool, error) {
+	body := map[string]any{"schema": v.Schema}
+	if v.SchemaType != "" {
+		body["schemaType"] = v.SchemaType
+	}
+	if len(v.References) > 0 {
+		body["references"] = v.References
+	}
+	var out struct {
+		ID      int64 `json:"id"`
+		Version int   `json:"version"`
+	}
+	err := im.dst.call(ctx, http.MethodPost, subjectPath(subject)+"?deleted=true", body, &out)
+	if isSRCode(err, 40403) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return out.ID == v.ID, nil
+}
+
+func (im *schemaImport) sameOnTargetByID(ctx context.Context, v *srVersion) (bool, error) {
+	var holders []struct {
+		Subject string `json:"subject"`
+		Version int    `json:"version"`
+	}
+	err := im.dst.call(ctx, http.MethodGet, fmt.Sprintf("/schemas/ids/%d/versions?deleted=true", v.ID), nil, &holders)
+	if err != nil {
+		return false, fmt.Errorf("list target versions of schema id %d: %w", v.ID, err)
+	}
+	if len(holders) == 0 {
+		return false, nil
+	}
+	return im.sameOnTarget(ctx, holders[0].Subject, v)
+}
+
 func (im *schemaImport) conflict(format string, args ...any) {
 	im.conflicts++
 	_, _ = fmt.Fprintf(im.out, "conflict: "+format+"\n", args...)
@@ -443,8 +505,18 @@ func (im *schemaImport) importVersion(ctx context.Context, v *srVersion) error {
 			existing.SchemaType = "AVRO"
 		}
 		if !sameSchema(v, existing) {
-			im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
-			return nil
+			if existing.ID != v.ID {
+				im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
+				return nil
+			}
+			ok, err := im.sameOnTarget(ctx, v.Subject, v)
+			if err != nil {
+				return fmt.Errorf("compare source subject %s version %d with the target: %w", v.Subject, v.Version, err)
+			}
+			if !ok {
+				im.conflict("subject %s version %d is id %d in the source and id %d with different content in the target\n  source: %s\n  target: %s", v.Subject, v.Version, v.ID, existing.ID, v.Schema, existing.Schema)
+				return nil
+			}
 		}
 		im.skipped++
 	case isSRCode(err, 40401, 40402):
@@ -457,8 +529,14 @@ func (im *schemaImport) importVersion(ctx context.Context, v *srVersion) error {
 			}
 			byID.ID = v.ID
 			if !sameSchema(v, byID) {
-				im.conflict("schema id %d already holds different content in the target\n  source: %s\n  target: %s", v.ID, v.Schema, byID.Schema)
-				return nil
+				ok, err := im.sameOnTargetByID(ctx, v)
+				if err != nil {
+					return fmt.Errorf("compare source schema id %d with the target: %w", v.ID, err)
+				}
+				if !ok {
+					im.conflict("schema id %d already holds different content in the target\n  source: %s\n  target: %s", v.ID, v.Schema, byID.Schema)
+					return nil
+				}
 			}
 		case !isSRCode(err, 40403):
 			return fmt.Errorf("read target schema id %d: %w", v.ID, err)
@@ -588,6 +666,72 @@ type configBody struct {
 	CompatibilityLevel string `json:"compatibilityLevel,omitempty"`
 }
 
+func (im *schemaImport) noteMissingSourceMode() {
+	if im.modeMissingNoted {
+		return
+	}
+	im.modeMissingNoted = true
+	_, _ = fmt.Fprintln(im.out, "source returns 404 for GET /mode/{subject}; those subjects are treated as having no mode")
+}
+
+func (im *schemaImport) sourceGlobalConfig(ctx context.Context) (string, error) {
+	if im.sourceGlobalKnown {
+		return im.sourceGlobal, nil
+	}
+	var body configBody
+	err := im.src.call(ctx, http.MethodGet, "/config", nil, &body)
+	if isSRCode(err, 40408) {
+		im.sourceGlobalKnown = true
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	im.sourceGlobal = body.CompatibilityLevel
+	im.sourceGlobalKnown = true
+	return im.sourceGlobal, nil
+}
+
+func (im *schemaImport) detectDefaultToGlobal(ctx context.Context, subjects []string) {
+	if im.defaultToGlobalKnown {
+		return
+	}
+	im.defaultToGlobalKnown = true
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		var body configBody
+		err := im.src.call(ctx, http.MethodGet, "/config/"+url.PathEscape(fmt.Sprintf("kafscale-import-probe-%x", b))+"?defaultToGlobal=false", nil, &body)
+		if isSRCode(err, 40408) {
+			im.defaultToGlobalIgnored = false
+			return
+		}
+	}
+	sawValue := false
+	for _, s := range subjects {
+		var body configBody
+		err := im.src.call(ctx, http.MethodGet, "/config/"+url.PathEscape(s)+"?defaultToGlobal=false", nil, &body)
+		if isSRCode(err, 40408) {
+			im.defaultToGlobalIgnored = false
+			return
+		}
+		if err == nil {
+			sawValue = true
+		}
+	}
+	im.defaultToGlobalIgnored = sawValue
+}
+
+func (im *schemaImport) skipInheritedSourceConfig(ctx context.Context, want string) bool {
+	if !im.defaultToGlobalIgnored {
+		return false
+	}
+	global, err := im.sourceGlobalConfig(ctx)
+	if err != nil || global == "" {
+		return false
+	}
+	return strings.EqualFold(want, global)
+}
+
 func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet int) error {
 	read := func(c *srClient) (string, error) {
 		path := "/" + kind
@@ -614,10 +758,17 @@ func (im *schemaImport) setting(ctx context.Context, kind, scope string, notSet 
 		name = kind + " of " + scope
 	}
 	want, err := read(im.src)
+	if kind == "mode" && isSRStatus(err, http.StatusNotFound) && isSRCode(err, 0) {
+		im.noteMissingSourceMode()
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read source %s: %w", name, err)
 	}
 	if want == "" {
+		return nil
+	}
+	if kind == "config" && scope != "" && im.skipInheritedSourceConfig(ctx, want) {
 		return nil
 	}
 	have, err := read(im.dst)
@@ -652,6 +803,7 @@ func (im *schemaImport) syncSettings(ctx context.Context, subjects []string) err
 	if err := im.setting(ctx, "config", "", 40408); err != nil {
 		return err
 	}
+	im.detectDefaultToGlobal(ctx, subjects)
 	for _, s := range subjects {
 		if err := im.setting(ctx, "config", s, 40408); err != nil {
 			return err
