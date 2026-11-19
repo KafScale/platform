@@ -189,6 +189,80 @@ func TestMCPAuthExistingSecret(t *testing.T) {
 	}
 }
 
+func TestMCPExistingSecretDocUsesExternalNamespace(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "ops-mcp.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var example string
+	for _, block := range strings.Split(string(doc), "```yaml\n")[1:] {
+		body, _, ok := strings.Cut(block, "```")
+		if ok && strings.Contains(body, "existingSecret:") {
+			example = body
+			break
+		}
+	}
+	if example == "" {
+		t.Fatal("existingSecret values example is missing")
+	}
+	var values struct {
+		MCP struct {
+			Namespace struct {
+				Name   string
+				Create *bool
+			}
+			Auth struct {
+				ExistingSecret    string
+				ExistingSecretKey string
+			}
+		}
+	}
+	if err := yaml.Unmarshal([]byte(example), &values); err != nil {
+		t.Fatal(err)
+	}
+	if values.MCP.Namespace.Create == nil || *values.MCP.Namespace.Create {
+		t.Fatal("existingSecret first-install example must disable chart namespace creation")
+	}
+	if values.MCP.Namespace.Name == "" || values.MCP.Auth.ExistingSecret == "" || values.MCP.Auth.ExistingSecretKey == "" {
+		t.Fatal("existingSecret example must specify its namespace and Secret reference")
+	}
+	chart := mcpAuthChart(t)
+	file := filepath.Join(t.TempDir(), "values.yaml")
+	if err := os.WriteFile(file, []byte(example), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rendered := helmTemplateMCP(t, chart, "-f", file)
+	dep, secrets := mcpDeploymentAndSecrets(t, rendered)
+	for _, document := range splitYAML(rendered) {
+		var obj struct {
+			Kind     string
+			Metadata struct{ Name string }
+		}
+		if err := yaml.Unmarshal(document, &obj); err != nil {
+			t.Fatal(err)
+		}
+		if obj.Kind == "Namespace" && obj.Metadata.Name == values.MCP.Namespace.Name {
+			t.Fatal("documented values render the pre-existing Namespace, causing a Helm ownership conflict")
+		}
+	}
+	if dep.Namespace != values.MCP.Namespace.Name {
+		t.Fatalf("MCP namespace %q, want %q", dep.Namespace, values.MCP.Namespace.Name)
+	}
+	env := mcpAuthEnv(t, dep)
+	if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+		t.Fatal("MCP auth token must use the documented existing Secret")
+	}
+	ref := env.ValueFrom.SecretKeyRef
+	if ref.Name != values.MCP.Auth.ExistingSecret || ref.Key != values.MCP.Auth.ExistingSecretKey {
+		t.Fatalf("Secret reference = %s/%s, want %s/%s", ref.Name, ref.Key, values.MCP.Auth.ExistingSecret, values.MCP.Auth.ExistingSecretKey)
+	}
+	for _, secret := range secrets {
+		if secret.Name == ref.Name && secret.Namespace == dep.Namespace {
+			t.Fatal("chart must not create the documented existing Secret")
+		}
+	}
+}
+
 func mustMarshalDeployment(t *testing.T, d appsv1.Deployment) []byte {
 	t.Helper()
 	data, err := yaml.Marshal(&d)
