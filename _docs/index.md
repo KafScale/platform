@@ -25,9 +25,9 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 ## Configure and operate
 
 - [Runtime Settings](/configuration/)
-- [MCP](/mcp/)
-- [Ops MCP](/ops-mcp/)
+- [MCP](/ops-mcp/)
 - [Operations](/operations/)
+- [Schema registry](/schema-registry/)
 - [Security](/security/)
 
 ## Reference
@@ -39,10 +39,10 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 - [Latency and batching](/latency/)
 - [Benchmarks](/benchmarks/)
 - [Helm](/helm/)
-- [MCP Server](/mcp-server/)
 - [Storage format](/storage-format/)
 - [Storage layer](/storage/)
 - [S3 health](/s3-health/)
+- [Upgrade guide](/upgrade-compatibility/)
 - [Release notes](/releases/)
 
 ## Large File Support (LFS)

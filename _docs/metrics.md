@@ -8,9 +8,8 @@ nav_order: 4
 nav_group: References
 ---
 
-
 <!--
-Copyright 2025 Alexander Alten (novatechflow), KafScale (novatechflow.com).
+Copyright 2025, 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
 This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -93,10 +92,13 @@ Operator metrics are exported by the controller runtime metrics server.
 | `kafscale_operator_etcd_snapshot_stale` | Gauge | `cluster` | 1 when the snapshot age exceeds the staleness threshold. |
 | `kafscale_operator_etcd_snapshot_success` | Gauge | `cluster` | 1 if at least one successful snapshot was recorded. |
 | `kafscale_operator_etcd_snapshot_access_ok` | Gauge | `cluster` | 1 if the snapshot bucket preflight succeeds. |
+| `kafscale_operator_etcd_snapshot_threshold_seconds` | Gauge | - | `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, the age after which `kafscale_operator_etcd_snapshot_stale` is 1. Every replica exports it, including standby replicas. |
 | `kafscale_operator_etcd_db_total_size_bytes` | Gauge | `cluster`, `member` | Physical etcd backend size per managed member. |
 | `kafscale_operator_etcd_db_in_use_bytes` | Gauge | `cluster`, `member` | Logical in-use etcd backend size per managed member. |
 | `kafscale_operator_etcd_db_size_high` | Gauge | `cluster` | 1 when any member exceeds the maintenance size threshold. |
 | `kafscale_operator_etcd_nospace_alarm` | Gauge | `cluster` | 1 when managed etcd has an active NOSPACE alarm. |
+
+The operator updates the `kafscale_operator_etcd_snapshot_*` gauges and the `EtcdSnapshot` condition when the snapshot CronJob status changes, when the last successful snapshot becomes older than `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`, and at least once a minute while a managed snapshot CronJob exists, including when snapshots are stale or have never succeeded.
 
 The `cluster` label uses `namespace/name`.
 
@@ -104,7 +106,7 @@ Helm can emit `KafscaleEtcdBackendSizeHigh` and `KafscaleEtcdNOSPACE` Prometheus
 
 ## Grafana Dashboard
 
-The Grafana template lives in `docs/grafana/broker-dashboard.json`. It expects
+The Grafana template lives in [`docs/grafana/broker-dashboard.json`](https://github.com/KafScale/platform/blob/main/docs/grafana/broker-dashboard.json). It expects
 Prometheus to scrape both broker and operator metrics endpoints.
 
 ## Metric Coverage
