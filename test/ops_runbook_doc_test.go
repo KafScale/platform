@@ -68,6 +68,9 @@ func TestEtcdSnapshotJobDocumented(t *testing.T) {
 		"<cluster>-etcd-snapshot",
 		"create job --from=cronjob/",
 		"--timeout=5m",
+		"logs job/snapshot-now",
+		"describe job/snapshot-now",
+		"Use a new Job name for each manual snapshot",
 		"etcd-snapshots/",
 		"EtcdSnapshot",
 		"SnapshotNotManaged",
@@ -75,6 +78,21 @@ func TestEtcdSnapshotJobDocumented(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/operations.md does not contain %q", want)
+		}
+	}
+}
+
+func TestEtcdSnapshotStatusDistinguishesManualJobs(t *testing.T) {
+	text := readOpsDoc(t, "docs/operations.md")
+	for _, want := range []string{
+		"Verify the manual Job's `Complete` condition and its logs",
+		"A manual Job created with `--from=cronjob` does not update the CronJob's `status.lastSuccessfulTime`",
+		"it does not refresh the cluster's `EtcdSnapshot` condition",
+		"`EtcdSnapshot` tracks scheduled snapshots through the CronJob's `status.lastSuccessfulTime`",
+		"reconciliation delays can postpone the condition update",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("docs/operations.md does not explain snapshot status: missing %q", want)
 		}
 	}
 }

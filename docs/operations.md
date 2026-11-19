@@ -437,9 +437,14 @@ To take a snapshot now, start a Job from the snapshot CronJob:
 ```bash
 kubectl -n <namespace> create job --from=cronjob/<cluster>-etcd-snapshot snapshot-now
 kubectl -n <namespace> wait --for=condition=complete --timeout=5m job/snapshot-now
+kubectl -n <namespace> logs job/snapshot-now
 ```
 
-A successful run sets the `KafscaleCluster` condition `EtcdSnapshot=True` with reason `SnapshotHealthy`. The snapshot bucket always has a default (`kafscale-etcd-<namespace>-<cluster>`). The CronJob is created only when etcd is operator-managed. External etcd gets `EtcdSnapshot=False` with reason `SnapshotNotManaged`. With operator-managed etcd, the operator rechecks at least once a minute and also when the CronJob status changes, so the condition updates within about a minute of the Job finishing. With external etcd, the condition is set on the next reconcile.
+Use a new Job name for each manual snapshot. Verify the manual Job's `Complete` condition and its logs, which show the snapshot and checksum uploads. If the wait times out, inspect the Job with `kubectl -n <namespace> describe job/snapshot-now` and check its logs before relying on the snapshot. A manual Job created with `--from=cronjob` does not update the CronJob's `status.lastSuccessfulTime`, so it does not refresh the cluster's `EtcdSnapshot` condition.
+
+The `KafscaleCluster` condition `EtcdSnapshot` tracks scheduled snapshots through the CronJob's `status.lastSuccessfulTime`. A recent scheduled success sets `EtcdSnapshot=True` with reason `SnapshotHealthy`; no recorded success or an older success produces `SnapshotNeverSucceeded` or `SnapshotStale`. With operator-managed etcd, the operator watches CronJob status changes and requests a recheck at most one minute later, but reconciliation delays can postpone the condition update.
+
+The snapshot bucket defaults to `kafscale-etcd-<namespace>-<cluster>`. The CronJob is created only when etcd is operator-managed. External etcd gets `EtcdSnapshot=False` with reason `SnapshotNotManaged` on the next reconcile.
 
 Override schedules and thresholds via the operator etcd env vars listed below.
 
