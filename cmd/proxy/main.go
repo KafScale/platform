@@ -2232,6 +2232,7 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.Fetc
 }
 
 type fetchFanOutResult struct {
+	route   string // Original group key, even when dialing falls back to another broker.
 	subReq  *kmsg.FetchRequest
 	subResp *kmsg.FetchResponse
 	conn    net.Conn
@@ -2322,6 +2323,9 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 		}
 
 		groups = p.groupFetchPartitionsByBroker(ctx, fullReq, failedPartitions)
+		if fetchResponseHasRecords(merged) {
+			groups = fetchGroupsWithWait(groups, 0)
+		}
 		originalPayload = nil
 		if len(groups) == 0 {
 			break
@@ -2348,14 +2352,16 @@ func (p *proxy) forwardFetch(ctx context.Context, header *protocol.RequestHeader
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, merged), nil
 }
 
-// fanOutFetch borrows connections and forwards fetch sub-requests concurrently.
-func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.FetchRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fetchFanOutResult {
+// fanOutFetchOnce interrupts outstanding long polls once a broker returns records.
+func (p *proxy) fanOutFetchOnce(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.FetchRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fetchFanOutResult {
 	coalesceFetchFallback(groups)
 	type workItem struct {
-		subReq  *kmsg.FetchRequest
-		conn    net.Conn
-		target  string
-		payload []byte
+		subReq       *kmsg.FetchRequest
+		conn         net.Conn
+		addr, target string
+		payload      []byte
+		ctx          context.Context
+		cancel       context.CancelFunc
 	}
 	work := make([]workItem, 0, len(groups))
 	var connectErrors []fetchFanOutResult
@@ -2364,7 +2370,7 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 	for addr, subReq := range groups {
 		conn, targetAddr, err := p.connectForAddr(ctx, addr, triedBackends, pool)
 		if err != nil {
-			connectErrors = append(connectErrors, fetchFanOutResult{subReq: subReq, target: addr, err: err})
+			connectErrors = append(connectErrors, fetchFanOutResult{route: addr, subReq: subReq, target: addr, err: err})
 			continue
 		}
 
@@ -2374,35 +2380,69 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 		} else {
 			payload = encodeFetchRequest(header, subReq)
 		}
-		work = append(work, workItem{subReq: subReq, conn: conn, target: targetAddr, payload: payload})
+		subCtx, cancel := context.WithCancel(ctx)
+		work = append(work, workItem{subReq: subReq, conn: conn, addr: addr, target: targetAddr, payload: payload, ctx: subCtx, cancel: cancel})
 	}
 
-	results := make([]fetchFanOutResult, len(work))
-	var wg sync.WaitGroup
-	for i := range work {
-		i := i
-		w := work[i]
-		wg.Add(1)
+	type completedFetch struct {
+		index  int
+		result fetchFanOutResult
+	}
+	completed := make(chan completedFetch, len(work))
+	for i, w := range work {
 		go func() {
-			defer wg.Done()
-			respBytes, err := p.forwardToBackend(ctx, w.conn, w.target, w.payload)
-			if err != nil {
-				w.conn.Close()
-				results[i] = fetchFanOutResult{subReq: w.subReq, target: w.target, err: err}
-				return
+			defer w.cancel()
+			result := fetchFanOutResult{route: w.addr, subReq: w.subReq, target: w.target}
+			wire, err := p.forwardToBackend(w.ctx, w.conn, w.target, w.payload)
+			if err == nil {
+				result.subResp, err = parseFetchResponse(wire, header.APIVersion)
 			}
-			subResp, parseErr := parseFetchResponse(respBytes, header.APIVersion)
-			if parseErr != nil {
-				w.conn.Close()
-				results[i] = fetchFanOutResult{subReq: w.subReq, target: w.target, err: parseErr}
-				return
+			result.err = err
+			// A complete response may race with cancellation. Keep the response,
+			// but never pool a socket that cancellation may already have closed.
+			if err == nil && w.ctx.Err() == nil {
+				result.conn = w.conn
+			} else {
+				_ = w.conn.Close()
 			}
-			results[i] = fetchFanOutResult{subReq: w.subReq, subResp: subResp, conn: w.conn, target: w.target}
+			completed <- completedFetch{index: i, result: result}
 		}()
 	}
-	wg.Wait()
-
-	return append(connectErrors, results...)
+	results := make([]fetchFanOutResult, len(work))
+	done := make([]bool, len(work))
+	interrupted := make([]bool, len(work))
+	progress := false
+	for range work {
+		received := <-completed
+		results[received.index] = received.result
+		done[received.index] = true
+		if !progress && fetchResponseHasRecords(received.result.subResp) {
+			progress = true
+			for i, w := range work {
+				if !done[i] && w.subReq.MaxWaitMillis > 0 && w.subReq.MinBytes > 0 {
+					interrupted[i] = true
+					w.cancel()
+				}
+			}
+		}
+	}
+	pending := make(map[string]*kmsg.FetchRequest)
+	for i, result := range results {
+		if interrupted[i] && result.err != nil && ctx.Err() == nil {
+			// Fetch does not commit consumer offsets. Repeat those same offsets
+			// without waiting on a fresh socket to preserve real partition data
+			// and watermarks, including records arriving during cancellation.
+			request := *result.subReq
+			request.MaxWaitMillis = 0
+			pending[work[i].addr] = &request
+		} else {
+			connectErrors = append(connectErrors, result)
+		}
+	}
+	if len(pending) > 0 {
+		connectErrors = append(connectErrors, p.fanOutFetchOnce(ctx, header, pending, nil, triedBackends, pool)...)
+	}
+	return connectErrors
 }
 
 func findOrAddFetchTopicResponse(resp *kmsg.FetchResponse, name string, topicID [16]byte) *kmsg.FetchResponseTopic {
