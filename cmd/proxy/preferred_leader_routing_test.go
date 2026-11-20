@@ -210,3 +210,12 @@ func TestProduceDoesNotReplayAmbiguousOutcome(t *testing.T) {
 		t.Fatal("ambiguous durable produce was replayed or falsely acknowledged")
 	}
 }
+
+func TestListOffsetsRoutesUnownedPartitionsToPreferredLeader(t *testing.T) {
+	ctx := context.Background()
+	p := preferredLeaderTestProxy(t, ctx)
+	groups := p.groupByPartitionOwner(ctx, []topicPartition{{"orders", 0}, {"orders", 1}, {"orders", 2}})
+	if len(groups[""]) != 0 || len(groups["127.0.0.1:19091"]) != 2 || !groups["127.0.0.1:19092"][topicPartition{"orders", 2}] {
+		t.Fatalf("list offsets groups = %v, want owner broker 1 for 0 and 1, preferred broker 2 for 2", groups)
+	}
+}
