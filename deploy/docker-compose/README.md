@@ -244,7 +244,6 @@ Set `DEMO_TEST_SKIP_BUILD=1` to reuse images that already exist instead of
 rebuilding them, or `DEMO_BASE_URL` to point the Playwright tests at a demo
 that is already running. Both are listed under
 [Build and test variables](../../docs/development.md#build-and-test-variables).
-```
 
 The script uses isolated Compose names, volumes, and a random loopback port,
 and removes its containers and volumes on exit. PRs affecting the demo or its backend run the same browser tests. Changes to
