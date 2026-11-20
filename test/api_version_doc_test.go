@@ -73,3 +73,25 @@ func TestUpgradeGuideDocumentsV1Migration(t *testing.T) {
 		}
 	}
 }
+
+func TestUpgradeGuideKeepsNewChartDefaults(t *testing.T) {
+	text := readRepoDoc(t, "docs/upgrade-compatibility.md")
+	for _, want := range []string{
+		"helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale --reset-then-reuse-values",
+		"helm get values kafscale --namespace kafscale -o yaml > kafscale-values.yaml",
+		"helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale -f kafscale-values.yaml",
+		"Helm 3.14",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("docs/upgrade-compatibility.md does not contain %q", want)
+		}
+	}
+	if strings.Contains(text, "--namespace kafscale --reuse-values") {
+		t.Error("docs/upgrade-compatibility.md upgrades from 1.x with --reuse-values, which drops the 2.0 chart defaults")
+	}
+	for _, doc := range []string{"docs/quickstart.md", "docs/operations.md", "deploy/helm/README.md", "deploy/helm/kafscale/README.md"} {
+		if !strings.Contains(readRepoDoc(t, doc), "- Helm 3.14+") {
+			t.Errorf("%s does not require Helm 3.14+", doc)
+		}
+	}
+}

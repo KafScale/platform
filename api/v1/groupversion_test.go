@@ -46,9 +46,10 @@ func TestAddToSchemeRegistersV1Kinds(t *testing.T) {
 }
 
 func TestV1AndV1alpha1ShareTypes(t *testing.T) {
-	var cluster *v1alpha1.KafscaleCluster = &KafscaleCluster{}
-	var topic *v1alpha1.KafscaleTopic = &KafscaleTopic{}
-	if cluster.DeepCopy() == nil || topic.DeepCopy() == nil {
+	sameTypes := func(cluster *v1alpha1.KafscaleCluster, topic *v1alpha1.KafscaleTopic) bool {
+		return cluster.DeepCopy() != nil && topic.DeepCopy() != nil
+	}
+	if !sameTypes(&KafscaleCluster{}, &KafscaleTopic{}) {
 		t.Fatal("DeepCopy returned nil")
 	}
 	alpha := runtime.NewScheme()

@@ -38,7 +38,7 @@ func TestConsoleSnapshotPanelReplicaBehaviorDocumented(t *testing.T) {
 		}
 	}
 	var note string
-	for _, line := range strings.Split(read("docs", "releases", "unreleased.md"), "\n") {
+	for _, line := range strings.Split(read("docs", "releases", "v2.0.0.md"), "\n") {
 		if strings.Contains(line, "KAFSCALE_CONSOLE_OPERATOR_METRICS_URL") && strings.Contains(line, "(#358)") {
 			note = line
 		}
@@ -60,7 +60,7 @@ func TestConsoleSnapshotPanelReplicaBehaviorDocumented(t *testing.T) {
 	noteText = strings.TrimSuffix(noteText, ".")
 	rowText = strings.TrimSuffix(rowText, ".")
 	if rowText != noteText {
-		t.Fatalf("operations.md and unreleased.md describe the panel differently:\n%s\n%s", rowText, noteText)
+		t.Fatalf("operations.md and v2.0.0.md describe the panel differently:\n%s\n%s", rowText, noteText)
 	}
 	for _, want := range []string{
 		"headless operator metrics Service",
@@ -80,7 +80,7 @@ func TestConsoleSnapshotPanelReplicaBehaviorDocumented(t *testing.T) {
 	if strings.Contains(rowText, "Service balances console scrapes") {
 		t.Error("snapshot discovery must not rely on Service load balancing")
 	}
-	release := read("docs", "releases", "unreleased.md")
+	release := read("docs", "releases", "v2.0.0.md")
 	for _, warning := range []string{"2.0 console operator metrics discovery", "Upgrade action:", "KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL", "older console images"} {
 		if !strings.Contains(release, warning) {
 			t.Errorf("release notes missing %q", warning)

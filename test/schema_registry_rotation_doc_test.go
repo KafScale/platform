@@ -45,7 +45,7 @@ func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 		}
 		checkRotationWording(t, "docs/"+doc, text)
 	}
-	notes, err := os.ReadFile(filepath.Join(root, "docs", "releases", "unreleased.md"))
+	notes, err := os.ReadFile(filepath.Join(root, "docs", "releases", "v2.0.0.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,9 +56,9 @@ func TestSchemaRegistryS3RotationRestartDocumented(t *testing.T) {
 		}
 	}
 	if note == "" {
-		t.Fatal("docs/releases/unreleased.md has no #361 note about schemaRegistry.s3.credentialsSecret")
+		t.Fatal("docs/releases/v2.0.0.md has no #361 note about schemaRegistry.s3.credentialsSecret")
 	}
-	checkRotationWording(t, "docs/releases/unreleased.md", note)
+	checkRotationWording(t, "docs/releases/v2.0.0.md", note)
 }
 
 func checkRotationWording(t *testing.T, doc, text string) {
@@ -80,5 +80,19 @@ func checkRotationWording(t *testing.T, doc, text string) {
 	}
 	if !strings.Contains(text, "no session token") {
 		t.Errorf("%s does not say the chart passes no session token to the registry", doc)
+	}
+}
+
+func TestApicurioImportDocMatchesSubjectLevelRule(t *testing.T) {
+	text, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "schema-registry.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.Join(strings.Fields(string(text)), " ")
+	if strings.Contains(doc, "explicit `NONE` override remains unchecked even after you change the global default") {
+		t.Error("docs/schema-registry.md says every subject NONE stays unchecked, but a subject level equal to the Apicurio global level is not copied")
+	}
+	if !strings.Contains(doc, "a subject set to `NONE` while the Apicurio global level is `NONE` follows the new global default") {
+		t.Error("docs/schema-registry.md does not explain the Apicurio subject NONE case")
 	}
 }

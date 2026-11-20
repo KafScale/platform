@@ -22,7 +22,7 @@ This chart deploys the Kafscale operator (which in turn manages broker pods) and
 ### Prerequisites
 
 - Kubernetes 1.26+
-- Helm 3.12+
+- Helm 3.14+
 - Access to an etcd cluster that the operator can reach
 - IAM credentials/secret containing the S3 access keys that the operator will mount into broker pods
 
@@ -32,8 +32,8 @@ This chart deploys the Kafscale operator (which in turn manages broker pods) and
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
-  --set operator.image.tag=v1.6.3 \
-  --set console.image.tag=v1.6.3
+  --set operator.image.tag=v2.0.0 \
+  --set console.image.tag=v2.0.0
 ```
 
 For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always`).

@@ -17,13 +17,13 @@ limitations under the License.
 
 # KafScale Docker Compose
 
-Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v1.6.3` images.
+Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v2.0.0` images.
 
 ## Prerequisites
 
 You need Docker and Docker Compose v2.
 
-By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v1.6.3`. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
+By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v2.0.0`. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
 
 ### Use a Local Registry
 
@@ -178,7 +178,7 @@ Edit `.env` to customize:
 ```bash
 # Registry settings
 REGISTRY=ghcr.io
-TAG=v1.6.3
+TAG=v2.0.0
 
 # MinIO credentials
 MINIO_ROOT_USER=minioadmin
@@ -211,7 +211,7 @@ REGISTRY=<registry> TAG=<tag> docker compose --profile demo up -d
 ### Override Registry/Tag
 
 ```bash
-REGISTRY=my-registry.local:5000 TAG=v1.6.3 docker-compose up -d
+REGISTRY=my-registry.local:5000 TAG=v2.0.0 docker-compose up -d
 ```
 
 ## Architecture
@@ -264,7 +264,7 @@ docker-compose restart proxy
 
 ```bash
 # Check that the default image pulls
-docker pull ghcr.io/kafscale/kafscale-broker:v1.6.3
+docker pull ghcr.io/kafscale/kafscale-broker:v2.0.0
 
 # For a local registry, check the Docker daemon config
 docker info | grep -A5 "Insecure Registries"

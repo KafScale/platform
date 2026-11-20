@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- include "kafscale.requireCurrentValues" . }}
 {{- if .Values.proxy.enabled }}
 {{- with .Values.proxy.security.handshakeTimeoutMs }}
 {{- if or (not (regexMatch "^[0-9]+$" (toString .))) (gt (int64 .) 60000) }}
