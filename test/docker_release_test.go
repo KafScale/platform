@@ -129,7 +129,7 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 		}
 		if strings.HasPrefix(step.Uses, "docker/bake-action@") {
 			foundBuild = true
-			if step.With["push"] != "${{ inputs.publish }}" || step.With["files"] != "${{ runner.temp }}/release-images.json" {
+			if step.With["push"] != "${{ inputs.publish }}" || step.With["files"] != "${{ runner.temp }}/release-images.json" || step.With["source"] != "." {
 				t.Fatal("Bake must build the shared plan and respect publishing mode")
 			}
 		}
