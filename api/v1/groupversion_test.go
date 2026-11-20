@@ -18,7 +18,7 @@ package v1
 import (
 	"testing"
 
-	"github.com/KafScale/platform/api/v1alpha1"
+	"github.com/KafScale/platform/v2/api/v1alpha1"
 
 	"k8s.io/apimachinery/pkg/runtime"
 )

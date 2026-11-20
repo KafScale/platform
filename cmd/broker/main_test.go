@@ -34,13 +34,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/broker"
-	controlpb "github.com/KafScale/platform/pkg/gen/control"
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/broker"
+	controlpb "github.com/KafScale/platform/v2/pkg/gen/control"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 func TestHandleProduceAckAll(t *testing.T) {

@@ -32,8 +32,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/metrics"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/metrics"
 )
 
 type Resolver interface {

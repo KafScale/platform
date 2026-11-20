@@ -18,7 +18,7 @@ package metadata
 import (
 	"context"
 	"errors"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"testing"
 )
 

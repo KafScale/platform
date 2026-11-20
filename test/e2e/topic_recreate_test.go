@@ -29,7 +29,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 func TestTopicRecreateE2E(t *testing.T) {

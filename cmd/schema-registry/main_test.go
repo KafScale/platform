@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/pkg/schemaregistry"
+	"github.com/KafScale/platform/v2/pkg/schemaregistry"
 )
 
 func env(values map[string]string) func(string) string {

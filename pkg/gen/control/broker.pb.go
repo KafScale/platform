@@ -782,8 +782,8 @@ const file_control_broker_proto_rawDesc = "" +
 	"\fTriggerFlush\x12%.kafscale.control.TriggerFlushRequest\x1a&.kafscale.control.TriggerFlushResponse\x12I\n" +
 	"\rStreamMetrics\x12\x1f.kafscale.control.MetricsSample\x1a\x15.kafscale.control.Ack(\x012~\n" +
 	"\x10AssignmentStream\x12j\n" +
-	"\x10WatchAssignments\x12(.kafscale.control.AssignmentWatchRequest\x1a*.kafscale.control.PartitionAssignmentEvent0\x01B\xb2\x01\n" +
-	"\x14com.kafscale.controlB\vBrokerProtoP\x01Z,github.com/KafScale/platform/pkg/gen/control\xa2\x02\x03KCX\xaa\x02\x10Kafscale.Control\xca\x02\x10Kafscale\\Control\xe2\x02\x1cKafscale\\Control\\GPBMetadata\xea\x02\x11Kafscale::Controlb\x06proto3"
+	"\x10WatchAssignments\x12(.kafscale.control.AssignmentWatchRequest\x1a*.kafscale.control.PartitionAssignmentEvent0\x01B\xb5\x01\n" +
+	"\x14com.kafscale.controlB\vBrokerProtoP\x01Z/github.com/KafScale/platform/v2/pkg/gen/control\xa2\x02\x03KCX\xaa\x02\x10Kafscale.Control\xca\x02\x10Kafscale\\Control\xe2\x02\x1cKafscale\\Control\\GPBMetadata\xea\x02\x11Kafscale::Controlb\x06proto3"
 
 var (
 	file_control_broker_proto_rawDescOnce sync.Once

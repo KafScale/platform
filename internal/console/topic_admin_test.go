@@ -32,9 +32,9 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 type topicAdminClient struct {

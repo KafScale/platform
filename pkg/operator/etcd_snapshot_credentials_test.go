@@ -29,7 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 func TestSnapshotContainersAcceptEitherS3KeyPair(t *testing.T) {

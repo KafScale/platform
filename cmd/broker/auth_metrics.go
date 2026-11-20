@@ -21,7 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/KafScale/platform/pkg/acl"
+	"github.com/KafScale/platform/v2/pkg/acl"
 )
 
 type authMetrics struct {

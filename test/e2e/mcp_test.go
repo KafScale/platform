@@ -28,10 +28,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/mcpserver"
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/internal/mcpserver"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )

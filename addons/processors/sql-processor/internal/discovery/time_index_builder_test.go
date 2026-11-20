@@ -23,7 +23,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/decoder"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/decoder"
 )
 
 func TestTimeIndexBuilderBuild(t *testing.T) {

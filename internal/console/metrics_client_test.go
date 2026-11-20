@@ -27,8 +27,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 func TestFetchPromSnapshotParsesS3ErrorRate(t *testing.T) {

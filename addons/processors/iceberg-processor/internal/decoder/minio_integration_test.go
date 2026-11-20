@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
 )
 
 func TestDecodeSegmentFromMinIO(t *testing.T) {

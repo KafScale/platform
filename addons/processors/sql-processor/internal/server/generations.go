@@ -23,8 +23,8 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
-	procmetadata "github.com/kafscale/platform/addons/processors/sql-processor/internal/metadata"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/discovery"
+	procmetadata "github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/metadata"
 )
 
 const topicGenerationPrefix = "/kafscale/topic-generations/"

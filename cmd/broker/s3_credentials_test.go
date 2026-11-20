@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 func TestBuildS3ConfigsFromEnvTrimsCredentials(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
 
-	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/v2/internal/testutil"
 )
 
 func TestEtcdStoreReconnectsQuicklyAfterOutage(t *testing.T) {

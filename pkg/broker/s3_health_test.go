@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 func TestS3HealthStateTransitions(t *testing.T) {

@@ -20,8 +20,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/discovery"
 )
 
 type staticGenerations struct {

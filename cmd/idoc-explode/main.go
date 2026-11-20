@@ -26,8 +26,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/KafScale/platform/pkg/idoc"
-	"github.com/KafScale/platform/pkg/lfs"
+	"github.com/KafScale/platform/v2/pkg/idoc"
+	"github.com/KafScale/platform/v2/pkg/lfs"
 )
 
 func main() {

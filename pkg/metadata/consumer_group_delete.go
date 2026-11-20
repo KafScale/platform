@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )

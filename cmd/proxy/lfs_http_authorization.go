@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/KafScale/platform/pkg/acl"
-	"github.com/KafScale/platform/pkg/authn"
+	"github.com/KafScale/platform/v2/pkg/acl"
+	"github.com/KafScale/platform/v2/pkg/authn"
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 

@@ -30,9 +30,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/operator"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/operator"
 
 	"go.etcd.io/etcd/server/v3/embed"
 )

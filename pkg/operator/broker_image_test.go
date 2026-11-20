@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"

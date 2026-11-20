@@ -27,10 +27,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 

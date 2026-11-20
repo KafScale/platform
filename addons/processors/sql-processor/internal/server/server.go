@@ -32,12 +32,12 @@ import (
 
 	"github.com/jackc/pgproto3/v2"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/decoder"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/metadata"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/metrics"
-	kafsql "github.com/kafscale/platform/addons/processors/sql-processor/internal/sql"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/decoder"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/discovery"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/metadata"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/metrics"
+	kafsql "github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/sql"
 )
 
 type Server struct {

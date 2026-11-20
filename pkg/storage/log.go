@@ -29,7 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/KafScale/platform/pkg/cache"
+	"github.com/KafScale/platform/v2/pkg/cache"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 )

@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/decoder"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	iceberg "github.com/apache/iceberg-go"

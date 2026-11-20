@@ -36,8 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	"github.com/KafScale/platform/internal/testutil"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	"github.com/KafScale/platform/v2/internal/testutil"
 )
 
 func TestClusterReconcilerReportsS3CredentialsSecret(t *testing.T) {

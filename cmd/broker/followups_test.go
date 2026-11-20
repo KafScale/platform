@@ -18,8 +18,8 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"testing"
 	"time"

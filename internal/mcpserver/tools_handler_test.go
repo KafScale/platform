@@ -21,10 +21,10 @@ import (
 	"strings"
 	"testing"
 
-	console "github.com/KafScale/platform/internal/console"
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	console "github.com/KafScale/platform/v2/internal/console"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 

@@ -25,10 +25,10 @@ import (
 
 	"github.com/jackc/pgproto3/v2"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/decoder"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
-	kafsql "github.com/kafscale/platform/addons/processors/sql-processor/internal/sql"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/decoder"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/discovery"
+	kafsql "github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/sql"
 )
 
 type mockLister struct {

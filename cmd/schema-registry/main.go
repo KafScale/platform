@@ -29,10 +29,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/KafScale/platform/internal/s3env"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/schemaregistry"
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/internal/s3env"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/schemaregistry"
+	"github.com/KafScale/platform/v2/pkg/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

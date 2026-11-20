@@ -18,8 +18,8 @@ package discovery
 import (
 	"context"
 	"fmt"
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	clientv3 "go.etcd.io/etcd/client/v3"

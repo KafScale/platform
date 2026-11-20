@@ -30,8 +30,8 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 type pruneConfig struct {

@@ -31,7 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 )
 
 func TestFailurePathStatusSkipsChangedCluster(t *testing.T) {

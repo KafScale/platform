@@ -21,8 +21,8 @@ import (
 	"log/slog"
 	"time"
 
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
-	"github.com/KafScale/platform/pkg/metadata"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 var errRetentionMembersRemain = errors.New("consumer group still has members")

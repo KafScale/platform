@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

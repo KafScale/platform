@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/v2/internal/testutil"
 )
 
 const (

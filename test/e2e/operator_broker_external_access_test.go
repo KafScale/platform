@@ -41,8 +41,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	"github.com/KafScale/platform/pkg/operator"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	"github.com/KafScale/platform/v2/pkg/operator"
 )
 
 func TestOperatorBrokerExternalAccessConfig(t *testing.T) {

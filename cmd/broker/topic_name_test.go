@@ -22,8 +22,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 var invalidTopicNames = []string{"col@1", "a/b", ".", "..", "bad name", strings.Repeat("a", 250)}

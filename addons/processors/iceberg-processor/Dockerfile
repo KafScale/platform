@@ -22,12 +22,10 @@ WORKDIR /src
 COPY ${REPO_ROOT} /src
 WORKDIR /src/${MODULE_DIR}
 ARG USE_LOCAL_PLATFORM=0
-RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
-      go mod edit -dropreplace github.com/KafScale/platform || true; \
-    fi
-RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
-      go mod download github.com/KafScale/platform@v1.6.3 || true; \
-    fi
+# Required for standalone builds; v2.0.0 predates the /v2 module declaration.
+ARG PLATFORM_VERSION
+RUN --mount=type=cache,target=/go/pkg/mod \
+    sh ./prepare-platform.sh
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go mod download

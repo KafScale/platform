@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
 )
 
 func TestConsumerGroupWriteWaitRespectsContext(t *testing.T) {

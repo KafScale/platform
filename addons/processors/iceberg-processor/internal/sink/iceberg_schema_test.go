@@ -19,7 +19,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
 	iceberg "github.com/apache/iceberg-go"
 )
 

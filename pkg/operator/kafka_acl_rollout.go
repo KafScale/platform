@@ -21,7 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"

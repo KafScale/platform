@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/v2/internal/testutil"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/grpc"

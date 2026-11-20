@@ -25,8 +25,8 @@ import (
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 const defaultLeaseTTLSeconds = 30

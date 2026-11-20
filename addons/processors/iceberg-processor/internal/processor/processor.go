@@ -22,14 +22,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/checkpoint"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/discovery"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/metrics"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/schema"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/sink"
-	"github.com/KafScale/platform/pkg/lfs"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/checkpoint"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/discovery"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/metrics"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/schema"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/sink"
+	"github.com/KafScale/platform/v2/pkg/lfs"
 )
 
 var leaseRenewInterval = 10 * time.Second

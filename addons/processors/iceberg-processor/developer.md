@@ -67,6 +67,17 @@ GOCACHE=$(pwd)/.gocache go test -race ./...
 `make test-strict` runs the same checks but may need a writable `GOCACHE`
 depending on your environment.
 
+## Docker Builds
+
+`make docker-build` builds from the repository checkout using
+`USE_LOCAL_PLATFORM=1`. CI uses the same local module mode.
+
+For a standalone build with this directory as context, pass
+`--build-arg PLATFORM_VERSION=<published /v2 version>` to `docker build`.
+The version must exist and declare `module github.com/KafScale/platform/v2`.
+The existing `v2.0.0` tag does not, so standalone builds require a later valid
+release. Omitting the argument fails with instructions for building locally.
+
 ## Integration Tests
 
 Some tests are gated by environment variables:

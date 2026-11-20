@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/pkg/lfs"
+	"github.com/KafScale/platform/v2/pkg/lfs"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	clientv3 "go.etcd.io/etcd/client/v3"

@@ -24,8 +24,8 @@ import (
 	"strings"
 	"syscall"
 
-	consolepkg "github.com/KafScale/platform/internal/console"
-	"github.com/KafScale/platform/pkg/metadata"
+	consolepkg "github.com/KafScale/platform/v2/internal/console"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 func main() {

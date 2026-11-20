@@ -19,8 +19,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/KafScale/platform/internal/testutil"
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
 )
 
 func TestDeleteConsumerGroupAndOffsets(t *testing.T) {

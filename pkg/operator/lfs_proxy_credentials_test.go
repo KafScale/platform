@@ -21,7 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 )
 
 func resolveContainerEnv(t *testing.T, env []corev1.EnvVar, secret map[string]string) map[string]string {

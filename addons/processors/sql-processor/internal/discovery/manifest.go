@@ -27,7 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/metrics"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/metrics"
 )
 
 type manifestLister struct {

@@ -21,10 +21,10 @@ import (
 	"net"
 	"os"
 
-	"github.com/KafScale/platform/pkg/acl"
-	"github.com/KafScale/platform/pkg/authn"
-	"github.com/KafScale/platform/pkg/broker"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/acl"
+	"github.com/KafScale/platform/v2/pkg/authn"
+	"github.com/KafScale/platform/v2/pkg/broker"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 

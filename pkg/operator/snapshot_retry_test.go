@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )

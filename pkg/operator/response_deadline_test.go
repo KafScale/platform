@@ -16,7 +16,7 @@
 package operator
 
 import (
-	kafscalev1 "github.com/KafScale/platform/api/v1"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 	"testing"
 )
 

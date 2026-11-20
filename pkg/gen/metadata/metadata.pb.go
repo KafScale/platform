@@ -869,7 +869,7 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\tbroker_id\x18\x01 \x01(\tR\bbrokerId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x05R\x05epoch\x12\x1f\n" +
 	"\vassigned_at\x18\x03 \x01(\tR\n" +
-	"assignedAtB8Z6github.com/KafScale/platform/pkg/gen/metadata;metadatab\x06proto3"
+	"assignedAtB;Z9github.com/KafScale/platform/v2/pkg/gen/metadata;metadatab\x06proto3"
 
 var (
 	file_metadata_metadata_proto_rawDescOnce sync.Once

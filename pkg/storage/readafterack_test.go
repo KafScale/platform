@@ -21,7 +21,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/cache"
+	"github.com/KafScale/platform/v2/pkg/cache"
 )
 
 // TestPartitionLogReadAfterAckBeforeFlush exercises read-after-ack at the

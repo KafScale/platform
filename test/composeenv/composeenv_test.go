@@ -75,7 +75,7 @@ func unreadKeys(keys map[string][]string, sources map[string]string) []string {
 }
 
 func serviceSource(t *testing.T, root, pkg string) string {
-	cmd := exec.Command("go", "list", "-deps", "-f", `{{if .Module}}{{if eq .Module.Path "github.com/KafScale/platform"}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}{{end}}`, pkg)
+	cmd := exec.Command("go", "list", "-deps", "-f", `{{if .Module}}{{if eq .Module.Path "github.com/KafScale/platform/v2"}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}{{end}}`, pkg)
 	cmd.Dir = root
 	out, err := cmd.Output()
 	if err != nil {
