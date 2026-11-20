@@ -205,7 +205,7 @@ func TestSchemaImportPolicyAndCLIConnectivityDocumented(t *testing.T) {
 	if strings.Contains(schema, "bucket: kafscale-data") {
 		t.Fatal("schema example uses a bucket absent from quickstart")
 	}
-	for _, want := range []string{"bucket: kafscale-demo", "Apicurio import", "including `NONE`", "/config/{subject}", `--data '{"compatibility":"BACKWARD"}'`} {
+	for _, want := range []string{"bucket: kafscale-demo", "Apicurio import", "including `NONE`", "follows the new global default", "/config/{subject}", `--data '{"compatibility":"BACKWARD"}'`} {
 		if !strings.Contains(schema, want) {
 			t.Fatalf("missing import guidance %s", want)
 		}
@@ -214,6 +214,18 @@ func TestSchemaImportPolicyAndCLIConnectivityDocumented(t *testing.T) {
 	for _, want := range []string{"svc/demo-etcd-client 2379:2379", "svc/minio 9000:9000", "read -rs KAFSCALE_S3_SECRET_KEY", "#cli-access-from-a-laptop"} {
 		if !strings.Contains(ops, want) {
 			t.Fatalf("missing CLI guidance %s", want)
+		}
+	}
+}
+
+func TestUpgradeFrom163ResetsMissingChartDefaults(t *testing.T) {
+	text := readRepoDoc(t, "docs/upgrade-compatibility.md")
+	if strings.Contains(text, "--reuse-values") && !strings.Contains(text, "Do not use `--reuse-values`") {
+		t.Fatal("1.x upgrade still tells the reader to reuse values")
+	}
+	for _, want := range []string{"--reset-then-reuse-values", "Helm 3.14", "nil pointer evaluating interface {}.enabled", "within seconds of the CRD apply", "running 1.x operator updates object status"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("upgrade guide missing %s", want)
 		}
 	}
 }

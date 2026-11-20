@@ -367,6 +367,8 @@ ones most likely to affect you.
 
 ### Behavior changes
 
+- A 1.x Helm release has no `schemaRegistry` value. Upgrading it with `--reuse-values` fails. Use `--reset-then-reuse-values` on Helm 3.14 or later, or pass values saved with `helm get values` using `-f`. The chart rejects values that lack `schemaRegistry`. Helm 3.14 is the documented minimum. Applying the 2.0 CRDs stores existing objects as `v1` within seconds, before the chart upgrade, because the running 1.x operator writes status. A rollback keeps the 2.0 CRDs. See [Upgrade and compatibility guide](../upgrade-compatibility.md) (#403).
+
 - **2.0 console operator metrics discovery:** Helm adds a headless operator metrics
   Service and configures the console to scrape each ready operator pod. This fixes
   snapshot panels that stay n/a when a persistent connection reaches a standby (#387).

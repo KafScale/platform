@@ -41,7 +41,7 @@ Before you begin, ensure you have:
 - **Maven 3.6+** (`mvn -version`)
 - **kubectl** v1.28+ (`kubectl version --client`) for Kubernetes demos
 - **kind** v0.20+ for local Kubernetes cluster
-- **helm** v3.12+ for installing KafScale charts
+- **helm** v3.14+ for installing KafScale charts
 - **make** command available
 - **curl** for API testing
 - **Git** (to clone the KafScale repository)

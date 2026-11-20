@@ -174,7 +174,7 @@ The import can be run again at any time, for example to copy schemas registered 
 - A subject whose mode in the target is not `IMPORT` is switched to `IMPORT` while its new versions are imported and set back afterwards.
 - `--dry-run` prints what would change and writes nothing.
 
-**After an Apicurio import, check compatibility before enabling writes.** Import copies the source's global compatibility level, including `NONE`, which disables compatibility checks. The import intentionally preserves source settings; it does not choose a new policy for you. A subject with an explicit `NONE` override remains unchecked even after you change the global default. Inspect and update those subject overrides through `/config/{subject}` too.
+**After an Apicurio import, check compatibility before enabling writes.** Import copies the source's global compatibility level, including `NONE`, which disables compatibility checks. The import intentionally preserves source settings; it does not choose a new policy for you. A subject with an explicit `NONE` override remains unchecked even after you change the global default. From Apicurio, a subject level equal to the source global level is not copied (see above), so a subject set to `NONE` while the Apicurio global level is `NONE` follows the new global default. Inspect and update those subject overrides through `/config/{subject}` too.
 
 After the last import run, set your intended compatibility policy before switching to `READWRITE`. For the quickstart release, forward the registry Service in a second terminal:
 

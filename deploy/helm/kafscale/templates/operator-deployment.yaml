@@ -18,6 +18,7 @@ kind: Deployment
 metadata:
   name: {{ include "kafscale.componentName" (dict "root" . "component" "operator") }}
   labels:
+{{- include "kafscale.requireCurrentValues" . }}
 {{ include "kafscale.labels" . | indent 4 }}
     app.kubernetes.io/component: operator
 spec:

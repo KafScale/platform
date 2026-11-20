@@ -24,7 +24,7 @@ Kafka proxy, and MCP server. LFS is configured on the `KafscaleCluster` CRD
 ## Prerequisites
 
 - Kubernetes 1.26+
-- Helm 3.12+
+- Helm 3.14+
 - (Optional) Prometheus Operator for ServiceMonitor resources
 
 ## Installation

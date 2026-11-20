@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- include "kafscale.requireCurrentValues" . }}
 {{- if and .Values.schemaRegistry.enabled .Values.schemaRegistry.podDisruptionBudget.enabled (gt (int .Values.schemaRegistry.replicas) 1) }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
