@@ -207,7 +207,7 @@ with the release containing #410 (planned for v2.0.1). The v2.0.0 tag has no
 demo image. After that release is published, select its tag for the whole stack:
 
 ```bash
-TAG=v2.0.1 docker compose --profile demo up -d
+TAG="<published-release-tag>" docker compose --profile demo up -d
 ```
 
 Open [the browser demo](http://localhost:3072), choose a non-empty file (up to
@@ -241,8 +241,10 @@ bash scripts/test_browser_demo.sh
 ```
 
 The script uses isolated Compose names, volumes, and a random loopback port,
-and removes its containers and volumes on exit. PRs run the same browser tests
-and build every release image for linux/amd64 and linux/arm64 without pushing.
+and removes its containers and volumes on exit. PRs affecting the demo or its backend run the same browser tests. Changes to
+release-image sources run one native linux/amd64 build check covering every
+release image, without pushing. Documentation-only PRs skip these checks.
+Version tags still build and publish linux/amd64 and linux/arm64 images.
 
 ### Override Registry/Tag
 

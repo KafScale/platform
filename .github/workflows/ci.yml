@@ -90,34 +90,6 @@ jobs:
         if: always()
         run: docker rm -f lfs-integrity-minio || true
 
-  browser-demo:
-    name: Browser LFS Demo E2E
-    # Playwright 1.58.2 supports Ubuntu 24.04; ubuntu-latest can select 26.04.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-      - name: Install repository Node version
-        run: bash scripts/ensure_local_node.sh
-      - name: Install browser test dependencies
-        run: |
-          export PATH="$PWD/.tools/node/bin:$PATH"
-          npm --prefix lfs-client-sdk/js-browser ci --ignore-scripts
-          cd lfs-client-sdk/js-browser
-          npx playwright install --with-deps chromium
-      - name: Build and test the Compose demo profile
-        run: |
-          export PATH="$PWD/.tools/node/bin:$PATH"
-          bash scripts/test_browser_demo.sh
-      - name: Upload browser test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: browser-demo-results
-          path: lfs-client-sdk/js-browser/demo/test-results/
-          if-no-files-found: ignore
-          retention-days: 3
-
   lfs-sdk-tests:
     name: LFS SDK Python and Java Tests
     runs-on: ubuntu-latest

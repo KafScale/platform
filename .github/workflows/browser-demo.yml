@@ -1,0 +1,78 @@
+# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Browser LFS Demo
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/browser-demo.yml'
+      - 'scripts/test_browser_demo.sh'
+      - 'lfs-client-sdk/js-browser/**'
+      - 'deploy/docker/e72-browser-demo.*'
+      - 'deploy/docker/proxy.Dockerfile'
+      - 'deploy/docker/broker.Dockerfile'
+      - 'deploy/docker-compose/docker-compose.yaml'
+      - 'test/e2e/minio.Dockerfile'
+      - 'cmd/proxy/**'
+      - 'cmd/broker/**'
+      - 'pkg/lfs/**'
+      - 'pkg/broker/**'
+      - 'pkg/metadata/**'
+      - 'pkg/storage/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.dockerignore'
+      - '.nvmrc'
+      - 'scripts/ensure_local_node.sh'
+      - '!**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-demo-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  browser-demo:
+    name: Browser LFS Demo E2E
+    # Playwright 1.58.2 supports Ubuntu 24.04; ubuntu-latest can select 26.04.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Install repository Node version
+        run: bash scripts/ensure_local_node.sh
+      - name: Install browser test dependencies
+        run: |
+          export PATH="$PWD/.tools/node/bin:$PATH"
+          npm --prefix lfs-client-sdk/js-browser ci --ignore-scripts
+          cd lfs-client-sdk/js-browser
+          npx playwright install --with-deps chromium
+      - name: Build and test the Compose demo profile
+        run: |
+          export PATH="$PWD/.tools/node/bin:$PATH"
+          bash scripts/test_browser_demo.sh
+      - name: Upload browser test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-demo-results
+          path: lfs-client-sdk/js-browser/demo/test-results/
+          if-no-files-found: ignore
+          retention-days: 3
