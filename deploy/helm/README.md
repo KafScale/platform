@@ -22,7 +22,7 @@ This chart deploys the Kafscale operator (which in turn manages broker pods) and
 ### Prerequisites
 
 - Kubernetes 1.26+
-- Helm 3.12+
+- Helm 3.14+
 - Access to an etcd cluster that the operator can reach
 - IAM credentials/secret containing the S3 access keys that the operator will mount into broker pods
 

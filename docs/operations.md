@@ -22,7 +22,7 @@ This guide explains how to install the Kafscale control plane with Helm, configu
 ## Prerequisites
 
 - Kubernetes 1.26+
-- Helm 3.12+
+- Helm 3.14+
 - etcd for metadata. The operator can run a managed etcd for you (the default), or you can point it at an existing cluster with `operator.etcdEndpoints`
 - An S3 bucket per environment plus IAM credentials with permission to list/create objects
 - Optional: an ingress controller for the console UI

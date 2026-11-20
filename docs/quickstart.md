@@ -22,7 +22,7 @@ This guide covers a minimal installation on a cloud Kubernetes cluster using the
 ## Prerequisites
 
 - Kubernetes 1.26+
-- Helm 3.12+
+- Helm 3.14+
 - `kubectl` access to your cluster
 - `jq` (used to build the login request and the optional session token patch)
 - An S3-compatible bucket and credentials

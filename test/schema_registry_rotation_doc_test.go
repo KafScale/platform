@@ -82,3 +82,17 @@ func checkRotationWording(t *testing.T, doc, text string) {
 		t.Errorf("%s does not say the chart passes no session token to the registry", doc)
 	}
 }
+
+func TestApicurioImportDocMatchesSubjectLevelRule(t *testing.T) {
+	text, err := os.ReadFile(filepath.Join(repoRoot(t), "docs", "schema-registry.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.Join(strings.Fields(string(text)), " ")
+	if strings.Contains(doc, "explicit `NONE` override remains unchecked even after you change the global default") {
+		t.Error("docs/schema-registry.md says every subject NONE stays unchecked, but a subject level equal to the Apicurio global level is not copied")
+	}
+	if !strings.Contains(doc, "a subject set to `NONE` while the Apicurio global level is `NONE` follows the new global default") {
+		t.Error("docs/schema-registry.md does not explain the Apicurio subject NONE case")
+	}
+}

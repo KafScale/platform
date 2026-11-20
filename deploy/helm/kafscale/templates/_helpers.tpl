@@ -58,3 +58,9 @@ app.kubernetes.io/component: {{ .component }}
 {{- $limit := sub 63 (len $suffix) | int -}}
 {{- printf "%s%s" (include "kafscale.componentName" (dict "root" . "component" "operator") | trunc $limit | trimSuffix "-") $suffix -}}
 {{- end -}}
+
+{{- define "kafscale.requireCurrentValues" -}}
+{{- if not (hasKey .Values "schemaRegistry") -}}
+{{- fail "these values come from a chart before 2.0 and lack the 2.0 defaults: upgrade with --reset-then-reuse-values (Helm 3.14+) or with -f and your saved values, not --reuse-values (see docs/upgrade-compatibility.md)" -}}
+{{- end -}}
+{{- end -}}

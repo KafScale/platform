@@ -56,8 +56,24 @@ chart. Run these from a checkout of the release you are upgrading to:
 ```sh
 kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
 kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io crd/kafscaletopics.kafscale.io
-helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale --reuse-values
+helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale --reset-then-reuse-values
 ```
+
+`--reset-then-reuse-values` needs Helm 3.14 or later. It keeps the values you
+set at install and takes the chart defaults for keys that are new in 2.0, such
+as `schemaRegistry`. Do not use `--reuse-values` for this upgrade. It reuses
+only the 1.x values, and the upgrade fails with
+`nil pointer evaluating interface {}.enabled`. With Helm older than 3.14, save
+your values and pass them with `-f`:
+
+```sh
+umask 077
+helm get values kafscale --namespace kafscale -o yaml > kafscale-values.yaml
+helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale -f kafscale-values.yaml
+```
+
+The saved file can hold credentials you set as values. Delete it after the
+upgrade.
 
 `--force-conflicts` is required when Helm installed the CRDs, which is the
 default. Without it the apply fails with `conflict with "helm": .spec.versions`.
@@ -106,7 +122,9 @@ picking one.
 
 Rolling the operator back to a release that only knows v1alpha1 keeps working
 while the new CRDs are installed, because v1alpha1 is still served. Once objects
-are stored as v1, the old v1alpha1-only CRDs from 1.x cannot be reapplied. The
+are stored as v1, the old v1alpha1-only CRDs from 1.x cannot be reapplied. This
+happens within seconds of the CRD apply, before the chart upgrade, because the
+running 1.x operator updates object status. The
 API server refuses to remove v1 from the CRD while `status.storedVersions` lists
 it. A chart rollback must keep the 2.0 CRDs.
 
