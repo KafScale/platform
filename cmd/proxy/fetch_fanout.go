@@ -24,7 +24,7 @@ import (
 )
 
 // Probe first so a backlog can drain over pooled sockets without waiting for
-// caught-up brokers. A successful round below MinBytes may begin a long poll.
+// caught-up brokers. Incremental long polls recheck the aggregate MinBytes target.
 func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader, groups map[string]*kmsg.FetchRequest, originalPayload []byte, triedBackends map[string]bool, pool *connPool) []fetchFanOutResult {
 	coalesceFetchFallback(groups)
 	if len(groups) <= 1 {
@@ -44,16 +44,26 @@ func (p *proxy) fanOutFetch(ctx context.Context, header *protocol.RequestHeader,
 	}
 	deadline := time.Now().Add(time.Duration(waitMillis) * time.Millisecond)
 	results := p.fanOutFetchOnce(ctx, header, fetchGroupsWithWait(groups, 0), nil, triedBackends, pool)
-	remaining := int32(time.Until(deadline) / time.Millisecond)
-	if !fetchResultsCanWait(results, minimumBytes) || ctx.Err() != nil || remaining <= 0 {
-		return results
-	}
-	for _, result := range results {
-		if result.conn != nil {
-			pool.Return(result.target, result.conn)
+	for {
+		remaining := int32(time.Until(deadline) / time.Millisecond)
+		if !fetchResultsCanWait(results, minimumBytes) || ctx.Err() != nil || remaining <= 0 {
+			return results
 		}
+		waiting := make(map[string]*kmsg.FetchRequest, len(results))
+		for _, result := range results {
+			request := *result.subReq
+			request.MaxWaitMillis = remaining
+			// Wait for growth beyond this broker's last snapshot, rather than
+			// asking every broker to independently reach the aggregate minimum.
+			// Re-read the same offsets and replace snapshots; never append them.
+			request.MinBytes = int32(min(int64(minimumBytes), int64(fetchResponseRecordBytes(result.subResp))+1))
+			waiting[result.route] = &request
+			if result.conn != nil {
+				pool.Return(result.target, result.conn)
+			}
+		}
+		results = p.fanOutFetchOnce(ctx, header, waiting, nil, triedBackends, pool)
 	}
-	return p.fanOutFetchOnce(ctx, header, fetchGroupsWithWait(groups, remaining), nil, triedBackends, pool)
 }
 
 func fetchGroupsWithWait(groups map[string]*kmsg.FetchRequest, millis int32) map[string]*kmsg.FetchRequest {
@@ -67,17 +77,22 @@ func fetchGroupsWithWait(groups map[string]*kmsg.FetchRequest, millis int32) map
 }
 
 func fetchResponseHasRecords(response *kmsg.FetchResponse) bool {
+	return fetchResponseRecordBytes(response) > 0
+}
+
+func fetchResponseRecordBytes(response *kmsg.FetchResponse) int {
 	if response == nil || response.ErrorCode != 0 {
-		return false
+		return 0
 	}
+	bytes := 0
 	for _, topic := range response.Topics {
 		for _, part := range topic.Partitions {
-			if part.ErrorCode == 0 && len(part.RecordBatches) > 0 {
-				return true
+			if part.ErrorCode == 0 {
+				bytes += len(part.RecordBatches)
 			}
 		}
 	}
-	return false
+	return bytes
 }
 
 func fetchResultsCanWait(results []fetchFanOutResult, minimumBytes int32) bool {

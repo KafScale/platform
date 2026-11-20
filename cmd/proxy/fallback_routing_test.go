@@ -178,7 +178,12 @@ func TestFanOutDoesNotExcludeSuccessfulBrokers(t *testing.T) {
 					if len(results) != expected {
 						t.Fatal(results)
 					}
+					routes := make(map[string]bool)
 					for _, result := range results {
+						if groups[result.route] == nil || routes[result.route] {
+							t.Fatalf("invalid or duplicate original route %q", result.route)
+						}
+						routes[result.route] = true
 						if result.err != nil {
 							t.Fatal(result.err)
 						}

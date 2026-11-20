@@ -2232,6 +2232,7 @@ func (p *proxy) groupFetchPartitionsByBroker(ctx context.Context, req *kmsg.Fetc
 }
 
 type fetchFanOutResult struct {
+	route   string // Original group key, even when dialing falls back to another broker.
 	subReq  *kmsg.FetchRequest
 	subResp *kmsg.FetchResponse
 	conn    net.Conn
@@ -2369,7 +2370,7 @@ func (p *proxy) fanOutFetchOnce(ctx context.Context, header *protocol.RequestHea
 	for addr, subReq := range groups {
 		conn, targetAddr, err := p.connectForAddr(ctx, addr, triedBackends, pool)
 		if err != nil {
-			connectErrors = append(connectErrors, fetchFanOutResult{subReq: subReq, target: addr, err: err})
+			connectErrors = append(connectErrors, fetchFanOutResult{route: addr, subReq: subReq, target: addr, err: err})
 			continue
 		}
 
@@ -2391,7 +2392,7 @@ func (p *proxy) fanOutFetchOnce(ctx context.Context, header *protocol.RequestHea
 	for i, w := range work {
 		go func() {
 			defer w.cancel()
-			result := fetchFanOutResult{subReq: w.subReq, target: w.target}
+			result := fetchFanOutResult{route: w.addr, subReq: w.subReq, target: w.target}
 			wire, err := p.forwardToBackend(w.ctx, w.conn, w.target, w.payload)
 			if err == nil {
 				result.subResp, err = parseFetchResponse(wire, header.APIVersion)

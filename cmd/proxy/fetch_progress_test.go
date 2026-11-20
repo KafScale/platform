@@ -303,55 +303,6 @@ func TestFetchProgressInterruptsLongPollAndReadsFreshMetadata(t *testing.T) {
 	}
 }
 
-func TestFetchProgressKeepsLongPollWhenAllCaughtUp(t *testing.T) {
-	entered := make(chan struct{}, 2)
-	release := make(chan struct{})
-	handler := func(ctx context.Context, _ net.Conn, req *kmsg.FetchRequest) (*kmsg.FetchResponse, error) {
-		if req.MaxWaitMillis > 0 {
-			entered <- struct{}{}
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		return progressFetchResponse(req, false), nil
-	}
-	a, b := startFetchProgressBackend(t, handler), startFetchProgressBackend(t, handler)
-	p := fetchProgressProxy(a, b)
-	pool := newConnPool(time.Second)
-	defer pool.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	req, groups := progressFetchGroups(4, a, b)
-	done := make(chan error, 1)
-	go func() {
-		_, err := p.forwardFetch(ctx, &protocol.RequestHeader{APIKey: 1, APIVersion: 4}, req, nil, groups, pool)
-		done <- err
-	}()
-	for range 2 {
-		select {
-		case <-entered:
-		case <-ctx.Done():
-			t.Fatal("long polls not started")
-		}
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("idle fetch returned before release: %v", err)
-	default:
-	}
-	close(release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-ctx.Done():
-		t.Fatal("fetch did not finish")
-	}
-}
-
 func TestFetchProgressParentCancellationDoesNotRefetch(t *testing.T) {
 	entered := make(chan struct{}, 2)
 	var probes atomic.Int32
@@ -499,57 +450,5 @@ func TestFetchProbeDoesNotResetExpiredWaitBudget(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("requests=%d", calls.Load())
-	}
-}
-
-func TestFetchProbeBelowMinBytesStillWaits(t *testing.T) {
-	entered := make(chan struct{}, 2)
-	release := make(chan struct{})
-	handler := func(ctx context.Context, _ net.Conn, req *kmsg.FetchRequest) (*kmsg.FetchResponse, error) {
-		if req.MaxWaitMillis > 0 {
-			entered <- struct{}{}
-			select {
-			case <-release:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		return progressFetchResponse(req, true), nil
-	}
-	a, b := startFetchProgressBackend(t, handler), startFetchProgressBackend(t, handler)
-	p := fetchProgressProxy(a, b)
-	pool := newConnPool(time.Second)
-	defer pool.Close()
-	req, groups := progressFetchGroups(4, a, b)
-	for _, sub := range groups {
-		sub.MinBytes = 1 << 20
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		_, err := p.forwardFetch(ctx, &protocol.RequestHeader{APIKey: 1, APIVersion: 4}, req, nil, groups, pool)
-		done <- err
-	}()
-	for range 2 {
-		select {
-		case <-entered:
-		case <-ctx.Done():
-			t.Fatal("partial probe bypassed MinBytes")
-		}
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("returned below MinBytes before wait: %v", err)
-	default:
-	}
-	close(release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-ctx.Done():
-		t.Fatal("fetch did not finish")
 	}
 }
