@@ -24,7 +24,8 @@ on:
       - main
   workflow_dispatch:
 
-permissions: read-all
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -334,6 +335,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
+      # Required only here to update badges/coverage.json on gh-pages.
       contents: write
     concurrency:
       group: coverage-badge
@@ -343,9 +345,11 @@ jobs:
         with:
           ref: gh-pages
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Commit badges/coverage.json to gh-pages
         env:
+          GH_TOKEN: ${{ github.token }}
           TOTAL: ${{ needs.go-coverage.outputs.coverage }}
         run: |
           if [ -z "$TOTAL" ]; then
@@ -368,6 +372,7 @@ jobs:
           git -c user.name="github-actions[bot]" \
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -q -m "Coverage badge: ${TOTAL}%"
+          gh auth setup-git
           for _ in 1 2 3; do
             if git push origin HEAD:gh-pages; then
               exit 0

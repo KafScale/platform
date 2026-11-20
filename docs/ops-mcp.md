@@ -180,6 +180,21 @@ mcp:
     existingSecretKey: mcp-token
 ```
 
+For a new install, create `kafscale-mcp` first with `kubectl create namespace kafscale-mcp` if it does not already exist. Create the Secret referenced above without putting the token in argv:
+
+```bash
+(
+  set -euo pipefail
+  printf 'MCP bearer token: '
+  IFS= read -rs KAFSCALE_MCP_AUTH_TOKEN
+  printf '\n'
+  : "${KAFSCALE_MCP_AUTH_TOKEN:?Token must not be empty}"
+  printf '%s' "$KAFSCALE_MCP_AUTH_TOKEN" | kubectl -n kafscale-mcp create secret generic my-mcp-token \
+    --from-file=mcp-token=/dev/stdin
+  unset KAFSCALE_MCP_AUTH_TOKEN
+)
+```
+
 Changing the token inside an existing Secret does not restart MCP. After you
 update the Secret, replace the release value below with your Helm release name and
 use your `mcp.namespace.name` if you changed it. Select the Deployment by its release
@@ -205,7 +220,11 @@ read -rs KAFSCALE_MCP_AUTH_TOKEN
 export KAFSCALE_MCP_AUTH_TOKEN
 ```
 
+`cluster_metrics` rounds floating-point aggregates to six decimal places, matching broker Prometheus sample precision. Integer metrics and the shared metrics snapshot are unchanged.
+
 ### Quick Test (port-forward)
+
+Run the port-forward in a second terminal and leave it running. Inspector opens and closes connections during requests, so kubectl can print `connection reset by peer` when a client closes its forwarded connection. If the Inspector call succeeded, that close message alone is harmless; failed calls or a port-forward that exits still need investigation.
 
 ```bash
 kubectl -n kafscale-mcp get svc

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
@@ -289,14 +290,25 @@ func clusterMetricsHandler(opts Options) mcp.ToolHandlerFor[emptyInput, ClusterM
 		return nil, ClusterMetricsOutput{
 			S3State:                 snap.S3State,
 			S3LatencyMS:             snap.S3LatencyMS,
-			ProduceRPS:              snap.ProduceRPS,
-			FetchRPS:                snap.FetchRPS,
-			AdminRequestsTotal:      snap.AdminRequestsTotal,
-			AdminRequestErrorsTotal: snap.AdminRequestErrorsTotal,
-			AdminRequestLatencyMS:   snap.AdminRequestLatencyMS,
+			ProduceRPS:              roundMetric(snap.ProduceRPS),
+			FetchRPS:                roundMetric(snap.FetchRPS),
+			AdminRequestsTotal:      roundMetric(snap.AdminRequestsTotal),
+			AdminRequestErrorsTotal: roundMetric(snap.AdminRequestErrorsTotal),
+			AdminRequestLatencyMS:   roundMetric(snap.AdminRequestLatencyMS),
 			ObservedAt:              time.Now().UTC().Format(time.RFC3339),
 		}, nil
 	}
+}
+
+func roundMetric(value float64) float64 {
+	// Broker Prometheus samples use %f (six decimal places). Canonicalize
+	// aggregated values to that precision without scaling large counters.
+	// ParseFloat accepts every string that FormatFloat produces here.
+	rounded, _ := strconv.ParseFloat(strconv.FormatFloat(value, 'f', 6, 64), 64)
+	if rounded == 0 {
+		return 0
+	}
+	return rounded
 }
 
 func listTopicsHandler(opts Options) mcp.ToolHandlerFor[emptyInput, TopicSummaryList] {

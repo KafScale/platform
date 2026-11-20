@@ -250,3 +250,28 @@ are emitted under the proxy names, such as `KAFSCALE_PROXY_ADDR`. The previous
 LFS proxy names, such as `KAFSCALE_LFS_PROXY_ADDR`, are retained for custom
 legacy images. LFS-specific settings keep their existing
 names. Set `spec.lfsProxy.advertisedHost` to an address reachable by clients.
+
+## Workflow publishing permissions
+
+The CI, Docker, and video-sync workflows default to `contents: read`. Write permissions are confined to
+jobs that publish, with pinned actions and no execution of downloaded source code:
+
+- `sync-demo-videos.yml` prepares and validates fixed video files in a read-only
+  job. A separate publishing job downloads only that run's prepared artifact,
+  pushes a branch, and creates a gh-pages PR. That job requires `contents: write`
+  and `pull-requests: write`. Checkout does not persist Git credentials.
+- The CI coverage-badge job runs only on a push to `main`, and requires
+  `contents: write` to update `badges/coverage.json` on gh-pages. Its Git credential
+  helper is configured only in the publishing step.
+- The Docker release job runs only for a `v*` tag, after all images build and push.
+  Its only step is the pinned GitHub release action, which requires
+  `contents: write` to call the release API. Image builds use `packages: write`
+  and `contents: read`, and do not retain checkout credentials.
+
+Scorecard's Token-Permissions check can flag the necessary publishing grants.
+Its [publishing allowlist](https://github.com/ossf/scorecard/blob/main/checks/raw/permissions.go)
+does not recognize the custom badge update or `softprops/action-gh-release`.
+Those required, isolated grants are not equivalent to workflow-wide write defaults;
+removing them would break the corresponding publisher. Do not replace them with a
+broad personal token or disable the check to hide a finding. Reassess the grants
+if a publishing job starts executing repository scripts or untrusted code.

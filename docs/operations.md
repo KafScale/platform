@@ -348,7 +348,33 @@ registering such a schema again when it is the latest version of the subject.
 
 Rotate the keys in this order. The order matters.
 
-1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the Secret.
+1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the Secret. Set the namespace and Secret name below to your release's values. This patches only these two keys and preserves other keys, labels, and annotations:
+
+   ```bash
+   (
+     set -euo pipefail
+     umask 077
+     credentials_dir=$(mktemp -d)
+     trap 'rm -rf "$credentials_dir"' EXIT
+     printf 'AWS access key ID: '
+     IFS= read -r AWS_ACCESS_KEY_ID
+     printf 'AWS secret access key: '
+     IFS= read -rs AWS_SECRET_ACCESS_KEY
+     printf '\n'
+     : "${AWS_ACCESS_KEY_ID:?Access key ID must not be empty}"
+     : "${AWS_SECRET_ACCESS_KEY:?Secret key must not be empty}"
+     printf '%s' "$AWS_ACCESS_KEY_ID" > "$credentials_dir/AWS_ACCESS_KEY_ID"
+     printf '%s' "$AWS_SECRET_ACCESS_KEY" > "$credentials_dir/AWS_SECRET_ACCESS_KEY"
+     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+     namespace='<namespace>'
+     secret_name='kafscale-s3' # Set this to schemaRegistry.s3.credentialsSecret.
+     jq -n \
+       --rawfile access "$credentials_dir/AWS_ACCESS_KEY_ID" \
+       --rawfile secret "$credentials_dir/AWS_SECRET_ACCESS_KEY" \
+       '{data:{AWS_ACCESS_KEY_ID:($access|@base64),AWS_SECRET_ACCESS_KEY:($secret|@base64)}}' | \
+       kubectl -n "$namespace" patch secret "$secret_name" --type=merge --patch-file=/dev/stdin
+   )
+   ```
 2. Find the registry Deployment by its labels and restart it:
 
    ```bash
@@ -572,6 +598,44 @@ go build -o bin/kafscale-cli ./cmd/kafscale-cli
 `kafscale-cli --help` and `kafscale-cli <command> --help` print the commands,
 flags and environment variables.
 
+### CLI access from a laptop
+
+The restore and prune commands connect directly to etcd and S3. For the quickstart's
+`demo` cluster in namespace `kafscale`, run each port-forward in its own terminal:
+
+```bash
+kubectl -n kafscale port-forward svc/demo-etcd-client 2379:2379
+```
+
+For in-cluster MinIO, also forward its S3 API port (not the console port):
+
+```bash
+kubectl -n kafscale port-forward svc/minio 9000:9000
+```
+
+Replace the cluster, namespace, and S3 Service names for your installation. External
+etcd needs its own reachable client endpoint. AWS S3 does not need an S3 port-forward;
+leave `KAFSCALE_S3_ENDPOINT` unset for AWS rather than using the MinIO value below.
+In the terminal where you run the CLI, configure the quickstart environment:
+
+```bash
+export KAFSCALE_ETCD_ENDPOINTS=http://127.0.0.1:2379
+export KAFSCALE_S3_ENDPOINT=http://127.0.0.1:9000
+export KAFSCALE_S3_BUCKET=kafscale-demo
+export KAFSCALE_S3_REGION=us-east-1
+export KAFSCALE_S3_NAMESPACE=kafscale
+printf 'S3 access key ID: '
+IFS= read -r KAFSCALE_S3_ACCESS_KEY
+printf 'S3 secret access key: '
+IFS= read -rs KAFSCALE_S3_SECRET_KEY
+printf '\n'
+export KAFSCALE_S3_ACCESS_KEY KAFSCALE_S3_SECRET_KEY
+```
+
+Keep these variables set while running restore or prune. Afterwards, run
+`unset KAFSCALE_S3_ACCESS_KEY KAFSCALE_S3_SECRET_KEY`. Temporary credentials also
+need `KAFSCALE_S3_SESSION_TOKEN`; read it without echo and export it in the same way.
+
 ### Topic recovery on the DR spine
 
 For broker topic data, KafScale now supports **recovery into a new topic** on the DR side. This is intentionally not an in-place rollback on the primary cluster.
@@ -602,6 +666,8 @@ Operational semantics:
 - The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
 
 ### Pruning deleted topic data
+
+For laptop access, use the etcd and S3 port-forwards and credential input in [CLI access from a laptop](#cli-access-from-a-laptop).
 
 DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`. Every environment variable `prune` reads is listed in [kafscale-cli](#kafscale-cli):
 
