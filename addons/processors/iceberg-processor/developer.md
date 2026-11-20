@@ -70,7 +70,11 @@ depending on your environment.
 ## Docker Builds
 
 `make docker-build` builds from the repository checkout using
-`USE_LOCAL_PLATFORM=1`. CI uses the same local module mode.
+`USE_LOCAL_PLATFORM=1`. CI uses the same local module mode. The local build
+also passes `--build-arg REPO_ROOT=. --build-arg MODULE_DIR=addons/processors/iceberg-processor`
+(see the `Makefile`): `REPO_ROOT` is the path copied into the image as `/src`,
+and `MODULE_DIR` is the processor directory under it. All three build args are
+documented in [Build and test variables](../../../docs/development.md#build-and-test-variables).
 
 For a standalone build with this directory as context, pass
 `--build-arg PLATFORM_VERSION=<published /v2 version>` to `docker build`.
