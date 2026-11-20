@@ -31,6 +31,7 @@ jobs:
       contents: read
       packages: write
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: broker
@@ -63,8 +64,12 @@ jobs:
             file: deploy/docker/etcd-tools.Dockerfile
           - name: iceberg-processor
             image: kafscale-iceberg-processor
-            context: addons/processors/iceberg-processor
+            context: .
             file: addons/processors/iceberg-processor/Dockerfile
+            build-args: |
+              USE_LOCAL_PLATFORM=1
+              REPO_ROOT=.
+              MODULE_DIR=addons/processors/iceberg-processor
           - name: sql-processor
             image: kafscale-sql-processor
             context: addons/processors/sql-processor
@@ -101,6 +106,7 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
+          build-args: ${{ matrix.build-args }}
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
