@@ -209,16 +209,16 @@ services:
   # ==========================================================================
 
   e72-browser-demo:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-e72-browser-demo:${TAG:-v2.0.0}
+    image: ${BROWSER_DEMO_IMAGE:-${REGISTRY:-ghcr.io}/kafscale/kafscale-e72-browser-demo:${TAG:-v2.0.0}}
     container_name: kafscale-e72-demo-dc
     profiles: ["demo"]
     depends_on:
       proxy:
         condition: service_healthy
     ports:
-      - "3072:80"
+      - "3072:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/index.html || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/index.html || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

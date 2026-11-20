@@ -1,0 +1,116 @@
+# Copyright 2025 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Build release image matrix
+
+on:
+  workflow_call:
+    inputs:
+      publish:
+        type: boolean
+        required: true
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: broker
+            image: kafscale-broker
+            context: .
+            file: deploy/docker/broker.Dockerfile
+          - name: operator
+            image: kafscale-operator
+            context: .
+            file: deploy/docker/operator.Dockerfile
+          - name: console
+            image: kafscale-console
+            context: .
+            file: deploy/docker/console.Dockerfile
+          - name: proxy
+            image: kafscale-proxy
+            context: .
+            file: deploy/docker/proxy.Dockerfile
+          - name: mcp
+            image: kafscale-mcp
+            context: .
+            file: deploy/docker/mcp.Dockerfile
+          - name: schema-registry
+            image: kafscale-schema-registry
+            context: .
+            file: deploy/docker/schema-registry.Dockerfile
+          - name: etcd-tools
+            image: kafscale-etcd-tools
+            context: .
+            file: deploy/docker/etcd-tools.Dockerfile
+          - name: iceberg-processor
+            image: kafscale-iceberg-processor
+            context: .
+            file: addons/processors/iceberg-processor/Dockerfile
+            build-args: |
+              USE_LOCAL_PLATFORM=1
+              REPO_ROOT=.
+              MODULE_DIR=addons/processors/iceberg-processor
+          - name: e72-browser-demo
+            image: kafscale-e72-browser-demo
+            context: .
+            file: deploy/docker/e72-browser-demo.Dockerfile
+          - name: sql-processor
+            image: kafscale-sql-processor
+            context: addons/processors/sql-processor
+            file: addons/processors/sql-processor/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        if: inputs.publish
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/kafscale/${{ matrix.image }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=pr-check,enable=${{ !inputs.publish }}
+
+      - name: Build and push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.build-args }}
+          push: ${{ inputs.publish }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
