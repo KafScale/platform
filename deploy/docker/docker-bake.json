@@ -1,0 +1,135 @@
+{
+  "group": {
+    "default": {
+      "targets": [
+        "broker",
+        "operator",
+        "console",
+        "proxy",
+        "mcp",
+        "schema-registry",
+        "etcd-tools",
+        "iceberg-processor",
+        "e72-browser-demo",
+        "sql-processor"
+      ]
+    }
+  },
+  "target": {
+    "broker": {
+      "context": ".",
+      "dockerfile": "deploy/docker/broker.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-broker:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "operator": {
+      "context": ".",
+      "dockerfile": "deploy/docker/operator.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-operator:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "console": {
+      "context": ".",
+      "dockerfile": "deploy/docker/console.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-console:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "proxy": {
+      "context": ".",
+      "dockerfile": "deploy/docker/proxy.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-proxy:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "mcp": {
+      "context": ".",
+      "dockerfile": "deploy/docker/mcp.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-mcp:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "schema-registry": {
+      "context": ".",
+      "dockerfile": "deploy/docker/schema-registry.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-schema-registry:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "etcd-tools": {
+      "context": ".",
+      "dockerfile": "deploy/docker/etcd-tools.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-etcd-tools:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "iceberg-processor": {
+      "context": ".",
+      "dockerfile": "addons/processors/iceberg-processor/Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-iceberg-processor:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "args": {
+        "USE_LOCAL_PLATFORM": "1",
+        "REPO_ROOT": ".",
+        "MODULE_DIR": "addons/processors/iceberg-processor"
+      }
+    },
+    "e72-browser-demo": {
+      "context": ".",
+      "dockerfile": "deploy/docker/e72-browser-demo.Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-e72-browser-demo:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    },
+    "sql-processor": {
+      "context": "addons/processors/sql-processor",
+      "dockerfile": "Dockerfile",
+      "tags": [
+        "ghcr.io/kafscale/kafscale-sql-processor:pr-check"
+      ],
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ]
+    }
+  }
+}

@@ -200,13 +200,51 @@ Override these in `docker-compose.yaml` or via your own `.env.local` if needed.
 
 ### Run the E72 Browser Demo
 
-`e72-browser-demo` runs only with the `demo` profile. Its image `kafscale-e72-browser-demo` is not published and the repository has no Dockerfile for it. Push it to your registry first, then run:
+`e72-browser-demo` runs only with the `demo` profile. Its image is built from
+`lfs-client-sdk/js-browser/demo` and published as
+`ghcr.io/kafscale/kafscale-e72-browser-demo` by the release workflow, starting
+with the release containing #410 (planned for v2.0.1). The v2.0.0 tag has no
+demo image. After that release is published, select its tag for the whole stack:
 
 ```bash
-REGISTRY=<registry> TAG=<tag> docker compose --profile demo up -d
+TAG="<published-release-tag>" docker compose --profile demo up -d
 ```
 
-`<registry>` and `<tag>` must hold all KafScale images, including `kafscale-e72-browser-demo`. Without the profile, `docker compose up -d` starts every service except the demo.
+Open [the browser demo](http://localhost:3072), choose a non-empty file (up to
+100 MiB), and upload it to a Kafka topic. Inspect the returned LFS envelope,
+then click **Verify and download file**. The proxy verifies the S3 object and
+the browser checks the downloaded size and SHA-256 before saving it.
+The demo forwards `/lfs/` to `proxy:8080` on the Compose network; it does not
+require browser access to internal MinIO addresses or S3 credentials.
+This is a local, unauthenticated demo.
+
+To build the demo image before the next release, run from the repository root:
+
+```bash
+docker build -t kafscale-e72-browser-demo:dev \
+  -f deploy/docker/e72-browser-demo.Dockerfile .
+BROWSER_DEMO_IMAGE=kafscale-e72-browser-demo:dev \
+  docker compose -f deploy/docker-compose/docker-compose.yaml --profile demo up -d --pull missing
+```
+
+`BROWSER_DEMO_IMAGE` overrides only the demo image; other services retain their
+normal registry and tag settings. Without `--profile demo`, the
+stack starts without the browser demo.
+
+For the automated browser tests against freshly built broker, proxy, and demo
+images, install the SDK dependencies and Chromium, then run:
+
+```bash
+npm --prefix lfs-client-sdk/js-browser ci --ignore-scripts
+(cd lfs-client-sdk/js-browser && npx playwright install chromium)
+bash scripts/test_browser_demo.sh
+```
+
+The script uses isolated Compose names, volumes, and a random loopback port,
+and removes its containers and volumes on exit. PRs affecting the demo or its backend run the same browser tests. Changes to
+release-image sources run one native linux/amd64 build check covering every
+release image, without pushing. Documentation-only PRs skip these checks.
+Version tags still build and publish linux/amd64 and linux/arm64 images.
 
 ### Override Registry/Tag
 

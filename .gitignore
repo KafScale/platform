@@ -113,3 +113,6 @@ __pycache__/
 
 # Test output
 records.txt
+
+# Browser demo test artifacts
+lfs-client-sdk/js-browser/demo/test-results/

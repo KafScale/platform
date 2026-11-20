@@ -17,12 +17,15 @@
     "build": "tsc && esbuild src/index.ts --bundle --format=esm --outfile=dist/index.esm.js --sourcemap",
     "build:umd": "esbuild src/index.ts --bundle --format=iife --global-name=KafscaleLfs --outfile=dist/index.umd.js --sourcemap",
     "dev": "tsc --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:demo": "node demo/build.mjs",
+    "test:demo": "playwright test --config demo/playwright.config.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
     "esbuild": "^0.25.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "@playwright/test": "1.58.2"
   },
   "files": [
     "dist",

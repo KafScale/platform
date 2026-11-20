@@ -16,6 +16,23 @@
 name: Docker Images
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/docker*.yml'
+      - 'scripts/build_release_images.sh'
+      - '.dockerignore'
+      - 'deploy/docker/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'api/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'pkg/**'
+      - 'ui/**'
+      - 'addons/processors/**'
+      - 'lfs-client-sdk/js-browser/**'
+      - '!**/*.md'
   push:
     tags:
       - 'v*'
@@ -24,93 +41,27 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: docker-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  validate:
+    if: github.event_name == 'pull_request' || !startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      publish: false
+    permissions:
+      contents: read
+
   build-and-push:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/docker-build.yml
+    with:
+      publish: true
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: broker
-            image: kafscale-broker
-            context: .
-            file: deploy/docker/broker.Dockerfile
-          - name: operator
-            image: kafscale-operator
-            context: .
-            file: deploy/docker/operator.Dockerfile
-          - name: console
-            image: kafscale-console
-            context: .
-            file: deploy/docker/console.Dockerfile
-          - name: proxy
-            image: kafscale-proxy
-            context: .
-            file: deploy/docker/proxy.Dockerfile
-          - name: mcp
-            image: kafscale-mcp
-            context: .
-            file: deploy/docker/mcp.Dockerfile
-          - name: schema-registry
-            image: kafscale-schema-registry
-            context: .
-            file: deploy/docker/schema-registry.Dockerfile
-          - name: etcd-tools
-            image: kafscale-etcd-tools
-            context: .
-            file: deploy/docker/etcd-tools.Dockerfile
-          - name: iceberg-processor
-            image: kafscale-iceberg-processor
-            context: .
-            file: addons/processors/iceberg-processor/Dockerfile
-            build-args: |
-              USE_LOCAL_PLATFORM=1
-              REPO_ROOT=.
-              MODULE_DIR=addons/processors/iceberg-processor
-          - name: sql-processor
-            image: kafscale-sql-processor
-            context: addons/processors/sql-processor
-            file: addons/processors/sql-processor/Dockerfile
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-        with:
-          persist-credentials: false
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
-        with:
-          images: ghcr.io/kafscale/${{ matrix.image }}
-          tags: |
-            type=ref,event=tag
-
-      - name: Build and push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          build-args: ${{ matrix.build-args }}
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
 
   release:
     runs-on: ubuntu-latest

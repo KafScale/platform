@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Copyright 2026 KafScale team. Licensed under the Apache License, Version 2.0. -->
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KafScale · Browser LFS demo</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+<header><p class="eyebrow">KafScale / E72</p><h1>Large files. Small Kafka records.</h1>
+<p>Upload a file through the browser LFS SDK. KafScale stores the bytes in S3 and publishes an envelope to Kafka.</p></header>
+<section><h2>1. Upload a file</h2><form id="upload-form">
+<label for="topic">Kafka topic</label><input id="topic" value="browser-lfs-demo" required pattern="[a-zA-Z0-9._\-]+" maxlength="249">
+<label for="file">File</label><input id="file" type="file" required>
+<p>Choose a non-empty file. This local demo uses the Compose proxy without authentication.</p>
+<button id="upload" type="submit">Upload to KafScale</button>
+<progress id="progress" max="100" value="0" aria-label="Upload progress"></progress>
+</form><p id="status" role="status" aria-live="polite">Ready to upload.</p></section>
+<section><h2>2. Inspect the envelope</h2><p>The envelope contains the object location, size and SHA-256 checksum.</p><pre id="envelope">No envelope yet.</pre></section>
+<section><h2>3. Verify and download</h2><p>The proxy checks stored bytes against the envelope. Your browser also checks the size and SHA-256 before saving.</p>
+<button id="download" disabled>Verify and download file</button></section>
+</main><script type="module" src="/app.js"></script></body></html>
