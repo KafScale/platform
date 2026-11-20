@@ -41,9 +41,6 @@ func TestIcebergStandalonePlatformSelection(t *testing.T) {
 		{name: "published invalid tag", version: "v2.0.0", wantError: "invalid version: go.mod has non-.../v2 module path"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.version != "" && testing.Short() {
-				t.Skip("downloads the real published module from the Go proxy")
-			}
 			dir := t.TempDir()
 			original, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
 			if err != nil {
@@ -56,8 +53,9 @@ func TestIcebergStandalonePlatformSelection(t *testing.T) {
 			cmd.Dir = dir
 			cmd.Env = append(os.Environ(),
 				"USE_LOCAL_PLATFORM="+tc.local, "PLATFORM_VERSION="+tc.version,
-				"GOPROXY=https://proxy.golang.org", "GOWORK=off", "GOFLAGS=",
-				"GOMODCACHE="+filepath.Join(dir, "modcache"),
+				"GOPROXY=direct", "GOSUMDB=off", "GOPRIVATE=", "GONOPROXY=", "GONOSUMDB=", "GOVCS=",
+				"GOWORK=off", "GOFLAGS=", "GOTOOLCHAIN=local", "GOMODCACHE="+filepath.Join(dir, "modcache"),
+				"GIT_CONFIG_GLOBAL="+invalidPlatformRepo(t), "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0",
 			)
 			out, err := cmd.CombinedOutput()
 			if tc.wantError == "" {
@@ -76,4 +74,38 @@ func TestIcebergStandalonePlatformSelection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func invalidPlatformRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	repo := filepath.Join(root, "platform")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module github.com/KafScale/platform\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"add", "go.mod"},
+		{"commit", "-q", "-m", "v2.0.0"},
+		{"tag", "v2.0.0"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	config := filepath.Join(root, "gitconfig")
+	rewrite := "[url \"" + filepath.ToSlash(repo) + "\"]\n\tinsteadOf = https://github.com/KafScale/platform\n"
+	if err := os.WriteFile(config, []byte(rewrite), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return config
 }
