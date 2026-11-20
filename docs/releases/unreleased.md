@@ -154,6 +154,8 @@ limitations under the License.
 
 ### Proxy and etcd outages
 
+- Multi-broker Fetch no longer waits for caught-up brokers while other partitions have records queued. The proxy probes without waiting, reuses backend connections while draining small batches, and retains long polling when the combined response is below `MinBytes`. If records arrive during a long poll, it interrupts outstanding polls and fetches those same offsets without waiting on fresh connections, preserving their records and watermarks. Ownership and transport retries also avoid another long poll once the response contains records (#388).
+
 - etcd clients reconnect with a one-second maximum gRPC backoff and a 100 millisecond first retry. Each connection attempt is given at least five seconds, or the configured DialTimeout when that is larger, so a slow TCP or TLS handshake can complete. They do not enable gRPC keepalive pings. Before, clients used the gRPC default maximum backoff of two minutes, so after a long etcd outage reconnecting could take up to about two minutes. QA measured 45 to 61 seconds. The same settings are used by the broker, proxy, console, MCP, CLI, schema registry, operator and processors.
 
 - The Kafka listener rejects Produce responses with a mismatched correlation ID instead of accepting an unrelated acknowledgement.
