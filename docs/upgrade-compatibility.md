@@ -17,10 +17,8 @@ limitations under the License.
 
 # Upgrade and compatibility guide
 
-This is the canonical guide for the unreleased changes after published v1.6.3
-(`092291b78b8abf1e5bde6cafd92550e9726b46e0`). No release version is assigned here.
-The release recommendation remains withdrawn pending the gates in
-[issue #298](https://github.com/KafScale/platform/issues/298).
+This is the canonical guide for upgrading from published v1.6.3
+(`092291b78b8abf1e5bde6cafd92550e9726b46e0`) to v2.0.0.
 
 ## Compatibility has separate boundaries
 

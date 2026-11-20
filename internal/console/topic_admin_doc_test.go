@@ -140,23 +140,23 @@ func TestConsoleTopicAdminDocumentedErrorCodesMatchHandlers(t *testing.T) {
 	}
 
 	var note string
-	for _, line := range strings.Split(readRepoDoc(t, "docs", "releases", "unreleased.md"), "\n") {
+	for _, line := range strings.Split(readRepoDoc(t, "docs", "releases", "v2.0.0.md"), "\n") {
 		if strings.Contains(line, "/ui/api/status/topics") && strings.Contains(line, "(#362)") {
 			note = line
 		}
 	}
 	if note == "" {
-		t.Fatal("docs/releases/unreleased.md has no #362 note for the console topic endpoints")
+		t.Fatal("docs/releases/v2.0.0.md has no #362 note for the console topic endpoints")
 	}
 	idx := strings.Index(note, "errors return ")
 	if idx < 0 {
-		t.Fatal("docs/releases/unreleased.md #362 note does not list the error codes")
+		t.Fatal("docs/releases/v2.0.0.md #362 note does not list the error codes")
 	}
 	clause := note[idx:]
 	if end := strings.Index(clause, ". "); end >= 0 {
 		clause = clause[:end]
 	}
 	if got := documentedCodes(clause); !slices.Equal(got, want) {
-		t.Errorf("docs/releases/unreleased.md #362 errors list %v, handlers return %v", got, want)
+		t.Errorf("docs/releases/v2.0.0.md #362 errors list %v, handlers return %v", got, want)
 	}
 }
