@@ -374,9 +374,11 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 		case <-timer.C:
 			sample := map[string]any{"timestamp": time.Now().UnixMilli()}
 			metrics := map[string]any{}
+			brokerMetrics := false
 			if h.metrics != nil {
 				if snap, err := h.metrics.Snapshot(ctx); err == nil && snap != nil {
-					if snap.BrokerMetricsAvailable {
+					brokerMetrics = snap.BrokerMetricsAvailable
+					if brokerMetrics {
 						metrics["s3_latency_ms"] = snap.S3LatencyMS
 						metrics["s3_error_rate"] = snap.S3ErrorRate
 						metrics["produce_rps"] = snap.ProduceRPS
@@ -397,7 +399,7 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 					}
 				}
 			}
-			sample["metrics_available"] = len(metrics) > 0
+			sample["metrics_available"] = brokerMetrics
 			sample["metrics"] = metrics
 			b, _ := json.Marshal(sample)
 			_, _ = w.Write([]byte("data: "))

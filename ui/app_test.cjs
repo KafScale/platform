@@ -294,6 +294,23 @@ test('missing metrics render n/a and a snapshot that never succeeded renders nev
   assert.notEqual(page.get('etcd-snapshot-last-schedule').textContent, 'n/a');
   assert.match(page.get('metrics-status').textContent, /^Last update /);
 
+  stream.onmessage({ data: JSON.stringify({
+    timestamp: Date.parse('2026-11-20T12:00:00Z'),
+    metrics_available: false,
+    metrics: {
+      etcd_snapshot_age_s: 60,
+      etcd_snapshot_stale: 0,
+      etcd_snapshot_access_ok: 1,
+      etcd_snapshot_last_success_ts: 1700000000,
+      etcd_snapshot_last_schedule_ts: 1700001000,
+    },
+  }) });
+  assert.equal(page.get('produce-rps').textContent, 'n/a');
+  assert.equal(page.get('etcd-snapshot-age').textContent, '60');
+  assert.equal(page.get('etcd-snapshot-stale').textContent, 'NO');
+  assert.equal(page.get('etcd-snapshot-access').textContent, 'OK');
+  assert.match(page.get('metrics-status').textContent, /^Metrics unavailable /);
+
   page.context.setMetricValue(page.get('produce-rps'), Number.NaN);
   assert.equal(page.get('produce-rps').textContent, 'n/a');
   page.context.setMetricValue(null, 1);

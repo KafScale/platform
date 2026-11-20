@@ -677,6 +677,22 @@ func TestHandleMetricsWithoutDataSendsNoNumbers(t *testing.T) {
 	}
 }
 
+func TestHandleMetricsBrokerUnavailableKeepsOperatorGauges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	w := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	h := &consoleHandlers{metrics: &testMetricsProvider{snap: &MetricsSnapshot{
+		OperatorMetricsAvailable:           true,
+		OperatorEtcdSnapshotAgeSeconds:     60,
+		OperatorEtcdSnapshotAccessReported: true,
+		OperatorEtcdSnapshotAccessOK:       1,
+	}}}
+	h.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil).WithContext(ctx))
+	body := w.Body.String()
+	if !strings.Contains(body, `"metrics_available":false`) || !strings.Contains(body, `"etcd_snapshot_age_s":60`) || !strings.Contains(body, `"etcd_snapshot_access_ok":1`) || strings.Contains(body, "produce_rps") {
+		t.Fatalf("operator gauges must stream while broker metrics stay unavailable: %s", body)
+	}
+}
+
 func TestHandleMetricsRequiresFlusher(t *testing.T) {
 	w := httptest.NewRecorder()
 	h := &consoleHandlers{}

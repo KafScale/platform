@@ -205,7 +205,7 @@ func TestCompositeKeepsOperatorMetricsWhenBrokerScrapeFails(t *testing.T) {
 		t.Fatalf("broker failure must keep the operator sample only: %+v", snap)
 	}
 	body := streamedMetrics(t, provider)
-	if strings.Contains(body, "produce_rps") || strings.Contains(body, "s3_latency_ms") || !strings.Contains(body, `"metrics_available":true`) || !strings.Contains(body, `"etcd_snapshot_age_s":60`) || !strings.Contains(body, `"etcd_snapshot_access_ok":1`) {
+	if strings.Contains(body, "produce_rps") || strings.Contains(body, "s3_latency_ms") || !strings.Contains(body, `"metrics_available":false`) || !strings.Contains(body, `"etcd_snapshot_age_s":60`) || !strings.Contains(body, `"etcd_snapshot_access_ok":1`) {
 		t.Fatalf("stream should show operator metrics without broker numbers: %s", body)
 	}
 

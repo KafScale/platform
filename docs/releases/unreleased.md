@@ -316,7 +316,7 @@ limitations under the License.
 
 ### Console
 
-- The metrics stream reports `metrics_available: false` and an empty sample when the console has no metrics provider, the broker scrape fails, or the snapshot has no reported samples. It does not invent throughput or latency. Broker scrape failures still leave operator snapshot gauges on the stream. Missing values render as n/a, and a snapshot that has never succeeded shows age never instead of 0 (#401).
+- The metrics stream sets `metrics_available` from the broker scrape. The flag is false when there is no provider, the broker scrape fails, or the snapshot has no reported broker samples, including when operator snapshot gauges are still in the sample. It does not invent throughput or latency. Missing broker values render as n/a, and the status says metrics unavailable. A snapshot that has never succeeded shows age never instead of 0 (#401).
 
 - The Helm chart can set console login credentials from `console.auth.existingSecret`, a Secret with `username` and `password` keys, which maps to `KAFSCALE_UI_USERNAME` and `KAFSCALE_UI_PASSWORD`. Inline `console.auth.username` and `console.auth.password` remain the fallback when `existingSecret` is empty. `console.etcd.existingSecret`, `proxy.etcd.existingSecret` and `mcp.etcd.existingSecret` now work the same way as `schemaRegistry.etcd.existingSecret`: they map Secret keys `ETCD_USERNAME` and `ETCD_PASSWORD` to each component's etcd env vars and omit inline username and password when the Secret is set. The quickstart creates the console auth Secret and an in-cluster Job that creates the S3 bucket from the `kafscale-s3` Secret.
 
