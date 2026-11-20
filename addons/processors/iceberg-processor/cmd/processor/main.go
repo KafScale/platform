@@ -24,9 +24,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/processor"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/server"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/processor"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/server"
 )
 
 func main() {

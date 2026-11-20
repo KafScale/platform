@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 func (m *lfsModule) wrapBackendTLS(ctx context.Context, conn net.Conn, addr string) (net.Conn, error) {

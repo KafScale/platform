@@ -37,8 +37,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	"github.com/KafScale/platform/internal/testutil"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	"github.com/KafScale/platform/v2/internal/testutil"
 )
 
 func snapshotDeniedReconciler(t *testing.T) (*ClusterReconciler, client.Client, *kafscalev1.KafscaleCluster, *corev1.Secret) {

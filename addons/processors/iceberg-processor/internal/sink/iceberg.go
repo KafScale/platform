@@ -31,8 +31,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/decoder"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"

@@ -22,11 +22,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/decoder"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/discovery"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/sink"
-	"github.com/KafScale/platform/pkg/lfs"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/decoder"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/discovery"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/sink"
+	"github.com/KafScale/platform/v2/pkg/lfs"
 )
 
 type fakeS3Reader struct {

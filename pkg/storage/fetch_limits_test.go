@@ -18,7 +18,7 @@ package storage
 import (
 	"bytes"
 	"context"
-	"github.com/KafScale/platform/pkg/cache"
+	"github.com/KafScale/platform/v2/pkg/cache"
 	"testing"
 	"time"
 )

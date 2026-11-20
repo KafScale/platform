@@ -36,7 +36,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/storage"
 	"github.com/hamba/avro/v2"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sr"

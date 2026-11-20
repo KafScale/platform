@@ -33,7 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/jackc/pgproto3/v2"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
 )
 
 const (

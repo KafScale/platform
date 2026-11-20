@@ -24,7 +24,7 @@ This is the canonical guide for upgrading from published v1.6.3
 
 | Surface | Scope and limits |
 | --- | --- |
-| Go source | Compare exported root-module APIs against published v1.6.3, including interface implementations and comparable types. Unkeyed struct literals are not covered; see [Use keyed struct literals](#use-keyed-struct-literals). This does not compare nested processor modules, binary ABI or all runtime semantics. |
+| Go source | The module path is `github.com/KafScale/platform/v2`. Compare exported root-module symbols against published v1.6.3 after rewriting that checkout onto `/v2`, including interface implementations and comparable types. Unkeyed struct literals are not covered; see [Use keyed struct literals](#use-keyed-struct-literals). This does not compare nested processor modules, binary ABI or all runtime semantics. |
 | Kafka wire | Brokers and proxies advertise the API versions they implement. Focused classic consumer-group, Produce/Fetch and native client tests cover those paths; they do not establish every Kafka API or every client/version. Legacy MessageSets are rejected; magic-2 batches are required. |
 | Schema Registry REST | The built-in service implements the subset documented in [Schema Registry](schema-registry.md), with Avro, Protobuf and JSON Schema. Its compatibility modes describe schema evolution, separately from Go or Kafka compatibility. The reported matrix used Confluent 8.4.0 Java serializers, confluent-kafka-python 2.16.1 and franz-go `pkg/sr` 1.8.0. It is not a claim of full Confluent product parity. |
 | Kubernetes CRDs | `kafscale.io/v1` is the served and stored version. `kafscale.io/v1alpha1` is still served but deprecated; see [CRD API version v1](#crd-api-version-v1). Apply the updated CRD before using new fields. Schema validation and Helm rendering checks do not prove a rolling upgrade on every Kubernetes/operator version. |
@@ -101,14 +101,28 @@ removes v1alpha1 requires this step first.
 
 ### Go types
 
-Import `github.com/KafScale/platform/api/v1` in new code:
+Import `github.com/KafScale/platform/v2/api/v1` in new code:
 
 ```go
-import kafscalev1 "github.com/KafScale/platform/api/v1"
+import kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 ```
 
+The module path is `github.com/KafScale/platform/v2`.
+`go get github.com/KafScale/platform@v2.0.0` fails because that tag's `go.mod`
+has no `/v2` suffix. Later 2.x tags use this path. v1.6.3 stays
+`github.com/KafScale/platform`. Do not tag v1.7.0 on a commit whose module
+path is `/v2`.
+
+The Iceberg processor module is
+`github.com/KafScale/platform/v2/addons/processors/iceberg-processor`. It
+requires `github.com/KafScale/platform/v2` and replaces that module with the
+repository root. The skeleton processor module is
+`github.com/KafScale/platform/v2/addons/processors/skeleton`. The SQL processor
+module is `github.com/kafscale/platform/v2/addons/processors/sql-processor`.
+
 The `api/v1` types are aliases of the `api/v1alpha1` types, so they are the
-same Go types and code written against `api/v1alpha1` keeps compiling.
+same Go types and code written against
+`github.com/KafScale/platform/v2/api/v1alpha1` keeps compiling.
 `api/v1alpha1` is deprecated and will be removed together with the v1alpha1
 CRD version.
 
@@ -358,8 +372,10 @@ go test -race ./pkg/broker ./pkg/metadata ./cmd/broker ./cmd/proxy
 ```
 
 The API script uses pinned `golang.org/x/exp/cmd/apidiff`, checks all exported
-root-module packages, and compiles an external fixture with the exact published
-Store method set plus comparable/map-key/unkeyed `CoordinatorConfig` usage.
+root-module packages against v1.6.3 after rewriting that checkout onto
+`github.com/KafScale/platform/v2`, and compiles an external fixture with the
+exact published Store method set plus comparable/map-key/unkeyed
+`CoordinatorConfig` usage.
 Runtime tests exercise the legacy constructor, group-offset fallback, optional
 capability dispatch, error propagation and broker OffsetFetch through an old
 Store implementation. Lease and retention tests exercise the new constructor.

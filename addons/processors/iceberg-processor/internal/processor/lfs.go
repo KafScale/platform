@@ -22,10 +22,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/config"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/metrics"
-	"github.com/KafScale/platform/addons/processors/iceberg-processor/internal/sink"
-	"github.com/KafScale/platform/pkg/lfs"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/config"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/metrics"
+	"github.com/KafScale/platform/v2/addons/processors/iceberg-processor/internal/sink"
+	"github.com/KafScale/platform/v2/pkg/lfs"
 )
 
 const (

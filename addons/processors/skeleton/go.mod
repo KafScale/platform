@@ -1,4 +1,4 @@
-module github.com/KafScale/platform/addons/processors/skeleton
+module github.com/KafScale/platform/v2/addons/processors/skeleton
 
 go 1.22
 

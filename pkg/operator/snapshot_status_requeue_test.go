@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 )
 
 func snapshotStatusFor(t *testing.T, cron *batchv1.CronJob, managed bool) (*kafscalev1.KafscaleCluster, time.Duration) {

@@ -25,7 +25,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/KafScale/platform/internal/testutil"
+	"github.com/KafScale/platform/v2/internal/testutil"
 )
 
 func newEtcdClientForTest(t *testing.T, endpoints []string) *clientv3.Client {

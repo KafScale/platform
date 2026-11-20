@@ -26,10 +26,10 @@ import (
 	"syscall"
 	"time"
 
-	console "github.com/KafScale/platform/internal/console"
-	"github.com/KafScale/platform/internal/health"
-	"github.com/KafScale/platform/internal/mcpserver"
-	"github.com/KafScale/platform/pkg/metadata"
+	console "github.com/KafScale/platform/v2/internal/console"
+	"github.com/KafScale/platform/v2/internal/health"
+	"github.com/KafScale/platform/v2/internal/mcpserver"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

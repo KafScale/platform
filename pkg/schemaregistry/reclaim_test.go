@@ -22,8 +22,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 type ifMatchIgnoringS3 struct {

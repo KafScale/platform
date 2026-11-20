@@ -18,7 +18,7 @@ version: v1
 managed:
   enabled: true
   go_package_prefix:
-    default: github.com/KafScale/platform/pkg/gen
+    default: github.com/KafScale/platform/v2/pkg/gen
 
 plugins:
   - plugin: buf.build/protocolbuffers/go

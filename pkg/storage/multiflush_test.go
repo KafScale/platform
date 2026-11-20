@@ -20,7 +20,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/cache"
+	"github.com/KafScale/platform/v2/pkg/cache"
 )
 
 // TestPartitionLogMultiFlushAllOffsetsReadable appends many batches across many

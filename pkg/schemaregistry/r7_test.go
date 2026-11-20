@@ -19,7 +19,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 type resetOnDownload struct {

@@ -1,11 +1,11 @@
-module github.com/KafScale/platform/addons/processors/iceberg-processor
+module github.com/KafScale/platform/v2/addons/processors/iceberg-processor
 
 go 1.26.0
 
 toolchain go1.26.11
 
 require (
-	github.com/KafScale/platform v1.6.3
+	github.com/KafScale/platform/v2 v2.0.0
 	github.com/apache/arrow-go/v18 v18.4.1
 	github.com/apache/iceberg-go v0.4.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
@@ -182,4 +182,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/KafScale/platform => ../../..
+replace github.com/KafScale/platform/v2 => ../../..

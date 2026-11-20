@@ -26,9 +26,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/KafScale/platform/pkg/acl"
-	"github.com/KafScale/platform/pkg/authn"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/acl"
+	"github.com/KafScale/platform/v2/pkg/authn"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/twmb/franz-go/pkg/kmsg"

@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	metadatapb "github.com/KafScale/platform/pkg/gen/metadata"
-	"github.com/KafScale/platform/pkg/metadata"
+	metadatapb "github.com/KafScale/platform/v2/pkg/gen/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 func TestConsumerGroupRetentionE2E(t *testing.T) {

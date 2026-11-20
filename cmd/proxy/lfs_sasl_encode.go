@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 // lfsbyteWriter is a minimal byte buffer used for SASL and produce encoding

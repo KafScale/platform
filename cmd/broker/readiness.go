@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/KafScale/platform/internal/health"
-	"github.com/KafScale/platform/pkg/broker"
+	"github.com/KafScale/platform/v2/internal/health"
+	"github.com/KafScale/platform/v2/pkg/broker"
 )
 
 func (h *handler) readiness(ctx context.Context) (bool, string) {

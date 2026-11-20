@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/pkg/cache"
+	"github.com/KafScale/platform/v2/pkg/cache"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"golang.org/x/sync/semaphore"

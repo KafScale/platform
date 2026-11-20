@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KafScale/platform/internal/console"
+	"github.com/KafScale/platform/v2/internal/console"
 )
 
 func TestClusterMetricsRoundsAggregatesWithoutChangingSnapshot(t *testing.T) {

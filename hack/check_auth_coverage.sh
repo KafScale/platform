@@ -35,7 +35,7 @@ for line in open(sys.argv[1]):
     if len(fields) != 3:
         continue
     location, count, hits = fields
-    path = location.split(':', 1)[0].removeprefix('github.com/KafScale/platform/')
+    path = location.split(':', 1)[0].removeprefix('github.com/KafScale/platform/v2/')
     if path not in required:
         continue
     seen.add(path)

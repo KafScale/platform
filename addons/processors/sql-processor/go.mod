@@ -1,4 +1,4 @@
-module github.com/kafscale/platform/addons/processors/sql-processor
+module github.com/kafscale/platform/v2/addons/processors/sql-processor
 
 go 1.26.0
 

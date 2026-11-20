@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/storage"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 

@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 type probeStore struct {

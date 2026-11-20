@@ -23,7 +23,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"github.com/KafScale/platform/pkg/authn"
+	"github.com/KafScale/platform/v2/pkg/authn"
 	"math/big"
 	"net"
 	"net/url"

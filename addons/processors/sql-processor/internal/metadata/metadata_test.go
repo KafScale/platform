@@ -29,7 +29,7 @@ import (
 	"go.etcd.io/etcd/server/v3/embed"
 	"google.golang.org/grpc/backoff"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
 )
 
 func TestSnapshotResolverCache(t *testing.T) {

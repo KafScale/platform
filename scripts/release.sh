@@ -83,7 +83,7 @@ while IFS= read -r chart; do
 done < <(rg --files -g 'addons/processors/*/deploy/helm/*/Chart.yaml')
 
 while IFS= read -r modfile; do
-  sed -i '' -E "s|(github.com/KafScale/platform) v[0-9]+\.[0-9]+\.[0-9]+|\\1 ${tag}|g" "$modfile"
+  sed -i '' -E "s|(github.com/KafScale/platform/v2) v[0-9]+\.[0-9]+\.[0-9]+|\\1 ${tag}|g" "$modfile"
 done < <(rg --files -g 'addons/processors/**/go.mod')
 
 release_file="docs/releases/${tag}.md"

@@ -31,9 +31,9 @@ import (
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/KafScale/platform/internal/health"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/ui"
+	"github.com/KafScale/platform/v2/internal/health"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/ui"
 )
 
 type MetricsSnapshot struct {

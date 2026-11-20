@@ -38,10 +38,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	consolepkg "github.com/KafScale/platform/internal/console"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/operator"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	consolepkg "github.com/KafScale/platform/v2/internal/console"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/operator"
 )
 
 func TestDemoStack(t *testing.T) {

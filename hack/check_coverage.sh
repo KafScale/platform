@@ -20,14 +20,14 @@ MIN_COVERAGE="${1:-85}"
 # Packages excluded from coverage: generated code, test utilities, demo tools,
 # embed-only wrappers, e2e tests, CLI entry points, and addon/skeleton packages.
 EXCLUDE=(
-  "github.com/KafScale/platform/api/v1"
-  "github.com/KafScale/platform/api/v1alpha1"
-  "github.com/KafScale/platform/pkg/gen/"
-  "github.com/KafScale/platform/internal/testutil"
-  "github.com/KafScale/platform/ui"
-  "github.com/KafScale/platform/cmd/"
-  "github.com/KafScale/platform/test"
-  "github.com/KafScale/platform/addons/"
+  "github.com/KafScale/platform/v2/api/v1"
+  "github.com/KafScale/platform/v2/api/v1alpha1"
+  "github.com/KafScale/platform/v2/pkg/gen/"
+  "github.com/KafScale/platform/v2/internal/testutil"
+  "github.com/KafScale/platform/v2/ui"
+  "github.com/KafScale/platform/v2/cmd/"
+  "github.com/KafScale/platform/v2/test"
+  "github.com/KafScale/platform/v2/addons/"
 )
 
 # Build package list excluding non-testable packages.

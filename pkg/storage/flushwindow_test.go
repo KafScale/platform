@@ -20,7 +20,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/cache"
+	"github.com/KafScale/platform/v2/pkg/cache"
 )
 
 // An explicit Flush must keep acknowledged buffered offsets readable for the

@@ -15,7 +15,7 @@
 
 package v1
 
-import "github.com/KafScale/platform/api/v1alpha1"
+import "github.com/KafScale/platform/v2/api/v1alpha1"
 
 type (
 	KafscaleTopicSpec     = v1alpha1.KafscaleTopicSpec

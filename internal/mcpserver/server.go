@@ -18,8 +18,8 @@ package mcpserver
 import (
 	"log"
 
-	console "github.com/KafScale/platform/internal/console"
-	"github.com/KafScale/platform/pkg/metadata"
+	console "github.com/KafScale/platform/v2/internal/console"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

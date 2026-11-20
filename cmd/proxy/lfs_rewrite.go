@@ -25,10 +25,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KafScale/platform/pkg/acl"
-	"github.com/KafScale/platform/pkg/authn"
-	"github.com/KafScale/platform/pkg/lfs"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/acl"
+	"github.com/KafScale/platform/v2/pkg/authn"
+	"github.com/KafScale/platform/v2/pkg/lfs"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )

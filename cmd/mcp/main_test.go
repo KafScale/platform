@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/mcpserver"
-	"github.com/KafScale/platform/pkg/metadata"
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/internal/mcpserver"
+	"github.com/KafScale/platform/v2/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 func TestEnvOrDefault(t *testing.T) {

@@ -26,8 +26,8 @@ import (
 	etcdserverpb "go.etcd.io/etcd/api/v3/etcdserverpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	kafscalev1 "github.com/KafScale/platform/api/v1"
-	"github.com/KafScale/platform/pkg/metadata"
+	kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 func (r *ClusterReconciler) pollManagedEtcdHealth(ctx context.Context, cluster *kafscalev1.KafscaleCluster, resolution EtcdResolution) {

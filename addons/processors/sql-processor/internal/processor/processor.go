@@ -20,11 +20,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/checkpoint"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/config"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/decoder"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/discovery"
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/sink"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/checkpoint"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/config"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/decoder"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/discovery"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/sink"
 )
 
 // Processor wires discovery, decoding, checkpointing, and sink writing.

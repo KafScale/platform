@@ -65,11 +65,59 @@ func TestUpgradeGuideDocumentsV1Migration(t *testing.T) {
 		"kubectl get kafscaletopics.kafscale.io --all-namespaces -o json | kubectl replace -f -",
 		`'{"status":{"storedVersions":["v1"]}}'`,
 		"will be removed in a future release",
-		"github.com/KafScale/platform/api/v1",
+		"github.com/KafScale/platform/v2/api/v1",
+		"go get github.com/KafScale/platform@v2.0.0",
+		"has no `/v2` suffix",
+		"Do not tag v1.7.0",
+		"github.com/KafScale/platform/v2/addons/processors/iceberg-processor",
+		"github.com/kafscale/platform/v2/addons/processors/sql-processor",
+		"rewriting that checkout onto",
 		"A chart rollback must keep the 2.0 CRDs.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("docs/upgrade-compatibility.md does not contain %q", want)
+		}
+	}
+}
+
+func TestGoModulePathIsV2(t *testing.T) {
+	root := repoRoot(t)
+	for _, rel := range []string{
+		"go.mod",
+		"addons/processors/iceberg-processor/go.mod",
+		"addons/processors/skeleton/go.mod",
+	} {
+		line, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(string(line), "module github.com/KafScale/platform/v2") {
+			t.Fatalf("%s module path is not /v2", rel)
+		}
+	}
+	sql, err := os.ReadFile(filepath.Join(root, "addons/processors/sql-processor/go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(sql), "module github.com/kafscale/platform/v2/addons/processors/sql-processor\n") {
+		t.Fatal("sql processor module path is not /v2")
+	}
+	ice, err := os.ReadFile(filepath.Join(root, "addons/processors/iceberg-processor/go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ice), "github.com/KafScale/platform/v2 v2.0.0") || !strings.Contains(string(ice), "replace github.com/KafScale/platform/v2 => ../../..") {
+		t.Fatal("iceberg processor does not require and replace /v2")
+	}
+	script := readRepoDoc(t, "scripts/check_go_api_compatibility.sh")
+	for _, want := range []string{
+		"module=github.com/KafScale/platform/v2",
+		`line == "module github.com/KafScale/platform"`,
+		`"module github.com/KafScale/platform/v2"`,
+		`'"github.com/KafScale/platform/v2'`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("compatibility script missing %q", want)
 		}
 	}
 }

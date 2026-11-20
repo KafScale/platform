@@ -22,7 +22,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 func (h *handler) topicStorageName(ctx context.Context, topic string) (string, error) {

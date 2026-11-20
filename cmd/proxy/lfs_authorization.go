@@ -21,7 +21,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/KafScale/platform/pkg/acl"
+	"github.com/KafScale/platform/v2/pkg/acl"
 )
 
 // The LFS rewrite uploads to S3 before forwarding Produce. It must use the

@@ -25,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 func TestConsoleLoginDocumented(t *testing.T) {

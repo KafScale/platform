@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KafScale/platform/pkg/storage"
+	"github.com/KafScale/platform/v2/pkg/storage"
 )
 
 // S3HealthState models the broker's view of S3 availability.

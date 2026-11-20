@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 type promMetricsClient struct {

@@ -26,7 +26,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 
-	"github.com/KafScale/platform/pkg/protocol"
+	"github.com/KafScale/platform/v2/pkg/protocol"
 )
 
 // Handler processes parsed Kafka protocol requests and returns the response payload.

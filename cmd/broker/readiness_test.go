@@ -24,9 +24,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/internal/testutil"
-	"github.com/KafScale/platform/pkg/broker"
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/internal/testutil"
+	"github.com/KafScale/platform/v2/pkg/broker"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 type readinessProbeStore struct {

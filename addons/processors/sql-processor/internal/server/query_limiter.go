@@ -19,7 +19,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kafscale/platform/addons/processors/sql-processor/internal/metrics"
+	"github.com/kafscale/platform/v2/addons/processors/sql-processor/internal/metrics"
 )
 
 var errQueueFull = errors.New("query queue full")

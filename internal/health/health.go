@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/KafScale/platform/pkg/metadata"
+	"github.com/KafScale/platform/v2/pkg/metadata"
 )
 
 const readinessTimeout = time.Second
