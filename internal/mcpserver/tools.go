@@ -284,7 +284,7 @@ func clusterMetricsHandler(opts Options) mcp.ToolHandlerFor[emptyInput, ClusterM
 		if err != nil {
 			return nil, ClusterMetricsOutput{}, err
 		}
-		if snap == nil {
+		if snap == nil || !snap.BrokerMetricsAvailable {
 			return nil, ClusterMetricsOutput{}, errors.New("metrics snapshot unavailable")
 		}
 		return nil, ClusterMetricsOutput{

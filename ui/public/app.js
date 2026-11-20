@@ -236,7 +236,10 @@ function startMetricsStream() {
       setEtcdFallbacks(metrics);
       if (payload.timestamp) {
         const ts = new Date(payload.timestamp);
-        status.textContent = `Last update ${ts.toLocaleTimeString()}`;
+        const stamp = ts.toLocaleTimeString();
+        status.textContent = payload.metrics_available === false ? `Metrics unavailable ${stamp}` : `Last update ${stamp}`;
+      } else if (payload.metrics_available === false) {
+        status.textContent = 'Metrics unavailable';
       } else {
         status.textContent = 'Live metrics';
       }
@@ -268,33 +271,38 @@ function setEtcdFallbacks(metrics) {
   if (typeof metrics.etcd_snapshot_access_ok !== 'number') {
     accessEl.textContent = 'n/a';
   }
+  if (typeof metrics.etcd_snapshot_last_success_ts === 'number' && metrics.etcd_snapshot_last_success_ts <= 0) {
+    ageEl.textContent = 'never';
+  }
 }
 
 function setMetricValue(el, value, mode) {
   if (!el) return;
-  if (typeof value === 'number' && !Number.isNaN(value)) {
-    if (el.id === 's3-error-rate') {
-      el.textContent = `${metricFormatter.format(value * 100)}%`;
-      return;
-    }
-    if (mode === 'timestamp') {
-      if (value <= 0) {
-        el.textContent = 'n/a';
-        return;
-      }
-      el.textContent = new Date(value * 1000).toLocaleString();
-      return;
-    }
-    if (el.id === 'etcd-snapshot-stale') {
-      el.textContent = value >= 1 ? 'YES' : 'NO';
-      return;
-    }
-    if (el.id === 'etcd-snapshot-access') {
-      el.textContent = value >= 1 ? 'OK' : 'FAIL';
-      return;
-    }
-    el.textContent = metricFormatter.format(value);
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    el.textContent = 'n/a';
+    return;
   }
+  if (el.id === 's3-error-rate') {
+    el.textContent = `${metricFormatter.format(value * 100)}%`;
+    return;
+  }
+  if (mode === 'timestamp') {
+    if (value <= 0) {
+      el.textContent = 'n/a';
+      return;
+    }
+    el.textContent = new Date(value * 1000).toLocaleString();
+    return;
+  }
+  if (el.id === 'etcd-snapshot-stale') {
+    el.textContent = value >= 1 ? 'YES' : 'NO';
+    return;
+  }
+  if (el.id === 'etcd-snapshot-access') {
+    el.textContent = value >= 1 ? 'OK' : 'FAIL';
+    return;
+  }
+  el.textContent = metricFormatter.format(value);
 }
 
 function renderTopics(topics) {

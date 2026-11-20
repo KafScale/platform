@@ -171,7 +171,7 @@ Related targets:
 
 Need an interactive run? `make demo` boots embedded etcd plus the broker + console, opens `http://127.0.0.1:48080/ui/`, and keeps everything running until you hit `Ctrl+C`. It is the quickest way to click around the UI while real messages flow through the broker/MinIO stack.
 
-The demo wires `KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics` so the console scrapes broker Prometheus metrics and populates the S3/metrics cards with live data. Any other process starting `cmd/console` can set the same env var (for example, `go run ./cmd/console`) to render broker-reported S3 state/latency instead of the mock placeholders.
+The demo wires `KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics` so the console scrapes broker Prometheus metrics and populates the S3/metrics cards with live data. Any other process starting `cmd/console` can set the same env var (for example, `go run ./cmd/console`) to render broker-reported S3 state and latency. Without that scrape, or when it fails, those cards show n/a.
 
 The broker exports live throughput gauges (`kafscale_produce_rps` / `kafscale_fetch_rps`) so the UI can show messages-per-second alongside S3 latency. The sliding window defaults to 60 seconds; override it with `KAFSCALE_THROUGHPUT_WINDOW_SEC` before starting the broker if you want a shorter (spikier) or longer (smoother) view.
 

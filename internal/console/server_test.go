@@ -644,10 +644,52 @@ func TestHandleMetricsInitialEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	w := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
-	h := &consoleHandlers{metrics: &testMetricsProvider{snap: &MetricsSnapshot{ProduceRPS: 123}}}
+	h := &consoleHandlers{metrics: &testMetricsProvider{snap: &MetricsSnapshot{BrokerMetricsAvailable: true, ProduceRPS: 123}}}
 	h.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil).WithContext(ctx))
-	if !w.Flushed || !strings.Contains(w.Body.String(), `"produce_rps":123`) {
-		t.Fatalf("stream did not send an initial snapshot before its refresh interval: %s", w.Body.String())
+	body := w.Body.String()
+	if !w.Flushed || !strings.Contains(body, `"produce_rps":123`) || !strings.Contains(body, `"metrics_available":true`) {
+		t.Fatalf("stream did not send an initial snapshot before its refresh interval: %s", body)
+	}
+}
+
+func TestHandleMetricsWithoutDataSendsNoNumbers(t *testing.T) {
+	for name, provider := range map[string]MetricsProvider{
+		"no provider":    nil,
+		"provider error": &testMetricsProvider{err: errors.New("brokers unreachable")},
+		"nil snapshot":   &testMetricsProvider{},
+		"empty snapshot": &testMetricsProvider{snap: &MetricsSnapshot{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			w := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+			h := &consoleHandlers{metrics: provider}
+			h.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil).WithContext(ctx))
+			body := w.Body.String()
+			if !strings.Contains(body, `"metrics":{}`) || !strings.Contains(body, `"metrics_available":false`) {
+				t.Fatalf("%s: stream must report unavailable metrics without values: %s", name, body)
+			}
+			for _, key := range []string{"produce_rps", "fetch_rps", "s3_latency_ms"} {
+				if strings.Contains(body, key) {
+					t.Fatalf("%s: stream invented %s: %s", name, key, body)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleMetricsBrokerUnavailableKeepsOperatorGauges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	w := &cancelOnFlushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	h := &consoleHandlers{metrics: &testMetricsProvider{snap: &MetricsSnapshot{
+		OperatorMetricsAvailable:           true,
+		OperatorEtcdSnapshotAgeSeconds:     60,
+		OperatorEtcdSnapshotAccessReported: true,
+		OperatorEtcdSnapshotAccessOK:       1,
+	}}}
+	h.handleMetrics(w, httptest.NewRequest(http.MethodGet, "/ui/api/metrics", nil).WithContext(ctx))
+	body := w.Body.String()
+	if !strings.Contains(body, `"metrics_available":false`) || !strings.Contains(body, `"etcd_snapshot_age_s":60`) || !strings.Contains(body, `"etcd_snapshot_access_ok":1`) || strings.Contains(body, "produce_rps") {
+		t.Fatalf("operator gauges must stream while broker metrics stay unavailable: %s", body)
 	}
 }
 
@@ -667,6 +709,7 @@ func (m *testMetricsProvider) Snapshot(_ context.Context) (*MetricsSnapshot, err
 func TestHandleMetricsSSEWithProvider(t *testing.T) {
 	provider := &testMetricsProvider{
 		snap: &MetricsSnapshot{
+			BrokerMetricsAvailable:   true,
 			S3LatencyMS:              50,
 			ProduceRPS:               1000,
 			FetchRPS:                 800,
