@@ -189,6 +189,40 @@ func (m *mockBrokerMetrics) Snapshot(_ context.Context) (*MetricsSnapshot, error
 	return m.snap, m.err
 }
 
+func TestCompositeKeepsOperatorMetricsWhenBrokerScrapeFails(t *testing.T) {
+	opServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("kafscale_operator_etcd_snapshot_age_seconds 60\nkafscale_operator_etcd_snapshot_last_success_timestamp 1700000000\nkafscale_operator_etcd_snapshot_access_ok 1\n"))
+	}))
+	defer opServer.Close()
+
+	broker := &mockBrokerMetrics{err: errors.New("no brokers available for metrics")}
+	provider := NewCompositeMetricsProvider(broker, opServer.URL)
+	snap, err := provider.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.BrokerMetricsAvailable || !snap.OperatorMetricsAvailable || snap.OperatorEtcdSnapshotAgeSeconds != 60 || snap.OperatorEtcdSnapshotLastSuccessTS != 1700000000 {
+		t.Fatalf("broker failure must keep the operator sample only: %+v", snap)
+	}
+	body := streamedMetrics(t, provider)
+	if strings.Contains(body, "produce_rps") || strings.Contains(body, "s3_latency_ms") || !strings.Contains(body, `"metrics_available":true`) || !strings.Contains(body, `"etcd_snapshot_age_s":60`) || !strings.Contains(body, `"etcd_snapshot_access_ok":1`) {
+		t.Fatalf("stream should show operator metrics without broker numbers: %s", body)
+	}
+
+	failed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer failed.Close()
+	provider = NewCompositeMetricsProvider(broker, failed.URL)
+	if _, err := provider.Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "no brokers") {
+		t.Fatalf("broker error with no operator sample must surface, got %v", err)
+	}
+	provider = NewCompositeMetricsProvider(broker, "")
+	if _, err := provider.Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "no brokers") {
+		t.Fatalf("broker error without an operator URL must surface, got %v", err)
+	}
+}
+
 func TestCompositeMetricsProviderWithBroker(t *testing.T) {
 	broker := &mockBrokerMetrics{
 		snap: &MetricsSnapshot{

@@ -254,4 +254,47 @@ test('etcd snapshot access shows n/a when the stream has no access value', () =>
   assert.equal(page.get('etcd-snapshot-age').textContent, '10');
   stream.onmessage({ data: JSON.stringify({ metrics: { etcd_snapshot_age_s: 10, etcd_snapshot_stale: 0, etcd_snapshot_access_ok: 1 } }) });
   assert.equal(access.textContent, 'OK');
+  stream.onmessage({ data: JSON.stringify({ metrics: { etcd_snapshot_age_s: 0, etcd_snapshot_stale: 0, etcd_snapshot_last_success_ts: 1700000000 } }) });
+  assert.equal(page.get('etcd-snapshot-age').textContent, '0');
+});
+
+test('missing metrics render n/a and a snapshot that never succeeded renders never', () => {
+  const page = app(() => status(false));
+  page.context.startMetricsStream();
+  const stream = page.streams[page.streams.length - 1];
+  stream.onmessage({ data: JSON.stringify({ timestamp: Date.parse('2026-11-20T12:00:00Z'), metrics_available: false, metrics: {} }) });
+  for (const id of ['produce-rps', 'fetch-rps', 'live-s3-latency', 's3-error-rate', 'admin-requests', 'admin-errors', 'admin-latency', 'etcd-snapshot-age']) {
+    assert.equal(page.get(id).textContent, 'n/a', id);
+  }
+  assert.match(page.get('metrics-status').textContent, /^Metrics unavailable /);
+
+  stream.onmessage({ data: JSON.stringify({ metrics_available: false }) });
+  assert.equal(page.get('metrics-status').textContent, 'Metrics unavailable');
+
+  stream.onmessage({ data: JSON.stringify({ metrics: { produce_rps: 0, s3_error_rate: 0 } }) });
+  assert.equal(page.get('produce-rps').textContent, '0');
+  assert.equal(page.get('s3-error-rate').textContent, '0%');
+  assert.equal(page.get('metrics-status').textContent, 'Live metrics');
+
+  stream.onmessage({ data: JSON.stringify({
+    timestamp: Date.parse('2026-11-20T12:00:00Z'),
+    metrics_available: true,
+    metrics: {
+      etcd_snapshot_age_s: 0,
+      etcd_snapshot_stale: 1,
+      etcd_snapshot_access_ok: 1,
+      etcd_snapshot_last_success_ts: 0,
+      etcd_snapshot_last_schedule_ts: 1700000000,
+    },
+  }) });
+  assert.equal(page.get('etcd-snapshot-age').textContent, 'never');
+  assert.equal(page.get('etcd-snapshot-stale').textContent, 'YES');
+  assert.equal(page.get('etcd-snapshot-access').textContent, 'OK');
+  assert.equal(page.get('etcd-snapshot-last-success').textContent, 'n/a');
+  assert.notEqual(page.get('etcd-snapshot-last-schedule').textContent, 'n/a');
+  assert.match(page.get('metrics-status').textContent, /^Last update /);
+
+  page.context.setMetricValue(page.get('produce-rps'), Number.NaN);
+  assert.equal(page.get('produce-rps').textContent, 'n/a');
+  page.context.setMetricValue(null, 1);
 });

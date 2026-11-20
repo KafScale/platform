@@ -107,7 +107,7 @@ Operator metrics are exported by the controller runtime metrics server.
 |--------|------|--------|-------------|
 | `kafscale_operator_clusters` | Gauge | - | Count of managed `KafscaleCluster` resources. |
 | `kafscale_operator_snapshot_publish_total` | Counter | `result` | Snapshot publish attempts (`success` or `error`). |
-| `kafscale_operator_etcd_snapshot_age_seconds` | Gauge | `cluster` | Seconds since last successful etcd snapshot upload. |
+| `kafscale_operator_etcd_snapshot_age_seconds` | Gauge | `cluster` | Seconds since last successful etcd snapshot upload. 0 when no snapshot has succeeded; the console shows that as never. |
 | `kafscale_operator_etcd_snapshot_last_success_timestamp` | Gauge | `cluster` | Unix timestamp of last successful snapshot upload. |
 | `kafscale_operator_etcd_snapshot_last_schedule_timestamp` | Gauge | `cluster` | Unix timestamp of last scheduled snapshot job. |
 | `kafscale_operator_etcd_snapshot_stale` | Gauge | `cluster` | 1 when the snapshot age exceeds the staleness threshold. |

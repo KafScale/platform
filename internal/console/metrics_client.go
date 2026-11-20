@@ -116,11 +116,13 @@ func NewCompositeMetricsProvider(broker MetricsProvider, operatorURL string) Met
 
 func (c *compositeMetricsProvider) Snapshot(ctx context.Context) (*MetricsSnapshot, error) {
 	var snap *MetricsSnapshot
+	var brokerErr error
 	if c.broker != nil {
-		var err error
-		snap, err = c.broker.Snapshot(ctx)
+		brokerSnap, err := c.broker.Snapshot(ctx)
 		if err != nil {
-			return nil, err
+			brokerErr = err
+		} else {
+			snap = brokerSnap
 		}
 	}
 	if snap == nil {
@@ -137,6 +139,9 @@ func (c *compositeMetricsProvider) Snapshot(ctx context.Context) (*MetricsSnapsh
 			snap.OperatorEtcdSnapshotAccessReported = op.EtcdSnapshotAccessReported
 			snap.OperatorMetricsAvailable = true
 		}
+	}
+	if brokerErr != nil && !snap.OperatorMetricsAvailable {
+		return nil, brokerErr
 	}
 	return snap, nil
 }
@@ -290,6 +295,7 @@ func (c *aggregatedPromMetricsClient) Snapshot(ctx context.Context) (*MetricsSna
 		AdminRequestErrorsTotal: adminErrTotal,
 		AdminRequestLatencyMS:   adminLatencyAvg,
 		BrokerRuntime:           runtimeByHost,
+		BrokerMetricsAvailable:  true,
 	}, nil
 }
 
@@ -508,6 +514,7 @@ func fetchPromSnapshot(ctx context.Context, client *http.Client, metricsURL stri
 		AdminRequestLatencyMS:   adminLatencyAvg,
 		BrokerCPUPercent:        brokerCPU,
 		BrokerMemBytes:          pickMemBytes(memHeapBytes, memAllocBytes),
+		BrokerMetricsAvailable:  true,
 	}, nil
 }
 

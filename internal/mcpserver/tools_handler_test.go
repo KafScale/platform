@@ -17,6 +17,8 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	console "github.com/KafScale/platform/internal/console"
@@ -157,12 +159,29 @@ func TestClusterMetricsHandlerNilSnapshot(t *testing.T) {
 	}
 }
 
+func TestClusterMetricsHandlerIgnoresUnreportedBrokerSnapshot(t *testing.T) {
+	handler := clusterMetricsHandler(Options{Metrics: &mockMetrics{snap: &console.MetricsSnapshot{ProduceRPS: 2100}}})
+	_, _, err := handler(context.Background(), nil, emptyInput{})
+	if err == nil {
+		t.Fatal("expected error when the broker scrape did not report metrics")
+	}
+}
+
+func TestClusterMetricsHandlerSnapshotError(t *testing.T) {
+	handler := clusterMetricsHandler(Options{Metrics: &mockMetrics{err: errors.New("brokers unreachable")}})
+	_, _, err := handler(context.Background(), nil, emptyInput{})
+	if err == nil || !strings.Contains(err.Error(), "brokers unreachable") {
+		t.Fatalf("expected scrape error, got %v", err)
+	}
+}
+
 func TestClusterMetricsHandler(t *testing.T) {
 	metrics := &mockMetrics{snap: &console.MetricsSnapshot{
-		S3State:     "healthy",
-		S3LatencyMS: 10,
-		ProduceRPS:  100.5,
-		FetchRPS:    50.2,
+		BrokerMetricsAvailable: true,
+		S3State:                "healthy",
+		S3LatencyMS:            10,
+		ProduceRPS:             100.5,
+		FetchRPS:               50.2,
 	}}
 	handler := clusterMetricsHandler(Options{Metrics: metrics})
 	_, output, err := handler(context.Background(), nil, emptyInput{})

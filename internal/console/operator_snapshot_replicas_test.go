@@ -197,6 +197,9 @@ kafscale_operator_etcd_snapshot_stale{cluster="default/kafscale"} 0
 	if strings.Contains(body, "etcd_snapshot_access_ok") {
 		t.Fatalf("access_ok gauge is absent, so access must be unknown: %s", body)
 	}
+	if strings.Contains(body, "produce_rps") || !strings.Contains(body, `"metrics_available":true`) {
+		t.Fatalf("operator-only scrape must not invent broker throughput: %s", body)
+	}
 }
 
 func TestOperatorSnapshotCachedAgeAdvancesAndTurnsStale(t *testing.T) {

@@ -27,7 +27,7 @@ import (
 
 func TestClusterMetricsRoundsAggregatesWithoutChangingSnapshot(t *testing.T) {
 	a, b := 0.1, 0.2
-	snapshot := &console.MetricsSnapshot{S3State: "healthy", S3LatencyMS: 12, ProduceRPS: 3.1666659999999998, FetchRPS: a + b, AdminRequestsTotal: 1 << 53, AdminRequestErrorsTotal: 2, AdminRequestLatencyMS: 0.123456789}
+	snapshot := &console.MetricsSnapshot{BrokerMetricsAvailable: true, S3State: "healthy", S3LatencyMS: 12, ProduceRPS: 3.1666659999999998, FetchRPS: a + b, AdminRequestsTotal: 1 << 53, AdminRequestErrorsTotal: 2, AdminRequestLatencyMS: 0.123456789}
 	original := *snapshot
 	_, output, err := clusterMetricsHandler(Options{Metrics: &mockMetrics{snap: snapshot}})(context.Background(), nil, emptyInput{})
 	if err != nil {

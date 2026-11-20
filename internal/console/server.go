@@ -56,6 +56,7 @@ type MetricsSnapshot struct {
 	OperatorEtcdSnapshotAccessOK       float64
 	OperatorEtcdSnapshotAccessReported bool
 	OperatorMetricsAvailable           bool
+	BrokerMetricsAvailable             bool
 
 	// A reported zero is a sample; absent or invalid metrics are not.
 	s3LatencySampleMS    float64
@@ -375,13 +376,15 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 			metrics := map[string]any{}
 			if h.metrics != nil {
 				if snap, err := h.metrics.Snapshot(ctx); err == nil && snap != nil {
-					metrics["s3_latency_ms"] = snap.S3LatencyMS
-					metrics["s3_error_rate"] = snap.S3ErrorRate
-					metrics["produce_rps"] = snap.ProduceRPS
-					metrics["fetch_rps"] = snap.FetchRPS
-					metrics["admin_requests_total"] = snap.AdminRequestsTotal
-					metrics["admin_errors_total"] = snap.AdminRequestErrorsTotal
-					metrics["admin_latency_ms_avg"] = snap.AdminRequestLatencyMS
+					if snap.BrokerMetricsAvailable {
+						metrics["s3_latency_ms"] = snap.S3LatencyMS
+						metrics["s3_error_rate"] = snap.S3ErrorRate
+						metrics["produce_rps"] = snap.ProduceRPS
+						metrics["fetch_rps"] = snap.FetchRPS
+						metrics["admin_requests_total"] = snap.AdminRequestsTotal
+						metrics["admin_errors_total"] = snap.AdminRequestErrorsTotal
+						metrics["admin_latency_ms_avg"] = snap.AdminRequestLatencyMS
+					}
 					if snap.OperatorMetricsAvailable {
 						metrics["etcd_snapshot_age_s"] = snap.OperatorEtcdSnapshotAgeSeconds
 						metrics["etcd_snapshot_last_success_ts"] = snap.OperatorEtcdSnapshotLastSuccessTS
@@ -394,15 +397,7 @@ func (h *consoleHandlers) handleMetrics(w http.ResponseWriter, r *http.Request) 
 					}
 				}
 			}
-			if len(metrics) == 0 {
-				metrics["s3_latency_ms"] = 40 + rand.Intn(60)
-				metrics["s3_error_rate"] = 0.0
-				metrics["produce_rps"] = 2000 + rand.Intn(500)
-				metrics["fetch_rps"] = 1800 + rand.Intn(600)
-				metrics["admin_requests_total"] = 0
-				metrics["admin_errors_total"] = 0
-				metrics["admin_latency_ms_avg"] = 0
-			}
+			sample["metrics_available"] = len(metrics) > 0
 			sample["metrics"] = metrics
 			b, _ := json.Marshal(sample)
 			_, _ = w.Write([]byte("data: "))
