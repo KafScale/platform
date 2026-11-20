@@ -24,40 +24,86 @@ on:
         default: main
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: sync-demo-videos
   cancel-in-progress: false
 
 jobs:
-  sync:
+  prepare:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out gh-pages
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
-        with:
-          ref: gh-pages
-          path: site
-
-      - name: Check out video source
+      - name: Check out video source without persistent credentials
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
         with:
           ref: ${{ inputs.source_ref }}
           path: src
           sparse-checkout: docs/media/videos
+          persist-credentials: false
 
-      - name: Copy videos
+      - name: Prepare video files
         run: |
           set -euo pipefail
+          for dir in src/docs src/docs/media src/docs/media/videos; do
+            test -d "$dir" && test ! -L "$dir" || { echo "invalid source directory $dir" >&2; exit 1; }
+          done
           for p in admin cli schema-registry mcp ops; do
             from="src/docs/media/videos/$p"
-            to="site/media/demos/$p"
+            to="staged-videos/$p"
+            test -d "$from" && test ! -L "$from" || { echo "invalid video directory $from" >&2; exit 1; }
             mkdir -p "$to"
             for f in "$p.webm" "$p.mp4" "$p-poster.webp"; do
-              test -s "$from/$f" || { echo "missing $from/$f" >&2; exit 1; }
+              test -f "$from/$f" && test -s "$from/$f" && test ! -L "$from/$f" || { echo "invalid video file $from/$f" >&2; exit 1; }
               cp "$from/$f" "$to/$f"
+            done
+          done
+
+      - name: Upload prepared videos
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: demo-videos
+          path: staged-videos/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to push the prepared video branch and open its gh-pages PR.
+      # Source preparation above has only contents: read and executes no source code.
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out gh-pages without persistent credentials
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          ref: gh-pages
+          path: site
+          persist-credentials: false
+
+      - name: Download prepared videos from this run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: demo-videos
+          path: prepared-videos
+
+      - name: Copy prepared videos
+        run: |
+          set -euo pipefail
+          for dir in site/media site/media/demos; do
+            test ! -L "$dir"
+            mkdir -p "$dir"
+          done
+          for p in admin cli schema-registry mcp ops; do
+            test ! -L "site/media/demos/$p"
+            mkdir -p "site/media/demos/$p"
+            for f in "$p.webm" "$p.mp4" "$p-poster.webp"; do
+              test -f "prepared-videos/$p/$f" && test -s "prepared-videos/$p/$f" && test ! -L "prepared-videos/$p/$f"
+              test ! -L "site/media/demos/$p/$f"
+              cp "prepared-videos/$p/$f" "site/media/demos/$p/$f"
             done
           done
 
@@ -69,7 +115,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- media/demos; then
+          if [ -z "$(git status --porcelain -- media/demos)" ]; then
             echo "Videos already match $SOURCE_REF."
             exit 0
           fi
@@ -79,6 +125,7 @@ jobs:
           git switch -c "$branch"
           git add media/demos
           git commit -m "site: sync demo videos from $SOURCE_REF"
+          gh auth setup-git
           git push origin "$branch"
           gh pr create --base gh-pages --head "$branch" \
             --title "site: sync demo videos from $SOURCE_REF" \
