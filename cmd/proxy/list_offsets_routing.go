@@ -77,8 +77,17 @@ func requestPartitions(req kmsg.Request) []topicPartition {
 
 func (p *proxy) groupByPartitionOwner(ctx context.Context, parts []topicPartition) map[string]map[topicPartition]bool {
 	groups := make(map[string]map[topicPartition]bool)
+	leaders := make(map[string]map[int32]int32)
 	for _, tp := range parts {
 		addr := p.partitionOwnerAddr(ctx, tp.topic, tp.partition)
+		if addr == "" {
+			topicLeaders, ok := leaders[tp.topic]
+			if !ok {
+				topicLeaders = p.preferredLeaders(ctx, tp.topic)
+				leaders[tp.topic] = topicLeaders
+			}
+			addr = p.preferredLeaderAddr(ctx, topicLeaders, tp.partition)
+		}
 		if groups[addr] == nil {
 			groups[addr] = make(map[topicPartition]bool)
 		}
