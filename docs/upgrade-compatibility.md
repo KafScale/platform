@@ -116,7 +116,9 @@ path is `/v2`.
 The Iceberg processor module is
 `github.com/KafScale/platform/v2/addons/processors/iceberg-processor`. It
 requires `github.com/KafScale/platform/v2` and replaces that module with the
-repository root. The skeleton processor module is
+repository root. The standalone image drops that replace and downloads
+`github.com/KafScale/platform/v2`. `USE_LOCAL_PLATFORM=1` keeps the replace.
+The skeleton processor module is
 `github.com/KafScale/platform/v2/addons/processors/skeleton`. The SQL processor
 module is `github.com/kafscale/platform/v2/addons/processors/sql-processor`.
 

@@ -23,10 +23,10 @@ COPY ${REPO_ROOT} /src
 WORKDIR /src/${MODULE_DIR}
 ARG USE_LOCAL_PLATFORM=0
 RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
-      go mod edit -dropreplace github.com/KafScale/platform || true; \
+      go mod edit -dropreplace github.com/KafScale/platform/v2; \
     fi
 RUN if [ "${USE_LOCAL_PLATFORM}" != "1" ]; then \
-      go mod download github.com/KafScale/platform@v1.6.3 || true; \
+      go mod download github.com/KafScale/platform/v2; \
     fi
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \

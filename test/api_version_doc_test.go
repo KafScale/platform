@@ -70,6 +70,7 @@ func TestUpgradeGuideDocumentsV1Migration(t *testing.T) {
 		"has no `/v2` suffix",
 		"Do not tag v1.7.0",
 		"github.com/KafScale/platform/v2/addons/processors/iceberg-processor",
+		"The standalone image drops that replace",
 		"github.com/kafscale/platform/v2/addons/processors/sql-processor",
 		"rewriting that checkout onto",
 		"A chart rollback must keep the 2.0 CRDs.",
