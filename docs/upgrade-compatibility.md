@@ -109,15 +109,31 @@ import kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 
 The module path is `github.com/KafScale/platform/v2`.
 `go get github.com/KafScale/platform@v2.0.0` fails because that tag's `go.mod`
-has no `/v2` suffix. Later 2.x tags use this path. v1.6.3 stays
+has no `/v2` suffix. The existing tag also cannot be fetched as
+`github.com/KafScale/platform/v2@v2.0.0`. Future 2.x releases must use this path.
+v1.6.3 stays
 `github.com/KafScale/platform`. Do not tag v1.7.0 on a commit whose module
 path is `/v2`.
 
 The Iceberg processor module is
 `github.com/KafScale/platform/v2/addons/processors/iceberg-processor`. It
 requires `github.com/KafScale/platform/v2` and replaces that module with the
-repository root. The standalone image drops that replace and downloads
-`github.com/KafScale/platform/v2`. `USE_LOCAL_PLATFORM=1` keeps the replace.
+repository root. Standalone image builds require an explicit
+`--build-arg PLATFORM_VERSION=<published /v2 version>`. The build validates
+that published artifact, drops the local replace, and updates the required
+version. There is no default published version: `v2.0.0` is invalid, and a
+release containing the corrected module declaration must be published first.
+Missing or unavailable versions fail with an actionable error.
+`USE_LOCAL_PLATFORM=1` keeps the replace and builds from the checkout without
+requiring `PLATFORM_VERSION`. From the repository root:
+
+```sh
+docker build -f addons/processors/iceberg-processor/Dockerfile \
+  --build-arg USE_LOCAL_PLATFORM=1 \
+  --build-arg MODULE_DIR=addons/processors/iceberg-processor \
+  -t iceberg-processor:dev .
+```
+
 The skeleton processor module is
 `github.com/KafScale/platform/v2/addons/processors/skeleton`. The SQL processor
 module is `github.com/kafscale/platform/v2/addons/processors/sql-processor`.

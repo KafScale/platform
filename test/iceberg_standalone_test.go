@@ -16,7 +16,6 @@
 package test
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,143 +23,57 @@ import (
 	"testing"
 )
 
-func TestIcebergStandaloneBuildDropsLocalReplace(t *testing.T) {
+func TestIcebergStandalonePlatformSelection(t *testing.T) {
 	root := repoRoot(t)
-	dockerSrc, err := os.ReadFile(filepath.Join(root, "addons/processors/iceberg-processor/Dockerfile"))
+	moduleDir := filepath.Join(root, "addons/processors/iceberg-processor")
+	dockerfile, err := os.ReadFile(filepath.Join(moduleDir, "Dockerfile"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(dockerSrc)
-	if strings.Contains(text, "dropreplace github.com/KafScale/platform ||") || strings.Contains(text, "github.com/KafScale/platform@v1.6.3") {
-		t.Fatal("standalone image still names the unsuffixed module")
+	if !strings.Contains(string(dockerfile), "ARG PLATFORM_VERSION\n") || !strings.Contains(string(dockerfile), "sh ./prepare-platform.sh") {
+		t.Fatal("Dockerfile must pass PLATFORM_VERSION to the platform preparation script")
 	}
-	var cmds []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(strings.TrimRight(line, "\\"))
-		line = strings.TrimSuffix(strings.TrimSpace(line), ";")
-		if strings.HasPrefix(line, "go mod ") {
-			cmds = append(cmds, line)
-		}
-	}
-	if len(cmds) < 2 || cmds[0] != "go mod edit -dropreplace github.com/KafScale/platform/v2" || cmds[1] != "go mod download github.com/KafScale/platform/v2" {
-		t.Fatalf("standalone module commands = %q", cmds)
-	}
-
-	modDir := filepath.Join(t.TempDir(), "a", "b", "c", "iceberg")
-	copyTree(t, filepath.Join(root, "addons/processors/iceberg-processor"), modDir)
-	proxy := filepath.Join(t.TempDir(), "proxy")
-	writePlatformProxy(t, root, proxy)
-
-	cache := t.TempDir()
-	t.Cleanup(func() {
-		_ = filepath.Walk(cache, func(path string, info os.FileInfo, err error) error {
-			if err == nil {
-				_ = os.Chmod(path, 0o700)
+	for _, tc := range []struct {
+		name, local, version, wantError string
+	}{
+		{name: "missing version", wantError: "Standalone builds require --build-arg PLATFORM_VERSION="},
+		{name: "local checkout", local: "1"},
+		{name: "published invalid tag", version: "v2.0.0", wantError: "invalid version: go.mod has non-.../v2 module path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.version != "" && testing.Short() {
+				t.Skip("downloads the real published module from the Go proxy")
 			}
-			return nil
+			dir := t.TempDir()
+			original, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("sh", filepath.Join(moduleDir, "prepare-platform.sh"))
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(),
+				"USE_LOCAL_PLATFORM="+tc.local, "PLATFORM_VERSION="+tc.version,
+				"GOPROXY=https://proxy.golang.org", "GOWORK=off", "GOFLAGS=",
+				"GOMODCACHE="+filepath.Join(dir, "modcache"),
+			)
+			out, err := cmd.CombinedOutput()
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatalf("local preparation: %v\n%s", err, out)
+				}
+			} else if err == nil || !strings.Contains(string(out), tc.wantError) {
+				t.Fatalf("preparation error = %v, output = %s; want %q", err, out, tc.wantError)
+			}
+			after, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(original) {
+				t.Fatal("preparation changed go.mod on local build or failed validation")
+			}
 		})
-	})
-	env := append(os.Environ(),
-		"GOCACHE="+filepath.Join(cache, "build"),
-		"GOMODCACHE="+filepath.Join(cache, "mod"),
-		"GOPROXY=file://"+proxy+",https://proxy.golang.org,direct",
-		"GONOSUMDB=github.com/KafScale/platform/v2",
-		"GOFLAGS=",
-	)
-	for _, line := range cmds[:2] {
-		runGo(t, modDir, env, "sh", "-c", line)
 	}
-	out := filepath.Join(t.TempDir(), "iceberg-processor")
-	runGo(t, modDir, env, "go", "build", "-o", out, "./cmd/processor")
-}
-
-func writePlatformProxy(t *testing.T, root, proxy string) {
-	t.Helper()
-	const modPath = "github.com/KafScale/platform/v2"
-	const ver = "v2.0.0"
-	dir := filepath.Join(proxy, escapeModulePath(modPath), "@v")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	zipPath := filepath.Join(dir, ver+".zip")
-	cmd := exec.Command("git", "archive", "--format=zip", "--prefix", modPath+"@"+ver+"/", "--output", zipPath, "HEAD",
-		":(exclude)addons/processors/iceberg-processor",
-		":(exclude)addons/processors/skeleton",
-		":(exclude)addons/processors/sql-processor")
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git archive: %v %s", err, out)
-	}
-	mod := exec.Command("git", "show", "HEAD:go.mod")
-	mod.Dir = root
-	modText, err := mod.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ver+".mod"), modText, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	info, err := json.Marshal(map[string]string{"Version": ver, "Time": "2026-11-20T00:00:00Z"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ver+".info"), append(info, '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "list"), []byte(ver+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func copyTree(t *testing.T, src, dst string) {
-	t.Helper()
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		base := filepath.Base(path)
-		if info.IsDir() && (base == ".gocache" || base == "bin" || base == "_site" || base == ".git") {
-			return filepath.SkipDir
-		}
-		target := filepath.Join(dst, rel)
-		if info.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, body, info.Mode())
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func runGo(t *testing.T, dir string, env []string, name string, args ...string) {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Env = env
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
-	}
-}
-
-func escapeModulePath(path string) string {
-	var b strings.Builder
-	for _, r := range path {
-		if r >= 'A' && r <= 'Z' {
-			b.WriteByte('!')
-			b.WriteRune(r + ('a' - 'A'))
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
 }
