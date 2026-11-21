@@ -338,7 +338,7 @@ cluster from step 1 exists:
 for image in tabulario/iceberg-rest:1.6.0 \
   "ghcr.io/kafscale/kafscale-iceberg-processor:$(sed -n 's/^appVersion: "\(.*\)"/\1/p' addons/processors/iceberg-processor/deploy/helm/iceberg-processor/Chart.yaml)" \
   edenhill/kcat:1.7.1; do
-  docker pull "$image" && kind load docker-image "$image" --name kafscale-demo
+  docker pull "$image" && scripts/kind-load-image.sh "$image" kafscale-demo
 done
 ```
 
@@ -436,7 +436,7 @@ sleep 3
 Ask the catalog for the table. `total-records` should be 50:
 
 ```bash
-curl -fsS http://localhost:8181/v1/namespaces/demo/tables
+curl -fsS http://localhost:8181/v1/namespaces/demo/tables | jq -c .
 curl -fsS http://localhost:8181/v1/namespaces/demo/tables/demo_topic_1 | jq '{
   location: .metadata.location,
   columns: [.metadata.schemas[-1].fields[] | "\(.name) \(.type)"],

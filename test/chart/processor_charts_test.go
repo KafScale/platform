@@ -344,3 +344,26 @@ func TestProcessorDemoDocsKeepSecretsOffTheCommandLine(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessorGuidesPreloadImagesWithPlatformArchive(t *testing.T) {
+	for _, c := range processorCharts() {
+		raw, err := os.ReadFile(c.guide)
+		if err != nil {
+			t.Fatal(err)
+		}
+		guide := string(raw)
+		if strings.Contains(guide, "kind load docker-image") {
+			t.Errorf("%s uses kind load docker-image, which fails on multi-arch images with the containerd image store", c.guide)
+		}
+		if !strings.Contains(guide, `docker pull "$image" && scripts/kind-load-image.sh "$image" kafscale-demo`) {
+			t.Errorf("%s does not preload images with scripts/kind-load-image.sh", c.guide)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "addons", "processors", "iceberg-processor", "user-guide.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "curl -fsS http://localhost:8181/v1/namespaces/demo/tables | jq -c .\n") {
+		t.Error("iceberg guide lists tables without a trailing newline")
+	}
+}

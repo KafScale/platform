@@ -398,7 +398,7 @@ the cluster from step 1 exists:
 for image in \
   "ghcr.io/kafscale/kafscale-sql-processor:$(sed -n 's/^appVersion: "\(.*\)"/\1/p' addons/processors/sql-processor/deploy/helm/sql-processor/Chart.yaml)" \
   edenhill/kcat:1.7.1; do
-  docker pull "$image" && kind load docker-image "$image" --name kafscale-demo
+  docker pull "$image" && scripts/kind-load-image.sh "$image" kafscale-demo
 done
 ```
 
