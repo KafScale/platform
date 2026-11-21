@@ -222,13 +222,13 @@ test, not by any running component, so they do not appear in the
 | `MODULE_DIR` | `addons/processors/iceberg-processor/Dockerfile` (build arg), iceberg processor `Makefile` | `.` | Processor directory under `/src` that the build runs in |
 | `USE_LOCAL_PLATFORM` | `addons/processors/iceberg-processor/Dockerfile` (build arg), `addons/processors/iceberg-processor/prepare-platform.sh` | `0` | `1` builds the processor against the local platform checkout; `0` requires a published `PLATFORM_VERSION` instead |
 | `DEMO_TEST_SKIP_BUILD` | `scripts/test_browser_demo.sh` | `0` | `1` skips building the images and uses ones that already exist |
-| `DEMO_BASE_URL` | `lfs-client-sdk/js-browser/demo/playwright.config.mjs` (set by `scripts/test_browser_demo.sh`) | `http://127.0.0.1:3072` | Base URL for the Playwright demo tests; `scripts/test_browser_demo.sh` overrides it with the demo container's loopback port |
+| `DEMO_BASE_URL` | `lfs-client-sdk/js-browser/demo/playwright.config.mjs` (set by `scripts/test_browser_demo.sh`) | `http://127.0.0.1:3072` | Base URL for the Playwright demo tests when run directly (`npm run test:demo`); `scripts/test_browser_demo.sh` overrides it with the demo container's loopback port |
 | `PUBLISH_IMAGES` | `scripts/build_release_images.sh` | `false` | `true` pushes the release images, `false` only builds; any other value fails |
 | `RELEASE_TAG` | `scripts/build_release_images.sh` | none | Image tag and `org.opencontainers.image.version` label; must match `v*` (a version number after the `v`), and `GITHUB_REF` must be a tag when publishing |
 | `SOURCE_REVISION` | `scripts/build_release_images.sh` | empty | `org.opencontainers.image.revision` label |
 
 `PUBLISH_IMAGES`, `RELEASE_TAG`, and `SOURCE_REVISION` are set by the release
-workflow (`.github/workflows/docker-build.yml`) and normally are not set by hand.
+workflow (`.github/workflows/docker.yml`) and normally are not set by hand.
 
 ### Demo workload tuning
 
