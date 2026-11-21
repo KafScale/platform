@@ -17,13 +17,13 @@ limitations under the License.
 
 # KafScale Docker Compose
 
-Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v2.0.0` images.
+Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v2.0.1` images.
 
 ## Prerequisites
 
 You need Docker and Docker Compose v2.
 
-By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v2.0.0`. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
+By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v2.0.1`, plus `kafscale-e72-browser-demo` with the `demo` profile. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
 
 ### Use a Local Registry
 
@@ -178,7 +178,7 @@ Edit `.env` to customize:
 ```bash
 # Registry settings
 REGISTRY=ghcr.io
-TAG=v2.0.0
+TAG=v2.0.1
 
 # MinIO credentials
 MINIO_ROOT_USER=minioadmin
@@ -203,11 +203,10 @@ Override these in `docker-compose.yaml` or via your own `.env.local` if needed.
 `e72-browser-demo` runs only with the `demo` profile. Its image is built from
 `lfs-client-sdk/js-browser/demo` and published as
 `ghcr.io/kafscale/kafscale-e72-browser-demo` by the release workflow, starting
-with the release containing #410 (planned for v2.0.1). The v2.0.0 tag has no
-demo image. After that release is published, select its tag for the whole stack:
+with v2.0.1. The v2.0.0 tag has no demo image. From the repository root:
 
 ```bash
-TAG="<published-release-tag>" docker compose --profile demo up -d
+docker compose -f deploy/docker-compose/docker-compose.yaml --profile demo up -d
 ```
 
 Open [the browser demo](http://localhost:3072), choose a non-empty file (up to
@@ -218,7 +217,7 @@ The demo forwards `/lfs/` to `proxy:8080` on the Compose network; it does not
 require browser access to internal MinIO addresses or S3 credentials.
 This is a local, unauthenticated demo.
 
-To build the demo image before the next release, run from the repository root:
+To build the demo image from your checkout instead, run from the repository root:
 
 ```bash
 docker build -t kafscale-e72-browser-demo:dev \
@@ -254,7 +253,7 @@ Version tags still build and publish linux/amd64 and linux/arm64 images.
 ### Override Registry/Tag
 
 ```bash
-REGISTRY=my-registry.local:5000 TAG=v2.0.0 docker-compose up -d
+REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker-compose up -d
 ```
 
 ## Architecture
@@ -307,7 +306,7 @@ docker-compose restart proxy
 
 ```bash
 # Check that the default image pulls
-docker pull ghcr.io/kafscale/kafscale-broker:v2.0.0
+docker pull ghcr.io/kafscale/kafscale-broker:v2.0.1
 
 # For a local registry, check the Docker daemon config
 docker info | grep -A5 "Insecure Registries"

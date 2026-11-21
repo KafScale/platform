@@ -47,6 +47,7 @@ KafScale is open source under the Apache 2.0 license and implemented in Go.
 ---
 
 For upgrades, see the [upgrade and compatibility guide](docs/upgrade-compatibility.md).
+Go code imports `github.com/KafScale/platform/v2`; fetch it with `go get github.com/KafScale/platform/v2@v2.0.1`.
 
 ## Why KafScale Exists
 

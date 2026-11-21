@@ -94,7 +94,7 @@ services:
   # ==========================================================================
 
   broker:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.0.0}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.0.1}
     container_name: kafscale-broker-dc
     depends_on:
       etcd:
@@ -128,7 +128,7 @@ services:
       - kafscale
 
   proxy:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-proxy:${TAG:-v2.0.0}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-proxy:${TAG:-v2.0.1}
     container_name: kafscale-proxy-dc
     depends_on:
       etcd:
@@ -171,7 +171,7 @@ services:
   # See the proxy service above for configuration.
 
   console:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-console:${TAG:-v2.0.0}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-console:${TAG:-v2.0.1}
     container_name: kafscale-console-dc
     depends_on:
       etcd:
@@ -209,7 +209,7 @@ services:
   # ==========================================================================
 
   e72-browser-demo:
-    image: ${BROWSER_DEMO_IMAGE:-${REGISTRY:-ghcr.io}/kafscale/kafscale-e72-browser-demo:${TAG:-v2.0.0}}
+    image: ${BROWSER_DEMO_IMAGE:-${REGISTRY:-ghcr.io}/kafscale/kafscale-e72-browser-demo:${TAG:-v2.0.1}}
     container_name: kafscale-e72-demo-dc
     profiles: ["demo"]
     depends_on:
@@ -230,14 +230,14 @@ services:
   # ==========================================================================
 
   # operator:
-  #   image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-operator:${TAG:-v2.0.0}
+  #   image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-operator:${TAG:-v2.0.1}
   #   container_name: kafscale-operator-dc
   #   depends_on:
   #     etcd:
   #       condition: service_healthy
   #   environment:
   #     KAFSCALE_OPERATOR_ETCD_ENDPOINTS: "http://etcd:2379"
-  #     KAFSCALE_OPERATOR_BROKER_IMAGE: "${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.0.0}"
+  #     KAFSCALE_OPERATOR_BROKER_IMAGE: "${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.0.1}"
   #     KAFSCALE_OPERATOR_LOG_LEVEL: "info"
   #   networks:
   #     - kafscale

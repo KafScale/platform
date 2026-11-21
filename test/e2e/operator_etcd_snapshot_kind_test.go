@@ -102,6 +102,8 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 	chartPath := filepath.Join(repoRoot(t), "deploy", "helm", "kafscale")
 	operatorRepo, operatorTag := splitImage(operatorImage)
 	consoleRepo, consoleTag := splitImage(consoleImage)
+	brokerRepo, brokerTag := splitImage(brokerImage)
+	etcdToolsRepo, etcdToolsTag := splitImage(etcdToolsImage)
 	consoleUser := "snapshot-e2e"
 	consolePassword := fmt.Sprintf("snapshot-e2e-%d", time.Now().UnixNano())
 
@@ -113,6 +115,10 @@ func TestOperatorEtcdSnapshotKindE2E(t *testing.T) {
 		"--set", fmt.Sprintf("operator.image.tag=%s", operatorTag),
 		"--set", fmt.Sprintf("console.image.repository=%s", consoleRepo),
 		"--set", fmt.Sprintf("console.image.tag=%s", consoleTag),
+		"--set", fmt.Sprintf("operator.brokerImage.repository=%s", brokerRepo),
+		"--set", fmt.Sprintf("operator.brokerImage.tag=%s", brokerTag),
+		"--set", fmt.Sprintf("operator.etcdSnapshotEtcdctlImage.repository=%s", etcdToolsRepo),
+		"--set", fmt.Sprintf("operator.etcdSnapshotEtcdctlImage.tag=%s", etcdToolsTag),
 		"--set", "operator.replicaCount=2",
 		"--set", "console.auth.username="+consoleUser,
 		"--set-string", "console.auth.password="+consolePassword,

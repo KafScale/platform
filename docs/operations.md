@@ -33,8 +33,8 @@ This guide explains how to install the Kafscale control plane with Helm, configu
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set 'operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379' \
-  --set operator.image.tag=v2.0.0 \
-  --set console.image.tag=v2.0.0
+  --set operator.image.tag=v2.0.1 \
+  --set console.image.tag=v2.0.1
 ```
 
 The chart ships the `KafscaleCluster` and `KafscaleTopic` CRDs so the operator can immediately reconcile resources.  Create a Kubernetes secret that contains your S3 access/secret keys, reference it inside a `KafscaleCluster` resource (see `config/samples/`), and the operator will launch broker pods with the right IAM credentials.
@@ -50,7 +50,7 @@ By default, image tags follow the chart `appVersion`. Every image key below uses
 - `schemaRegistry.image`
 - `mcp.image`
 
-Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v2.0.0`). If you install from a checkout of `main`, that tag may be older than the branch; set `useLatest=true` on each image the install runs.
+Override `tag` on any of those keys to pin a specific release (for example, `operator.image.tag=v2.0.1`). If you install from a checkout of `main`, that tag may be older than the branch; set `useLatest=true` on each image the install runs.
 
 The operator-managed LFS proxy image comes from `spec.lfsProxy.image` if that field is set, otherwise from the operator's `LFS_PROXY_IMAGE` env (the chart sets it from `operator.lfsProxyImage`, which follows `appVersion` like the other image keys). If neither is set, it falls back to `ghcr.io/kafscale/kafscale-proxy:dev`. The same order applies to the pull policy: `spec.lfsProxy.imagePullPolicy` if that field is set, otherwise `LFS_PROXY_IMAGE_PULL_POLICY` (the chart sets it to `Always` when `operator.lfsProxyImage.useLatest` is true, and to `IfNotPresent` otherwise). If that env is also unset, the pull policy is `IfNotPresent`.
 
@@ -65,7 +65,7 @@ spec:
   brokers:
     image:
       repository: ghcr.io/kafscale/kafscale-broker
-      tag: v2.0.0
+      tag: v2.0.1
 ```
 
 Omitting the image keeps the operator default. A repository without a tag is used

@@ -18,7 +18,8 @@ limitations under the License.
 # Upgrade and compatibility guide
 
 This is the canonical guide for upgrading from published v1.6.3
-(`092291b78b8abf1e5bde6cafd92550e9726b46e0`) to v2.0.0.
+(`092291b78b8abf1e5bde6cafd92550e9726b46e0`) to v2.0.1. It applies to v2.0.0
+as well, except for the Go module path described in [Go types](#go-types).
 
 ## Compatibility has separate boundaries
 
@@ -107,10 +108,18 @@ Import `github.com/KafScale/platform/v2/api/v1` in new code:
 import kafscalev1 "github.com/KafScale/platform/v2/api/v1"
 ```
 
-The module path is `github.com/KafScale/platform/v2`.
+The module path is `github.com/KafScale/platform/v2`. v2.0.1 is the first
+release that Go modules can fetch:
+
+```sh
+go get github.com/KafScale/platform/v2@v2.0.1
+```
+
+Change every import of `github.com/KafScale/platform/...` to
+`github.com/KafScale/platform/v2/...` in the same change.
 `go get github.com/KafScale/platform@v2.0.0` fails because that tag's `go.mod`
-has no `/v2` suffix. The existing tag also cannot be fetched as
-`github.com/KafScale/platform/v2@v2.0.0`. Future 2.x releases must use this path.
+has no `/v2` suffix. The v2.0.0 tag also cannot be fetched as
+`github.com/KafScale/platform/v2@v2.0.0`. Later 2.x releases use this path.
 v1.6.3 stays
 `github.com/KafScale/platform`. Do not tag v1.7.0 on a commit whose module
 path is `/v2`.
@@ -121,8 +130,8 @@ requires `github.com/KafScale/platform/v2` and replaces that module with the
 repository root. Standalone image builds require an explicit
 `--build-arg PLATFORM_VERSION=<published /v2 version>`. The build validates
 that published artifact, drops the local replace, and updates the required
-version. There is no default published version: `v2.0.0` is invalid, and a
-release containing the corrected module declaration must be published first.
+version. There is no default published version. `v2.0.0` is invalid; use
+`v2.0.1` or later.
 Missing or unavailable versions fail with an actionable error.
 `USE_LOCAL_PLATFORM=1` keeps the replace and builds from the checkout without
 requiring `PLATFORM_VERSION`. From the repository root:

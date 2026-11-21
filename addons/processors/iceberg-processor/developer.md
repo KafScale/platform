@@ -79,8 +79,8 @@ documented in [Build and test variables](../../../docs/development.md#build-and-
 For a standalone build with this directory as context, pass
 `--build-arg PLATFORM_VERSION=<published /v2 version>` to `docker build`.
 The version must exist and declare `module github.com/KafScale/platform/v2`.
-The existing `v2.0.0` tag does not, so standalone builds require a later valid
-release. Omitting the argument fails with instructions for building locally.
+The `v2.0.0` tag does not, so use `v2.0.1` or later. Omitting the argument
+fails with instructions for building locally.
 
 ## Integration Tests
 
