@@ -17,11 +17,13 @@ limitations under the License.
 
 # Processors
 
-Processors consume Kafscale segments directly from S3 and write to downstream
-systems. They are not Kafka brokers and do not implement Kafka client APIs.
+Processors consume Kafscale segments directly from S3. They write to downstream
+systems or serve SQL queries. They are not Kafka brokers and do not implement Kafka client APIs.
 
 ## Included
 
 - `iceberg-processor/` is a working storage-native processor that maps topics to
-  Iceberg tables.
+  Iceberg tables. See the [kind walkthrough](iceberg-processor/user-guide.md#try-it-on-kind).
+- `sql-processor/` is KAFSQL, which serves SQL over KFS segments through the
+  Postgres wire protocol. See the [kind walkthrough](sql-processor/user-guide.md#try-it-on-kind).
 - `skeleton/` is a template for building custom processors.

@@ -14,9 +14,12 @@
 # limitations under the License.
 
 image:
-  repository: sql-processor
-  tag: dev
+  repository: ghcr.io/kafscale/kafscale-sql-processor
+  tag: ""
   pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
 
 replicaCount: 1
 
@@ -34,12 +37,22 @@ envFromSecret: ""
 
 resources: {}
 
+service:
+  enabled: false
+  type: ClusterIP
+  port: 5432
+  targetPort: 5432
+  annotations: {}
+
 proxy:
   enabled: false
   replicaCount: 2
   service:
     type: LoadBalancer
     port: 5432
+  networkPolicy:
+    enabled: true
+    extraIngress: []
   env: []
   envFromSecret: ""
   resources: {}
