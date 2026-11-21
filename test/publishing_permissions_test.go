@@ -111,6 +111,43 @@ func TestPublishingTokenPermissions(t *testing.T) {
 	}
 }
 
+func TestEveryWorkflowDefaultsToReadOnlyToken(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join(repoRoot(t), ".github", "workflows", "*.yml"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("workflows=%v err=%v", paths, err)
+	}
+	for _, path := range paths {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workflow struct {
+			Permissions any
+		}
+		if err := yaml.Unmarshal(body, &workflow); err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(path)
+		switch permissions := workflow.Permissions.(type) {
+		case string:
+			if permissions != "read-all" {
+				t.Fatalf("%s default permissions=%s", name, permissions)
+			}
+		case map[string]any:
+			if len(permissions) == 0 {
+				t.Fatalf("%s has an empty default permissions block", name)
+			}
+			for scope, level := range permissions {
+				if level != "read" && level != "none" {
+					t.Fatalf("%s grants %s %v by default", name, scope, level)
+				}
+			}
+		default:
+			t.Fatalf("%s has no top-level permissions block", name)
+		}
+	}
+}
+
 func TestVideoPreparationAcceptsOnlyExpectedRegularFiles(t *testing.T) {
 	workflow := readPublishingWorkflow(t, "sync-demo-videos.yml")
 	var script string
