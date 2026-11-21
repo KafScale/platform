@@ -37,7 +37,6 @@ discovery_manifest:
   enabled: false
   key: manifest.json
   ttl_seconds: 60
-  build_interval_seconds: 0
   build_max_segments: 0
   build_max_bytes: 0
   build_lease_ttl_seconds: 120

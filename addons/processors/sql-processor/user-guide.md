@@ -114,7 +114,6 @@ discovery_manifest:
   enabled: false
   key: manifest.json
   ttl_seconds: 60
-  build_interval_seconds: 0
   build_max_segments: 0
   build_max_bytes: 0
   build_lease_ttl_seconds: 120
@@ -287,6 +286,18 @@ Use the backfill tool to generate or refresh these:
 ./kafsql-backfill -config /config/config.yaml -mode manifest
 ./kafsql-backfill -config /config/config.yaml -mode time-index -interval 5m
 ```
+
+The executor only reads the manifest and time index; it never builds them.
+The `build_*` keys under `discovery_manifest` and `time_index` are read only
+by `kafsql-backfill` when it writes them:
+
+- `build_max_segments` / `build_max_bytes`: caps on the build; `0` means no cap.
+- `build_lease_ttl_seconds`: how long the build lease is held (default `120`).
+
+They can also be set with `KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS`,
+`KAFSQL_MANIFEST_BUILD_MAX_BYTES`, `KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS`,
+`KAFSQL_TIME_INDEX_BUILD_MAX_SEGMENTS`, `KAFSQL_TIME_INDEX_BUILD_MAX_BYTES`
+and `KAFSQL_TIME_INDEX_BUILD_LEASE_TTL_SECONDS`.
 
 ## Metrics
 
