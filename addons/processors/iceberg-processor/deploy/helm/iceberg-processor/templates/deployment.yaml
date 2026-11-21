@@ -35,7 +35,7 @@ spec:
       serviceAccountName: {{ include "iceberg-processor.serviceAccountName" . }}
       containers:
         - name: processor
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: metrics

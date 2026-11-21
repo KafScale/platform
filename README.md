@@ -208,6 +208,11 @@ More on the backup pattern: [KafShield, Kafka backup and disaster recovery on S3
 - Flink demo (E30): `examples/E30_flink-kafscale-demo/README.md`
 - Spark demo (E40): `examples/E40_spark-kafscale-demo/README.md`
 
+## Storage-native processors
+
+- [Iceberg processor](addons/processors/iceberg-processor/user-guide.md#try-it-on-kind): write KFS records to Apache Iceberg tables and read them back with DuckDB.
+- [KAFSQL](addons/processors/sql-processor/user-guide.md#try-it-on-kind): query KFS records directly with a Postgres client.
+
 ## Related projects
 
 These open source projects come from the same team and work with KafScale:

@@ -70,7 +70,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 docker-build:
-	@tmp=$$(mktemp -d); \
+	@command -v rsync >/dev/null 2>&1 || { echo "rsync is required to build the iceberg-processor image" >&2; exit 1; }
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	rsync -a --delete $(RSYNC_EXCLUDES) ../../.. "$$tmp/"; \
-	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) $(DOCKER_BUILD_ARGS_LOCAL) -t $(IMAGE) -f Dockerfile "$$tmp"; \
-	rm -rf "$$tmp"
+	$(DOCKER_BUILD_CMD) $(DOCKER_BUILD_ARGS) $(DOCKER_BUILD_ARGS_LOCAL) -t $(IMAGE) -f Dockerfile "$$tmp"

@@ -1249,6 +1249,14 @@ Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets t
 
 The Iceberg processor addon has its own LFS environment overrides. See `addons/processors/iceberg-processor/README.md`.
 
+### Processor demos
+
+The kind demo scripts are development tools, not runtime component settings.
+Their complete variable tables and cleanup behavior are in the user guides:
+
+- [Iceberg demo variables](../addons/processors/iceberg-processor/user-guide.md#one-command-demo): `ICEBERG_DEMO_CLEANUP` (default `1`) removes the topic and cluster objects; `ICEBERG_DEMO_CLEANUP_KIND` (default `1`) deletes the kind cluster on success. Set both to `0` to keep the demo running.
+- [KAFSQL demo variables](../addons/processors/sql-processor/user-guide.md#one-command-demo): `KAFSQL_DEMO_CLEANUP` (default `1`) removes the release, job, topic and cluster objects. Set it to `0` to keep them. The kind cluster stays up.
+
 ### idoc-explode
 
 `idoc-explode` (cmd/idoc-explode) reads SAP IDoc XML or JSONL envelopes and writes one file per topic. Flags: `-input` (file path; empty reads stdin) and `-out` (output directory).

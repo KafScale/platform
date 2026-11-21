@@ -63,7 +63,9 @@ Refer to `kafscale-spec.md` for the detailed package-by-package breakdown.
 | `make test-operator-kind` | Build required images and run the operator kind suite. Use `KAFSCALE_KIND_KUBE_PROXY_MODE=nftables` on hosts without working iptables. |
 | `make demo` | Local demo with broker + console + embedded etcd. |
 | `make demo-platform` | Kind-based demo (operator HA + managed etcd + console). |
-| `make docker-build` | Build broker/operator/console/sql-processor images locally. |
+| `make iceberg-demo` | Run the Iceberg processor kind demo. See the [user guide](../addons/processors/iceberg-processor/user-guide.md#one-command-demo) for cleanup and image overrides. |
+| `make kafsql-demo` | Run the KAFSQL kind demo and psql checks. See the [user guide](../addons/processors/sql-processor/user-guide.md#one-command-demo) for cleanup and image overrides. |
+| `make docker-build` | Build broker, operator, console, proxy, MCP, schema registry, e2e client, etcd-tools and SQL processor images locally. The Iceberg processor is built by `make iceberg-demo`, not this target. |
 | `make docker-clean` | Remove dev images + Docker caches. |
 | `make stop-containers` | Stop leftover MinIO/kind containers. |
 | `make tidy` | Clean go.mod/go.sum. |

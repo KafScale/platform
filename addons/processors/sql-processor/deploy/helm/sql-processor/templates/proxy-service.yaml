@@ -29,6 +29,5 @@ spec:
       targetPort: {{ .Values.proxy.service.port }}
       protocol: TCP
   selector:
-    app.kubernetes.io/name: {{ include "sql-processor.name" . }}-proxy
-    app.kubernetes.io/instance: {{ .Release.Name }}
+{{ include "sql-processor.proxySelector" . | indent 4 }}
 {{- end }}

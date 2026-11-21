@@ -1,0 +1,61 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+fullnameOverride: iceberg-processor
+
+s3:
+  credentialsSecretRef: iceberg-s3-credentials
+
+config:
+  s3:
+    bucket: kafscale-snapshots
+    namespace: kafscale-demo
+    region: us-east-1
+    endpoint: http://minio.kafscale-demo.svc.cluster.local:9000
+    path_style: true
+  iceberg:
+    catalog:
+      type: rest
+      uri: http://iceberg-rest.kafscale-demo.svc.cluster.local:8181
+      token: ""
+      username: ""
+      password: null
+    warehouse: s3://kafscale-snapshots/iceberg
+  offsets:
+    backend: etcd
+    lease_ttl_seconds: 30
+    key_prefix: processors
+  processor:
+    poll_interval_seconds: 1
+  discovery:
+    mode: s3
+  etcd:
+    endpoints:
+      - http://kafscale-etcd-client.kafscale-demo.svc.cluster.local:2379
+    username: ""
+    password: null
+  schema:
+    mode: "off"
+    registry:
+      base_url: ""
+      timeout_seconds: 5
+      cache_seconds: 300
+  mappings:
+    - topic: demo-topic-1
+      table: demo.demo_topic_1
+      mode: append
+      create_table_if_missing: true
+      schema:
+        source: none
