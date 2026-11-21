@@ -240,9 +240,17 @@ bash scripts/test_browser_demo.sh
 ```
 
 Set `DEMO_TEST_SKIP_BUILD=1` to reuse images that already exist instead of
-rebuilding them, or `DEMO_BASE_URL` to point the Playwright tests at a demo
-that is already running. Both are listed under
+rebuilding them. Both variables are listed under
 [Build and test variables](../../docs/development.md#build-and-test-variables).
+
+To point the Playwright tests at a demo that is already running, set
+`DEMO_BASE_URL` when invoking the tests directly instead of through the
+script, since the script always starts its own demo and overrides the
+variable:
+
+```bash
+(cd lfs-client-sdk/js-browser && DEMO_BASE_URL=https://my-demo.example npm run test:demo)
+```
 
 The script uses isolated Compose names, volumes, and a random loopback port,
 and removes its containers and volumes on exit. PRs affecting the demo or its backend run the same browser tests. Changes to
