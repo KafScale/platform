@@ -48,7 +48,7 @@ jobs:
           for dir in src/docs src/docs/media src/docs/media/videos; do
             test -d "$dir" && test ! -L "$dir" || { echo "invalid source directory $dir" >&2; exit 1; }
           done
-          for p in admin cli schema-registry mcp ops; do
+          for p in admin cli schema-registry mcp ops iceberg sql; do
             from="src/docs/media/videos/$p"
             to="staged-videos/$p"
             test -d "$from" && test ! -L "$from" || { echo "invalid video directory $from" >&2; exit 1; }
@@ -97,7 +97,7 @@ jobs:
             test ! -L "$dir"
             mkdir -p "$dir"
           done
-          for p in admin cli schema-registry mcp ops; do
+          for p in admin cli schema-registry mcp ops iceberg sql; do
             test ! -L "site/media/demos/$p"
             mkdir -p "site/media/demos/$p"
             for f in "$p.webm" "$p.mp4" "$p-poster.webp"; do
@@ -129,4 +129,4 @@ jobs:
           git push origin "$branch"
           gh pr create --base gh-pages --head "$branch" \
             --title "site: sync demo videos from $SOURCE_REF" \
-            --body "Copies docs/media/videos/<persona>/<persona>.{webm,mp4} and <persona>-poster.webp from $SOURCE_REF into media/demos/. The Demos page links only these paths, so no page edits are needed."
+            --body "Copies docs/media/videos/<name>/<name>.{webm,mp4} and <name>-poster.webp from $SOURCE_REF into media/demos/. The Demos page links only these paths, so no page edits are needed."

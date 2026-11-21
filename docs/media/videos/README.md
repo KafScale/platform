@@ -103,3 +103,28 @@ docs/media/videos/tapes/prep/media.sh admin 107.5
 ```
 
 Pick a poster time that shows a result and nothing secret.
+
+## Processor videos
+
+Two more videos show the processors. They use the same files and names as the persona videos (`iceberg/iceberg.*`, `sql/sql.*`) and the same VHS settings, except font size 20, so the DuckDB result table fits on one line.
+
+| Video | Follows | Length | Poster at |
+|---|---|---|---|
+| `iceberg` | `addons/processors/iceberg-processor/user-guide.md` (Try It on kind, steps 4 to 6) | 1:26 | 84 s |
+| `sql` | `addons/processors/sql-processor/user-guide.md` (Try It on kind, steps 3 to 5) | 0:56 | 46 s |
+
+They run on their own kind cluster, `kafscale-demo`, which the user guides create. `tapes/prep/before-processors.sh` runs the hidden steps from both guides: it deletes every kind cluster on the host and runs `make demo-platform-bootstrap` with the nftables kube-proxy, loads the processor, REST catalog and kcat images, creates the S3 credentials Secrets through a mode-600 file, starts the REST catalog, installs both charts and installs the DuckDB extensions. The S3 keys come from the platform Secret and are never typed or shown. The tapes only wait, clear the screen and start port-forwards while hidden.
+
+You also need `psql` and the DuckDB CLI 2.0 or newer. Run from the repository root, with docker and kind usable by your user (or set `KSV_SUDO`):
+
+```bash
+docs/media/videos/tapes/prep/before-processors.sh
+vhs docs/media/videos/tapes/iceberg.tape
+vhs docs/media/videos/tapes/sql.tape
+docs/media/videos/tapes/prep/media.sh iceberg 84
+docs/media/videos/tapes/prep/media.sh sql 46
+```
+
+The Sync demo videos workflow copies them to `media/demos/iceberg/` and `media/demos/sql/` on gh-pages, like the persona videos. The Demos page shows them only once it links those paths.
+
+Each tape produces records once, so the counts match only on a fresh cluster. Run `before-processors.sh` again before you record a tape a second time. Delete the cluster afterwards with `kind delete cluster --name kafscale-demo`.

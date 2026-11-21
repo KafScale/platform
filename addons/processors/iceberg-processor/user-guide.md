@@ -17,6 +17,8 @@ limitations under the License.
 
 # Iceberg Processor User Guide
 
+[![Terminal demo: the Iceberg processor on kind turns 50 records produced to demo-topic-1 into parquet files in MinIO and the Iceberg table demo.demo_topic_1, which the REST catalog and DuckDB both read back with 50 records](../../../docs/media/videos/iceberg/iceberg.gif)](../../../docs/media/videos/iceberg/iceberg.mp4)
+
 This guide is for operators and platform engineers deploying the Iceberg
 processor in Kubernetes. It focuses on configuration, behavior, and operations.
 For implementation details and code changes, see `developer.md`.
