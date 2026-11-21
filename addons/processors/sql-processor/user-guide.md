@@ -17,6 +17,8 @@ limitations under the License.
 
 # KAFSQL User Guide
 
+[![Terminal demo: KAFSQL on kind answers psql with SHOW TOPICS, TAIL 5 and count(*) over 200 records produced to demo-topic-2, with no ksqlDB cluster](../../../docs/media/videos/sql/sql.gif)](../../../docs/media/videos/sql/sql.mp4)
+
 This guide targets operators and platform engineers deploying KAFSQL. It
 explains configuration, runtime behavior, and operational guidance. For
 implementation details, see `developer.md`.

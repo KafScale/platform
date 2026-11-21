@@ -25,6 +25,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+var demoVideos = []string{"admin", "cli", "schema-registry", "mcp", "ops", "iceberg", "sql"}
+
 type publishingWorkflow struct {
 	Permissions map[string]string
 	Jobs        map[string]struct {
@@ -162,7 +164,7 @@ func TestVideoPreparationAcceptsOnlyExpectedRegularFiles(t *testing.T) {
 	for _, mode := range []string{"valid", "symlink-file", "symlink-directory", "empty-file"} {
 		t.Run(mode, func(t *testing.T) {
 			work := t.TempDir()
-			for _, persona := range []string{"admin", "cli", "schema-registry", "mcp", "ops"} {
+			for _, persona := range demoVideos {
 				dir := filepath.Join(work, "src", "docs", "media", "videos", persona)
 				if err := os.MkdirAll(dir, 0o755); err != nil {
 					t.Fatal(err)
@@ -225,7 +227,7 @@ func TestVideoPreparationAcceptsOnlyExpectedRegularFiles(t *testing.T) {
 				}
 				return nil
 			})
-			if err != nil || count != 15 {
+			if err != nil || count != 3*len(demoVideos) {
 				t.Fatalf("prepared files=%d err=%v", count, err)
 			}
 		})
@@ -251,7 +253,7 @@ func TestVideoPublisherIncludesNewFilesWithoutRunningSource(t *testing.T) {
 	if err := os.Mkdir(site, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, persona := range []string{"admin", "cli", "schema-registry", "mcp", "ops"} {
+	for _, persona := range demoVideos {
 		dir := filepath.Join(work, "prepared-videos", persona)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -301,7 +303,7 @@ gh() { printf '%s\n' "$*" >> "$PUBLISH_CALLS"; }
 	if strings.TrimSpace(runGit("branch", "--show-current")) != "site/sync-demo-videos-123" {
 		t.Fatal("publisher skipped the newly added videos")
 	}
-	if count := len(strings.Fields(runGit("ls-files", "media/demos"))); count != 15 {
+	if count := len(strings.Fields(runGit("ls-files", "media/demos"))); count != 3*len(demoVideos) {
 		t.Fatalf("tracked videos=%d", count)
 	}
 	if string(runGit("show", "HEAD:README.md")) != "site fixture" {
@@ -351,5 +353,47 @@ func TestVideoPublisherRejectsDestinationSymlink(t *testing.T) {
 	body, err := os.ReadFile(outside)
 	if err != nil || string(body) != "untouched" {
 		t.Fatal("publisher overwrote a file outside the video path")
+	}
+}
+
+func TestVideoSyncCoversEveryRecordedVideo(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Join(repoRoot(t), "docs", "media", "videos"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded []string
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() != "tapes" {
+			recorded = append(recorded, entry.Name())
+		}
+	}
+	want := map[string]bool{}
+	for _, name := range demoVideos {
+		want[name] = true
+	}
+	for _, name := range recorded {
+		if !want[name] {
+			t.Errorf("docs/media/videos/%s is not in demoVideos", name)
+		}
+	}
+	if len(recorded) != len(demoVideos) {
+		t.Errorf("recorded videos %v, demoVideos %v", recorded, demoVideos)
+	}
+	loop := "for p in " + strings.Join(demoVideos, " ") + "; do"
+	workflow := readPublishingWorkflow(t, "sync-demo-videos.yml")
+	steps := map[string]string{"prepare": "Prepare video files", "publish": "Copy prepared videos"}
+	for job, stepName := range steps {
+		found := false
+		for _, step := range workflow.Jobs[job].Steps {
+			if step.Name == stepName {
+				found = true
+				if !strings.Contains(step.Run, loop) {
+					t.Errorf("%s/%s does not copy %v", job, stepName, demoVideos)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("missing step %s/%s", job, stepName)
+		}
 	}
 }
