@@ -80,7 +80,6 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("KAFSQL_MANIFEST_ENABLED", "true")
 	t.Setenv("KAFSQL_MANIFEST_KEY", "manifests/segments.json")
 	t.Setenv("KAFSQL_MANIFEST_TTL_SECONDS", "45")
-	t.Setenv("KAFSQL_MANIFEST_BUILD_INTERVAL_SECONDS", "120")
 	t.Setenv("KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS", "55")
 	t.Setenv("KAFSQL_MANIFEST_BUILD_MAX_BYTES", "999")
 	t.Setenv("KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS", "200")
@@ -126,7 +125,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	if !cfg.Manifest.Enabled || cfg.Manifest.Key != "manifests/segments.json" || cfg.Manifest.TTLSeconds != 45 {
 		t.Fatalf("expected manifest overrides, got %+v", cfg.Manifest)
 	}
-	if cfg.Manifest.BuildIntervalSeconds != 120 || cfg.Manifest.BuildMaxSegments != 55 || cfg.Manifest.BuildMaxBytes != 999 {
+	if cfg.Manifest.BuildMaxSegments != 55 || cfg.Manifest.BuildMaxBytes != 999 {
 		t.Fatalf("expected manifest build overrides, got %+v", cfg.Manifest)
 	}
 	if cfg.Manifest.BuildLeaseTTLSeconds != 200 {

@@ -1249,6 +1249,20 @@ Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets t
 
 The Iceberg processor addon has its own LFS environment overrides. See `addons/processors/iceberg-processor/README.md`.
 
+### SQL processor (KAFSQL)
+
+The executor only reads the manifest and time index; `kafsql-backfill` writes
+them. The build keys under `discovery_manifest` and `time_index` in the SQL
+processor config are read only by the backfill tool, and can be set with these
+environment variables:
+
+- `KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS` / `KAFSQL_TIME_INDEX_BUILD_MAX_SEGMENTS`: cap on segments per build (`0` = no cap).
+- `KAFSQL_MANIFEST_BUILD_MAX_BYTES` / `KAFSQL_TIME_INDEX_BUILD_MAX_BYTES`: cap on build size in bytes (`0` = no cap).
+- `KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS` / `KAFSQL_TIME_INDEX_BUILD_LEASE_TTL_SECONDS`: how long the build lease is held (default `120` seconds).
+
+`KAFSQL_MANIFEST_BUILD_INTERVAL_SECONDS` no longer exists: it was documented
+but never read by any component, so it was removed from the config.
+
 ### Processor demos
 
 The kind demo scripts are development tools, not runtime component settings.

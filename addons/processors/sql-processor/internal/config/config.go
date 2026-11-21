@@ -107,7 +107,6 @@ type ManifestConfig struct {
 	Enabled              bool   `yaml:"enabled"`
 	Key                  string `yaml:"key"`
 	TTLSeconds           int    `yaml:"ttl_seconds"`
-	BuildIntervalSeconds int    `yaml:"build_interval_seconds"`
 	BuildMaxSegments     int    `yaml:"build_max_segments"`
 	BuildMaxBytes        int64  `yaml:"build_max_bytes"`
 	BuildLeaseTTLSeconds int    `yaml:"build_lease_ttl_seconds"`
@@ -238,9 +237,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.Manifest.TTLSeconds == 0 {
 		cfg.Manifest.TTLSeconds = 60
 	}
-	if cfg.Manifest.BuildIntervalSeconds < 0 {
-		cfg.Manifest.BuildIntervalSeconds = 0
-	}
 	if cfg.Manifest.BuildLeaseTTLSeconds == 0 {
 		cfg.Manifest.BuildLeaseTTLSeconds = 120
 	}
@@ -309,7 +305,6 @@ func applyEnvOverrides(cfg *Config) {
 	setBool(&cfg.Manifest.Enabled, "KAFSQL_MANIFEST_ENABLED")
 	setString(&cfg.Manifest.Key, "KAFSQL_MANIFEST_KEY")
 	setInt(&cfg.Manifest.TTLSeconds, "KAFSQL_MANIFEST_TTL_SECONDS")
-	setInt(&cfg.Manifest.BuildIntervalSeconds, "KAFSQL_MANIFEST_BUILD_INTERVAL_SECONDS")
 	setInt(&cfg.Manifest.BuildMaxSegments, "KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS")
 	setInt64(&cfg.Manifest.BuildMaxBytes, "KAFSQL_MANIFEST_BUILD_MAX_BYTES")
 	setInt(&cfg.Manifest.BuildLeaseTTLSeconds, "KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS")
