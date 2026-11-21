@@ -38,7 +38,7 @@ envFromSecret: ""
 resources: {}
 
 service:
-  enabled: true
+  enabled: false
   type: ClusterIP
   port: 5432
   targetPort: 5432
@@ -50,6 +50,9 @@ proxy:
   service:
     type: LoadBalancer
     port: 5432
+  networkPolicy:
+    enabled: true
+    extraIngress: []
   env: []
   envFromSecret: ""
   resources: {}

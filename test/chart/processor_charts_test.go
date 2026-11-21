@@ -136,7 +136,10 @@ func TestProcessorChartsDefaultToReleaseImage(t *testing.T) {
 func TestSQLProcessorChartServiceExposesExecutor(t *testing.T) {
 	requireHelm(t)
 	chart := processorCharts()[1].dir
-	r := decodeProcessor(t, helmTemplateProcessor(t, chart))
+	if r := decodeProcessor(t, helmTemplateProcessor(t, chart)); len(r.services) != 0 {
+		t.Fatalf("default render has %d Services, want none", len(r.services))
+	}
+	r := decodeProcessor(t, helmTemplateProcessor(t, chart, "--set", "service.enabled=true"))
 	if len(r.services) != 1 {
 		t.Fatalf("rendered %d Services, want 1", len(r.services))
 	}
@@ -157,7 +160,7 @@ func TestSQLProcessorChartServiceExposesExecutor(t *testing.T) {
 		t.Fatalf("container ports = %+v", ports)
 	}
 
-	r = decodeProcessor(t, helmTemplateProcessor(t, chart,
+	r = decodeProcessor(t, helmTemplateProcessor(t, chart, "--set", "service.enabled=true",
 		"--set", "service.type=NodePort", "--set", "service.port=15432", "--set", "service.targetPort=6543",
 		"--set", "service.annotations.example\\.com/team=data"))
 	svc = r.services[0]
@@ -168,9 +171,155 @@ func TestSQLProcessorChartServiceExposesExecutor(t *testing.T) {
 		t.Fatalf("containerPort = %d, want 6543", got)
 	}
 
-	r = decodeProcessor(t, helmTemplateProcessor(t, chart, "--set", "service.enabled=false"))
-	if len(r.services) != 0 {
-		t.Fatalf("service.enabled=false rendered %d Services", len(r.services))
+}
+
+func selects(selector, labels map[string]string) bool {
+	if len(selector) == 0 {
+		return false
+	}
+	for k, v := range selector {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func TestSQLProcessorRefusesDirectServiceWithProxy(t *testing.T) {
+	requireHelm(t)
+	chart := processorCharts()[1].dir
+	out, err := exec.Command("helm", "template", "demo", chart, "--set", "proxy.enabled=true", "--set", "service.enabled=true").CombinedOutput()
+	if err == nil {
+		t.Fatal("service.enabled and proxy.enabled rendered")
+	}
+	want := "service.enabled and proxy.enabled cannot both be true: the direct executor Service bypasses the proxy ACLs and audit log. Use the proxy Service, or turn the proxy off."
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("error = %s", out)
+	}
+	guide, err := os.ReadFile(processorCharts()[1].guide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(guide), want) {
+		t.Fatal("user guide does not show the render error")
+	}
+}
+
+func TestSQLProcessorProxySelectorsAreDisjoint(t *testing.T) {
+	requireHelm(t)
+	chart := processorCharts()[1].dir
+	data := helmTemplateProcessor(t, chart, "--set", "proxy.enabled=true")
+	r := decodeProcessor(t, data)
+	pods := map[string]map[string]string{}
+	for _, d := range r.deployments {
+		pods[d.Name] = d.Spec.Template.Labels
+		if !selects(d.Spec.Selector.MatchLabels, d.Spec.Template.Labels) {
+			t.Fatalf("Deployment %s selector %v does not match its pods %v", d.Name, d.Spec.Selector.MatchLabels, d.Spec.Template.Labels)
+		}
+	}
+	executor, proxy := pods["demo-sql-processor"], pods["demo-sql-processor-proxy"]
+	if executor == nil || proxy == nil {
+		t.Fatalf("rendered Deployments %v", pods)
+	}
+	if executor["app.kubernetes.io/component"] != "executor" || proxy["app.kubernetes.io/component"] != "proxy" {
+		t.Fatalf("component labels executor=%v proxy=%v", executor, proxy)
+	}
+	svcs := map[string]corev1.Service{}
+	for _, svc := range r.services {
+		svcs[svc.Name] = svc
+	}
+	if len(svcs) != 2 {
+		t.Fatalf("rendered Services %v, want the executor backend and the proxy", svcs)
+	}
+	backend, ok := svcs["demo-sql-processor-executor"]
+	if !ok || backend.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("executor backend Service = %+v", backend)
+	}
+	front := svcs["demo-sql-processor-proxy"]
+	if !selects(backend.Spec.Selector, executor) || selects(backend.Spec.Selector, proxy) {
+		t.Fatalf("executor Service selector %v, executor %v, proxy %v", backend.Spec.Selector, executor, proxy)
+	}
+	if !selects(front.Spec.Selector, proxy) || selects(front.Spec.Selector, executor) {
+		t.Fatalf("proxy Service selector %v, executor %v, proxy %v", front.Spec.Selector, executor, proxy)
+	}
+	direct := decodeProcessor(t, helmTemplateProcessor(t, chart, "--set", "service.enabled=true")).services[0]
+	if !selects(direct.Spec.Selector, executor) || selects(direct.Spec.Selector, proxy) {
+		t.Fatalf("direct Service selector %v matches proxy pods %v", direct.Spec.Selector, proxy)
+	}
+	var upstream string
+	for _, d := range r.deployments {
+		if d.Name == "demo-sql-processor-proxy" {
+			for _, e := range d.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "KAFSQL_PROXY_UPSTREAMS" {
+					upstream = e.Value
+				}
+			}
+		}
+	}
+	if upstream != "demo-sql-processor-executor:5432" {
+		t.Fatalf("KAFSQL_PROXY_UPSTREAMS = %q", upstream)
+	}
+	var policy struct {
+		Kind string `json:"kind"`
+		Spec struct {
+			PodSelector struct {
+				MatchLabels map[string]string `json:"matchLabels"`
+			} `json:"podSelector"`
+			Ingress []struct {
+				From []struct {
+					PodSelector struct {
+						MatchLabels map[string]string `json:"matchLabels"`
+					} `json:"podSelector"`
+				} `json:"from"`
+			} `json:"ingress"`
+		} `json:"spec"`
+	}
+	found := false
+	for _, doc := range splitYAML(data) {
+		if err := yaml.Unmarshal(doc, &policy); err != nil {
+			t.Fatal(err)
+		}
+		if policy.Kind == "NetworkPolicy" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("no NetworkPolicy for the executor")
+	}
+	if !selects(policy.Spec.PodSelector.MatchLabels, executor) || selects(policy.Spec.PodSelector.MatchLabels, proxy) {
+		t.Fatalf("NetworkPolicy selects %v", policy.Spec.PodSelector.MatchLabels)
+	}
+	if len(policy.Spec.Ingress) != 1 || len(policy.Spec.Ingress[0].From) != 1 ||
+		!selects(policy.Spec.Ingress[0].From[0].PodSelector.MatchLabels, proxy) ||
+		selects(policy.Spec.Ingress[0].From[0].PodSelector.MatchLabels, executor) {
+		t.Fatalf("NetworkPolicy ingress %+v", policy.Spec.Ingress)
+	}
+	if strings.Contains(string(helmTemplateProcessor(t, chart, "--set", "proxy.enabled=true", "--set", "proxy.networkPolicy.enabled=false")), "kind: NetworkPolicy") {
+		t.Fatal("proxy.networkPolicy.enabled=false still renders a NetworkPolicy")
+	}
+}
+
+func TestProcessorGuidesRolloutRenderedDeployment(t *testing.T) {
+	requireHelm(t)
+	rollout := regexp.MustCompile(`helm upgrade --install (\S+) (\S+) \\\n  --namespace kafscale \\\n  -f my-[a-z]+-values.yaml\nkubectl -n kafscale rollout status deployment/(\S+)\n`)
+	for _, c := range processorCharts() {
+		raw, err := os.ReadFile(c.guide)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := rollout.FindStringSubmatch(string(raw))
+		if m == nil {
+			t.Fatalf("%s has no generic install and rollout block", c.guide)
+		}
+		data, err := exec.Command("helm", "template", m[1], c.dir).CombinedOutput()
+		if err != nil {
+			t.Fatalf("helm template: %v\n%s", err, data)
+		}
+		r := decodeProcessor(t, data)
+		if len(r.deployments) != 1 || r.deployments[0].Name != m[3] {
+			t.Fatalf("%s waits for deployment/%s, chart renders %+v", c.guide, m[3], r.deployments)
+		}
 	}
 }
 

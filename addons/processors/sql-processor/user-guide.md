@@ -262,6 +262,14 @@ The proxy is used for external access:
 
 Deploy proxy only when you need external access. In-cluster use can skip it.
 
+With `proxy.enabled: true` the chart points the proxy at the executors through
+the ClusterIP Service `<fullname>-executor` (it sets `KAFSQL_PROXY_UPSTREAMS`;
+an entry with the same name in `proxy.env` overrides it). It also adds the
+NetworkPolicy `<fullname>-executor`, which lets only the proxy pods reach the
+executor Postgres port. Every other ingress to the executor pods is denied,
+metrics included, unless you add rules in `proxy.networkPolicy.extraIngress`.
+The policy only takes effect when your CNI enforces NetworkPolicy.
+
 Proxy ACLs are applied before any S3 access. If the proxy cannot authorize a
 query, it returns an error without forwarding.
 
@@ -294,7 +302,8 @@ Proxy audit logs include allow/deny decisions, topics, and client IP.
 
 The chart lives in `addons/processors/sql-processor/deploy/helm/sql-processor`.
 By default it runs `ghcr.io/kafscale/kafscale-sql-processor` with the chart's
-`appVersion` as the tag, and creates a ClusterIP Service for the Postgres port.
+`appVersion` as the tag. It does not expose the executor by default, see
+Exposing the Executor below.
 The chart mounts `config/config.yaml` from the chart as the config file. Override
 single settings with `KAFSQL_*` environment variables in `env` (for example
 `KAFSQL_S3_BUCKET`, `KAFSQL_S3_ENDPOINT`, `KAFSQL_METADATA_ETCD_ENDPOINTS`), or
@@ -318,15 +327,17 @@ Helm values:
 | `env` | `[]` | Executor env vars, for example `KAFSQL_*` overrides. |
 | `envFromSecret` | `""` | Secret loaded into the executor with `envFrom`, for example `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. |
 | `resources` | `{}` | Executor resources. |
-| `service.enabled` | `true` | Create the executor Service. |
+| `service.enabled` | `false` | Create the direct executor Service `<fullname>` for Postgres clients. Rendering fails if `proxy.enabled` is also `true`. |
 | `service.type` | `ClusterIP` | Executor Service type. |
-| `service.port` | `5432` | Service port for Postgres clients. |
+| `service.port` | `5432` | Port of the direct executor Service, and of `<fullname>-executor` when the proxy is on. |
 | `service.targetPort` | `5432` | Executor container port. Keep it equal to the port in `server.listen`. |
 | `service.annotations` | `{}` | Executor Service annotations. |
 | `proxy.enabled` | `false` | Deploy the KAFSQL proxy and its Service. |
 | `proxy.replicaCount` | `2` | Proxy replicas. |
 | `proxy.service.type` | `LoadBalancer` | Proxy Service type. |
 | `proxy.service.port` | `5432` | Proxy Service and target port. Keep it equal to the port in `proxy.listen`. |
+| `proxy.networkPolicy.enabled` | `true` | With the proxy on, add a NetworkPolicy that lets only proxy pods reach the executor Postgres port. |
+| `proxy.networkPolicy.extraIngress` | `[]` | Extra NetworkPolicy ingress rules for the executor pods, for example metrics scraping. |
 | `proxy.env` | `[]` | Proxy env vars. |
 | `proxy.envFromSecret` | `""` | Secret loaded into the proxy with `envFrom`. |
 | `proxy.resources` | `{}` | Proxy resources. |
@@ -348,7 +359,8 @@ rm -f sql-s3.env
 ```
 
 Then install with your values file, named `my-kafsql-values.yaml` here, that sets
-`envFromSecret: sql-s3-credentials` and your settings:
+`envFromSecret: sql-s3-credentials`, `service.enabled: true` for direct access
+without the proxy, and your settings:
 
 ```bash
 helm upgrade --install kafsql addons/processors/sql-processor/deploy/helm/sql-processor \
@@ -358,6 +370,30 @@ kubectl -n kafscale rollout status deployment/kafsql-sql-processor
 ```
 
 Clients in the cluster connect to `kafsql-sql-processor.kafscale.svc:5432`.
+
+### Exposing the Executor
+
+The executor accepts any user name, has no TLS and applies no topic ACLs. The
+proxy enforces the ACLs and writes the audit log. So the chart creates no
+Service for the executor unless you ask:
+
+- Direct access, no proxy: set `service.enabled: true`. Any workload that can
+  reach the Service can query every topic. Use it for trusted in-cluster
+  clients and local demos.
+- Through the proxy: set `proxy.enabled: true` and leave `service.enabled`
+  off. Clients use the proxy Service, and the executor is reachable only
+  through `<fullname>-executor`, limited to proxy pods by a NetworkPolicy.
+
+Setting both stops rendering with this error, because the direct Service would
+let clients skip the proxy ACLs and audit log:
+
+```text
+service.enabled and proxy.enabled cannot both be true: the direct executor Service bypasses the proxy ACLs and audit log. Use the proxy Service, or turn the proxy off.
+```
+
+Executor pods carry `app.kubernetes.io/component: executor` and proxy pods
+`app.kubernetes.io/component: proxy`. Each Service selects only its own
+component.
 `addons/processors/sql-processor/deploy/kind/values-kind.yaml` is a full
 working example for the kind walkthrough below.
 
@@ -455,7 +491,9 @@ kubectl -n kafscale-demo get deployment,service kafsql
 
 `values-kind.yaml` points KAFSQL at MinIO and the cluster etcd with
 `KAFSQL_*` environment variables and loads the Secret with `envFromSecret`.
-The chart Service `kafsql` exposes the Postgres port 5432.
+`values-kind.yaml` also sets `service.enabled: true`, so the chart Service
+`kafsql` exposes the executor Postgres port 5432 directly. That is fine for a
+local demo; see Exposing the Executor before you do the same elsewhere.
 
 ### 4. Produce 200 records
 

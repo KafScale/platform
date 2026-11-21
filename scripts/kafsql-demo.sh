@@ -156,6 +156,9 @@ kubectl create namespace "${KAFSQL_DEMO_NAMESPACE}" --dry-run=client -o yaml | \
   kubectl apply --validate=false -f -
 
 s3_env_file="$(mktemp)"
+trap 'rm -f "${s3_env_file}"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 chmod 600 "${s3_env_file}"
 printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\nKAFSCALE_S3_ACCESS_KEY=%s\nKAFSCALE_S3_SECRET_KEY=%s\n' \
   "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" > "${s3_env_file}"
@@ -163,6 +166,7 @@ kubectl -n "${KAFSQL_DEMO_NAMESPACE}" create secret generic kafsql-s3-credential
   --from-env-file="${s3_env_file}" \
   --dry-run=client -o yaml | kubectl apply --validate=false -f -
 rm -f "${s3_env_file}"
+trap - EXIT INT TERM
 
 cluster_yaml="$(printf '%s\n' \
   'apiVersion: kafscale.io/v1' \
@@ -340,6 +344,7 @@ helm upgrade --install "${KAFSQL_PROCESSOR_RELEASE}" addons/processors/sql-proce
   --set image.repository="${proc_repo}" \
   --set image.tag="${proc_tag}" \
   --set envFromSecret=kafsql-s3-credentials \
+  --set service.enabled=true \
   --set env[0].name=KAFSQL_S3_BUCKET \
   --set env[0].value="${MINIO_BUCKET}" \
   --set env[1].name=KAFSQL_S3_NAMESPACE \

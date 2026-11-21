@@ -34,6 +34,5 @@ spec:
       targetPort: pgwire
       protocol: TCP
   selector:
-    app.kubernetes.io/name: {{ include "sql-processor.name" . }}
-    app.kubernetes.io/instance: {{ .Release.Name }}
+{{ include "sql-processor.executorSelector" . | indent 4 }}
 {{- end }}

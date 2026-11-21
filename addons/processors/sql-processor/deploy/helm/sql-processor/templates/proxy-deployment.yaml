@@ -30,8 +30,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "sql-processor.name" . }}-proxy
-        app.kubernetes.io/instance: {{ .Release.Name }}
+{{ include "sql-processor.proxySelector" . | indent 8 }}
     spec:
       serviceAccountName: {{ include "sql-processor.serviceAccountName" . }}
       containers:
@@ -47,8 +46,10 @@ spec:
             - secretRef:
                 name: {{ .Values.proxy.envFromSecret }}
           {{- end }}
-          {{- with .Values.proxy.env }}
           env:
+            - name: KAFSQL_PROXY_UPSTREAMS
+              value: "{{ include "sql-processor.fullname" . }}-executor:{{ .Values.service.port }}"
+          {{- with .Values.proxy.env }}
 {{ toYaml . | indent 12 }}
           {{- end }}
           {{- with .Values.proxy.resources }}

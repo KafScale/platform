@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- include "sql-processor.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -29,8 +30,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "sql-processor.name" . }}
-        app.kubernetes.io/instance: {{ .Release.Name }}
+{{ include "sql-processor.executorSelector" . | indent 8 }}
     spec:
       serviceAccountName: {{ include "sql-processor.serviceAccountName" . }}
       containers:

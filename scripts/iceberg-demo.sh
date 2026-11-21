@@ -221,7 +221,8 @@ cleanup_kubeconfig() {
   fi
   rm -f "${kubeconfig_file}"
 }
-trap 'status=$?; cleanup_kubeconfig; if [[ "${status}" -eq 0 ]]; then cleanup_kind_cluster; fi; exit ${status}' EXIT
+exit_trap='status=$?; cleanup_kubeconfig; if [[ "${status}" -eq 0 ]]; then cleanup_kind_cluster; fi; exit ${status}'
+trap "${exit_trap}" EXIT
 
 if ! ensure_kube_system_ready; then
   exit 1
@@ -243,6 +244,9 @@ kubectl create namespace "${ICEBERG_DEMO_NAMESPACE}" --dry-run=client -o yaml | 
   kubectl apply --validate=false -f -
 
 s3_env_file="$(mktemp)"
+trap 'status=$?; rm -f "${s3_env_file}"; '"${exit_trap#'status=$?; '}" EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 chmod 600 "${s3_env_file}"
 printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\nKAFSCALE_S3_ACCESS_KEY=%s\nKAFSCALE_S3_SECRET_KEY=%s\n' \
   "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" > "${s3_env_file}"
@@ -250,6 +254,8 @@ kubectl -n "${ICEBERG_DEMO_NAMESPACE}" create secret generic iceberg-s3-credenti
   --from-env-file="${s3_env_file}" \
   --dry-run=client -o yaml | kubectl apply --validate=false -f -
 rm -f "${s3_env_file}"
+trap "${exit_trap}" EXIT
+trap - INT TERM
 
 if ! kubectl -n "${ICEBERG_DEMO_NAMESPACE}" get "kafscalecluster/${ICEBERG_DEMO_CLUSTER}" >/dev/null 2>&1; then
   echo "kafscalecluster/${ICEBERG_DEMO_CLUSTER} not found in ${ICEBERG_DEMO_NAMESPACE}; run make demo-platform-bootstrap first" >&2
