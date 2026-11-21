@@ -1,7 +1,7 @@
 ---
 layout: default
 title: "KafScale Demos: Terminal Walkthroughs"
-description: Short terminal videos that show KafScale install, CLI, schema registry, MCP and day-2 operations, each following the docs step by step.
+description: Short terminal videos that show KafScale install, CLI, schema registry, MCP, day-2 operations and the Iceberg and SQL processors, each following the docs step by step.
 permalink: /demos/
 ---
 
@@ -66,6 +66,27 @@ limitations under the License.
   <p>Restarts a broker, rotates the S3 keys, takes an etcd snapshot and scales brokers out with the HPA.</p>
   <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>ops: restart, S3 rotation, snapshot, HPA</span></div><video data-demo controls muted loop playsinline preload="none" width="960" height="540" poster="/media/demos/ops/ops-poster.webp" aria-label="Terminal demo: a broker is restarted, S3 keys are rotated, an etcd snapshot is taken and the broker HPA scales out"><source src="/media/demos/ops/ops.webm" type="video/webm"><source src="/media/demos/ops/ops.mp4" type="video/mp4"></video></div>
   <div class="hero-actions"><a class="button secondary" href="/operations/">Follow along: Operations</a></div>
+</section>
+
+<section class="demo" id="processors">
+  <h2>Processors</h2>
+  <p>Processors are addons that read topic data straight from the segments in S3. They never connect to the brokers, so they add no load to produce and consume traffic.</p>
+</section>
+
+<section class="demo" id="iceberg">
+  <h2>Iceberg processor: topics to tables</h2>
+  <p>For data teams that want Kafka topics as Apache Iceberg tables.</p>
+  <p>Produces 50 records, then the processor reads the finished segments from S3 and appends them to an Iceberg table through a REST catalog. DuckDB reads the table back, row count and records included.</p>
+  <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>iceberg: segments to Iceberg, DuckDB</span></div><video data-demo controls muted loop playsinline preload="none" width="960" height="540" poster="/media/demos/iceberg/iceberg-poster.webp" aria-label="Terminal demo: records are produced to a topic, the Iceberg processor writes them from S3 into an Iceberg table, and DuckDB queries the table"><source src="/media/demos/iceberg/iceberg.webm" type="video/webm"><source src="/media/demos/iceberg/iceberg.mp4" type="video/mp4"></video></div>
+  <div class="hero-actions"><a class="button secondary" href="/processors/iceberg/#try-it-on-kind">Follow along: Iceberg processor</a></div>
+</section>
+
+<section class="demo" id="sql">
+  <h2>SQL processor: query topics with psql</h2>
+  <p>For anyone who wants to query Kafka topics with SQL, no ksqlDB cluster needed.</p>
+  <p>Produces 200 records, then psql connects to KAFSQL over the Postgres protocol, lists the topics, reads the last five records and counts the last hour.</p>
+  <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>sql: psql, SHOW TOPICS, TAIL, LAST</span></div><video data-demo controls muted loop playsinline preload="none" width="960" height="540" poster="/media/demos/sql/sql-poster.webp" aria-label="Terminal demo: records are produced to a topic and psql queries them through the KAFSQL processor with SHOW TOPICS, TAIL and LAST"><source src="/media/demos/sql/sql.webm" type="video/webm"><source src="/media/demos/sql/sql.mp4" type="video/mp4"></video></div>
+  <div class="hero-actions"><a class="button secondary" href="/processors/sql/#try-it-on-kind">Follow along: SQL processor</a></div>
 </section>
 
 <script src="/assets/js/demos.js" defer></script>
