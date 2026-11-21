@@ -43,7 +43,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 </section>
 
 <section class="section demo-teaser">
-  <p><a href="/demos/">See all demos</a> for the CLI, schema registry, MCP and ops walkthroughs.</p>
+  <p><a href="/demos/">See all demos</a> for the CLI, schema registry, MCP, ops and processor walkthroughs.</p>
 </section>
 
 <section class="section">
