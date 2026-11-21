@@ -27,20 +27,31 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+type releaseStep struct {
+	Uses string
+	Run  string
+	Env  map[string]string
+	If   string
+	With map[string]any
+}
+
 type releaseWorkflow struct {
 	Jobs map[string]struct {
 		If          string
 		Strategy    map[string]any
 		Uses        string
-		With        map[string]any
+		RunsOn      string `json:"runs-on"`
+		Timeout     int    `json:"timeout-minutes"`
 		Permissions map[string]string
-		Steps       []struct {
-			Uses string
-			Run  string
-			Env  map[string]string
-			If   string
-			With map[string]any
-		}
+		Steps       []releaseStep
+	}
+}
+
+type releaseAction struct {
+	Inputs map[string]struct{ Required bool }
+	Runs   struct {
+		Using string
+		Steps []releaseStep
 	}
 }
 
@@ -58,21 +69,45 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 		return workflow
 	}
 	workflow := read("docker.yml")
+	if len(workflow.Jobs) != 3 {
+		t.Fatal("release workflow jobs changed")
+	}
 	validate := workflow.Jobs["validate"]
 	publish := workflow.Jobs["build-and-push"]
-	if validate.Uses != "./.github/workflows/docker-build.yml" || publish.Uses != validate.Uses {
-		t.Fatal("PR and release builds must use the same workflow")
+	for id, mode := range map[string]string{"validate": "false", "build-and-push": "true"} {
+		job := workflow.Jobs[id]
+		if job.Uses != "" || job.RunsOn != "ubuntu-latest" || job.Timeout != 60 || len(job.Strategy) != 0 || len(job.Steps) != 2 {
+			t.Fatalf("%s must be a single job without a matrix", id)
+		}
+		if !strings.HasPrefix(job.Steps[0].Uses, "actions/checkout@") || job.Steps[0].With["persist-credentials"] != false {
+			t.Fatalf("%s must check out without persisted credentials", id)
+		}
+		if job.Steps[1].Uses != "./.github/actions/build-release-images" || job.Steps[1].With["publish"] != mode {
+			t.Fatal("PR and release builds must use the same build action")
+		}
 	}
-	if validate.With["publish"] != false || publish.With["publish"] != true || validate.Permissions["packages"] == "write" {
+	if validate.Permissions["packages"] == "write" || len(validate.Permissions) != 1 || validate.Permissions["contents"] != "read" {
 		t.Fatal("PR builds must not publish or receive a package write grant")
+	}
+	if len(publish.Permissions) != 2 || publish.Permissions["contents"] != "read" || publish.Permissions["packages"] != "write" {
+		t.Fatal("release builds must receive only the package write grant")
 	}
 	if !strings.Contains(validate.If, "github.event_name == 'pull_request'") || publish.If != "github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')" {
 		t.Fatal("release publishing must be restricted to version tags")
 	}
-	buildWorkflow := read("docker-build.yml")
-	build := buildWorkflow.Jobs["images"]
-	if len(buildWorkflow.Jobs) != 1 || len(build.Strategy) != 0 {
-		t.Fatal("image validation must remain a single job without a matrix")
+	if _, err := os.Stat(filepath.Join(repoRoot(t), ".github/workflows/docker-build.yml")); !os.IsNotExist(err) {
+		t.Fatal("release images must build through the composite action")
+	}
+	actionData, err := os.ReadFile(filepath.Join(repoRoot(t), ".github/actions/build-release-images/action.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action releaseAction
+	if err := yaml.Unmarshal(actionData, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Runs.Using != "composite" || len(action.Inputs) != 1 || !action.Inputs["publish"].Required {
+		t.Fatal("build action must be a composite action with a required publish input")
 	}
 	expected := map[string]bool{}
 	for _, name := range []string{"broker", "operator", "console", "proxy", "mcp", "schema-registry", "etcd-tools", "iceberg-processor", "sql-processor", "e72-browser-demo"} {
@@ -119,8 +154,8 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 	if len(expected) != 0 {
 		t.Fatalf("missing release images: %v", expected)
 	}
-	var foundBuild, foundPlan, foundLogin bool
-	for _, step := range build.Steps {
+	var foundBuild, foundPlan, foundLogin, foundQEMU bool
+	for _, step := range action.Runs.Steps {
 		if strings.HasPrefix(step.Run, "bash scripts/build_release_images.sh --print") {
 			foundPlan = true
 			if step.Env["PUBLISH_IMAGES"] != "${{ inputs.publish }}" {
@@ -135,12 +170,18 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 		}
 		if strings.HasPrefix(step.Uses, "docker/login-action@") {
 			foundLogin = true
-			if step.If != "inputs.publish" {
+			if step.If != "inputs.publish == 'true'" || step.With["password"] != "${{ github.token }}" {
 				t.Fatal("PR builds must not log in to GHCR")
 			}
 		}
+		if strings.HasPrefix(step.Uses, "docker/setup-qemu-action@") {
+			foundQEMU = true
+			if step.If != "inputs.publish == 'true'" {
+				t.Fatal("PR builds must not set up release emulation")
+			}
+		}
 	}
-	if !foundBuild || !foundPlan || !foundLogin {
+	if !foundBuild || !foundPlan || !foundLogin || !foundQEMU {
 		t.Fatal("missing build or publishing login step")
 	}
 }
