@@ -41,7 +41,9 @@ read-only interfaces.
 ## Structure
 
 - `processors/` contains stream or batch processors that consume Kafscale
-  segments directly from S3 and write to downstream systems.
+  segments directly from S3 and write to downstream systems or serve SQL queries.
 - `processors/iceberg-processor/` describes the storage-native processor that
   maps topics to Iceberg tables.
+- `processors/sql-processor/` describes KAFSQL, which serves SQL over KFS segments
+  through the Postgres wire protocol.
 - `processors/skeleton/` provides a template for building custom processors.

@@ -155,12 +155,14 @@ kind load docker-image "${E2E_CLIENT_IMAGE}" --name "${KAFSCALE_KIND_CLUSTER}"
 kubectl create namespace "${KAFSQL_DEMO_NAMESPACE}" --dry-run=client -o yaml | \
   kubectl apply --validate=false -f -
 
+s3_env_file="$(mktemp)"
+chmod 600 "${s3_env_file}"
+printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\nKAFSCALE_S3_ACCESS_KEY=%s\nKAFSCALE_S3_SECRET_KEY=%s\n' \
+  "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" > "${s3_env_file}"
 kubectl -n "${KAFSQL_DEMO_NAMESPACE}" create secret generic kafsql-s3-credentials \
-  --from-literal=AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER}" \
-  --from-literal=AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD}" \
-  --from-literal=KAFSCALE_S3_ACCESS_KEY="${MINIO_ROOT_USER}" \
-  --from-literal=KAFSCALE_S3_SECRET_KEY="${MINIO_ROOT_PASSWORD}" \
+  --from-env-file="${s3_env_file}" \
   --dry-run=client -o yaml | kubectl apply --validate=false -f -
+rm -f "${s3_env_file}"
 
 cluster_yaml="$(printf '%s\n' \
   'apiVersion: kafscale.io/v1' \
@@ -231,8 +233,6 @@ if [[ "${KAFSQL_DEMO_CREATE_BUCKET:-1}" == "1" ]]; then
   kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete pod kafsql-minio-bucket --ignore-not-found=true >/dev/null
   bucket_cmd=$(cat <<EOF
 set -e
-export AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER}"
-export AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD}"
 export AWS_DEFAULT_REGION="${MINIO_REGION}"
 export AWS_EC2_METADATA_DISABLED=true
 endpoint="http://minio.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:9000"
@@ -241,7 +241,9 @@ aws s3api --endpoint-url "\${endpoint}" head-bucket --bucket "${MINIO_BUCKET}" >
 EOF
 )
   kubectl -n "${KAFSQL_DEMO_NAMESPACE}" run kafsql-minio-bucket --restart=Never \
-    --image=amazon/aws-cli:2.15.0 --command -- /bin/sh -c "${bucket_cmd}"
+    --image=amazon/aws-cli:2.15.0 --override-type=strategic \
+    --overrides='{"spec":{"containers":[{"name":"kafsql-minio-bucket","envFrom":[{"secretRef":{"name":"kafsql-s3-credentials"}}]}]}}' \
+    --command -- /bin/sh -c "${bucket_cmd}"
   if ! kubectl -n "${KAFSQL_DEMO_NAMESPACE}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/kafsql-minio-bucket --timeout=90s; then
     kubectl -n "${KAFSQL_DEMO_NAMESPACE}" logs pod/kafsql-minio-bucket --tail=200 || true
     kubectl -n "${KAFSQL_DEMO_NAMESPACE}" describe pod/kafsql-minio-bucket || true
@@ -365,23 +367,7 @@ if ! kubectl -n "${KAFSQL_DEMO_NAMESPACE}" rollout status "${deploy}" --timeout=
   exit 1
 fi
 
-service_yaml="$(printf '%s\n' \
-  'apiVersion: v1' \
-  'kind: Service' \
-  'metadata:' \
-  "  name: ${KAFSQL_PROCESSOR_RELEASE}" \
-  "  namespace: ${KAFSQL_DEMO_NAMESPACE}" \
-  'spec:' \
-  '  type: ClusterIP' \
-  '  selector:' \
-  '    app.kubernetes.io/name: sql-processor' \
-  "    app.kubernetes.io/instance: ${KAFSQL_PROCESSOR_RELEASE}" \
-  '  ports:' \
-  '    - name: sql' \
-  '      port: 5432' \
-  '      targetPort: 5432' \
-)"
-kubectl apply --validate=false -f - <<<"${service_yaml}"
+kubectl -n "${KAFSQL_DEMO_NAMESPACE}" get service "${KAFSQL_PROCESSOR_RELEASE}" >/dev/null
 
 kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete pod kafsql-demo-query --ignore-not-found=true >/dev/null
 query_cmd=$(cat <<EOF
@@ -438,7 +424,6 @@ kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete pod kafsql-demo-query --ignore-not-
 if [[ "${KAFSQL_DEMO_CLEANUP:-1}" == "1" ]]; then
   echo "cleaning up KAFSQL demo resources (${KAFSQL_DEMO_NAMESPACE})"
   helm -n "${KAFSQL_DEMO_NAMESPACE}" uninstall "${KAFSQL_PROCESSOR_RELEASE}" >/dev/null 2>&1 || true
-  kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete service "${KAFSQL_PROCESSOR_RELEASE}" --ignore-not-found=true || true
   kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete job kafsql-demo-producer --ignore-not-found=true || true
   kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete kafscaletopic "${KAFSQL_DEMO_TOPIC}" --ignore-not-found=true || true
   kubectl -n "${KAFSQL_DEMO_NAMESPACE}" delete kafscalecluster "${KAFSQL_DEMO_CLUSTER}" --ignore-not-found=true || true

@@ -35,8 +35,12 @@ spec:
       serviceAccountName: {{ include "sql-processor.serviceAccountName" . }}
       containers:
         - name: processor
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: pgwire
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
           args:
             - "-config={{ .Values.config.path }}"
           {{- if .Values.envFromSecret }}

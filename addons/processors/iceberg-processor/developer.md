@@ -113,7 +113,11 @@ make iceberg-demo
 
 It spins up a kind cluster, deploys the REST catalog and processor, produces
 records, and validates the output. Adjust image/tag overrides in the root
-`Makefile` if you need local builds.
+`Makefile` if you need local builds. By default it deletes both the demo
+objects and the kind cluster on success. To keep them, use
+`ICEBERG_DEMO_CLEANUP=0 ICEBERG_DEMO_CLEANUP_KIND=0 make iceberg-demo`.
+See the [user guide](user-guide.md#one-command-demo) for all variables, cleanup
+behavior and a step-by-step kind walkthrough with DuckDB proof.
 
 ## Dependency Notes
 

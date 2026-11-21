@@ -106,3 +106,13 @@ Local build:
 ```
 make docker-build-sql-processor
 ```
+
+## Local Demo Workflow
+
+From the repo root, `make kafsql-demo` boots kind, produces 200 records and
+runs the `psql` checks. It removes the processor release, topic and cluster
+objects on success. `KAFSQL_DEMO_CLEANUP=0 make kafsql-demo` keeps them for
+inspection. The kind cluster stays up either way.
+
+See the [user guide](user-guide.md#one-command-demo) for all demo variables,
+cleanup behavior and a step-by-step kind walkthrough.

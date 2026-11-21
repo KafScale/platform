@@ -52,13 +52,21 @@ sql-processor/
 ├── internal/discovery/   # segment listing and completion checks
 ├── internal/decoder/     # Kafscale segment decoding
 ├── internal/processor/   # query orchestration
-├── internal/server/      # Postgres wire server (planned)
+├── internal/server/      # Postgres wire server + query execution
 ├── deploy/helm/          # Helm chart
 ├── Dockerfile
 └── Makefile
 ```
 
 ## Quick Start (Local)
+
+For a full kind demo from the repo root, run `make kafsql-demo` or follow the
+[pastable walkthrough](user-guide.md#try-it-on-kind). The sample config below
+is a template for your own S3 bucket, not a local demo config. Set your S3
+endpoint, bucket, namespace and etcd endpoints, and supply the S3 keys in
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` before you start the server.
+
+From `addons/processors/sql-processor`:
 
 ```
 make build

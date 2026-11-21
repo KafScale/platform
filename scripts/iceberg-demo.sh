@@ -242,12 +242,14 @@ kind load docker-image "${E2E_CLIENT_IMAGE}" --name "${KAFSCALE_KIND_CLUSTER}"
 kubectl create namespace "${ICEBERG_DEMO_NAMESPACE}" --dry-run=client -o yaml | \
   kubectl apply --validate=false -f -
 
+s3_env_file="$(mktemp)"
+chmod 600 "${s3_env_file}"
+printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\nKAFSCALE_S3_ACCESS_KEY=%s\nKAFSCALE_S3_SECRET_KEY=%s\n' \
+  "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}" > "${s3_env_file}"
 kubectl -n "${ICEBERG_DEMO_NAMESPACE}" create secret generic iceberg-s3-credentials \
-  --from-literal=AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER}" \
-  --from-literal=AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD}" \
-  --from-literal=KAFSCALE_S3_ACCESS_KEY="${MINIO_ROOT_USER}" \
-  --from-literal=KAFSCALE_S3_SECRET_KEY="${MINIO_ROOT_PASSWORD}" \
+  --from-env-file="${s3_env_file}" \
   --dry-run=client -o yaml | kubectl apply --validate=false -f -
+rm -f "${s3_env_file}"
 
 if ! kubectl -n "${ICEBERG_DEMO_NAMESPACE}" get "kafscalecluster/${ICEBERG_DEMO_CLUSTER}" >/dev/null 2>&1; then
   echo "kafscalecluster/${ICEBERG_DEMO_CLUSTER} not found in ${ICEBERG_DEMO_NAMESPACE}; run make demo-platform-bootstrap first" >&2
@@ -412,8 +414,6 @@ if [[ "${ICEBERG_DEMO_CREATE_BUCKET:-0}" == "1" ]]; then
   bucket_cmd=$(cat <<EOF
 set -e
 echo "aws-cli: \$(aws --version 2>&1 || true)"
-export AWS_ACCESS_KEY_ID="${MINIO_ROOT_USER}"
-export AWS_SECRET_ACCESS_KEY="${MINIO_ROOT_PASSWORD}"
 export AWS_DEFAULT_REGION="${MINIO_REGION}"
 export AWS_EC2_METADATA_DISABLED=true
 endpoint="http://minio.${KAFSCALE_DEMO_NAMESPACE}.svc.cluster.local:9000"
@@ -423,7 +423,9 @@ aws s3api --endpoint-url "\${endpoint}" head-bucket --bucket "${ICEBERG_WAREHOUS
 EOF
 )
   kubectl -n "${ICEBERG_DEMO_NAMESPACE}" run iceberg-minio-bucket --restart=Never \
-    --image=amazon/aws-cli:2.15.0 --command -- /bin/sh -c "${bucket_cmd}"
+    --image=amazon/aws-cli:2.15.0 --override-type=strategic \
+    --overrides='{"spec":{"containers":[{"name":"iceberg-minio-bucket","envFrom":[{"secretRef":{"name":"iceberg-s3-credentials"}}]}]}}' \
+    --command -- /bin/sh -c "${bucket_cmd}"
   if ! kubectl -n "${ICEBERG_DEMO_NAMESPACE}" wait --for=jsonpath='{.status.phase}'=Succeeded pod/iceberg-minio-bucket --timeout=90s; then
     kubectl -n "${ICEBERG_DEMO_NAMESPACE}" logs pod/iceberg-minio-bucket --tail=200 || true
     kubectl -n "${ICEBERG_DEMO_NAMESPACE}" describe pod/iceberg-minio-bucket || true
