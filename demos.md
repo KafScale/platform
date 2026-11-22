@@ -1,7 +1,7 @@
 ---
 layout: default
 title: "KafScale Demos: Terminal Walkthroughs"
-description: Short terminal videos that show KafScale install, CLI, schema registry, MCP, day-2 operations and the Iceberg and SQL processors, each following the docs step by step.
+description: Short terminal videos that show KafScale install, CLI, schema registry, MCP, day-2 operations and the Iceberg and SQL processors, each following the docs step by step, plus an interactive failure simulator.
 permalink: /demos/
 ---
 
@@ -87,6 +87,21 @@ limitations under the License.
   <p>Produces 200 records, then psql connects to KAFSQL over the Postgres protocol, lists the topics, reads the last five records and counts the last hour.</p>
   <div class="term"><div class="term-bar" aria-hidden="true"><i></i><i></i><i></i><span>sql: psql, SHOW TOPICS, TAIL, LAST</span></div><video data-demo controls muted loop playsinline preload="none" width="960" height="540" poster="/media/demos/sql/sql-poster.webp" aria-label="Terminal demo: records are produced to a topic and psql queries them through the KAFSQL processor with SHOW TOPICS, TAIL and LAST"><source src="/media/demos/sql/sql.webm" type="video/webm"><source src="/media/demos/sql/sql.mp4" type="video/mp4"></video></div>
   <div class="hero-actions"><a class="button secondary" href="/processors/sql/#try-it-on-kind">Follow along: SQL processor</a></div>
+</section>
+
+<section class="demo" id="simulator">
+  <h2>Try it in your browser</h2>
+  <p>Watch KafScale 2.0 handle broker, etcd and S3 failures in an interactive simulator.</p>
+  <ul class="demo-links">
+    <li><a href="https://monedula.dev/kafka-simulator/playground/?scenario=free&amp;cluster=kafscale-2-3b" target="_blank" rel="noreferrer">Free play</a>: Run your own three-broker cluster, kill or stop brokers, stop etcd or S3, and inspect any component.</li>
+    <li><a href="https://monedula.dev/kafka-simulator/scenarios/kafscale-2-broker-crash/" target="_blank" rel="noreferrer">Broker crash</a>: A killed broker keeps its partition lease until the 10 second TTL runs out, while a graceful stop hands over at once.</li>
+    <li><a href="https://monedula.dev/kafka-simulator/scenarios/kafscale-2-etcd-outage/" target="_blank" rel="noreferrer">etcd outage</a>: Produce, fetch and offset commits get a retriable error while etcd is down, and resume without loss once it is back.</li>
+    <li><a href="https://monedula.dev/kafka-simulator/scenarios/kafscale-2-s3-outage/" target="_blank" rel="noreferrer">S3 outage</a>: A failed segment upload is retried, and the record lands at the same offset once S3 is healthy again.</li>
+    <li><a href="https://monedula.dev/kafka-simulator/scenarios/kafscale-2-lease-handover-fencing/" target="_blank" rel="noreferrer">Lease handover without overwrite</a>: A broker stopped mid-write cannot overwrite the segment the new owner already wrote.</li>
+    <li><a href="https://monedula.dev/kafka-simulator/scenarios/kafscale-2-failed-etcd-write/" target="_blank" rel="noreferrer">Producer timeout that still wrote</a>: A write that timed out can still reach consumers, and the producer retry adds a second copy.</li>
+    <li><a href="https://monedula.dev/kafka-simulator/scenarios/kafscale-2-proxy-cache-expiry/" target="_blank" rel="noreferrer">Proxy with etcd down past the cache TTL</a>: The proxy keeps routing for 60 seconds after etcd stops, then reports not ready until etcd is back.</li>
+  </ul>
+  <p class="demo-note">The simulator is an independent third-party tool by <a href="https://monedula.dev/" target="_blank" rel="noreferrer">monedula.dev</a>. Its timings are simulated.</p>
 </section>
 
 <script src="/assets/js/demos.js" defer></script>

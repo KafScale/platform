@@ -1289,3 +1289,18 @@ pre.highlight {
   margin: 0.25rem 0;
   color: var(--muted);
 }
+
+.demo-links {
+  margin: 0.75rem 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+}
+
+.demo-links li {
+  margin: 0.4rem 0;
+}
+
+.demo .demo-note {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}

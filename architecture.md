@@ -50,6 +50,8 @@ The architecture diagrams and data formats live in `kafscale-spec.md`.
 3. Broker reads from cache or fetches from S3 using the index file.
 4. Broker returns Kafka record batches to the consumer.
 
+To watch the write path, lease handover and broker, etcd and S3 failures play out step by step, see [Try it in your browser](/demos/#simulator).
+
 ## Caching Strategy
 
 Kafscale uses a layered cache:
