@@ -23,3 +23,4 @@ These notes match the release documents in the KafScale repository.
 - [v1.6.2](/releases/v1.6.2/)
 - [v1.6.3](/releases/v1.6.3/)
 - [v2.0.0](/releases/v2.0.0/)
+- [v2.0.1](/releases/v2.0.1/)

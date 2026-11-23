@@ -34,7 +34,7 @@ KafScale provides LFS client SDKs in four languages. Each SDK handles envelope e
 The Go SDK lives in `pkg/lfs/` and is used internally by the LFS proxy, console, and processors.
 
 ```go
-import "github.com/KafScale/platform/pkg/lfs"
+import "github.com/KafScale/platform/v2/pkg/lfs"
 
 // Produce a large file through the LFS proxy HTTP API.
 producer := lfs.NewProducer("http://localhost:8080")

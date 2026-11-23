@@ -105,7 +105,7 @@ Commercial support and an enterprise version of KafScale are available from Scal
 - mTLS authentication: https://kafscale.io/kafka-authentication/
 - Protocol compatibility: https://kafscale.io/protocol/
 - FAQ: https://kafscale.io/faq/
-- Release notes: https://kafscale.io/releases/
+- Release notes: https://kafscale.io/releases/ (latest: v2.0.1, https://kafscale.io/releases/v2.0.1/)
 
 ## Author
 

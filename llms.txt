@@ -24,7 +24,7 @@ Full text for LLMs: https://kafscale.io/llms-full.txt
 - [Migrate from WarpStream](https://kafscale.io/migrate-from-warpstream/): Move topics from WarpStream with a kaf-mirror dual run and cutover, and what KafScale does not support
 - [Bento with KafScale](https://kafscale.io/bento/): Run Bento pipelines against KafScale with the kafka_franz input and output
 - [Project overview](https://kafscale.io/overview/): What KafScale optimizes for, and what it leaves out
-- [Release notes](https://kafscale.io/releases/): Changes, upgrade notes and fixes for each release
+- [Release notes](https://kafscale.io/releases/): Changes, upgrade notes and fixes for each release. Latest: [v2.0.1](https://kafscale.io/releases/v2.0.1/)
 
 ## Related projects
 
