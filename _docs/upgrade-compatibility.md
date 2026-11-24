@@ -27,20 +27,157 @@ limitations under the License.
 
 # Upgrade and compatibility guide
 
-This is the canonical guide for the unreleased changes after published v1.6.3
-(`092291b78b8abf1e5bde6cafd92550e9726b46e0`). No release version is assigned here.
-The release recommendation remains withdrawn pending the gates in
-[issue #298](https://github.com/KafScale/platform/issues/298).
+This is the canonical guide for upgrading from published v1.6.3
+(`092291b78b8abf1e5bde6cafd92550e9726b46e0`) to v2.0.1. It applies to v2.0.0
+as well, except for the Go module path described in [Go types](#go-types).
 
 ## Compatibility has separate boundaries
 
 | Surface | Scope and limits |
 | --- | --- |
-| Go source | Compare exported root-module APIs against published v1.6.3, including interface implementations and comparable types. Unkeyed struct literals are not covered; see [Use keyed struct literals](#use-keyed-struct-literals). This does not compare nested processor modules, binary ABI or all runtime semantics. |
+| Go source | The module path is `github.com/KafScale/platform/v2`. Compare exported root-module symbols against published v1.6.3 after rewriting that checkout onto `/v2`, including interface implementations and comparable types. Unkeyed struct literals are not covered; see [Use keyed struct literals](#use-keyed-struct-literals). This does not compare nested processor modules, binary ABI or all runtime semantics. |
 | Kafka wire | Brokers and proxies advertise the API versions they implement. Focused classic consumer-group, Produce/Fetch and native client tests cover those paths; they do not establish every Kafka API or every client/version. Legacy MessageSets are rejected; magic-2 batches are required. |
 | Schema Registry REST | The built-in service implements the subset documented in [Schema Registry](/schema-registry/), with Avro, Protobuf and JSON Schema. Its compatibility modes describe schema evolution, separately from Go or Kafka compatibility. The reported matrix used Confluent 8.4.0 Java serializers, confluent-kafka-python 2.16.1 and franz-go `pkg/sr` 1.8.0. It is not a claim of full Confluent product parity. |
-| Kubernetes CRDs | Apply the updated CRD before using new fields. Schema validation and Helm rendering checks do not prove a rolling upgrade on every Kubernetes/operator version. |
+| Kubernetes CRDs | `kafscale.io/v1` is the served and stored version. `kafscale.io/v1alpha1` is still served but deprecated; see [CRD API version v1](#crd-api-version-v1). Apply the updated CRD before using new fields. Schema validation and Helm rendering checks do not prove a rolling upgrade on every Kubernetes/operator version. |
 | Persisted data | Existing offset/group metadata and LFS envelopes remain readable in the covered tests. Topic recreation introduces generation-specific S3 prefixes; registry hash/descriptor aliases preserve covered schema IDs. Back up etcd and S3 together. Forward readability does not imply that an older binary can interpret new data on rollback. |
+
+## CRD API version v1
+
+`KafscaleCluster` and `KafscaleTopic` now use `apiVersion: kafscale.io/v1`.
+The v1 schema is identical to v1alpha1, so no conversion webhook is needed
+(conversion strategy `None`).
+
+- Both versions are served. v1 is the storage version.
+- v1alpha1 is deprecated. Requests that use it still work, and the API server
+  returns a warning such as `Warning: kafscale.io/v1alpha1 KafscaleCluster is deprecated; use kafscale.io/v1 KafscaleCluster. v1alpha1 will be removed in a future release.`
+- v1alpha1 will be removed in a future release. No removal date or version is
+  set.
+- The operator uses v1. The console, MCP server and CLI do not read the CRDs.
+- Existing v1alpha1 objects keep working. You can read every object as either
+  version: `kubectl get kafscaleclusters.v1.kafscale.io` or
+  `kubectl get kafscaleclusters.v1alpha1.kafscale.io`.
+- An object stored as v1alpha1 is rewritten as v1 the next time it is written,
+  for example by `kubectl apply` or an operator status update.
+
+### Upgrade steps
+
+Helm does not upgrade CRDs from `crds/`, so apply them first, then upgrade the
+chart. Run these from a checkout of the release you are upgrading to:
+
+```sh
+kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
+kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io crd/kafscaletopics.kafscale.io
+helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale --reset-then-reuse-values
+```
+
+`--reset-then-reuse-values` needs Helm 3.14 or later. It keeps the values you
+set at install and takes the chart defaults for keys that are new in 2.0, such
+as `schemaRegistry`. Do not use `--reuse-values` for this upgrade. It reuses
+only the 1.x values, and the upgrade fails with
+`nil pointer evaluating interface {}.enabled`. With Helm older than 3.14, save
+your values and pass them with `-f`:
+
+```sh
+umask 077
+helm get values kafscale --namespace kafscale -o yaml > kafscale-values.yaml
+helm upgrade --install kafscale deploy/helm/kafscale --namespace kafscale -f kafscale-values.yaml
+```
+
+The saved file can hold credentials you set as values. Delete it after the
+upgrade.
+
+`--force-conflicts` is required when Helm installed the CRDs, which is the
+default. Without it the apply fails with `conflict with "helm": .spec.versions`.
+
+Then change `apiVersion: kafscale.io/v1alpha1` to `apiVersion: kafscale.io/v1`
+in your manifests, Helm values and GitOps sources. Nothing else in the manifest
+changes.
+
+### Rewrite stored objects
+
+To move every stored object to v1 now instead of on its next write, replace
+each object with its current content, then record that only v1 is stored:
+
+```sh
+kubectl get kafscaleclusters.kafscale.io --all-namespaces -o json | kubectl replace -f -
+kubectl get kafscaletopics.kafscale.io --all-namespaces -o json | kubectl replace -f -
+kubectl patch crd kafscaleclusters.kafscale.io --subresource=status --type=merge -p '{"status":{"storedVersions":["v1"]}}'
+kubectl patch crd kafscaletopics.kafscale.io --subresource=status --type=merge -p '{"status":{"storedVersions":["v1"]}}'
+```
+
+Run the two `kubectl patch` commands only after both `kubectl replace` commands
+succeed. A `kubectl replace` that fails with a conflict means the operator
+updated the object at the same time; run it again. The future release that
+removes v1alpha1 requires this step first.
+
+### Go types
+
+Import `github.com/KafScale/platform/v2/api/v1` in new code:
+
+```go
+import kafscalev1 "github.com/KafScale/platform/v2/api/v1"
+```
+
+The module path is `github.com/KafScale/platform/v2`. v2.0.1 is the first
+release that Go modules can fetch:
+
+```sh
+go get github.com/KafScale/platform/v2@v2.0.1
+```
+
+Change every import of `github.com/KafScale/platform/...` to
+`github.com/KafScale/platform/v2/...` in the same change.
+`go get github.com/KafScale/platform@v2.0.0` fails because that tag's `go.mod`
+has no `/v2` suffix. The v2.0.0 tag also cannot be fetched as
+`github.com/KafScale/platform/v2@v2.0.0`. Later 2.x releases use this path.
+v1.6.3 stays
+`github.com/KafScale/platform`. Do not tag v1.7.0 on a commit whose module
+path is `/v2`.
+
+The Iceberg processor module is
+`github.com/KafScale/platform/v2/addons/processors/iceberg-processor`. It
+requires `github.com/KafScale/platform/v2` and replaces that module with the
+repository root. Standalone image builds require an explicit
+`--build-arg PLATFORM_VERSION=<published /v2 version>`. The build validates
+that published artifact, drops the local replace, and updates the required
+version. There is no default published version. `v2.0.0` is invalid; use
+`v2.0.1` or later.
+Missing or unavailable versions fail with an actionable error.
+`USE_LOCAL_PLATFORM=1` keeps the replace and builds from the checkout without
+requiring `PLATFORM_VERSION`. From the repository root:
+
+```sh
+docker build -f addons/processors/iceberg-processor/Dockerfile \
+  --build-arg USE_LOCAL_PLATFORM=1 \
+  --build-arg MODULE_DIR=addons/processors/iceberg-processor \
+  -t iceberg-processor:dev .
+```
+
+The skeleton processor module is
+`github.com/KafScale/platform/v2/addons/processors/skeleton`. The SQL processor
+module is `github.com/kafscale/platform/v2/addons/processors/sql-processor`.
+
+The `api/v1` types are aliases of the `api/v1alpha1` types, so they are the
+same Go types and code written against
+`github.com/KafScale/platform/v2/api/v1alpha1` keeps compiling.
+`api/v1alpha1` is deprecated and will be removed together with the v1alpha1
+CRD version.
+
+The packages differ only in the version they register. `kafscalev1.AddToScheme`
+maps the types to `kafscale.io/v1`, and `v1alpha1.AddToScheme` maps them to
+`kafscale.io/v1alpha1`. Add only one of them to a scheme. With both, each type
+maps to two kinds and controller-runtime clients return an error instead of
+picking one.
+
+### Rollback
+
+Rolling the operator back to a release that only knows v1alpha1 keeps working
+while the new CRDs are installed, because v1alpha1 is still served. Once objects
+are stored as v1, the old v1alpha1-only CRDs from 1.x cannot be reapplied. This
+happens within seconds of the CRD apply, before the chart upgrade, because the
+running 1.x operator updates object status. The
+API server refuses to remove v1 from the CRD while `status.storedVersions` lists
+it. A chart rollback must keep the 2.0 CRDs.
 
 ## Go API migration
 
@@ -110,8 +247,8 @@ compile against both versions.
 | --- | --- |
 | `metadata.ConsumerOffset` | `Metadata` |
 | `metadata.EtcdStoreConfig` | `StorageNamespace` |
-| `v1alpha1.ClusterConfigSpec` | `OffsetsRetentionMinutes` (first field), `ResponseWriteTimeoutMs` |
-| `v1alpha1.KafscaleClusterSpec` | `Security` (first field) |
+| `v1.ClusterConfigSpec`, `v1alpha1.ClusterConfigSpec` | `OffsetsRetentionMinutes` (first field), `ResponseWriteTimeoutMs` |
+| `v1.KafscaleClusterSpec`, `v1alpha1.KafscaleClusterSpec` | `Security` (first field) |
 
 ```go
 offset := metadata.ConsumerOffset{Group: "orders", Topic: "events", Partition: 0, Offset: 42}
@@ -272,8 +409,10 @@ go test -race ./pkg/broker ./pkg/metadata ./cmd/broker ./cmd/proxy
 ```
 
 The API script uses pinned `golang.org/x/exp/cmd/apidiff`, checks all exported
-root-module packages, and compiles an external fixture with the exact published
-Store method set plus comparable/map-key/unkeyed `CoordinatorConfig` usage.
+root-module packages against v1.6.3 after rewriting that checkout onto
+`github.com/KafScale/platform/v2`, and compiles an external fixture with the
+exact published Store method set plus comparable/map-key/unkeyed
+`CoordinatorConfig` usage.
 Runtime tests exercise the legacy constructor, group-offset fallback, optional
 capability dispatch, error propagation and broker OffsetFetch through an old
 Store implementation. Lease and retention tests exercise the new constructor.
