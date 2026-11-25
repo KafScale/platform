@@ -153,12 +153,13 @@ UnsupportedVersionException: The node does not support INIT_PRODUCER_ID ...
 ```
 
 **Cause**:
-Flink Kafka sink uses idempotent/transactional producer features for stronger guarantees. The current KafScale broker
-does not support `INIT_PRODUCER_ID`, so the producer fails.
+Older KafScale brokers or proxies do not support `INIT_PRODUCER_ID`. Upgrade the
+whole stack to use nontransactional idempotence. Flink exactly-once delivery still
+requires unsupported transactions; use `at-least-once` or `none`.
 
 **Solutions**:
 
-1. **Use delivery guarantee `none` and disable idempotence** (recommended for demos):
+1. **For older stacks, use delivery guarantee `none` and disable idempotence**:
    - Set `KAFSCALE_SINK_DELIVERY_GUARANTEE=none` and `KAFSCALE_SINK_ENABLE_IDEMPOTENCE=false`.
 
 2. **Disable the sink entirely**:

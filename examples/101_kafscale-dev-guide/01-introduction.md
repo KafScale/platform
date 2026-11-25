@@ -123,7 +123,7 @@ KafScale is compatible with standard Kafka clients, but stricter schema validati
 
 **Recommendations:**
 - **Java/Spring Boot**: Use Spring Boot 3.1.x (Kafka client 3.4.x) or ensure your client version is < 3.5.0 if you encounter protocol errors.
-- **Idempotence**: Always set `enable.idempotence=false` in your producers. KafScale does not support the `InitProducerId` API or sequence number validation handling required for idempotent producers.
+- **Idempotence**: Default nontransactional idempotent producers are supported with `acks=all`. Leave `transactional.id` unset; transactions remain unsupported.
 - **Transactions**: Config `isolation.level=read_uncommitted` (default) as transactions are not supported.
 
 **Not supported** (by design):
@@ -142,7 +142,7 @@ Before moving to the next chapter, ensure you can answer these questions:
 - [ ] When should you use KafScale vs traditional Kafka?
 - [ ] What are the key limitations? (Hint: transactions, compaction, latency)
 - [ ] What does "Kafka protocol compatible" mean for your existing clients?
-- [ ] What configuration changes are required for producers? (Hint: `enable.idempotence`)
+- [ ] What configuration changes are required for producers? (Hint: transactions remain disabled)
 
 If you're unsure about any of these, review the relevant sections above before continuing.
 

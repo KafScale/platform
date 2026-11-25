@@ -113,6 +113,12 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		h.logger.Debug("received request", "api_version", header.APIVersion, "correlation", header.CorrelationID, "client_id", header.ClientID)
 	}
 	principal := principalFromContext(ctx, header)
+	if resp := protocol.UnsupportedTransactionResponse(req); resp != nil {
+		if produce, ok := req.(*kmsg.ProduceRequest); ok && produce.Acks == 0 {
+			return nil, nil
+		}
+		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+	}
 	switch req.(type) {
 	case *kmsg.ApiVersionsRequest:
 		errorCode := int16(protocol.NONE)
@@ -257,6 +263,8 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			h.logger.Debug("metadata response", "topics", topicSummaries, "brokers", brokerAddrs)
 		}
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
+	case *kmsg.InitProducerIDRequest:
+		return h.handleInitProducerID(ctx, header, req.(*kmsg.InitProducerIDRequest))
 	case *kmsg.ProduceRequest:
 		return h.handleProduce(ctx, header, req.(*kmsg.ProduceRequest))
 	case *kmsg.FetchRequest:
@@ -1247,7 +1255,25 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				partitionResponses = append(partitionResponses, p)
 				continue
 			}
-			result, err := plog.AppendBatches(ctx, batches, req.Acks != 0 && h.flushOnAck)
+			var result *storage.AppendResult
+			duplicate := false
+			idempotent := false
+			for _, batch := range batches {
+				if int64(binary.BigEndian.Uint64(batch.Bytes[43:51])) >= 0 {
+					idempotent = true
+				}
+			}
+			if idempotent && req.Acks != -1 {
+				err = errIdempotentAcks
+			} else if idempotent {
+				idempotentResult, appendErr := plog.AppendIdempotentBatches(ctx, batches)
+				err = appendErr
+				if idempotentResult != nil {
+					result, duplicate = &idempotentResult.AppendResult, idempotentResult.Duplicate
+				}
+			} else {
+				result, err = plog.AppendBatches(ctx, batches, req.Acks != 0 && h.flushOnAck)
+			}
 			if err != nil {
 				if errors.Is(err, storage.ErrLogFenced) {
 					h.dropConflictingPartitionLog(topic.Topic, part.Partition, plog)
@@ -1255,7 +1281,15 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				p := kmsg.NewProduceResponseTopicPartition()
 				p.Partition = part.Partition
 				p.ErrorCode = protocol.UNKNOWN_SERVER_ERROR
-				if errors.Is(err, storage.ErrAppendOutcomeUnknown) {
+				if errors.Is(err, storage.ErrOutOfOrderSequence) {
+					p.ErrorCode = protocol.OUT_OF_ORDER_SEQUENCE_NUMBER
+				} else if errors.Is(err, storage.ErrInvalidProducerEpoch) {
+					p.ErrorCode = protocol.INVALID_PRODUCER_EPOCH
+				} else if errors.Is(err, storage.ErrInvalidProducerBatch) {
+					p.ErrorCode = protocol.INVALID_REQUEST
+				} else if errors.Is(err, errIdempotentAcks) {
+					p.ErrorCode = protocol.INVALID_REQUIRED_ACKS
+				} else if errors.Is(err, storage.ErrAppendOutcomeUnknown) {
 					p.ErrorCode = protocol.REQUEST_TIMED_OUT
 				} else if errors.Is(err, metadata.ErrNotOwner) {
 					p.ErrorCode = protocol.NOT_LEADER_OR_FOLLOWER
@@ -1278,8 +1312,10 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			p.LogAppendTime = now
 			p.LogStartOffset = 0
 			partitionResponses = append(partitionResponses, p)
-			for _, batch := range batches {
-				producedMessages += int64(batch.MessageCount)
+			if !duplicate {
+				for _, batch := range batches {
+					producedMessages += int64(batch.MessageCount)
+				}
 			}
 			if h.traceKafka {
 				h.logger.Debug("produce append success", "topic", topic.Topic, "partition", part.Partition, "base_offset", result.BaseOffset, "last_offset", result.LastOffset)
@@ -1331,6 +1367,13 @@ func validateProduceRecordSet(records []byte) ([]storage.RecordBatch, int16) {
 		// Kafka's CRC32C covers attributes through the end of this batch.
 		if crc32.Checksum(records[21:int(length)], produceCRC32CTable) != binary.BigEndian.Uint32(records[17:21]) {
 			return nil, protocol.CORRUPT_MESSAGE
+		}
+		if binary.BigEndian.Uint16(records[21:23])&0x30 != 0 {
+			// Transactional batches and control/commit markers are unsupported.
+			return nil, protocol.UNSUPPORTED_VERSION
+		}
+		if int64(binary.BigEndian.Uint64(records[43:51])) < -1 {
+			return nil, protocol.INVALID_REQUEST
 		}
 		batch, err := storage.NewRecordBatchFromBytes(records[:int(length)])
 		if err != nil {
@@ -2114,6 +2157,10 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				continue
 			}
 			nextOffset, offsetErr := h.store.NextOffset(ctx, topicName, part.Partition)
+			durableOffset := nextOffset
+			if offsetErr != nil {
+				durableOffset = -1
+			}
 			// In flush-disabled / acks=0 mode (KAFSCALE_PRODUCE_SYNC_FLUSH=false)
 			// no flush fires for the buffered tail, so the metadata store's
 			// high-watermark (nextOffset) lags the records already acknowledged to
@@ -2125,7 +2172,7 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			// broker restart (the buffer is in-memory; restore is segment-only). In
 			// the default flushOnAck=true path every acknowledged produce is already
 			// flushed, the buffer is empty at fetch time, and this is a no-op.
-			if !h.flushOnAck && offsetErr == nil {
+			if req.IsolationLevel == 0 && !h.flushOnAck && offsetErr == nil {
 				if buffered := plog.BufferedHighWatermark(); buffered > nextOffset {
 					nextOffset = buffered
 				}
@@ -2151,11 +2198,16 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				}
 			}
 			var recordSet []byte
+			fetchEndOffset := nextOffset
+			if req.IsolationLevel == 1 && offsetErr == nil {
+				// A position in the volatile tail is valid but not yet readable.
+				fetchEndOffset = max(nextOffset, plog.BufferedHighWatermark())
+			}
 			if offsetErr == nil {
 				switch {
-				case part.FetchOffset > nextOffset:
+				case part.FetchOffset > fetchEndOffset:
 					errorCode = protocol.OFFSET_OUT_OF_RANGE
-				case part.FetchOffset == nextOffset:
+				case part.FetchOffset >= nextOffset:
 					recordSet = nil
 				default:
 					recordSet, err = plog.Read(ctx, part.FetchOffset, part.PartitionMaxBytes)
@@ -2174,6 +2226,9 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				}
 			}
 
+			if req.IsolationLevel == 1 && errorCode == protocol.NONE {
+				recordSet = limitFetchToStableOffset(recordSet, durableOffset)
+			}
 			if err := plog.CheckOwnership(); err != nil {
 				errorCode = protocol.NOT_LEADER_OR_FOLLOWER
 				recordSet = nil
@@ -2193,7 +2248,10 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			p.Partition = part.Partition
 			p.ErrorCode = errorCode
 			p.HighWatermark = highWatermark
-			p.LastStableOffset = highWatermark
+			p.LastStableOffset = durableOffset
+			if req.IsolationLevel == 1 {
+				p.AbortedTransactions = make([]kmsg.FetchResponseTopicPartitionAbortedTransaction, 0)
+			}
 			p.LogStartOffset = 0
 			p.PreferredReadReplica = -1
 			if recordSet == nil {
@@ -3131,6 +3189,7 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyApiVersion, minVersion: 0, maxVersion: protocol.ApiVersionsMaxVersion},
 		{key: protocol.APIKeyMetadata, minVersion: 0, maxVersion: 12},
 		{key: protocol.APIKeyProduce, minVersion: 0, maxVersion: 9},
+		{key: protocol.APIKeyInitProducerID, minVersion: 0, maxVersion: 4},
 		// librdkafka probes Fetch v4 before enabling magic-2 record batches.
 		{key: protocol.APIKeyFetch, minVersion: 4, maxVersion: 13},
 		// Classic group feature probes require the original API versions too.
@@ -3155,25 +3214,13 @@ func generateApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyDeleteTopics, minVersion: 0, maxVersion: 2},
 		{key: protocol.APIKeyDeleteGroups, minVersion: 0, maxVersion: 2},
 	}
-	unsupported := []int16{
-		4, 5, 6, 7,
-		21, 22,
-		24, 25, 26,
-	}
 
-	entries := make([]kmsg.ApiVersionsResponseApiKey, 0, len(supported)+len(unsupported))
+	entries := make([]kmsg.ApiVersionsResponseApiKey, 0, len(supported))
 	for _, entry := range supported {
 		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
 			ApiKey:     entry.key,
 			MinVersion: entry.minVersion,
 			MaxVersion: entry.maxVersion,
-		})
-	}
-	for _, key := range unsupported {
-		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
-			ApiKey:     key,
-			MinVersion: -1,
-			MaxVersion: -1,
 		})
 	}
 	return entries

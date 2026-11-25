@@ -124,7 +124,11 @@ func TestFetchOffsetReadFailuresDoNotResetOffsets(t *testing.T) {
 					if offset > 3 {
 						want = protocol.OFFSET_OUT_OF_RANGE
 					}
-					if part.ErrorCode != want || part.HighWatermark != 3 || part.LastStableOffset != 3 {
+					stable := int64(3)
+					if !flush {
+						stable = 0
+					} // buffered data is visible only to uncommitted reads
+					if part.ErrorCode != want || part.HighWatermark != 3 || part.LastStableOffset != stable {
 						t.Fatalf("recovered offset=%d: %+v", offset, part)
 					}
 					if offset < 3 {

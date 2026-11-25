@@ -132,6 +132,17 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 }
 
 func TestKafkaCliProduce(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		keyed, idempotent bool
+	}{
+		{"Default", false, true}, {"Keyed", true, true}, {"NonIdempotent", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testKafkaCliProduce(t, tc.keyed, tc.idempotent) })
+	}
+}
+
+func testKafkaCliProduce(t *testing.T, keyed, idempotent bool) {
 	harness := newKafkaCliHarness(t)
 	ctx := harness.ctx
 	image := harness.image
@@ -145,6 +156,9 @@ func TestKafkaCliProduce(t *testing.T) {
 	quoted := make([]string, messageCount)
 	for i := 0; i < messageCount; i++ {
 		msg := fmt.Sprintf("cli-%08x-%02d", rng.Uint32(), i)
+		if keyed {
+			msg = fmt.Sprintf("key-%02d,%s", i, msg)
+		}
 		messages[i] = msg
 		quoted[i] = strconv.Quote(msg)
 	}
@@ -153,7 +167,13 @@ func TestKafkaCliProduce(t *testing.T) {
 	if runtime.GOOS == "linux" {
 		args = append(args, "--network=host")
 	}
-	produceScript := fmt.Sprintf("printf '%%s\\n' %s | %s --bootstrap-server %s --topic %s --producer-property enable.idempotence=false", strings.Join(quoted, " "), producerCmd, bootstrap, topic)
+	produceScript := fmt.Sprintf("printf '%%s\\n' %s | %s --bootstrap-server %s --topic %s", strings.Join(quoted, " "), producerCmd, bootstrap, topic)
+	if !idempotent {
+		produceScript += " --producer-property enable.idempotence=false"
+	}
+	if keyed {
+		produceScript += " --property parse.key=true --property key.separator=,"
+	}
 	args = append(args, image, "sh", "-c", produceScript)
 	t.Log("kafka cli: running producer")
 	roundTripStart := time.Now()
@@ -165,6 +185,9 @@ func TestKafkaCliProduce(t *testing.T) {
 		consumeArgs = append(consumeArgs, "--network=host")
 	}
 	consumeScript := fmt.Sprintf("%s --bootstrap-server %s --topic %s --from-beginning --max-messages %d --consumer-property max.partition.fetch.bytes=1", consumerCmd, bootstrap, topic, messageCount)
+	if keyed {
+		consumeScript += " --property print.key=true --property key.separator=,"
+	}
 	consumeArgs = append(consumeArgs, image, "sh", "-c", consumeScript)
 	t.Log("kafka cli: running consumer")
 	consumed := runCmdGetOutput(t, ctx, "docker", consumeArgs...)

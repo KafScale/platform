@@ -43,12 +43,12 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-      acks: 0
+      acks: all
       retries: 3
       properties:
         linger.ms: 10
         batch.size: 16384
-        enable.idempotence: false # false for KafScale
+        enable.idempotence: true # nontransactional retry deduplication
     consumer:
       group-id: kafscale-demo-group-${random.uuid}
       auto-offset-reset: earliest

@@ -227,7 +227,7 @@ See [application.yml](src/main/resources/application.yml) for complete configura
 **Producer:**
 - `acks: 0` - No acknowledgment (⚠️ weak delivery guarantees, may lose messages)
 - `retries: 3`
-- `enable.idempotence: false` - Disabled for KafScale compatibility
+- `enable.idempotence: true` with `acks: all` - Nontransactional retry deduplication
 - `key-serializer: StringSerializer`
 - `value-serializer: JsonSerializer`
 
@@ -312,7 +312,7 @@ See `CONFIGURATION.md` (if available) or the [Running Your Application](../../ex
 
 ### Production Readiness Gaps
 
-1. **Weak delivery guarantees**: Producer uses `acks=0`, meaning messages may be lost without acknowledgment. For production, set `acks=all`.
+1. **Delivery guarantees**: Producer uses `acks=all` with nontransactional idempotence. Application resends after a producer restart can still duplicate records; transactional exactly-once delivery is unsupported.
 
 2. **No offset persistence**: Consumer group ID uses random UUID, so offset tracking resets on every restart. Orders are re-consumed from `earliest`.
    - **Impact**: No resume capability, potential duplicate processing
@@ -344,7 +344,7 @@ For dual connectivity, configure multiple advertised listeners in KafScale.
 ### Reliability & Resilience
 - **DLQ implementation**: Add Dead Letter Queue topic with `@RetryableTopic` and `@DltHandler`
 - **Circuit breaker**: Integrate Resilience4j for producer/consumer fault tolerance
-- **Exactly-once semantics**: Enable idempotence and transactional producers
+- **Retry deduplication**: Nontransactional idempotence is supported; transactional exactly-once delivery remains unsupported
 
 ### Data Management
 - **Database persistence**: Replace in-memory list with JPA/Hibernate + PostgreSQL

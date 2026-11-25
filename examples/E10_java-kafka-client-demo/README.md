@@ -57,8 +57,8 @@ CLI args take precedence over environment variables:
 
 ### Producer Settings
 - `--produce-count=...` (env: `KAFSCALE_PRODUCE_COUNT`, default: `25`)
-- `--acks=...` (env: `KAFSCALE_ACKS`, default: `0`)
-- `--idempotence=true|false` (env: `KAFSCALE_ENABLE_IDEMPOTENCE`, default: `false`)
+- `--acks=...` (env: `KAFSCALE_ACKS`, default: `all`)
+- `--idempotence=true|false` (env: `KAFSCALE_ENABLE_IDEMPOTENCE`, default: `true`)
 - `--retries=...` (env: `KAFSCALE_RETRIES`, default: `3`)
 
 ### Consumer Settings
@@ -116,7 +116,7 @@ When the demo finishes or times out, you'll see consumer shutdown logs including
 
 ## Limitations & Considerations
 
-- **Weak delivery guarantees**: Producer defaults to `acks=0` and idempotence disabled. For production use, set `--acks=all --idempotence=true`.
+- **Delivery guarantees**: Producer defaults to `acks=all` with nontransactional idempotence. Transactions remain unsupported.
 - **No offset persistence**: Consumer uses a random group ID by default. Provide a fixed `--group-id` to persist offsets across runs.
 - **Message mismatch**: By default, 25 messages are produced but only 5 are consumed. Adjust `--consume-count=25` to read all messages.
 - **No security**: TLS/SASL authentication not demonstrated.
@@ -135,7 +135,6 @@ java -jar target/java-kafka-client-demo-1.0-SNAPSHOT.jar --bootstrap=127.0.0.1:3
 ## Next Level Extensions
 
 - **Config file support**: Replace simple CLI parsing with a proper library (e.g., JCommander, picocli)
-- **Production defaults**: Switch to `acks=all` with idempotence enabled by default
 - **Schema evolution**: Add JSON/Avro/Protobuf serializers with Schema Registry integration
 - **Offset management**: Demonstrate manual offset commits and consumer group coordination
 - **Monitoring**: Add metrics collection (JMX, Micrometer) and observability

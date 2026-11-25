@@ -16,6 +16,9 @@
 package protocol
 
 const (
+	OUT_OF_ORDER_SEQUENCE_NUMBER int16 = 45
+	INVALID_PRODUCER_EPOCH       int16 = 47
+	INVALID_REQUIRED_ACKS        int16 = 21
 	NONE                         int16 = 0
 	OFFSET_OUT_OF_RANGE          int16 = 1
 	CORRUPT_MESSAGE              int16 = 2

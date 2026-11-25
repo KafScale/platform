@@ -258,8 +258,8 @@ public class SimpleDemo {
             int produceCount = parseInt(envOrArg(args, "--produce-count=", "KAFSCALE_PRODUCE_COUNT", "25"), 25);
             int consumeCount = parseInt(envOrArg(args, "--consume-count=", "KAFSCALE_CONSUME_COUNT", "5"), 5);
             long consumeTimeout = parseLong(envOrArg(args, "--consume-timeout-ms=", "KAFSCALE_CONSUME_TIMEOUT_MS", "10000"), 10000);
-            String acks = envOrArg(args, "--acks=", "KAFSCALE_ACKS", "0");
-            boolean idempotence = Boolean.parseBoolean(envOrArg(args, "--idempotence=", "KAFSCALE_ENABLE_IDEMPOTENCE", "false"));
+            String acks = envOrArg(args, "--acks=", "KAFSCALE_ACKS", "all");
+            boolean idempotence = Boolean.parseBoolean(envOrArg(args, "--idempotence=", "KAFSCALE_ENABLE_IDEMPOTENCE", "true"));
             int retries = parseInt(envOrArg(args, "--retries=", "KAFSCALE_RETRIES", "3"), 3);
             int timeoutMs = parseInt(envOrArg(args, "--timeout-ms=", "KAFSCALE_TIMEOUT_MS", "2000"), 2000);
             String groupId = envOrArg(args, "--group-id=", "KAFSCALE_GROUP_ID",

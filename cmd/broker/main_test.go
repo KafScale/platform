@@ -721,8 +721,9 @@ func TestHandleListOffsets(t *testing.T) {
 			if tc.version >= 2 {
 				req.IsolationLevel = 1
 			}
-			header := &protocol.RequestHeader{CorrelationID: 55, APIVersion: tc.version}
-			respBytes, err := handler.handleListOffsets(context.Background(), header, req)
+			req.Version = tc.version
+			header := &protocol.RequestHeader{APIKey: protocol.APIKeyListOffsets, CorrelationID: 55, APIVersion: tc.version}
+			respBytes, err := handler.Handle(context.Background(), header, req)
 			if err != nil {
 				t.Fatalf("handleListOffsets: %v", err)
 			}
@@ -731,6 +732,9 @@ func TestHandleListOffsets(t *testing.T) {
 				t.Fatalf("unexpected list offsets response: %#v", resp)
 			}
 			part := resp.Topics[0].Partitions[0]
+			if part.ErrorCode != protocol.NONE {
+				t.Fatalf("list offsets error: %+v", part)
+			}
 			if tc.version == 0 {
 				if len(part.OldStyleOffsets) != 1 || part.OldStyleOffsets[0] != tc.expected {
 					t.Fatalf("expected old style offset %d got %#v", tc.expected, part.OldStyleOffsets)
@@ -1014,6 +1018,9 @@ func encodeJoinMetadata(topics []string) []byte {
 func testBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32) []byte {
 	data := make([]byte, 70)
 	data[16] = 2 // Kafka record-batch magic.
+	for i := 43; i < 57; i++ {
+		data[i] = 0xff
+	} // non-idempotent producer
 	binary.BigEndian.PutUint32(data[8:12], uint32(len(data)-12))
 	binary.BigEndian.PutUint64(data[0:8], uint64(baseOffset))
 	binary.BigEndian.PutUint32(data[23:27], uint32(lastOffsetDelta))

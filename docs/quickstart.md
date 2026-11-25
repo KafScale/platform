@@ -244,7 +244,7 @@ Port-forward to `svc/<cluster>-broker` only works when `spec.brokers.replicas`
 is `1` and `spec.brokers.advertisedHost` is set to an address the client can
 reach, for example `127.0.0.1`.
 
-Note: Kafka clients that default to idempotent producers or transactions must disable them explicitly.
+Default nontransactional idempotent producers are supported. Leave `transactional.id` unset and use `acks=all`; transactions remain unsupported. Both isolation levels are supported for nontransactional records. Upgrade all brokers and proxies before enabling idempotence on older deployments.
 
 Service names for a `KafscaleCluster` named `<cluster>` in namespace
 `<namespace>` are documented in [Service names](operations.md#service-names).
