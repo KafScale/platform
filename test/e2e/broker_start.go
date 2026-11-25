@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,12 +93,16 @@ func startBrokerProcess(t *testing.T, ctx context.Context, addresses brokerAddre
 	if parseBoolEnv("KAFSCALE_E2E_DEBUG") {
 		writer = io.MultiWriter(writer, os.Stdout)
 	}
+	brokerEnv := append(os.Environ(), env...)
+	brokerID := fixtureBrokerID(brokerEnv)
 	factory := func(addresses brokerAddresses) *exec.Cmd {
 		cmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
 		configureProcessGroup(cmd)
 		// Cancellation must also stop the broker spawned by go run.
 		cmd.Cancel = func() error { return signalProcessGroup(cmd, os.Kill) }
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append([]string(nil), brokerEnv...)
+		// Readiness consumes the successful metrics bind signal, logged at info.
+		cmd.Env = upsertEnv(cmd.Env, "KAFSCALE_LOG_LEVEL", "debug")
 		listenAddr := addresses.kafka
 		for _, entry := range env {
 			if strings.HasPrefix(entry, "KAFSCALE_BROKER_HOST=") {
@@ -115,7 +120,7 @@ func startBrokerProcess(t *testing.T, ctx context.Context, addresses brokerAddre
 	}
 	beforeRetry := func(old, next brokerAddresses) error {
 		t.Logf("broker bind collision; retrying with %s", next.kafka)
-		return moveSnapshotBrokerAddress(ctx, endpoints, old.kafka, next.kafka)
+		return moveSnapshotBrokerAddress(ctx, endpoints, brokerID, old.kafka, next.kafka)
 	}
 	cmd, logs, actual, err := startBrokerAttempts(ctx, addresses, factory, func() brokerAddresses { return newBrokerAddresses(t) }, beforeRetry, writer)
 	if err != nil {
@@ -172,7 +177,12 @@ func waitBrokerStartup(ctx context.Context, logs *brokerLogBuffer, addresses bro
 	defer deadline.Stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
-	ready := false
+	client := &http.Client{
+		Timeout:       500 * time.Millisecond,
+		Transport:     &http.Transport{Proxy: nil, DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	defer client.CloseIdleConnections()
 	for {
 		select {
 		case <-ctx.Done():
@@ -193,8 +203,13 @@ func waitBrokerStartup(ctx context.Context, logs *brokerLogBuffer, addresses bro
 			if !strings.Contains(output, "broker listening on "+addresses.kafka) && !strings.Contains(output, "broker listening on [::]:"+port) && !strings.Contains(output, "broker listening on 0.0.0.0:"+port) {
 				continue
 			}
+			// The marker comes from this child only after it binds, so even
+			// another KafScale broker on the stolen port cannot satisfy readiness.
+			if !strings.Contains(output, "metrics server listening on "+addresses.metrics) {
+				continue
+			}
 			listening := true
-			for _, addr := range []string{addresses.kafka, addresses.metrics, addresses.control} {
+			for _, addr := range []string{addresses.kafka, addresses.control} {
 				conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
 				if err != nil {
 					listening = false
@@ -202,12 +217,24 @@ func waitBrokerStartup(ctx context.Context, logs *brokerLogBuffer, addresses bro
 				}
 				conn.Close()
 			}
-			// Require two successful polls: asynchronous auxiliary bind failures
-			// must be observed even if the Kafka listener was ready first.
-			if listening && ready {
+			if !listening {
+				continue
+			}
+			// A TCP accept (or an arbitrary HTTP 200) may belong to the process
+			// that stole the metrics port. Require the broker's metrics payload.
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+addresses.metrics+"/metrics", nil)
+			if err != nil {
+				return err
+			}
+			response, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+			response.Body.Close()
+			if readErr == nil && response.StatusCode == http.StatusOK && strings.Contains(string(body), "\nkafscale_broker_uptime_seconds ") {
 				return nil
 			}
-			ready = listening
 		}
 	}
 }
@@ -224,7 +251,7 @@ func splitCSVEndpoints(value string) []string {
 
 // Existing snapshots (including restart and multi-broker fixtures) must advertise
 // the replacement port. CAS preserves concurrent changes by another fixture.
-func moveSnapshotBrokerAddress(parent context.Context, endpoints []string, old, next string) error {
+func moveSnapshotBrokerAddress(parent context.Context, endpoints []string, brokerID int32, old, next string) error {
 	if len(endpoints) == 0 || old == next {
 		return nil
 	}
@@ -235,11 +262,7 @@ func moveSnapshotBrokerAddress(parent context.Context, endpoints []string, old, 
 		return err
 	}
 	defer client.Close()
-	oldHost, oldPort, err := net.SplitHostPort(old)
-	if err != nil {
-		return err
-	}
-	host, portString, err := net.SplitHostPort(next)
+	_, portString, err := net.SplitHostPort(next)
 	if err != nil {
 		return err
 	}
@@ -263,8 +286,8 @@ func moveSnapshotBrokerAddress(parent context.Context, endpoints []string, old, 
 		changed := false
 		for i := range snapshot.Brokers {
 			broker := &snapshot.Brokers[i]
-			if broker.Host == oldHost && strconv.Itoa(int(broker.Port)) == oldPort {
-				broker.Host, broker.Port, changed = host, int32(port), true
+			if broker.NodeID == brokerID {
+				broker.Port, changed = int32(port), true
 			}
 		}
 		if !changed {
@@ -283,4 +306,25 @@ func moveSnapshotBrokerAddress(parent context.Context, endpoints []string, old, 
 		}
 	}
 	return fmt.Errorf("metadata snapshot changed during broker port replacement")
+}
+
+// Match the broker's explicit-ID / Kubernetes ordinal / zero default precedence.
+func fixtureBrokerID(env []string) int32 {
+	values := make(map[string]string)
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = strings.TrimSpace(value)
+		}
+	}
+	if id, err := strconv.ParseInt(values["KAFSCALE_BROKER_ID"], 10, 32); err == nil {
+		return int32(id)
+	}
+	name := values["POD_NAME"]
+	if pos := strings.LastIndex(name, "-"); pos >= 0 {
+		if id, err := strconv.ParseInt(name[pos+1:], 10, 32); err == nil {
+			return int32(id)
+		}
+	}
+	return 0
 }

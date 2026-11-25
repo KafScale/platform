@@ -23,8 +23,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -49,13 +52,29 @@ func TestBrokerStartupChild(t *testing.T) {
 		os.Exit(1)
 	}
 	addresses := strings.Split(os.Getenv("KAFSCALE_STARTUP_TEST_ADDRS"), ",")
-	for _, addr := range addresses {
+	delayedFailure := false
+	for i, addr := range addresses {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
+			if mode == "delayed-metrics" && i == 1 {
+				delayedFailure = true
+				continue
+			}
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		defer listener.Close()
+		if i == 1 {
+			fmt.Println("metrics server listening on " + addr)
+			go http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/metrics" {
+					http.NotFound(w, r)
+					return
+				}
+				fmt.Fprintln(w, "# TYPE kafscale_broker_uptime_seconds gauge\nkafscale_broker_uptime_seconds 1")
+			}))
+			continue
+		}
 		go func() {
 			for {
 				conn, err := listener.Accept()
@@ -68,6 +87,11 @@ func TestBrokerStartupChild(t *testing.T) {
 	}
 	if mode != "wait" {
 		fmt.Println("broker listening on " + addresses[0])
+	}
+	if delayedFailure {
+		time.Sleep(250 * time.Millisecond)
+		fmt.Fprintln(os.Stderr, "metrics server error: bind: address already in use")
+		os.Exit(1)
 	}
 	select {}
 }
@@ -187,44 +211,87 @@ func TestBrokerStartupCancellationStopsChild(t *testing.T) {
 }
 
 func TestBrokerStartupRepairsSnapshotAfterCollision(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	etcd, endpoints := startEmbeddedEtcd(t)
-	defer etcd.Close()
-	occupied, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for _, host := range []string{"127.0.0.1", "host.docker.internal"} {
+		t.Run(host, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			etcd, endpoints := startEmbeddedEtcd(t)
+			defer etcd.Close()
+			occupied, err := net.Listen("tcp", ":0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer occupied.Close()
+			addresses := newBrokerAddresses(t)
+			addresses.kafka = net.JoinHostPort("127.0.0.1", fmt.Sprint(occupied.Addr().(*net.TCPAddr).Port))
+			client, err := clientv3.New(clientv3.Config{Endpoints: endpoints})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			oldPort := int32(occupied.Addr().(*net.TCPAddr).Port)
+			snapshot := metadata.ClusterMetadata{Brokers: []protocol.MetadataBroker{
+				{NodeID: 1, Host: host, Port: oldPort},
+				{NodeID: 2, Host: "other-broker", Port: oldPort},
+			}}
+			data, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Put(ctx, "/kafscale/metadata/snapshot", string(data)); err != nil {
+				t.Fatal(err)
+			}
+			cmd, _, actual := startBrokerWithEtcd(t, ctx, addresses.kafka, addresses.metrics, addresses.control, endpoints, "KAFSCALE_BROKER_ID=1", "KAFSCALE_BROKER_HOST="+host)
+			defer stopBroker(t, cmd)
+			if actual.kafka == addresses.kafka {
+				t.Fatal("broker retained occupied address")
+			}
+			req := kmsg.NewPtrMetadataRequest()
+			req.Version = 12
+			response := directGroupRequest(t, actual.kafka, req).(*kmsg.MetadataResponse)
+			_, newPort, _ := net.SplitHostPort(actual.kafka)
+			if len(response.Brokers) != 2 || response.Brokers[0].NodeID != 1 || response.Brokers[0].Host != host || fmt.Sprint(response.Brokers[0].Port) != newPort {
+				t.Fatalf("incorrect advertised metadata: %+v", response)
+			}
+			persisted, err := client.Get(ctx, "/kafscale/metadata/snapshot")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var repaired metadata.ClusterMetadata
+			if len(persisted.Kvs) != 1 {
+				t.Fatal("snapshot missing")
+			}
+			if err := json.Unmarshal(persisted.Kvs[0].Value, &repaired); err != nil {
+				t.Fatal(err)
+			}
+			if len(repaired.Brokers) != 2 || repaired.Brokers[0].Host != host || fmt.Sprint(repaired.Brokers[0].Port) != newPort || !reflect.DeepEqual(repaired.Brokers[1], snapshot.Brokers[1]) {
+				t.Fatalf("incorrect persisted repair: %+v", repaired.Brokers)
+			}
+		})
 	}
-	defer occupied.Close()
+}
+
+func TestBrokerStartupRejectsUnrelatedMetrics(t *testing.T) {
+	// Even another broker's HTTP metrics must not count as readiness while the bind
+	// failure is delayed well beyond the old two successful TCP polls.
+	unrelated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, "# TYPE kafscale_broker_uptime_seconds gauge\nkafscale_broker_uptime_seconds 1")
+	}))
+	defer unrelated.Close()
 	addresses := newBrokerAddresses(t)
-	addresses.kafka = occupied.Addr().String()
-	client, err := clientv3.New(clientv3.Config{Endpoints: endpoints})
+	addresses.metrics = strings.TrimPrefix(unrelated.URL, "http://")
+	var commands []*exec.Cmd
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, actual, err := startBrokerAttempts(ctx, addresses, startupChildFactory(t, "delayed-metrics", &commands), func() brokerAddresses { return newBrokerAddresses(t) }, nil, io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	snapshot := metadata.ClusterMetadata{Brokers: []protocol.MetadataBroker{{NodeID: 1, Host: "127.0.0.1", Port: int32(occupied.Addr().(*net.TCPAddr).Port)}}}
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
+	if len(commands) != 2 || actual.metrics == addresses.metrics {
+		t.Fatalf("accepted unrelated metrics server: attempts=%d actual=%+v", len(commands), actual)
 	}
-	if _, err := client.Put(ctx, "/kafscale/metadata/snapshot", string(data)); err != nil {
-		t.Fatal(err)
-	}
-	cmd, _, actual := startBrokerWithEtcd(t, ctx, addresses.kafka, addresses.metrics, addresses.control, endpoints, "KAFSCALE_BROKER_ID=1")
-	defer stopBroker(t, cmd)
-	if actual.kafka == addresses.kafka {
-		t.Fatal("broker retained occupied address")
-	}
-	req := kmsg.NewPtrMetadataRequest()
-	req.Version = 12
-	response := directGroupRequest(t, actual.kafka, req).(*kmsg.MetadataResponse)
-	if len(response.Brokers) != 1 {
-		t.Fatal(response)
-	}
-	advertised := net.JoinHostPort(response.Brokers[0].Host, fmt.Sprint(response.Brokers[0].Port))
-	if advertised != actual.kafka {
-		t.Fatalf("advertised %s, bound %s", advertised, actual.kafka)
+	if commands[0].ProcessState == nil {
+		t.Fatal("failed process was not reaped")
 	}
 }
 

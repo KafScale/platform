@@ -194,7 +194,7 @@ jobs:
 
       - name: Broker startup port race regressions
         if: matrix.suite == 'kafka'
-        run: go test -race -tags=e2e ./test/e2e -run '^TestBrokerStartup(RetriesOccupiedPorts|RetryLimits|RepairsSnapshotAfterCollision|RetriesAuxiliaryListeners|CleanupDoesNotRewait|CancellationStopsChild)$' -v -count=1 -timeout=2m
+        run: go test -race -tags=e2e ./test/e2e -run '^TestBrokerStartup(RetriesOccupiedPorts|RetryLimits|RepairsSnapshotAfterCollision|RetriesAuxiliaryListeners|CleanupDoesNotRewait|CancellationStopsChild|RejectsUnrelatedMetrics)$' -v -count=1 -timeout=2m
 
       - name: librdkafka compatibility end-to-end tests
         if: matrix.suite == 'kafka'
