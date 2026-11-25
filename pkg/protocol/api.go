@@ -33,6 +33,7 @@ const (
 	APIKeyApiVersion           int16 = 18
 	APIKeyCreateTopics         int16 = 19
 	APIKeyDeleteTopics         int16 = 20
+	APIKeyInitProducerID       int16 = 22
 	APIKeyOffsetForLeaderEpoch int16 = 23
 	APIKeyDescribeConfigs      int16 = 32
 	APIKeyAlterConfigs         int16 = 33

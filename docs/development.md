@@ -269,7 +269,7 @@ To stay Kafka-compatible we track every protocol key + version that upstream exp
 | 19 | CreateTopics | 7 | ✅ Implemented (v0-2) |
 | 20 | DeleteTopics | 6 | ✅ Implemented (v0-2) |
 | 21 | DeleteRecords | 2 | ❌ Rely on S3 lifecycle |
-| 22 | InitProducerId | 4 | ❌ Transactions out of scope |
+| 22 | InitProducerId | 4 | ✅ Implemented (v0-4), nontransactional idempotence only |
 | 23 | OffsetForLeaderEpoch | 3 | ✅ Implemented |
 | 24 | AddPartitionsToTxn | 3 | ❌ Transactions out of scope |
 | 25 | AddOffsetsToTxn | 3 | ❌ Transactions out of scope |

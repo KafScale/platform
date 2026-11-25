@@ -769,6 +769,15 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 			continue
 		}
 
+		if _, parsed, parseErr := protocol.ParseRequestBody(header, body); parseErr == nil {
+			if response := protocol.UnsupportedTransactionResponse(parsed); response != nil {
+				if produce, ok := parsed.(*kmsg.ProduceRequest); !ok || produce.Acks != 0 {
+					writeResponse(protocol.EncodeResponse(header.CorrelationID, header.APIVersion, response))
+				}
+				continue
+			}
+		}
+
 		if !p.isReady() || !p.listenerRoutable(ctx) {
 			resp, ok, err := p.buildNotReadyResponse(header, body)
 			if err != nil {
@@ -1527,6 +1536,10 @@ func (p *proxy) buildNotReadyResponse(header *protocol.RequestHeader, body []byt
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), true, nil
 	}
 	switch header.APIKey {
+	case protocol.APIKeyInitProducerID:
+		resp := kmsg.NewPtrInitProducerIDResponse()
+		resp.ErrorCode, resp.ProducerID, resp.ProducerEpoch = protocol.REQUEST_TIMED_OUT, -1, -1
+		return encode(resp)
 	case protocol.APIKeyMetadata:
 		metaReq := req.(*kmsg.MetadataRequest)
 		resp := kmsg.NewPtrMetadataResponse()
@@ -1755,6 +1768,7 @@ func generateProxyApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyApiVersion, min: 0, max: protocol.ApiVersionsMaxVersion},
 		{key: protocol.APIKeyMetadata, min: 0, max: 12},
 		{key: protocol.APIKeyProduce, min: 0, max: 9},
+		{key: protocol.APIKeyInitProducerID, min: 0, max: 4},
 		// librdkafka probes Fetch v4 before enabling magic-2 record batches.
 		{key: protocol.APIKeyFetch, min: 4, max: 13},
 		// Classic group feature probes require the original API versions too.
@@ -1776,20 +1790,12 @@ func generateProxyApiVersions() []kmsg.ApiVersionsResponseApiKey {
 		{key: protocol.APIKeyDeleteTopics, min: 0, max: 2},
 		{key: protocol.APIKeyDeleteGroups, min: 0, max: 2},
 	}
-	unsupported := []int16{4, 5, 6, 7, 21, 22, 24, 25, 26}
-	entries := make([]kmsg.ApiVersionsResponseApiKey, 0, len(supported)+len(unsupported))
+	entries := make([]kmsg.ApiVersionsResponseApiKey, 0, len(supported))
 	for _, entry := range supported {
 		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
 			ApiKey:     entry.key,
 			MinVersion: entry.min,
 			MaxVersion: entry.max,
-		})
-	}
-	for _, key := range unsupported {
-		entries = append(entries, kmsg.ApiVersionsResponseApiKey{
-			ApiKey:     key,
-			MinVersion: -1,
-			MaxVersion: -1,
 		})
 	}
 	return entries

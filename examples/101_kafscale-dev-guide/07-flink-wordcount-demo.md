@@ -27,7 +27,7 @@ This section adds a Flink-based word count job that consumes from KafScale and k
 
 **After this exercise, you'll be able to**:
 - Build and deploy a Flink streaming job that reads from KafScale
-- Configure Flink's Kafka connector with proper KafScale settings (`enable.idempotence=false`)
+- Configure Flink's Kafka connector with nontransactional settings (`at-least-once` or `none`; idempotence is supported)
 - Manage stateful computations (word counts) using Flink's keyed state
 - Troubleshoot transaction-related errors when integrating Flink with KafScale
 - Choose between standalone, Docker, and Kubernetes deployment modes for Flink jobs
@@ -163,7 +163,7 @@ After completing the Flink word count demo, verify you can:
 
 - [ ] Build the Flink job with Maven
 - [ ] Run the job in standalone mode (local Flink)
-- [ ] Understand why `enable.idempotence=false` is required in Flink's Kafka connector
+- [ ] Understand why Flink exactly-once transactions remain unsupported
 - [ ] Troubleshoot transaction-related errors (see [Troubleshooting](05-troubleshooting.md))
 - [ ] Interpret word count output from headers, keys, values, and stats
 - [ ] Deploy the job in different modes (standalone, Docker, Kubernetes)

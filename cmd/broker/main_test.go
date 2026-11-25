@@ -1014,6 +1014,9 @@ func encodeJoinMetadata(topics []string) []byte {
 func testBatchBytes(baseOffset int64, lastOffsetDelta int32, messageCount int32) []byte {
 	data := make([]byte, 70)
 	data[16] = 2 // Kafka record-batch magic.
+	for i := 43; i < 57; i++ {
+		data[i] = 0xff
+	} // non-idempotent producer
 	binary.BigEndian.PutUint32(data[8:12], uint32(len(data)-12))
 	binary.BigEndian.PutUint64(data[0:8], uint64(baseOffset))
 	binary.BigEndian.PutUint32(data[23:27], uint32(lastOffsetDelta))

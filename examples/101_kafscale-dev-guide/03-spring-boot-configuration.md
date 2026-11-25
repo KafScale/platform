@@ -206,10 +206,9 @@ spring.kafka.producer.compression-type=snappy
 
 ## What's Not Supported
 
-KafScale does not support some advanced Kafka features:
+KafScale supports nontransactional idempotent producers with `enable.idempotence=true` and `acks=all`. The following remain unsupported:
 
 - ❌ **Transactions**: No exactly-once semantics
-- ❌ **Idempotent producers**: `enable.idempotence=true` will be ignored
 - ❌ **Log compaction**: Compacted topics not supported
 
 If your application relies on these features, you'll need to use traditional Kafka or refactor your application.
@@ -230,7 +229,7 @@ See the [Running Your Application](04-running-your-app.md) section for details o
 Before moving to the next chapter, ensure you understand:
 
 - [ ] How to set the KafScale bootstrap server in Spring Boot configuration
-- [ ] Why `enable.idempotence=false` is required for producers
+- [ ] How idempotent producers differ from unsupported transactions
 - [ ] How to configure JSON serialization/deserialization
 - [ ] What features are NOT supported (transactions, exactly-once, compaction)
 - [ ] The difference between migrating from Kafka (minimal) vs configuring from scratch

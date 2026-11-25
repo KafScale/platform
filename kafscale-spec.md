@@ -128,7 +128,7 @@ Messages are grouped into batches for efficiency:
 │ Last Offset Delta   │ 4 bytes  │ Offset of last msg - base     │
 │ First Timestamp     │ 8 bytes  │ Timestamp of first message    │
 │ Max Timestamp       │ 8 bytes  │ Max timestamp in batch        │
-│ Producer ID         │ 8 bytes  │ -1 (no idempotence)           │
+│ Producer ID         │ 8 bytes  │ Producer ID, or -1 if disabled           │
 │ Producer Epoch      │ 2 bytes  │ -1                            │
 │ Base Sequence       │ 4 bytes  │ -1                            │
 │ Record Count        │ 4 bytes  │ Number of records in batch    │
@@ -207,6 +207,7 @@ decoding the unsupported body and keep the connection open for a client retry.
 | 18 | ApiVersions | 0-4 | ✅ Full | Client capability negotiation |
 | 19 | CreateTopics | 0-2 | ✅ Full | Topic management |
 | 20 | DeleteTopics | 0-2 | ✅ Full | Topic management |
+| 22 | InitProducerId | 0-4 | ✅ Nontransactional | Idempotent producers; transactions unsupported |
 | 32 | DescribeConfigs | 4 | ✅ Full | Read topic/broker config |
 | 33 | AlterConfigs | 1 | ✅ Full | Runtime config changes (whitelist) |
 | 37 | CreatePartitions | 0-3 | ✅ Full | Scale partitions without topic recreation |
@@ -221,7 +222,6 @@ decoding the unsupported body and keep the connection open for a client retry.
 | 6 | UpdateMetadata | Internal Kafka protocol |
 | 7 | ControlledShutdown | Kubernetes handles pod lifecycle |
 | 21 | DeleteRecords | S3 lifecycle handles retention |
-| 22 | InitProducerId | Transactions not supported (by design) |
 | 24 | AddPartitionsToTxn | Transactions not supported |
 | 25 | AddOffsetsToTxn | Transactions not supported |
 | 26 | EndTxn | Transactions not supported |

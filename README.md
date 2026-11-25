@@ -103,6 +103,7 @@ KafScale is built on the assumption that broker state is a historical constraint
 
 In scope:
 - Kafka wire protocol for core produce, fetch, and consumer group APIs
+- Nontransactional idempotent producers with durable retry deduplication
 - Immutable S3-backed segment storage
 - Stateless broker pods
 - etcd-backed metadata, offsets, and consumer group state
@@ -159,13 +160,12 @@ git clone https://github.com/scalytics/kaf-mirror.git && cd kaf-mirror
 mkdir -p bin
 go build -o bin/kaf-mirror ./cmd/kaf-mirror
 go build -o bin/mirror-cli ./cmd/mirror-cli
-KAFMIRROR_DISABLE_IDEMPOTENT_WRITES=true ./bin/kaf-mirror
+./bin/kaf-mirror
 ```
 
-KafScale does not implement `InitProducerId`, so idempotent writes must be off
-when KafScale is the target. The environment variable above does that for the
-whole process. On first start kaf-mirror creates `admin@localhost` and prints a
-random password to its log (`logs/kaf-mirror.log`).
+KafScale supports nontransactional idempotent producers through both the broker
+and Kubernetes proxy. Leave transactions disabled. See [producer guarantees](docs/protocol.md#idempotent-producers).
+On first start kaf-mirror creates `admin@localhost` and prints a random password to its log (`logs/kaf-mirror.log`).
 
 **3. Add both clusters and start a job**
 

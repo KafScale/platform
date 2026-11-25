@@ -77,7 +77,7 @@ docker ps
 - **[MinIO](https://kafscale.io/configuration/)**: S3-compatible object storage server used for local development instead of AWS S3
 
 **Limitations:**
-- **[No Transactions](https://kafscale.io/protocol/)**: KafScale doesn't support Kafka transactions (`InitProducerId`, `EndTxn`, etc.)
+- **[No Transactions](https://kafscale.io/protocol/)**: KafScale doesn't support Kafka transactions (`EndTxn`, transactional offset commits, etc.); nontransactional `InitProducerId` is supported
 - **[No Compaction](https://kafscale.io/protocol/)**: Log compaction is not available; S3 lifecycle policies handle retention instead
 
 **Learn More**: See the [KafScale Documentation](https://kafscale.io/docs/) for comprehensive guides on [Architecture](https://kafscale.io/architecture/), [Configuration](https://kafscale.io/configuration/), [Protocol](https://kafscale.io/protocol/), and [Operations](https://kafscale.io/operations/).

@@ -68,6 +68,7 @@ type PartitionLog struct {
 	indexEntries map[int64][]*IndexEntry
 	prefetchMu   sync.Mutex
 	appendMu     sync.Mutex
+	producers    producerStates
 	mu           sync.Mutex
 	s3sem        *semaphore.Weighted
 
@@ -106,6 +107,7 @@ func NewPartitionLogWithOptions(namespace string, topic string, partition int32,
 	}
 	pl := &PartitionLog{
 		namespace:    namespace,
+		producers:    make(producerStates),
 		topic:        topic,
 		partition:    partition,
 		s3:           s3Client,
@@ -157,12 +159,15 @@ const (
 )
 
 type restoredSegment struct {
-	segment segmentRange
-	entries []*IndexEntry
+	producers producerStates
+	segment   segmentRange
+	entries   []*IndexEntry
 }
 
 // RestoreFromS3 rebuilds segment ranges from objects already stored in S3.
 func (l *PartitionLog) RestoreFromS3(ctx context.Context) (lastOffset int64, restoreErr error) {
+	l.appendMu.Lock()
+	defer l.appendMu.Unlock()
 	started := time.Now()
 	logger := l.logger().With("topic", l.topic, "partition", l.partition)
 	logger.Info("partition restore started")
@@ -243,7 +248,17 @@ waiting:
 			return -1, fmt.Errorf("overlapping segments at offsets %d and %d", segments[i-1].baseOffset, segments[i].baseOffset)
 		}
 	}
+	sort.Slice(results, func(i, j int) bool { return results[i].segment.baseOffset < results[j].segment.baseOffset })
+	producers := make(producerStates)
+	for _, result := range results {
+		for id, state := range result.producers {
+			for _, batch := range state.batches {
+				producers.add(id, state.epoch, batch)
+			}
+		}
+	}
 	last := int64(-1)
+	l.producers = producers
 	if len(segments) > 0 {
 		last = segments[len(segments)-1].lastOffset
 		l.mu.Lock()
@@ -280,11 +295,11 @@ func (l *PartitionLog) restoreSegment(ctx context.Context, obj S3Object) (*resto
 	// Sidecars are untrusted hints: bounds and ordering cannot prove that an
 	// offset/position pair identifies the batch containing that offset.
 	// Derive every read index from validated immutable segment bytes.
-	entries, err := l.restoreSegmentIndex(ctx, obj, base, lastOffset)
+	entries, producers, err := l.restoreSegmentState(ctx, obj, base, lastOffset)
 	if err != nil {
 		return nil, err
 	}
-	return &restoredSegment{segment: segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size}, entries: entries}, nil
+	return &restoredSegment{segment: segmentRange{baseOffset: base, lastOffset: lastOffset, size: obj.Size}, entries: entries, producers: producers}, nil
 }
 
 // AppendBatch appends one batch through the atomic record-set path.
@@ -302,7 +317,7 @@ func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch,
 	if len(batches) == 0 {
 		return nil, fmt.Errorf("no batches to append")
 	}
-	return l.appendBatches(ctx, batches, forceFlush)
+	return l.appendBatches(ctx, batches, forceFlush, false)
 }
 
 // DrainAndRelease waits for the active append, then releases ownership before
@@ -314,7 +329,7 @@ func (l *PartitionLog) DrainAndRelease(release func()) {
 }
 
 // appendBatches also accepts an empty set for an explicit Flush.
-func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch, forceFlush bool) (*AppendResult, error) {
+func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch, forceFlush, idempotent bool) (*AppendResult, error) {
 	l.appendMu.Lock()
 	defer l.appendMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -328,6 +343,18 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 	nextOffset := baseOffset
 	staged := l.buffer.clone()
 	l.mu.Unlock()
+	var producerUpdates producerStates
+	if idempotent {
+		var duplicate *AppendResult
+		var err error
+		producerUpdates, duplicate, err = l.stageProducerState(batches, baseOffset)
+		if err != nil {
+			return nil, err
+		}
+		if duplicate != nil {
+			return duplicate, nil
+		}
+	}
 	for _, batch := range batches {
 		if len(batch.Bytes) < recordBatchHeaderMinSize || batch.LastOffsetDelta < 0 {
 			return nil, fmt.Errorf("invalid record batch")
@@ -355,7 +382,7 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 	if err := l.uploadStaged(ctx, artifact); err != nil {
 		failure := fmt.Errorf("%w: %w", ErrObjectStorage, err)
 		var uncertain *segmentUploadError
-		if errors.As(err, &uncertain) && !errors.Is(err, ErrPreconditionFailed) && !errors.Is(err, ErrConditionalConflict) {
+		if !idempotent && errors.As(err, &uncertain) && !errors.Is(err, ErrPreconditionFailed) && !errors.Is(err, ErrConditionalConflict) {
 			// The PUT may still complete. A later conditional retry determines
 			// whether this offset was occupied; never delete an uncertain claim.
 			return nil, failure
@@ -382,6 +409,9 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		}
 	}
 	l.buffer, l.nextOffset = staged, nextOffset
+	for id, state := range producerUpdates {
+		l.producers[id] = state
+	}
 	l.segments = append(l.segments, segmentRange{baseOffset: artifact.BaseOffset, lastOffset: artifact.LastOffset, size: int64(len(artifact.SegmentBytes))})
 	l.indexEntries[artifact.BaseOffset] = artifact.RelativeIndex
 	lastSegIdx := len(l.segments) - 1
@@ -426,7 +456,7 @@ func (l *PartitionLog) EarliestOffset() int64 {
 // Flush persists the current buffer through the atomic record-set path.
 // A terminal upload failure fences the handle without deleting durable objects.
 func (l *PartitionLog) Flush(ctx context.Context) error {
-	_, err := l.appendBatches(ctx, nil, true)
+	_, err := l.appendBatches(ctx, nil, true, false)
 	return err
 }
 

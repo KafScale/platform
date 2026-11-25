@@ -25,8 +25,13 @@ import (
 )
 
 func (l *PartitionLog) restoreSegmentIndex(ctx context.Context, obj S3Object, base, last int64) ([]*IndexEntry, error) {
+	entries, _, err := l.restoreSegmentState(ctx, obj, base, last)
+	return entries, err
+}
+
+func (l *PartitionLog) restoreSegmentState(ctx context.Context, obj S3Object, base, last int64) ([]*IndexEntry, producerStates, error) {
 	if err := l.acquireS3(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	started := time.Now()
 	data, err := l.s3.DownloadSegment(ctx, obj.Key, nil)
@@ -35,59 +40,66 @@ func (l *PartitionLog) restoreSegmentIndex(ctx context.Context, obj S3Object, ba
 		l.onS3Op("download_segment_rebuild_index", time.Since(started), err)
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return rebuildSegmentIndex(data, base, last, l.cfg.Segment.IndexIntervalMessages)
+	return rebuildSegmentState(data, base, last, l.cfg.Segment.IndexIntervalMessages)
 }
 
 // rebuildSegmentIndex validates the complete winning segment before using its
 // offsets. The derived index stays local so a delayed writer can finish its
 // sidecar without racing a recovery PUT.
 func rebuildSegmentIndex(data []byte, base, last int64, interval int32) ([]*IndexEntry, error) {
+	entries, _, err := rebuildSegmentState(data, base, last, interval)
+	return entries, err
+}
+
+func rebuildSegmentState(data []byte, base, last int64, interval int32) ([]*IndexEntry, producerStates, error) {
 	if len(data) < segmentHeaderLen+segmentFooterLen || base < 0 || last < base || last == math.MaxInt64 {
-		return nil, fmt.Errorf("invalid segment bounds")
+		return nil, nil, fmt.Errorf("invalid segment bounds")
 	}
 	if _, err := parseSegmentHeaderCreatedAt(data[:segmentHeaderLen]); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if binary.BigEndian.Uint16(data[4:6]) != 1 || int64(binary.BigEndian.Uint64(data[8:16])) != base {
-		return nil, fmt.Errorf("segment header does not match its key")
+		return nil, nil, fmt.Errorf("segment header does not match its key")
 	}
 	footer := data[len(data)-segmentFooterLen:]
 	gotLast, err := parseSegmentFooter(footer)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if gotLast != last {
-		return nil, fmt.Errorf("segment footer changed during restore")
+		return nil, nil, fmt.Errorf("segment footer changed during restore")
 	}
 	body := data[segmentHeaderLen : len(data)-segmentFooterLen]
 	if crc32.Checksum(body, crcTable) != binary.BigEndian.Uint32(footer[:4]) {
-		return nil, fmt.Errorf("segment checksum mismatch")
+		return nil, nil, fmt.Errorf("segment checksum mismatch")
 	}
 	index := NewIndexBuilder(interval)
+	producers := make(producerStates)
 	next := base
 	for position := 0; position < len(body); {
 		if len(body)-position < batchFrameHeaderLen {
-			return nil, fmt.Errorf("truncated record batch frame")
+			return nil, nil, fmt.Errorf("truncated record batch frame")
 		}
 		frameLen := uint64(binary.BigEndian.Uint32(body[position+8:position+12])) + batchFrameHeaderLen
 		if frameLen > uint64(len(body)-position) {
-			return nil, fmt.Errorf("record batch exceeds segment bounds")
+			return nil, nil, fmt.Errorf("record batch exceeds segment bounds")
 		}
 		batch, err := NewRecordBatchFromBytes(body[position : position+int(frameLen)])
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if batch.BaseOffset != next || batch.LastOffsetDelta < 0 || int64(batch.LastOffsetDelta) > last-next {
-			return nil, fmt.Errorf("record batch offsets do not match segment bounds")
+			return nil, nil, fmt.Errorf("record batch offsets do not match segment bounds")
 		}
+		producers.recoverBatch(batch)
 		index.MaybeAdd(batch.BaseOffset, int32(segmentHeaderLen+position), batch.MessageCount)
 		next += int64(batch.LastOffsetDelta) + 1
 		position += int(frameLen)
 	}
 	if next != last+1 {
-		return nil, fmt.Errorf("segment does not contain its advertised last offset")
+		return nil, nil, fmt.Errorf("segment does not contain its advertised last offset")
 	}
-	return index.Entries(), nil
+	return index.Entries(), producers, nil
 }

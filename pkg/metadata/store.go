@@ -101,6 +101,7 @@ type ClusterMetadata struct {
 
 // InMemoryStore is a simple Store backed by in-process state. Useful for early development and tests.
 type InMemoryStore struct {
+	producerID      int64
 	mu              sync.RWMutex
 	state           ClusterMetadata
 	offsets         map[string]int64
