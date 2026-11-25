@@ -43,6 +43,7 @@ type releaseWorkflow struct {
 		RunsOn      string `json:"runs-on"`
 		Timeout     int    `json:"timeout-minutes"`
 		Permissions map[string]string
+		Needs       []string
 		Steps       []releaseStep
 	}
 }
@@ -69,8 +70,31 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 		return workflow
 	}
 	workflow := read("docker.yml")
-	if len(workflow.Jobs) != 3 {
+	if len(workflow.Jobs) != 4 {
 		t.Fatal("release workflow jobs changed")
+	}
+	release := workflow.Jobs["release"]
+	if strings.Join(release.Needs, ",") != "build-and-push,assets" || release.Permissions["contents"] != "write" {
+		t.Fatal("release must wait for images and native assets")
+	}
+	var download, attach bool
+	for _, step := range release.Steps {
+		if strings.HasPrefix(step.Uses, "actions/checkout@") || step.Run != "" {
+			t.Fatal("release write job must not execute checked-out source")
+		}
+		if strings.HasPrefix(step.Uses, "actions/download-artifact@") && step.With["name"] == "release-assets" {
+			download = true
+		}
+		if strings.HasPrefix(step.Uses, "softprops/action-gh-release@") && step.With["files"] == "release-assets/*" && step.With["fail_on_unmatched_files"] == true {
+			attach = true
+		}
+	}
+	if !download || !attach {
+		t.Fatal("release assets must be downloaded and attached with missing-file failures")
+	}
+	assets := workflow.Jobs["assets"]
+	if assets.RunsOn != "ubuntu-latest" || len(assets.Permissions) != 1 || assets.Permissions["contents"] != "read" {
+		t.Fatal("asset builds must use Ubuntu and read-only permissions")
 	}
 	validate := workflow.Jobs["validate"]
 	publish := workflow.Jobs["build-and-push"]

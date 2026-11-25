@@ -57,7 +57,7 @@ func readPublishingWorkflow(t *testing.T, name string) publishingWorkflow {
 }
 
 func TestPublishingTokenPermissions(t *testing.T) {
-	for _, name := range []string{"ci.yml", "docker.yml", "sync-demo-videos.yml"} {
+	for _, name := range []string{"ci.yml", "docker.yml", "sync-demo-videos.yml", "sync-quickstart-site.yml"} {
 		workflow := readPublishingWorkflow(t, name)
 		if len(workflow.Permissions) != 1 || workflow.Permissions["contents"] != "read" {
 			t.Fatalf("%s default permissions=%v", name, workflow.Permissions)
@@ -68,10 +68,11 @@ func TestPublishingTokenPermissions(t *testing.T) {
 					continue
 				}
 				allowed := map[string]map[string]bool{
-					"ci.yml/coverage-badge":        {"contents": true},
-					"docker.yml/build-and-push":    {"packages": true},
-					"docker.yml/release":           {"contents": true},
-					"sync-demo-videos.yml/publish": {"contents": true, "pull-requests": true},
+					"ci.yml/coverage-badge":            {"contents": true},
+					"docker.yml/build-and-push":        {"packages": true},
+					"docker.yml/release":               {"contents": true},
+					"sync-demo-videos.yml/publish":     {"contents": true, "pull-requests": true},
+					"sync-quickstart-site.yml/publish": {"contents": true, "pages": true},
 				}
 				if !allowed[name+"/"+id][permission] {
 					t.Fatalf("unexpected %s write grant in %s/%s", permission, name, id)
@@ -91,8 +92,13 @@ func TestPublishingTokenPermissions(t *testing.T) {
 					t.Fatal("badge publishing is not restricted to trusted main pushes")
 				}
 			case "docker.yml/release":
-				if job.If != "startsWith(github.ref, 'refs/tags/v')" || job.Needs != "build-and-push" || len(job.Permissions) != 1 || len(job.Steps) != 1 || !strings.HasPrefix(job.Steps[0].Uses, "softprops/action-gh-release@") {
+				needs, ok := job.Needs.([]any)
+				if job.If != "startsWith(github.ref, 'refs/tags/v')" || !ok || len(needs) != 2 || needs[0] != "build-and-push" || needs[1] != "assets" || len(job.Permissions) != 1 || len(job.Steps) != 2 || !strings.HasPrefix(job.Steps[0].Uses, "actions/download-artifact@") || !strings.HasPrefix(job.Steps[1].Uses, "softprops/action-gh-release@") {
 					t.Fatal("release write token exposed outside the release API step")
+				}
+			case "sync-quickstart-site.yml/publish":
+				if job.If != "github.ref == 'refs/heads/main'" || len(job.Permissions) != 2 || job.Permissions["pages"] != "write" {
+					t.Fatal("site publishing must be restricted to trusted main")
 				}
 			case "sync-demo-videos.yml/publish":
 				if job.Needs != "prepare" || len(job.Permissions) != 2 || job.Permissions["pull-requests"] != "write" {

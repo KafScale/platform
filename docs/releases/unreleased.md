@@ -17,6 +17,9 @@ limitations under the License.
 
 # Unreleased
 
+- Publish native `kafscale-cli` archives for Linux/macOS on amd64/arm64, a version-pinned external-S3 Compose file and SHA-256 checksums on release tags. The CLI runs without Docker or Go; MinIO remains a local development/CI fixture (#431).
+- Lead the README and website with a local Compose quick start, native Kafka client examples, CLI installation, and a shared guide for connecting S3 through Helm, Compose or the CLI (#430).
+
 - Assign and persist a random UUID for each new topic. Same-name recreation gets a new ID, and stale Fetch/Metadata IDs return `UNKNOWN_TOPIC_ID`. Preserve existing IDs across upgrades, partition expansion, restarts and operator reconciliation; track Kubernetes resource incarnations in the metadata snapshot (#424).
 
 - Support nontransactional idempotent producers through brokers and the Kubernetes proxy (`InitProducerId` v0-v4). Default Java producers can send without disabling idempotence (#28).

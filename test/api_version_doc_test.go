@@ -30,8 +30,21 @@ func TestExamplesUseKafscaleV1(t *testing.T) {
 	var checked int
 	for _, dir := range []string{"docs", "scripts", "deploy", "examples", "test/e2e", "README.md"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
 				return err
+			}
+			if d.IsDir() {
+				if d.Name() == "node_modules" || d.Name() == "logs" {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			// This guard checks source examples, not recorded videos, binary
+			// fixtures or runtime logs. Reading those dominates race-test time.
+			switch strings.ToLower(filepath.Ext(path)) {
+			case ".md", ".yaml", ".yml", ".sh", ".py", ".go", ".json", ".tpl", ".tmpl", ".tape", ".html", ".js", ".ts", ".cjs", ".mjs", ".dockerfile":
+			default:
+				return nil
 			}
 			rel, _ := filepath.Rel(root, path)
 			if rel == "docs/upgrade-compatibility.md" || strings.HasPrefix(rel, "docs/releases/") || strings.Contains(rel, "node_modules") {

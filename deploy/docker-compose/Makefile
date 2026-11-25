@@ -21,19 +21,19 @@ BUCKET ?= kafscale
 OUT ?= downloaded-blob.bin
 
 up: ## Start all services
-	REGISTRY=$(REGISTRY) TAG=$(TAG) docker-compose up -d
+	REGISTRY=$(REGISTRY) TAG=$(TAG) docker compose up -d
 
 down: ## Stop all services
-	docker-compose down
+	docker compose down
 
 logs: ## View logs (follow mode)
-	docker-compose logs -f
+	docker compose logs -f
 
 ps: ## Show service status
-	docker-compose ps
+	docker compose ps
 
 restart: ## Restart all services
-	docker-compose restart
+	docker compose restart
 
 health: ## Check service health
 	@echo "=== Health Checks ==="
@@ -58,7 +58,7 @@ test-download: ## Test LFS stream download (requires KEY, SHA256, and SIZE)
 	@echo "Downloaded verified LFS object to $(OUT)"
 
 clean: ## Stop services and remove volumes
-	docker-compose down -v
+	docker compose down -v
 
 registry-check: ## Check local registry
 	@echo "=== Registry Catalog ==="

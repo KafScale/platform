@@ -17,7 +17,9 @@ limitations under the License.
 
 # Kafscale Quickstart
 
+For a first local run, start with the [Docker Compose quick start](local-quickstart.md).
 This guide covers a minimal installation on a cloud Kubernetes cluster using the Helm chart in this repo.
+[Connect your S3](s3-connection.md) explains bucket, region, endpoint and credentials settings across Helm, Compose and the native CLI.
 
 ## Prerequisites
 
