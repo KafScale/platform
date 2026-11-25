@@ -98,18 +98,20 @@ jobs:
           KAFSCALE_UI_PASSWORD: compose-test-password
         run: |
           set -euo pipefail
-          s3_gateway=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
-          export KAFSCALE_S3_ENDPOINT="http://$s3_gateway:9000"
+          export KAFSCALE_S3_ENDPOINT=http://external-s3:9000
           compose_file=deploy/docker-compose/docker-compose.release.yaml
           cleanup() {
             result=$?
             if [ "$result" -ne 0 ]; then
-              docker compose -p release-smoke -f "$compose_file" logs --no-color
+              docker compose -p release-smoke -f "$compose_file" logs --no-color || true
             fi
-            docker compose -p release-smoke -f "$compose_file" down --volumes
+            docker network disconnect release-smoke_default lfs-integrity-minio || true
+            docker compose -p release-smoke -f "$compose_file" down --volumes || true
             return "$result"
           }
           trap cleanup EXIT
+          docker compose -p release-smoke -f "$compose_file" create
+          docker network connect --alias external-s3 release-smoke_default lfs-integrity-minio
           docker compose -p release-smoke -f "$compose_file" up -d --wait --wait-timeout 180
           curl -fsS http://127.0.0.1:9094/readyz
           curl -fsS http://127.0.0.1:3080/healthz
