@@ -88,6 +88,31 @@ jobs:
           done
           curl -fsS "$LFS_S3_ENDPOINT/minio/health/ready"
           npm --prefix lfs-client-sdk/js run test:s3
+      - name: Smoke-test release Compose against external S3
+        env:
+          KAFSCALE_S3_BUCKET: release-compose-check
+          KAFSCALE_S3_REGION: us-east-1
+          KAFSCALE_S3_ACCESS_KEY: minioadmin
+          KAFSCALE_S3_SECRET_KEY: minioadmin
+          KAFSCALE_S3_PATH_STYLE: "true"
+          KAFSCALE_UI_PASSWORD: compose-test-password
+        run: |
+          set -euo pipefail
+          s3_gateway=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+          export KAFSCALE_S3_ENDPOINT="http://$s3_gateway:9000"
+          compose_file=deploy/docker-compose/docker-compose.release.yaml
+          cleanup() {
+            result=$?
+            if [ "$result" -ne 0 ]; then
+              docker compose -p release-smoke -f "$compose_file" logs --no-color
+            fi
+            docker compose -p release-smoke -f "$compose_file" down --volumes
+            return "$result"
+          }
+          trap cleanup EXIT
+          docker compose -p release-smoke -f "$compose_file" up -d --wait --wait-timeout 180
+          curl -fsS http://127.0.0.1:9094/readyz
+          curl -fsS http://127.0.0.1:3080/healthz
       - name: Stop MinIO test fixture
         if: always()
         run: docker rm -f lfs-integrity-minio || true
