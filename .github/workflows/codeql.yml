@@ -55,7 +55,6 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        id: codeql
         uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           languages: ${{ matrix.language }}
@@ -74,14 +73,8 @@ jobs:
         uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
         with:
           category: "/language:${{ matrix.language }}"
+          upload: true
           output: ${{ runner.temp }}/codeql-results
-          upload: false
-
-      - name: Upload and validate CodeQL results
-        env:
-          CODEQL_PATH: ${{ steps.codeql.outputs.codeql-path }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash scripts/upload_codeql_results.sh "$RUNNER_TEMP/codeql-results"
 
       - name: Preserve reports after a failed scan or upload
         if: failure()
