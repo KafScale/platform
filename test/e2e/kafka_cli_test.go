@@ -18,14 +18,12 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"math/rand"
+	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -38,7 +36,7 @@ type kafkaCliHarness struct {
 	brokerAddr       string
 	brokerPort       string
 	brokerListenAddr string
-	brokerLogs       *bytes.Buffer
+	brokerLogs       *brokerLogBuffer
 	image            string
 	bootstrap        string
 	producerCmd      string
@@ -64,44 +62,10 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 	controlAddr := "127.0.0.1:" + pickFreePort(t)
 	advertisedHost := dockerAdvertisedHost(brokerAddr)
 
-	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
-	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
-		"KAFSCALE_AUTO_CREATE_TOPICS=true",
-		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
-		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerListenAddr),
-		fmt.Sprintf("KAFSCALE_BROKER_HOST=%s", advertisedHost),
-		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
-		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
-	)
-	var brokerLogs bytes.Buffer
-	debugLogs := parseBoolEnv("KAFSCALE_E2E_DEBUG")
-	brokerWriterTargets := []io.Writer{&brokerLogs, mustLogFile(t, "broker.log")}
-	if debugLogs {
-		brokerWriterTargets = append(brokerWriterTargets, os.Stdout)
-	}
-	logWriter := io.MultiWriter(brokerWriterTargets...)
-	brokerCmd.Stdout = logWriter
-	brokerCmd.Stderr = logWriter
-	if err := brokerCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = signalProcessGroup(brokerCmd, os.Interrupt)
-		done := make(chan struct{})
-		go func() {
-			_ = brokerCmd.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			_ = signalProcessGroup(brokerCmd, os.Kill)
-		}
-	})
-
-	t.Log("waiting for broker readiness")
-	waitForBrokerReady(t, &brokerLogs, brokerListenAddr, brokerAddr)
+	_, brokerLogs, actual := startBrokerProcess(t, ctx, brokerAddresses{brokerAddr, metricsAddr, controlAddr}, []string{"KAFSCALE_AUTO_CREATE_TOPICS=true", "KAFSCALE_AUTO_CREATE_PARTITIONS=1", "KAFSCALE_BROKER_HOST=" + advertisedHost}, nil, "broker.log")
+	brokerAddr = actual.kafka
+	_, brokerPort, _ = net.SplitHostPort(brokerAddr)
+	brokerListenAddr = ":" + brokerPort
 	t.Logf("broker ready on %s", brokerAddr)
 
 	image := envOrDefault("KAFSCALE_KAFKA_CLI_IMAGE", "apache/kafka:3.9.1")
@@ -123,7 +87,7 @@ func newKafkaCliHarness(t *testing.T) *kafkaCliHarness {
 		brokerAddr:       brokerAddr,
 		brokerPort:       brokerPort,
 		brokerListenAddr: brokerListenAddr,
-		brokerLogs:       &brokerLogs,
+		brokerLogs:       brokerLogs,
 		image:            image,
 		bootstrap:        bootstrap,
 		producerCmd:      producerCmd,
@@ -265,51 +229,14 @@ func TestKafkaCliAdminTopics(t *testing.T) {
 	defer cancel()
 
 	brokerPort := pickFreePort(t)
-	brokerListenAddr := ":" + brokerPort
 	brokerAddr := "127.0.0.1:" + brokerPort
 	metricsAddr := "127.0.0.1:" + pickFreePort(t)
 	controlAddr := "127.0.0.1:" + pickFreePort(t)
 	advertisedHost := dockerAdvertisedHost(brokerAddr)
 
-	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
-	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
-		"KAFSCALE_AUTO_CREATE_TOPICS=false",
-		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
-		"KAFSCALE_ALLOW_ADMIN_APIS=true",
-		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerListenAddr),
-		fmt.Sprintf("KAFSCALE_BROKER_HOST=%s", advertisedHost),
-		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
-		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
-	)
-	var brokerLogs bytes.Buffer
-	debugLogs := parseBoolEnv("KAFSCALE_E2E_DEBUG")
-	brokerWriterTargets := []io.Writer{&brokerLogs, mustLogFile(t, "broker.log")}
-	if debugLogs {
-		brokerWriterTargets = append(brokerWriterTargets, os.Stdout)
-	}
-	logWriter := io.MultiWriter(brokerWriterTargets...)
-	brokerCmd.Stdout = logWriter
-	brokerCmd.Stderr = logWriter
-	if err := brokerCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = signalProcessGroup(brokerCmd, os.Interrupt)
-		done := make(chan struct{})
-		go func() {
-			_ = brokerCmd.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			_ = signalProcessGroup(brokerCmd, os.Kill)
-		}
-	})
-
-	t.Log("waiting for broker readiness")
-	waitForBrokerReady(t, &brokerLogs, brokerListenAddr, brokerAddr)
+	_, _, actual := startBrokerProcess(t, ctx, brokerAddresses{brokerAddr, metricsAddr, controlAddr}, []string{"KAFSCALE_AUTO_CREATE_TOPICS=false", "KAFSCALE_AUTO_CREATE_PARTITIONS=1", "KAFSCALE_ALLOW_ADMIN_APIS=true", "KAFSCALE_BROKER_HOST=" + advertisedHost}, nil, "broker.log")
+	brokerAddr = actual.kafka
+	_, brokerPort, _ = net.SplitHostPort(brokerAddr)
 	t.Logf("broker ready on %s", brokerAddr)
 
 	image := envOrDefault("KAFSCALE_KAFKA_CLI_IMAGE", "apache/kafka:3.9.1")
@@ -430,24 +357,6 @@ func dockerAdvertisedHost(addr string) string {
 		return "127.0.0.1"
 	}
 	return "host.docker.internal"
-}
-
-func waitForBrokerReady(t *testing.T, logs *bytes.Buffer, listenAddr, connectAddr string) {
-	t.Helper()
-	deadline := time.After(10 * time.Second)
-	msg := fmt.Sprintf("broker listening on %s", listenAddr)
-	altMsg := fmt.Sprintf("broker listening on [::]%s", strings.TrimPrefix(listenAddr, "127.0.0.1"))
-	for {
-		if strings.Contains(logs.String(), msg) || strings.Contains(logs.String(), altMsg) {
-			waitForPort(t, connectAddr)
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("broker failed to start: logs:\n%s", logs.String())
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
 }
 
 func parseApiVersionMax(output, apiName string) (int, bool) {

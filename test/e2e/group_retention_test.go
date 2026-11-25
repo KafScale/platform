@@ -60,7 +60,8 @@ func TestConsumerGroupRetentionE2E(t *testing.T) {
 		}
 	}
 	addr := freeAddr(t)
-	command, logs := startBrokerWithEtcd(t, ctx, addr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_OFFSETS_RETENTION_MINUTES=1")
+	command, logs, actual := startBrokerWithEtcd(t, ctx, addr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_OFFSETS_RETENTION_MINUTES=1")
+	addr = actual.kafka
 	defer stopBroker(t, command)
 	waitForBroker(t, logs, addr)
 	for deadline := time.Now().Add(12 * time.Second); ; {

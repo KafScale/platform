@@ -17,7 +17,6 @@ package testutil
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -69,11 +68,9 @@ func startEmbeddedEtcdOnce(t testing.TB) ([]string, error) {
 	cfg.LogLevel = "error"
 	cfg.LogOutputs = []string{etcdLogPath(t)}
 
-	clientPort := freeLocalPort(t)
-	peerPort := freeLocalPort(t)
-	cfg.ListenClientUrls = []url.URL{mustURL(t, fmt.Sprintf("http://127.0.0.1:%d", clientPort))}
+	cfg.ListenClientUrls = []url.URL{mustURL(t, "http://127.0.0.1:0")}
 	cfg.AdvertiseClientUrls = cfg.ListenClientUrls
-	cfg.ListenPeerUrls = []url.URL{mustURL(t, fmt.Sprintf("http://127.0.0.1:%d", peerPort))}
+	cfg.ListenPeerUrls = []url.URL{mustURL(t, "http://127.0.0.1:0")}
 	cfg.AdvertisePeerUrls = cfg.ListenPeerUrls
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
 
@@ -85,7 +82,7 @@ func startEmbeddedEtcdOnce(t testing.TB) ([]string, error) {
 	select {
 	case <-e.Server.ReadyNotify():
 	case <-time.After(10 * time.Second):
-		e.Server.Stop()
+		e.Close()
 		return nil, fmt.Errorf("embedded etcd took too long to start")
 	}
 
@@ -104,16 +101,6 @@ func isEmbeddedEtcdBindError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "bind: address already in use") ||
 		strings.Contains(msg, "address already in use")
-}
-
-func freeLocalPort(t testing.TB) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("allocate free port: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-	return ln.Addr().(*net.TCPAddr).Port
 }
 
 func mustURL(t testing.TB, raw string) url.URL {

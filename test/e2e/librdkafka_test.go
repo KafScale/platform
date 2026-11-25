@@ -71,7 +71,8 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 	brokerAddr, proxyAddr := freeAddr(t), freeAddr(t)
 	// Flush the acks=0 tail without requiring a later acknowledged Produce to
 	// make its durable watermark visible to the close-after-send regression.
-	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_SEGMENT_BYTES=1")
+	brokerCmd, brokerLogs, actual := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_SEGMENT_BYTES=1")
+	brokerAddr = actual.kafka
 	defer stopBroker(t, brokerCmd)
 	waitForBroker(t, brokerLogs, brokerAddr)
 	_, proxyPort, _ := net.SplitHostPort(proxyAddr)

@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -32,22 +33,63 @@ func brokerAddrs(t *testing.T) (string, string, string) {
 		control := envOrDefault("KAFSCALE_E2E_CONTROL_ADDR", "127.0.0.1:39094")
 		return addr, metrics, control
 	}
-	brokerPort := pickFreePort(t)
-	metricsPort := pickFreePort(t)
-	controlPort := pickFreePort(t)
-	return "127.0.0.1:" + brokerPort, "127.0.0.1:" + metricsPort, "127.0.0.1:" + controlPort
+	addresses := newBrokerAddresses(t)
+	return addresses.kafka, addresses.metrics, addresses.control
+}
+
+// Selections are advisory until the subprocess binds. Keep selections distinct
+// within this test process; startBrokerAttempts handles external bind races.
+var localAddressSelections = struct {
+	sync.Mutex
+	used map[string]bool
+}{used: make(map[string]bool)}
+
+func allocateLocalAddresses(t *testing.T, count int) []string {
+	t.Helper()
+	localAddressSelections.Lock()
+	defer localAddressSelections.Unlock()
+	var listeners []net.Listener
+	defer func() {
+		for _, listener := range listeners {
+			listener.Close()
+		}
+	}()
+	addresses := make([]string, 0, count)
+	for attempt := 0; len(addresses) < count && attempt < 100*count; attempt++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("allocate address: %v", err)
+		}
+		addr := listener.Addr().String()
+		if localAddressSelections.used[addr] {
+			listener.Close()
+			continue
+		}
+		localAddressSelections.used[addr] = true
+		t.Cleanup(func() {
+			localAddressSelections.Lock()
+			delete(localAddressSelections.used, addr)
+			localAddressSelections.Unlock()
+		})
+		listeners = append(listeners, listener)
+		addresses = append(addresses, addr)
+	}
+	if len(addresses) != count {
+		t.Fatal("could not allocate distinct local addresses")
+	}
+	return addresses
+}
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	return allocateLocalAddresses(t, 1)[0]
 }
 
 func pickFreePort(t *testing.T) string {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	_, port, err := net.SplitHostPort(freeAddr(t))
 	if err != nil {
-		t.Fatalf("pick free port: %v", err)
-	}
-	defer l.Close()
-	_, port, err := net.SplitHostPort(l.Addr().String())
-	if err != nil {
-		t.Fatalf("split free port: %v", err)
+		t.Fatal(err)
 	}
 	return port
 }

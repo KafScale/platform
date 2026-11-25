@@ -103,10 +103,12 @@ func TestDeleteGroupsNonCoordinatorE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a, logsA := startBrokerWithEtcd(t, ctx, aAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_BROKER_ID=1")
+	a, logsA, actualA := startBrokerWithEtcd(t, ctx, aAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_BROKER_ID=1")
+	aAddr = actualA.kafka
 	defer stopBroker(t, a)
 	waitForBroker(t, logsA, aAddr)
-	b, logsB := startBrokerWithEtcd(t, ctx, bAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_BROKER_ID=2")
+	b, logsB, actualB := startBrokerWithEtcd(t, ctx, bAddr, freeAddr(t), freeAddr(t), endpoints, "KAFSCALE_BROKER_ID=2")
+	bAddr = actualB.kafka
 	defer stopBroker(t, b)
 	waitForBroker(t, logsB, bAddr)
 	proxyAddr := freeAddr(t)

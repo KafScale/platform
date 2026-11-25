@@ -18,14 +18,11 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +58,8 @@ func TestACLsE2E(t *testing.T) {
 		`{"name":"denied","allow":[]}` +
 		`]}`
 
-	brokerCmd, brokerLogs := startBrokerWithEtcdACL(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints, aclJSON)
+	brokerCmd, brokerLogs, actual := startBrokerWithEtcdACL(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints, aclJSON)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	t.Cleanup(func() { stopBroker(t, brokerCmd) })
 	waitForBroker(t, brokerLogs, brokerAddr)
 
@@ -115,27 +113,8 @@ func TestACLsE2E(t *testing.T) {
 	}
 }
 
-func startBrokerWithEtcdACL(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string, aclJSON string) (*exec.Cmd, *bytes.Buffer) {
+func startBrokerWithEtcdACL(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string, aclJSON string) (*exec.Cmd, *brokerLogBuffer, brokerAddresses) {
 	t.Helper()
-	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
-	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
-		"KAFSCALE_AUTO_CREATE_TOPICS=true",
-		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
-		"KAFSCALE_USE_MEMORY_S3=1",
-		"KAFSCALE_ACL_ENABLED=true",
-		fmt.Sprintf("KAFSCALE_ACL_JSON=%s", aclJSON),
-		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
-		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
-		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
-		fmt.Sprintf("KAFSCALE_ETCD_ENDPOINTS=%s", strings.Join(endpoints, ",")),
-	)
-	var brokerLogs bytes.Buffer
-	logWriter := io.MultiWriter(&brokerLogs, mustLogFile(t, "broker-acl.log"))
-	brokerCmd.Stdout = logWriter
-	brokerCmd.Stderr = logWriter
-	if err := brokerCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-	return brokerCmd, &brokerLogs
+	env := []string{"KAFSCALE_AUTO_CREATE_TOPICS=true", "KAFSCALE_AUTO_CREATE_PARTITIONS=1", "KAFSCALE_USE_MEMORY_S3=1", "KAFSCALE_ACL_ENABLED=true", "KAFSCALE_ACL_JSON=" + aclJSON, "KAFSCALE_ETCD_ENDPOINTS=" + strings.Join(endpoints, ",")}
+	return startBrokerProcess(t, ctx, brokerAddresses{brokerAddr, metricsAddr, controlAddr}, env, endpoints, "broker-acl.log")
 }

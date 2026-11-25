@@ -181,7 +181,8 @@ func (h *srHarness) runScenarios() {
 	defer etcd.Close()
 	h.endpoints = endpoints
 	brokerAddr := freeAddr(t)
-	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints)
+	brokerCmd, brokerLogs, actual := startBrokerWithEtcd(t, ctx, brokerAddr, freeAddr(t), freeAddr(t), endpoints)
+	brokerAddr = actual.kafka
 	defer stopBroker(t, brokerCmd)
 	waitForBroker(t, brokerLogs, brokerAddr)
 	h.bin = filepath.Join(h.work, "kafscale-schema-registry")

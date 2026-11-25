@@ -18,15 +18,12 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -71,7 +68,8 @@ func TestMultiSegmentRestartDurability(t *testing.T) {
 	metricsAddr := freeAddr(t)
 	controlAddr := freeAddr(t)
 
-	brokerCmd, brokerLogs := startBrokerWithEtcdS3(t, ctx, brokerAddr, metricsAddr, controlAddr)
+	brokerCmd, brokerLogs, actual := startBrokerWithEtcdS3(t, ctx, brokerAddr, metricsAddr, controlAddr)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	waitForBroker(t, brokerLogs, brokerAddr)
 
 	topic := fmt.Sprintf("durability-%d", time.Now().UnixNano())
@@ -117,7 +115,8 @@ func TestMultiSegmentRestartDurability(t *testing.T) {
 		t.Fatalf("etcd client probe failed after broker stop: %v", err)
 	}
 
-	brokerCmd, brokerLogs = startBrokerWithEtcdS3(t, ctx, brokerAddr, metricsAddr, controlAddr)
+	brokerCmd, brokerLogs, actual = startBrokerWithEtcdS3(t, ctx, brokerAddr, metricsAddr, controlAddr)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	waitForBroker(t, brokerLogs, brokerAddr)
 	if err := waitForEtcdClient(t, endpoints[0]); err != nil {
 		t.Fatalf("etcd client probe failed after broker restart: %v", err)
@@ -291,25 +290,8 @@ func setEnvDefault(t *testing.T, name, value string) {
 	}
 }
 
-func startBrokerWithEtcdS3(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string) (*exec.Cmd, *bytes.Buffer) {
+func startBrokerWithEtcdS3(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string) (*exec.Cmd, *brokerLogBuffer, brokerAddresses) {
 	t.Helper()
-	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
-	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
-		"KAFSCALE_AUTO_CREATE_TOPICS=true",
-		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
-		"KAFSCALE_TRACE_KAFKA=true",
-		"KAFSCALE_LOG_LEVEL=debug",
-		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
-		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
-		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
-	)
-	var brokerLogs bytes.Buffer
-	logWriter := io.MultiWriter(&brokerLogs, mustLogFile(t, "broker-durability.log"))
-	brokerCmd.Stdout = logWriter
-	brokerCmd.Stderr = logWriter
-	if err := brokerCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-	return brokerCmd, &brokerLogs
+	env := []string{"KAFSCALE_AUTO_CREATE_TOPICS=true", "KAFSCALE_AUTO_CREATE_PARTITIONS=1", "KAFSCALE_TRACE_KAFKA=true", "KAFSCALE_LOG_LEVEL=debug"}
+	return startBrokerProcess(t, ctx, brokerAddresses{brokerAddr, metricsAddr, controlAddr}, env, splitCSVEndpoints(os.Getenv("KAFSCALE_ETCD_ENDPOINTS")), "broker-durability.log")
 }

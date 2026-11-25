@@ -3001,7 +3001,13 @@ func startMetricsServer(ctx context.Context, addr string, h *handler, logger *sl
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			logger.Error("metrics server error", "error", err)
+			return
+		}
+		logger.Info("metrics server listening on " + listener.Addr().String())
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("metrics server error", "error", err)
 		}
 	}()
