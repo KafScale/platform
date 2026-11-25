@@ -47,32 +47,26 @@ func TestFranzGoProduceConsume(t *testing.T) {
 
 	brokerAddr, metricsAddr, controlAddr := brokerAddrs(t)
 
-	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
-	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
+	brokerEnv := []string{
 		"KAFSCALE_AUTO_CREATE_TOPICS=true",
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
 		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
 		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
-		"KAFSCALE_S3_BUCKET="+envOrDefault("KAFSCALE_S3_BUCKET", "kafscale"),
-		"KAFSCALE_S3_REGION="+envOrDefault("KAFSCALE_S3_REGION", "us-east-1"),
-		"KAFSCALE_S3_NAMESPACE="+envOrDefault("KAFSCALE_S3_NAMESPACE", "default"),
-		"KAFSCALE_S3_ENDPOINT="+envOrDefault("KAFSCALE_S3_ENDPOINT", "http://127.0.0.1:9000"),
-		"KAFSCALE_S3_PATH_STYLE="+envOrDefault("KAFSCALE_S3_PATH_STYLE", "true"),
-		"KAFSCALE_S3_ACCESS_KEY="+envOrDefault("KAFSCALE_S3_ACCESS_KEY", "minioadmin"),
-		"KAFSCALE_S3_SECRET_KEY="+envOrDefault("KAFSCALE_S3_SECRET_KEY", "minioadmin"),
-	)
-	var brokerLogs bytes.Buffer
+		"KAFSCALE_S3_BUCKET=" + envOrDefault("KAFSCALE_S3_BUCKET", "kafscale"),
+		"KAFSCALE_S3_REGION=" + envOrDefault("KAFSCALE_S3_REGION", "us-east-1"),
+		"KAFSCALE_S3_NAMESPACE=" + envOrDefault("KAFSCALE_S3_NAMESPACE", "default"),
+		"KAFSCALE_S3_ENDPOINT=" + envOrDefault("KAFSCALE_S3_ENDPOINT", "http://127.0.0.1:9000"),
+		"KAFSCALE_S3_PATH_STYLE=" + envOrDefault("KAFSCALE_S3_PATH_STYLE", "true"),
+		"KAFSCALE_S3_ACCESS_KEY=" + envOrDefault("KAFSCALE_S3_ACCESS_KEY", "minioadmin"),
+		"KAFSCALE_S3_SECRET_KEY=" + envOrDefault("KAFSCALE_S3_SECRET_KEY", "minioadmin"),
+	}
 	var franzLogs bytes.Buffer
 	debugLogs := parseBoolEnv("KAFSCALE_E2E_DEBUG")
-	brokerWriterTargets := []io.Writer{&brokerLogs, mustLogFile(t, "broker.log")}
 	franzWriterTargets := []io.Writer{&franzLogs, mustLogFile(t, "franz.log")}
 	if debugLogs {
-		brokerWriterTargets = append(brokerWriterTargets, os.Stdout)
 		franzWriterTargets = append(franzWriterTargets, os.Stdout)
 	}
-	logWriter := io.MultiWriter(brokerWriterTargets...)
 	franzLogWriter := io.MultiWriter(franzWriterTargets...)
 	traceKafka := parseBoolEnv("KAFSCALE_TRACE_KAFKA")
 	newFranzLogger := func(component string) kgo.Logger {
@@ -84,27 +78,11 @@ func TestFranzGoProduceConsume(t *testing.T) {
 			return fmt.Sprintf("franz/%s ", component)
 		})
 	}
-	brokerCmd.Stdout = logWriter
-	brokerCmd.Stderr = logWriter
-	if err := brokerCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = signalProcessGroup(brokerCmd, os.Interrupt)
-		done := make(chan struct{})
-		go func() {
-			_ = brokerCmd.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			_ = signalProcessGroup(brokerCmd, os.Kill)
-		}
-	})
+	_, brokerLogs, actual := startBrokerProcess(t, ctx, brokerAddresses{brokerAddr, metricsAddr, controlAddr}, brokerEnv, nil, "broker.log")
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 
 	t.Log("waiting for broker readiness")
-	waitForBroker(t, &brokerLogs, brokerAddr)
+	waitForBroker(t, brokerLogs, brokerAddr)
 	t.Run("ApiVersionsNegotiation", func(t *testing.T) {
 		conn, err := net.DialTimeout("tcp", brokerAddr, 5*time.Second)
 		if err != nil {

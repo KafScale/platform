@@ -21,7 +21,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -83,6 +82,7 @@ func TestSnapshotPublishAndBrokerConsumption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create etcd store: %v", err)
 	}
+	defer store.Close()
 
 	meta, err := store.Metadata(ctx, []string{"orders"})
 	if err != nil {
@@ -106,11 +106,9 @@ func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
 	cfg.Logger = "zap"
 	cfg.LogLevel = "info"
 	cfg.LogOutputs = []string{etcdLogPath(t)}
-	clientPort := freeLocalPort(t)
-	peerPort := freeLocalPort(t)
-	cfg.ListenClientUrls = []url.URL{mustURL(t, fmt.Sprintf("http://127.0.0.1:%d", clientPort))}
+	cfg.ListenClientUrls = []url.URL{mustURL(t, "http://127.0.0.1:0")}
 	cfg.AdvertiseClientUrls = cfg.ListenClientUrls
-	cfg.ListenPeerUrls = []url.URL{mustURL(t, fmt.Sprintf("http://127.0.0.1:%d", peerPort))}
+	cfg.ListenPeerUrls = []url.URL{mustURL(t, "http://127.0.0.1:0")}
 	cfg.AdvertisePeerUrls = cfg.ListenPeerUrls
 	cfg.InitialCluster = cfg.InitialClusterFromName(cfg.Name)
 
@@ -121,22 +119,12 @@ func startEmbeddedEtcd(t *testing.T) (*embed.Etcd, []string) {
 	select {
 	case <-e.Server.ReadyNotify():
 	case <-time.After(10 * time.Second):
-		e.Server.Stop()
+		e.Close()
 		t.Fatalf("etcd server took too long to start")
 	}
 
 	clientURL := e.Clients[0].Addr().String()
 	return e, []string{fmt.Sprintf("http://%s", clientURL)}
-}
-
-func freeLocalPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("allocate port: %v", err)
-	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
 }
 
 func mustURL(t *testing.T, raw string) url.URL {

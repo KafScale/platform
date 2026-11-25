@@ -147,6 +147,25 @@ To add headers to new files, run `python3 hack/license_headers.py`.
 
 ## Test Workflows (Details)
 
+### Local e2e ports
+
+Embedded etcd binds its client and peer listeners directly on port zero. Broker
+fixtures use `startBrokerProcess`, which makes at most three startup attempts
+with fresh Kafka, metrics, and control addresses after bind collisions. Callers use the
+returned addresses; existing metadata snapshots are updated when a retry moves
+the broker. Failed children are stopped and reaped before retrying. Other startup
+errors and cancellation are not retried.
+
+`freeAddr` and `pickFreePort` only select addresses; they cannot reserve a port
+for a subprocess. New broker fixtures should use the shared startup helper.
+Reproduce the port and coordinator-restart regressions under repeated startup:
+
+```sh
+KAFSCALE_E2E=1 go test -race -tags=e2e ./test/e2e \
+  -run '^(TestBrokerStartup(RetriesOccupiedPorts|RetryLimits|RepairsSnapshotAfterCollision|RetriesAuxiliaryListeners|CleanupDoesNotRewait|CancellationStopsChild)|TestDeleteConsumerGroupAfterCoordinatorCrash|TestSnapshotPublishAndBrokerConsumption)$' \
+  -count=20 -timeout=15m
+```
+
 ### Local MinIO / S3 setup
 
 `make test-produce-consume` assumes there is an S3 endpoint in front of the broker, so we keep a local MinIO container (`kafscale-minio`) running to exercise a production-like S3 stack.

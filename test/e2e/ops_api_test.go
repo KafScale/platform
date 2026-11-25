@@ -43,7 +43,8 @@ func TestOpsAPI(t *testing.T) {
 	brokerAddr := freeAddr(t)
 	metricsAddr := freeAddr(t)
 	controlAddr := freeAddr(t)
-	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerCmd, brokerLogs, actual := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	t.Cleanup(func() { stopBroker(t, brokerCmd) })
 	waitForBroker(t, brokerLogs, brokerAddr)
 

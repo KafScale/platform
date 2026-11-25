@@ -21,11 +21,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -53,7 +50,8 @@ func TestConsumerGroupMetadataPersistsInEtcd(t *testing.T) {
 	metricsAddr := freeAddr(t)
 	controlAddr := freeAddr(t)
 
-	brokerCmd, brokerLogs := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerCmd, brokerLogs, actual := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	waitForBroker(t, brokerLogs, brokerAddr)
 
 	topic := fmt.Sprintf("orders-%d", time.Now().UnixNano())
@@ -169,7 +167,8 @@ func TestConsumerGroupMetadataPersistsInEtcd(t *testing.T) {
 	brokerAddr = freeAddr(t)
 	metricsAddr = freeAddr(t)
 	controlAddr = freeAddr(t)
-	brokerCmd, brokerLogs = startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerCmd, brokerLogs, actual = startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	waitForBroker(t, brokerLogs, brokerAddr)
 	verifyGroup("after-restart")
 	stopBroker(t, brokerCmd)
@@ -193,59 +192,15 @@ func (b *brokerLogBuffer) String() string {
 	return b.buffer.String()
 }
 
-func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string, extraEnv ...string) (*exec.Cmd, *brokerLogBuffer) {
+func startBrokerWithEtcd(t *testing.T, ctx context.Context, brokerAddr, metricsAddr, controlAddr string, endpoints []string, extraEnv ...string) (*exec.Cmd, *brokerLogBuffer, brokerAddresses) {
 	t.Helper()
-	brokerCmd := exec.CommandContext(ctx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
-	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
-		"KAFSCALE_AUTO_CREATE_TOPICS=true",
-		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
-		"KAFSCALE_USE_MEMORY_S3=1",
-		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
-		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
-		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
-		fmt.Sprintf("KAFSCALE_ETCD_ENDPOINTS=%s", strings.Join(endpoints, ",")),
-	)
-	brokerCmd.Env = append(brokerCmd.Env, extraEnv...)
-	var brokerLogs brokerLogBuffer
-	logWriter := io.MultiWriter(&brokerLogs, mustLogFile(t, "broker-etcd.log"))
-	brokerCmd.Stdout = logWriter
-	brokerCmd.Stderr = logWriter
-	if err := brokerCmd.Start(); err != nil {
-		t.Fatalf("start broker: %v", err)
-	}
-	return brokerCmd, &brokerLogs
+	env := append([]string{"KAFSCALE_AUTO_CREATE_TOPICS=true", "KAFSCALE_AUTO_CREATE_PARTITIONS=1", "KAFSCALE_USE_MEMORY_S3=1", "KAFSCALE_ETCD_ENDPOINTS=" + strings.Join(endpoints, ",")}, extraEnv...)
+	return startBrokerProcess(t, ctx, brokerAddresses{brokerAddr, metricsAddr, controlAddr}, env, endpoints, "broker-etcd.log")
 }
 
 func stopBroker(t *testing.T, cmd *exec.Cmd) {
 	t.Helper()
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	_ = signalProcessGroup(cmd, os.Interrupt)
-	done := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		_ = signalProcessGroup(cmd, os.Kill)
-	}
-}
-
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen on free port: %v", err)
-	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatalf("close listener: %v", err)
-	}
-	return addr
+	stopStartedCommand(cmd)
 }
 
 // A raw protocol client creates membership without a background heartbeat loop,
@@ -259,7 +214,8 @@ func TestDeleteConsumerGroupAfterCoordinatorCrash(t *testing.T) {
 	etcd, endpoints := startEmbeddedEtcd(t)
 	defer etcd.Close()
 	brokerAddr, metricsAddr, controlAddr := freeAddr(t), freeAddr(t), freeAddr(t)
-	brokerCmd, logs := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerCmd, logs, actual := startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	t.Cleanup(func() { stopBroker(t, brokerCmd) })
 	waitForBroker(t, logs, brokerAddr)
 	client, err := kgo.NewClient(kgo.SeedBrokers(brokerAddr))
@@ -299,7 +255,7 @@ func TestDeleteConsumerGroupAfterCoordinatorCrash(t *testing.T) {
 	if err := signalProcessGroup(brokerCmd, os.Kill); err != nil {
 		t.Fatal(err)
 	}
-	_ = brokerCmd.Wait()
+	<-commandCompletionFor(brokerCmd).done
 	client.Close()
 	// Wait only for the recorded member's session deadline, without joining again.
 	for _, member := range before.Members {
@@ -312,7 +268,8 @@ func TestDeleteConsumerGroupAfterCoordinatorCrash(t *testing.T) {
 			time.Sleep(remaining)
 		}
 	}
-	brokerCmd, logs = startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerCmd, logs, actual = startBrokerWithEtcd(t, ctx, brokerAddr, metricsAddr, controlAddr, endpoints)
+	brokerAddr, metricsAddr, controlAddr = actual.kafka, actual.metrics, actual.control
 	waitForBroker(t, logs, brokerAddr)
 	admin, err := kgo.NewClient(kgo.SeedBrokers(brokerAddr))
 	if err != nil {

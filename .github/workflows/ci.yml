@@ -192,6 +192,10 @@ jobs:
           KAFSCALE_E2E_AUTH: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^TestProxy(MTLS|PlainAutoCreate)E2E$' -v -count=1 -timeout=3m
 
+      - name: Broker startup port race regressions
+        if: matrix.suite == 'kafka'
+        run: go test -race -tags=e2e ./test/e2e -run '^TestBrokerStartup(RetriesOccupiedPorts|RetryLimits|RepairsSnapshotAfterCollision|RetriesAuxiliaryListeners|CleanupDoesNotRewait|CancellationStopsChild)$' -v -count=1 -timeout=2m
+
       - name: librdkafka compatibility end-to-end tests
         if: matrix.suite == 'kafka'
         env:
