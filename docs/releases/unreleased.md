@@ -17,6 +17,8 @@ limitations under the License.
 
 # Unreleased
 
+- Assign and persist a random UUID for each new topic. Same-name recreation gets a new ID, and stale Fetch/Metadata IDs return `UNKNOWN_TOPIC_ID`. Preserve existing IDs across upgrades, partition expansion, restarts and operator reconciliation; track Kubernetes resource incarnations in the metadata snapshot (#424).
+
 - Support nontransactional idempotent producers through brokers and the Kubernetes proxy (`InitProducerId` v0-v4). Default Java producers can send without disabling idempotence (#28).
 - Allocate producer IDs durably through etcd; deduplicate the last five batches per producer and partition under the append lock. Rebuild sequence state from S3 on restart and ownership changes, including after uncertain writes. Idempotent writes require `acks=all` and always flush before success.
 - Support `read_committed` Fetch and offset queries on the durable nontransactional log. Return explicit protocol errors for transactional writes and control batches; omit unsupported APIs from version negotiation. Transactions and cross-session exactly-once delivery remain unsupported.

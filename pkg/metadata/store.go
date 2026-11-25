@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,9 @@ type ClusterMetadata struct {
 	Topics       []protocol.MetadataTopic
 	ClusterName  *string
 	ClusterID    *string
+	// TopicResourceUIDs identifies operator-managed Kubernetes resource incarnations.
+	// It is persisted atomically with topic IDs, never exposed in Kafka responses.
+	TopicResourceUIDs map[string]string `json:",omitempty"`
 }
 
 // InMemoryStore is a simple Store backed by in-process state. Useful for early development and tests.
@@ -179,11 +183,12 @@ func filterTopics(all []protocol.MetadataTopic, requested []string) []protocol.M
 
 func cloneMetadata(src ClusterMetadata) ClusterMetadata {
 	return ClusterMetadata{
-		Brokers:      cloneBrokers(src.Brokers),
-		ControllerID: src.ControllerID,
-		Topics:       cloneTopics(src.Topics),
-		ClusterName:  cloneStringPtr(src.ClusterName),
-		ClusterID:    cloneStringPtr(src.ClusterID),
+		Brokers:           cloneBrokers(src.Brokers),
+		ControllerID:      src.ControllerID,
+		Topics:            cloneTopics(src.Topics),
+		ClusterName:       cloneStringPtr(src.ClusterName),
+		ClusterID:         cloneStringPtr(src.ClusterID),
+		TopicResourceUIDs: maps.Clone(src.TopicResourceUIDs),
 	}
 }
 
@@ -335,7 +340,7 @@ func (s *InMemoryStore) CreateTopic(ctx context.Context, spec TopicSpec) (*proto
 	}
 	newTopic := protocol.MetadataTopic{
 		Topic:      kmsg.StringPtr(spec.Name),
-		TopicID:    TopicIDForName(spec.Name),
+		TopicID:    NewTopicID(),
 		IsInternal: false,
 		Partitions: partitions,
 	}
@@ -481,6 +486,7 @@ func (s *InMemoryStore) DeleteTopic(ctx context.Context, name string) error {
 		return ErrUnknownTopic
 	}
 	s.state.Topics = append(s.state.Topics[:index], s.state.Topics[index+1:]...)
+	delete(s.state.TopicResourceUIDs, name)
 	for key := range s.offsets {
 		if strings.HasPrefix(key, name+":") {
 			delete(s.offsets, key)

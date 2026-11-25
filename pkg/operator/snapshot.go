@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -176,6 +177,7 @@ func BuildClusterMetadataForBrokers(cluster *kafscalev1.KafscaleCluster, topics 
 		}
 	}
 	metaTopics := make([]protocol.MetadataTopic, 0, len(topics))
+	resourceUIDs := make(map[string]string)
 	replicaIDs := buildReplicaIDs(replicas)
 	clusterID := string(cluster.UID)
 	var clusterIDPtr *string
@@ -188,6 +190,9 @@ func BuildClusterMetadataForBrokers(cluster *kafscalev1.KafscaleCluster, topics 
 		clusterNamePtr = &clusterName
 	}
 	for _, topic := range topics {
+		if topic.UID != "" {
+			resourceUIDs[topic.Name] = string(topic.UID)
+		}
 		partitions := make([]protocol.MetadataPartition, topic.Spec.Partitions)
 		for i := int32(0); i < topic.Spec.Partitions; i++ {
 			leader := int32(-1)
@@ -207,7 +212,7 @@ func BuildClusterMetadataForBrokers(cluster *kafscalev1.KafscaleCluster, topics 
 		}
 		metaTopics = append(metaTopics, protocol.MetadataTopic{
 			Topic:      kmsg.StringPtr(topic.Name),
-			TopicID:    metadata.TopicIDForName(topic.Name),
+			TopicID:    metadata.NewTopicID(),
 			IsInternal: false,
 			Partitions: partitions,
 		})
@@ -217,11 +222,12 @@ func BuildClusterMetadataForBrokers(cluster *kafscalev1.KafscaleCluster, topics 
 		controllerID = brokers[0].NodeID
 	}
 	return metadata.ClusterMetadata{
-		Brokers:      brokers,
-		ControllerID: controllerID,
-		Topics:       metaTopics,
-		ClusterName:  clusterNamePtr,
-		ClusterID:    clusterIDPtr,
+		Brokers:           brokers,
+		ControllerID:      controllerID,
+		Topics:            metaTopics,
+		ClusterName:       clusterNamePtr,
+		ClusterID:         clusterIDPtr,
+		TopicResourceUIDs: resourceUIDs,
 	}
 }
 
@@ -325,8 +331,38 @@ func publishMetadataSnapshot(ctx context.Context, endpoints []string, snapshot m
 }
 
 func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMetadata {
-	if len(existing.Topics) == 0 {
-		return next
+	// Candidates are rebuilt on CAS conflicts. Never mutate the desired input.
+	next.Topics = append([]protocol.MetadataTopic(nil), next.Topics...)
+	next.TopicResourceUIDs = maps.Clone(next.TopicResourceUIDs)
+	if next.TopicResourceUIDs == nil {
+		next.TopicResourceUIDs = make(map[string]string)
+	}
+	previous := make(map[string]protocol.MetadataTopic, len(existing.Topics))
+	for _, topic := range existing.Topics {
+		if topic.Topic != nil && topic.ErrorCode == 0 {
+			previous[*topic.Topic] = topic
+		}
+	}
+	for i := range next.Topics {
+		topic := &next.Topics[i]
+		if topic.Topic == nil {
+			continue
+		}
+		name := *topic.Topic
+		old, ok := previous[name]
+		if !ok {
+			continue
+		}
+		oldUID, nextUID := existing.TopicResourceUIDs[name], next.TopicResourceUIDs[name]
+		if oldUID == "" || nextUID == "" || oldUID == nextUID {
+			topic.TopicID = old.TopicID
+			if topic.TopicID == ([16]byte{}) {
+				topic.TopicID = metadata.TopicIDForName(name)
+			}
+		}
+		if nextUID == "" && oldUID != "" {
+			next.TopicResourceUIDs[name] = oldUID
+		}
 	}
 	seen := make(map[string]struct{}, len(next.Topics))
 	for _, topic := range next.Topics {
@@ -374,7 +410,13 @@ func mergeSnapshots(next, existing metadata.ClusterMetadata) metadata.ClusterMet
 			part.Replicas = replicas
 			part.ISR = append([]int32(nil), replicas...)
 		}
+		if topic.TopicID == ([16]byte{}) {
+			topic.TopicID = metadata.TopicIDForName(name)
+		}
 		next.Topics = append(next.Topics, topic)
+		if uid := existing.TopicResourceUIDs[name]; uid != "" {
+			next.TopicResourceUIDs[name] = uid
+		}
 	}
 	return next
 }

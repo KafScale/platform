@@ -213,3 +213,65 @@ func TestTopicDeleteWatchStopsWithContext(t *testing.T) {
 	newTestHandler(store).watchTopicDeletes(ctx, store.EtcdClient())
 	newTestHandler(metadata.NewInMemoryStore(defaultMetadata())).startTopicDeleteWatch(context.Background())
 }
+
+func TestRecreatedTopicRejectsCachedTopicID(t *testing.T) {
+	ctx := context.Background()
+	store := newEtcdTopicStore(t, ctx)
+	h := newTestHandler(store)
+	t.Cleanup(h.coordinator.Stop)
+	before, err := store.Metadata(ctx, []string{"orders"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldID := before.Topics[0].TopicID
+	produceOrders(t, ctx, h, 1)
+	wire, err := h.handleDeleteTopics(ctx, &protocol.RequestHeader{APIVersion: 0}, &kmsg.DeleteTopicsRequest{TopicNames: []string{"orders"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp := decodeKmsgResponse(t, 0, wire, kmsg.NewPtrDeleteTopicsResponse); resp.Topics[0].ErrorCode != 0 {
+		t.Fatal(resp)
+	}
+	wire, err = h.handleCreateTopics(ctx, &protocol.RequestHeader{APIVersion: 0}, &kmsg.CreateTopicsRequest{Topics: []kmsg.CreateTopicsRequestTopic{{Topic: "orders", NumPartitions: 1, ReplicationFactor: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp := decodeKmsgResponse(t, 0, wire, kmsg.NewPtrCreateTopicsResponse); resp.Topics[0].ErrorCode != 0 {
+		t.Fatal(resp)
+	}
+	after, err := store.Metadata(ctx, []string{"orders"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID := after.Topics[0].TopicID
+	if oldID == newID {
+		t.Fatal("CreateTopics reused the deleted ID")
+	}
+	for _, tc := range []struct {
+		id   [16]byte
+		want int16
+	}{{oldID, protocol.UNKNOWN_TOPIC_ID}, {newID, protocol.NONE}} {
+		req := kmsg.NewPtrFetchRequest()
+		req.Version, req.ReplicaID, req.MaxBytes = 13, -1, 1<<20
+		req.Topics = []kmsg.FetchRequestTopic{{TopicID: tc.id, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1 << 20}}}}
+		wire, err := h.Handle(ctx, &protocol.RequestHeader{APIKey: protocol.APIKeyFetch, APIVersion: 13}, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := decodeKmsgResponse(t, 13, wire, kmsg.NewPtrFetchResponse)
+		if response.Topics[0].TopicID != tc.id || response.Topics[0].Partitions[0].ErrorCode != tc.want {
+			t.Fatalf("unexpected Fetch response: %+v", response)
+		}
+		metaReq := kmsg.NewPtrMetadataRequest()
+		metaReq.Version = 12
+		metaReq.Topics = []kmsg.MetadataRequestTopic{{TopicID: tc.id}}
+		wire, err = h.Handle(ctx, &protocol.RequestHeader{APIKey: protocol.APIKeyMetadata, APIVersion: 12}, metaReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metaResp := decodeKmsgResponse(t, 12, wire, kmsg.NewPtrMetadataResponse)
+		if len(metaResp.Topics) != 1 || metaResp.Topics[0].TopicID != tc.id || metaResp.Topics[0].ErrorCode != tc.want {
+			t.Fatalf("unexpected Metadata response: %+v", metaResp)
+		}
+	}
+}

@@ -30,7 +30,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/KafScale/platform/v2/pkg/metadata"
 	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -149,12 +148,20 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 					}
 				}
 			})
+			metadataReq := kmsg.NewPtrMetadataRequest()
+			metadataReq.Version = 12
+			metadataReq.Topics = []kmsg.MetadataRequestTopic{{Topic: kmsg.StringPtr(topic)}}
+			metadataResp := directGroupRequest(t, target.addr, metadataReq).(*kmsg.MetadataResponse)
+			if len(metadataResp.Topics) != 1 || metadataResp.Topics[0].ErrorCode != 0 || metadataResp.Topics[0].TopicID == ([16]byte{}) {
+				t.Fatalf("missing topic ID: %+v", metadataResp)
+			}
+			topicID := metadataResp.Topics[0].TopicID
 			t.Run("fetch-isolation-modes", func(t *testing.T) {
 				for _, version := range []int16{4, 9, 13} {
 					for _, isolation := range []int8{0, 1} {
 						req := kmsg.NewPtrFetchRequest()
 						req.Version, req.IsolationLevel, req.MaxBytes = version, isolation, 1<<20
-						req.Topics = []kmsg.FetchRequestTopic{{Topic: topic, TopicID: metadata.TopicIDForName(topic), Partitions: []kmsg.FetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
+						req.Topics = []kmsg.FetchRequestTopic{{Topic: topic, TopicID: topicID, Partitions: []kmsg.FetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
 						response := directGroupRequest(t, target.addr, req).(*kmsg.FetchResponse)
 						if len(response.Topics) != 1 || len(response.Topics[0].Partitions) != 1 {
 							t.Fatalf("v%d isolation %d: %+v", version, isolation, response)
