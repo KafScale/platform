@@ -148,7 +148,7 @@ Traceability is enabled in the compose file by default. It consists of:
 
 2) **Raw events from Kafka**
 ```bash
-kcat -b localhost:9092 -C -t __lfs_ops_state -o beginning
+kcat -b localhost:9093 -C -t __lfs_ops_state -o beginning
 ```
 
 ### Key settings (compose)
@@ -166,13 +166,13 @@ Console LFS dashboard:
 
 ```bash
 # List topics
-kcat -b localhost:9092 -L
+kcat -b localhost:9093 -L
 
 # Produce message (goes through regular broker, not LFS)
-echo "hello" | kcat -b localhost:9092 -P -t test-topic
+echo "hello" | kcat -b localhost:9093 -P -t test-topic -X enable.idempotence=false
 
 # Consume messages
-kcat -b localhost:9092 -C -t test-topic -o beginning
+kcat -b localhost:9093 -C -t test-topic -o beginning
 ```
 
 ## Configuration
@@ -294,7 +294,7 @@ REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker compose up -d
               │   Host Machine    │
               │                   │
               │ localhost:8080    │ ← LFS HTTP API
-              │ localhost:9092    │ ← Kafka Broker
+              │ broker:9092       │ ← Kafka Broker (Compose network)
               │ localhost:9093    │ ← Kafka Proxy
               │ localhost:9001    │ ← MinIO Console
               │ localhost:3080    │ ← KafScale Console
