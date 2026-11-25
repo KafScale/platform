@@ -93,6 +93,9 @@ func rebuildSegmentState(data []byte, base, last int64, interval int32) ([]*Inde
 		if batch.BaseOffset != next || batch.LastOffsetDelta < 0 || int64(batch.LastOffsetDelta) > last-next {
 			return nil, nil, fmt.Errorf("record batch offsets do not match segment bounds")
 		}
+		if batch.Bytes[16] == 2 && binary.BigEndian.Uint16(batch.Bytes[21:23])&0x30 != 0 {
+			return nil, nil, fmt.Errorf("transactional/control batches are unsupported")
+		}
 		producers.recoverBatch(batch)
 		index.MaybeAdd(batch.BaseOffset, int32(segmentHeaderLen+position), batch.MessageCount)
 		next += int64(batch.LastOffsetDelta) + 1

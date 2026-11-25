@@ -46,37 +46,6 @@ func UnsupportedTransactionResponse(req kmsg.Request) kmsg.Response {
 		if r.TransactionID != nil {
 			return ProduceErrorResponse(r, code)
 		}
-	case *kmsg.FetchRequest:
-		if r.IsolationLevel != 0 {
-			resp := kmsg.NewPtrFetchResponse()
-			resp.ErrorCode = code
-			for _, t := range r.Topics {
-				topic := kmsg.NewFetchResponseTopic()
-				topic.Topic, topic.TopicID = t.Topic, t.TopicID
-				for _, p := range t.Partitions {
-					part := kmsg.NewFetchResponseTopicPartition()
-					part.Partition, part.ErrorCode = p.Partition, code
-					topic.Partitions = append(topic.Partitions, part)
-				}
-				resp.Topics = append(resp.Topics, topic)
-			}
-			return resp
-		}
-	case *kmsg.ListOffsetsRequest:
-		if r.IsolationLevel != 0 {
-			resp := kmsg.NewPtrListOffsetsResponse()
-			for _, t := range r.Topics {
-				topic := kmsg.NewListOffsetsResponseTopic()
-				topic.Topic = t.Topic
-				for _, p := range t.Partitions {
-					part := kmsg.NewListOffsetsResponseTopicPartition()
-					part.Partition, part.ErrorCode = p.Partition, code
-					topic.Partitions = append(topic.Partitions, part)
-				}
-				resp.Topics = append(resp.Topics, topic)
-			}
-			return resp
-		}
 	case *kmsg.AddPartitionsToTxnRequest:
 		resp := kmsg.NewPtrAddPartitionsToTxnResponse()
 		resp.ErrorCode = code // v4+ has a top-level error

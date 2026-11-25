@@ -56,33 +56,36 @@ func TestFetchCompatibilityWireVersions(t *testing.T) {
 		t.Fatal(resp)
 	}
 	for version := int16(4); version <= 13; version++ {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
-			req := kmsg.NewPtrFetchRequest()
-			req.Version, req.ReplicaID, req.MinBytes, req.MaxBytes = version, -1, 1, 1<<20
-			req.Topics = []kmsg.FetchRequestTopic{{Topic: "orders", TopicID: topicID, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 0, PartitionMaxBytes: 1 << 20}}}}
-			formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID("compatibility"))
-			framed := formatter.AppendRequest(nil, req, 42)
-			header, parsed, err := protocol.ParseRequest(framed[4:])
-			if err != nil {
-				t.Fatal(err)
-			}
-			decoded, ok := parsed.(*kmsg.FetchRequest)
-			if !ok || decoded.Version != version || decoded.ReplicaID != -1 || decoded.MinBytes != 1 || decoded.MaxBytes != 1<<20 || len(decoded.Topics) != 1 || len(decoded.Topics[0].Partitions) != 1 || decoded.Topics[0].Partitions[0].PartitionMaxBytes != 1<<20 {
-				t.Fatalf("Fetch v%d request round trip: %+v", version, parsed)
-			}
-			wire, err := h.Handle(ctx, header, parsed)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp := decodeKmsgResponse(t, version, wire, kmsg.NewPtrFetchResponse)
-			if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
-				t.Fatal(resp)
-			}
-			part := resp.Topics[0].Partitions[0]
-			if part.ErrorCode != 0 || part.HighWatermark != 1 || len(part.RecordBatches) == 0 {
-				t.Fatal(part)
-			}
-		})
+		for _, isolation := range []int8{0, 1} {
+			t.Run(fmt.Sprintf("v%d/isolation%d", version, isolation), func(t *testing.T) {
+				req := kmsg.NewPtrFetchRequest()
+				req.IsolationLevel = isolation
+				req.Version, req.ReplicaID, req.MinBytes, req.MaxBytes = version, -1, 1, 1<<20
+				req.Topics = []kmsg.FetchRequestTopic{{Topic: "orders", TopicID: topicID, Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, FetchOffset: 0, PartitionMaxBytes: 1 << 20}}}}
+				formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID("compatibility"))
+				framed := formatter.AppendRequest(nil, req, 42)
+				header, parsed, err := protocol.ParseRequest(framed[4:])
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded, ok := parsed.(*kmsg.FetchRequest)
+				if !ok || decoded.Version != version || decoded.IsolationLevel != isolation || decoded.ReplicaID != -1 || decoded.MinBytes != 1 || decoded.MaxBytes != 1<<20 || len(decoded.Topics) != 1 || len(decoded.Topics[0].Partitions) != 1 || decoded.Topics[0].Partitions[0].PartitionMaxBytes != 1<<20 {
+					t.Fatalf("Fetch v%d request round trip: %+v", version, parsed)
+				}
+				wire, err := h.Handle(ctx, header, parsed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp := decodeKmsgResponse(t, version, wire, kmsg.NewPtrFetchResponse)
+				if len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 {
+					t.Fatal(resp)
+				}
+				part := resp.Topics[0].Partitions[0]
+				if part.ErrorCode != 0 || part.HighWatermark != 1 || part.LastStableOffset != 1 || len(part.AbortedTransactions) != 0 || len(part.RecordBatches) == 0 {
+					t.Fatal(part)
+				}
+			})
+		}
 	}
 }
 

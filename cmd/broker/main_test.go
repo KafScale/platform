@@ -721,8 +721,9 @@ func TestHandleListOffsets(t *testing.T) {
 			if tc.version >= 2 {
 				req.IsolationLevel = 1
 			}
-			header := &protocol.RequestHeader{CorrelationID: 55, APIVersion: tc.version}
-			respBytes, err := handler.handleListOffsets(context.Background(), header, req)
+			req.Version = tc.version
+			header := &protocol.RequestHeader{APIKey: protocol.APIKeyListOffsets, CorrelationID: 55, APIVersion: tc.version}
+			respBytes, err := handler.Handle(context.Background(), header, req)
 			if err != nil {
 				t.Fatalf("handleListOffsets: %v", err)
 			}
@@ -731,6 +732,9 @@ func TestHandleListOffsets(t *testing.T) {
 				t.Fatalf("unexpected list offsets response: %#v", resp)
 			}
 			part := resp.Topics[0].Partitions[0]
+			if part.ErrorCode != protocol.NONE {
+				t.Fatalf("list offsets error: %+v", part)
+			}
 			if tc.version == 0 {
 				if len(part.OldStyleOffsets) != 1 || part.OldStyleOffsets[0] != tc.expected {
 					t.Fatalf("expected old style offset %d got %#v", tc.expected, part.OldStyleOffsets)

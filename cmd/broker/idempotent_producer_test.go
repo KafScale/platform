@@ -213,3 +213,33 @@ func TestIdempotentRetryAcrossEtcdPartitionOwners(t *testing.T) {
 		t.Fatalf("durable offset = %d, %v", next, err)
 	}
 }
+
+func TestDuplicateProduceDoesNotInflateIngestMetric(t *testing.T) {
+	h := newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))
+	t.Cleanup(h.coordinator.Stop)
+	count := func() int64 {
+		h.produceRate.mu.Lock()
+		defer h.produceRate.mu.Unlock()
+		var total int64
+		for _, value := range h.produceRate.buckets {
+			total += value
+		}
+		return total
+	}
+	for _, tc := range []struct {
+		sequence  int32
+		wantCount int64
+	}{{0, 1}, {0, 1}, {0, 1}, {1, 2}, {1, 2}} {
+		req := &kmsg.ProduceRequest{Version: 9, Acks: -1, Topics: []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Records: producerBatchBytes(0, tc.sequence)}}}}}
+		wire, err := h.Handle(context.Background(), &protocol.RequestHeader{APIKey: 0, APIVersion: 9}, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p := decodeKmsgResponse(t, 9, wire, kmsg.NewPtrProduceResponse).Topics[0].Partitions[0]; p.ErrorCode != 0 {
+			t.Fatal(p)
+		}
+		if got := count(); got != tc.wantCount {
+			t.Fatalf("sequence %d: ingest tracker counted %d records, want %d", tc.sequence, got, tc.wantCount)
+		}
+	}
+}

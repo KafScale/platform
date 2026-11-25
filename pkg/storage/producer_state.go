@@ -80,15 +80,26 @@ func (s producerStates) recoverBatch(batch RecordBatch) {
 	})
 }
 
+// IdempotentAppendResult distinguishes newly persisted records from a retry
+// acknowledged at its original offsets. The published AppendResult stays intact.
+type IdempotentAppendResult struct {
+	AppendResult
+	Duplicate bool
+}
+
 // AppendIdempotentBatches validates sequences and deduplicates under the same
 // append lock that assigns offsets. Every accepted new set is flushed, even if
 // ordinary writes are configured to buffer, so no acknowledged sequence exists
 // only in process memory. Recovery derives this state from the same S3 bytes.
-func (l *PartitionLog) AppendIdempotentBatches(ctx context.Context, batches []RecordBatch) (*AppendResult, error) {
+func (l *PartitionLog) AppendIdempotentBatches(ctx context.Context, batches []RecordBatch) (*IdempotentAppendResult, error) {
 	if len(batches) == 0 {
 		return nil, ErrInvalidProducerBatch
 	}
-	return l.appendBatches(ctx, batches, true, true)
+	result, duplicate, err := l.appendBatches(ctx, batches, true, true)
+	if err != nil {
+		return nil, err
+	}
+	return &IdempotentAppendResult{AppendResult: *result, Duplicate: duplicate}, nil
 }
 
 // stageProducerState never mutates live state. A partition record set must be

@@ -24,7 +24,7 @@ Kafscale implements a focused subset of the Kafka protocol. Versions below refle
 | API Key | Name | Version | Notes |
 |---------|------|---------|-------|
 | 0 | Produce | 0-9 | Core produce path |
-| 1 | Fetch | 4-13 | Request-wide MaxWait and MinBytes across partitions |
+| 1 | Fetch | 4-13 | Both isolation levels for nontransactional records; request-wide MaxWait and MinBytes |
 | 2 | ListOffsets | 0-4 | Required for consumers |
 | 3 | Metadata | 0-12 | Topic/broker discovery |
 | 8 | OffsetCommit | 1-3 | Consumer group tracking |
@@ -117,10 +117,18 @@ partition or transaction where the schema has no top-level error. This covers
 `InitProducerId` with a transactional ID, transaction coordinator lookup,
 `AddPartitionsToTxn`, `AddOffsetsToTxn`, `EndTxn`, `WriteTxnMarkers`,
 `TxnOffsetCommit`, `DescribeTransactions`, `ListTransactions`, and the internal
-`AllocateProducerIds` API. Transactional/control batches, transactional Produce,
-and `read_committed` Fetch/ListOffsets are rejected without appending or changing
-consumer offsets. Produce with `acks=0` has no response, including on rejection.
-Full transactions, commit markers, and transactional visibility remain unsupported.
+`AllocateProducerIds` API. Transactional/control batches and transactional Produce
+are rejected without appending or changing consumer offsets. Produce with `acks=0` has no response, including on rejection.
+Full transactions and commit markers remain unsupported.
+`Fetch` and `ListOffsets` accept both isolation levels: with transactional writes rejected,
+there are no open transactions and the stable end equals the durable high
+watermark. This preserves librdkafka/kcat watermark queries for either consumer isolation mode.
+For `read_committed` Fetch, the last stable offset is the durable published S3
+high watermark, the aborted-transaction list is empty, and returned batches stay
+strictly below that boundary. With buffered ordinary writes enabled,
+`read_uncommitted` may also see the volatile tail; `read_committed` waits for its
+flush and offset publication. Restore rejects legacy transactional/control
+batches rather than treating unverified transaction history as committed.
 
 Upgrade every broker and proxy before using idempotent producers. An older proxy
 can hide the capability, and an older partition owner cannot deduplicate retries.

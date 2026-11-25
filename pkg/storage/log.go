@@ -317,7 +317,8 @@ func (l *PartitionLog) AppendBatches(ctx context.Context, batches []RecordBatch,
 	if len(batches) == 0 {
 		return nil, fmt.Errorf("no batches to append")
 	}
-	return l.appendBatches(ctx, batches, forceFlush, false)
+	result, _, err := l.appendBatches(ctx, batches, forceFlush, false)
+	return result, err
 }
 
 // DrainAndRelease waits for the active append, then releases ownership before
@@ -329,14 +330,14 @@ func (l *PartitionLog) DrainAndRelease(release func()) {
 }
 
 // appendBatches also accepts an empty set for an explicit Flush.
-func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch, forceFlush, idempotent bool) (*AppendResult, error) {
+func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch, forceFlush, idempotent bool) (*AppendResult, bool, error) {
 	l.appendMu.Lock()
 	defer l.appendMu.Unlock()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := l.CheckOwnership(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	l.mu.Lock()
 	baseOffset := l.nextOffset
@@ -349,15 +350,15 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		var err error
 		producerUpdates, duplicate, err = l.stageProducerState(batches, baseOffset)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if duplicate != nil {
-			return duplicate, nil
+			return duplicate, true, nil
 		}
 	}
 	for _, batch := range batches {
 		if len(batch.Bytes) < recordBatchHeaderMinSize || batch.LastOffsetDelta < 0 {
-			return nil, fmt.Errorf("invalid record batch")
+			return nil, false, fmt.Errorf("invalid record batch")
 		}
 		batch.Bytes = append([]byte(nil), batch.Bytes...)
 		PatchRecordBatchBaseOffset(&batch, nextOffset)
@@ -369,15 +370,15 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		l.mu.Lock()
 		l.buffer, l.nextOffset = staged, nextOffset
 		l.mu.Unlock()
-		return result, nil
+		return result, false, nil
 	}
 	stagedBatches := staged.Drain()
 	if len(stagedBatches) == 0 {
-		return result, nil
+		return result, false, nil
 	}
 	artifact, err := BuildSegment(l.cfg.Segment, stagedBatches, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("build segment: %w", err)
+		return nil, false, fmt.Errorf("build segment: %w", err)
 	}
 	if err := l.uploadStaged(ctx, artifact); err != nil {
 		failure := fmt.Errorf("%w: %w", ErrObjectStorage, err)
@@ -385,17 +386,17 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		if !idempotent && errors.As(err, &uncertain) && !errors.Is(err, ErrPreconditionFailed) && !errors.Is(err, ErrConditionalConflict) {
 			// The PUT may still complete. A later conditional retry determines
 			// whether this offset was occupied; never delete an uncertain claim.
-			return nil, failure
+			return nil, false, failure
 		}
 		// A conflicting claim or a failed sidecar write leaves an immutable
 		// segment that a new owner may already be restoring. Cleanup must not
 		// delete that segment or index, even after a lease handoff.
 		failure = fmt.Errorf("%w: %w", ErrLogFenced, failure)
 		l.uploadConflict.Store(&partitionLogFailure{err: failure})
-		return nil, failure
+		return nil, false, failure
 	}
 	if err := l.CheckOwnership(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrAppendOutcomeUnknown, err)
+		return nil, false, fmt.Errorf("%w: %w", ErrAppendOutcomeUnknown, err)
 	}
 	// A Fetch that sees committed offsets must also see the matching local
 	// segment ranges. Hold the read-state lock through offset publication.
@@ -405,7 +406,7 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 			failure := fmt.Errorf("%w: %w: %w", ErrAppendOutcomeUnknown, ErrLogFenced, err)
 			l.uploadConflict.Store(&partitionLogFailure{err: failure})
 			l.mu.Unlock()
-			return nil, failure
+			return nil, false, failure
 		}
 	}
 	l.buffer, l.nextOffset = staged, nextOffset
@@ -423,7 +424,7 @@ func (l *PartitionLog) appendBatches(ctx context.Context, batches []RecordBatch,
 		l.onFlush(ctx, artifact)
 	}
 	l.startPrefetch(ctx, lastSegIdx)
-	return result, nil
+	return result, false, nil
 }
 
 // BufferedHighWatermark returns the in-memory high-watermark: one past the last
@@ -456,7 +457,7 @@ func (l *PartitionLog) EarliestOffset() int64 {
 // Flush persists the current buffer through the atomic record-set path.
 // A terminal upload failure fences the handle without deleting durable objects.
 func (l *PartitionLog) Flush(ctx context.Context) error {
-	_, err := l.appendBatches(ctx, nil, true, false)
+	_, _, err := l.appendBatches(ctx, nil, true, false)
 	return err
 }
 

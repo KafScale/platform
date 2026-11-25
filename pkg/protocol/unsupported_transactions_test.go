@@ -27,8 +27,6 @@ func TestUnsupportedTransactionsRoundTrip(t *testing.T) {
 		&kmsg.InitProducerIDRequest{TransactionalID: kmsg.StringPtr("tx")},
 		&kmsg.FindCoordinatorRequest{CoordinatorType: 1, CoordinatorKey: "tx", CoordinatorKeys: []string{"tx"}},
 		&kmsg.ProduceRequest{TransactionID: kmsg.StringPtr("tx"), Topics: []kmsg.ProduceRequestTopic{{Topic: "orders", Partitions: []kmsg.ProduceRequestTopicPartition{{Partition: 2}}}}},
-		&kmsg.FetchRequest{IsolationLevel: 1, Topics: []kmsg.FetchRequestTopic{{Topic: "orders", Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 2}}}}},
-		&kmsg.ListOffsetsRequest{IsolationLevel: 1, Topics: []kmsg.ListOffsetsRequestTopic{{Topic: "orders", Partitions: []kmsg.ListOffsetsRequestTopicPartition{{Partition: 2}}}}},
 		&kmsg.AddPartitionsToTxnRequest{Topics: []kmsg.AddPartitionsToTxnRequestTopic{{Topic: "orders", Partitions: []int32{2}}}, Transactions: []kmsg.AddPartitionsToTxnRequestTransaction{{TransactionalID: "tx", Topics: []kmsg.AddPartitionsToTxnRequestTransactionTopic{{Topic: "orders", Partitions: []int32{2}}}}}},
 		kmsg.NewPtrAddOffsetsToTxnRequest(), kmsg.NewPtrEndTxnRequest(),
 		&kmsg.WriteTxnMarkersRequest{Markers: []kmsg.WriteTxnMarkersRequestMarker{{ProducerID: 7, Topics: []kmsg.WriteTxnMarkersRequestMarkerTopic{{Topic: "orders", Partitions: []int32{2}}}}}},
@@ -39,7 +37,7 @@ func TestUnsupportedTransactionsRoundTrip(t *testing.T) {
 	for _, req := range requests {
 		for version := int16(0); version <= req.MaxVersion(); version++ {
 			// The request schemas did not contain these fields in earlier versions.
-			if req.Key() == APIKeyFindCoordinator && version == 0 || req.Key() == APIKeyProduce && version < 3 || req.Key() == APIKeyFetch && version < 4 || req.Key() == APIKeyListOffsets && version < 2 {
+			if req.Key() == APIKeyFindCoordinator && version == 0 || req.Key() == APIKeyProduce && version < 3 {
 				continue
 			}
 			t.Run(fmt.Sprintf("%s/v%d", kmsg.NameForKey(req.Key()), version), func(t *testing.T) {
@@ -72,10 +70,6 @@ func TestUnsupportedTransactionsRoundTrip(t *testing.T) {
 						code = r.ErrorCode
 					}
 				case *kmsg.ProduceResponse:
-					code = r.Topics[0].Partitions[0].ErrorCode
-				case *kmsg.FetchResponse:
-					code = r.Topics[0].Partitions[0].ErrorCode
-				case *kmsg.ListOffsetsResponse:
 					code = r.Topics[0].Partitions[0].ErrorCode
 				case *kmsg.AddPartitionsToTxnResponse:
 					if version < 4 {
@@ -113,7 +107,7 @@ func TestUnsupportedTransactionsRoundTrip(t *testing.T) {
 			})
 		}
 	}
-	for _, req := range []kmsg.Request{kmsg.NewPtrInitProducerIDRequest(), kmsg.NewPtrFetchRequest(), kmsg.NewPtrListOffsetsRequest(), kmsg.NewPtrFindCoordinatorRequest(), kmsg.NewPtrProduceRequest()} {
+	for _, req := range []kmsg.Request{kmsg.NewPtrInitProducerIDRequest(), &kmsg.FetchRequest{Version: 4, IsolationLevel: 1}, kmsg.NewPtrFetchRequest(), &kmsg.ListOffsetsRequest{Version: 2, IsolationLevel: 1}, kmsg.NewPtrListOffsetsRequest(), kmsg.NewPtrFindCoordinatorRequest(), kmsg.NewPtrProduceRequest()} {
 		if resp := UnsupportedTransactionResponse(req); resp != nil {
 			t.Fatalf("nontransactional request rejected: %T", req)
 		}

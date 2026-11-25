@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/KafScale/platform/v2/pkg/metadata"
 	"github.com/KafScale/platform/v2/pkg/protocol"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -123,6 +124,47 @@ func TestLibrdkafkaCompatibilityE2E(t *testing.T) {
 			topic := fmt.Sprintf("kcat-%s-%d", target.name, time.Now().UnixNano())
 			const messages = "first\nsecond\nthird\n"
 			run(t, target.addr, messages, "-P", "-q", "-t", topic, "-p", "0", "-X", "enable.idempotence=false", "-X", "message.timeout.ms=5000")
+			t.Run("committed-watermark-query", func(t *testing.T) {
+				// librdkafka can use read_committed for watermark queries even
+				// when the consumer fetches with read_uncommitted. Transactions
+				// are rejected, so the stable end is the durable high watermark.
+				for version := int16(2); version <= 4; version++ {
+					for _, timestamp := range []int64{-2, -1} {
+						req := kmsg.NewPtrListOffsetsRequest()
+						req.Version, req.IsolationLevel = version, 1
+						req.Topics = []kmsg.ListOffsetsRequestTopic{{Topic: topic, Partitions: []kmsg.ListOffsetsRequestTopicPartition{{Partition: 0, Timestamp: timestamp}}}}
+						response := directGroupRequest(t, target.addr, req).(*kmsg.ListOffsetsResponse)
+						if len(response.Topics) != 1 || len(response.Topics[0].Partitions) != 1 {
+							t.Fatalf("v%d: missing offset response: %+v", version, response)
+						}
+						part := response.Topics[0].Partitions[0]
+						want := int64(0)
+						if timestamp == -1 {
+							want = 3
+						}
+						if part.ErrorCode != protocol.NONE || part.Offset != want {
+							t.Fatalf("v%d timestamp %d: %+v, want offset %d", version, timestamp, part, want)
+						}
+					}
+				}
+			})
+			t.Run("fetch-isolation-modes", func(t *testing.T) {
+				for _, version := range []int16{4, 9, 13} {
+					for _, isolation := range []int8{0, 1} {
+						req := kmsg.NewPtrFetchRequest()
+						req.Version, req.IsolationLevel, req.MaxBytes = version, isolation, 1<<20
+						req.Topics = []kmsg.FetchRequestTopic{{Topic: topic, TopicID: metadata.TopicIDForName(topic), Partitions: []kmsg.FetchRequestTopicPartition{{PartitionMaxBytes: 1 << 20}}}}
+						response := directGroupRequest(t, target.addr, req).(*kmsg.FetchResponse)
+						if len(response.Topics) != 1 || len(response.Topics[0].Partitions) != 1 {
+							t.Fatalf("v%d isolation %d: %+v", version, isolation, response)
+						}
+						part := response.Topics[0].Partitions[0]
+						if part.ErrorCode != 0 || part.HighWatermark != 3 || part.LastStableOffset != 3 || len(part.AbortedTransactions) != 0 || len(part.RecordBatches) == 0 {
+							t.Fatalf("v%d isolation %d: %+v", version, isolation, part)
+						}
+					}
+				}
+			})
 			t.Run("reject-corrupt-produce", func(t *testing.T) {
 				fetch := kmsg.NewPtrFetchRequest()
 				fetch.Version, fetch.ReplicaID, fetch.MaxBytes = 4, -1, 1<<20

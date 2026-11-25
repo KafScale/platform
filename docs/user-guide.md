@@ -33,7 +33,7 @@ For a kind-based demo environment run `make demo-platform`. The Makefile applies
 
 ## Client Examples
 
-Use this section to copy/paste a minimal example for your client. Default nontransactional idempotent producers are supported. Do not set a `transactional.id`; transactions and `read_committed` remain unsupported.
+Use this section to copy/paste a minimal example for your client. Default nontransactional idempotent producers are supported. Do not set a `transactional.id`; transactions remain unsupported. Both isolation levels are supported for nontransactional records.
 
 For install + bootstrap steps, follow `docs/quickstart.md`.
 
@@ -161,14 +161,26 @@ An `UnsupportedVersionException` mentioning `INIT_PRODUCER_ID` on a default
 producer indicates an older broker or proxy. Upgrade all brokers and proxies
 before enabling idempotence in an existing deployment. During a rolling upgrade,
 `--producer-property enable.idempotence=false` remains a compatibility option;
-those writes can duplicate after retries. A `transactional.id`, transactional
-batches and `read_committed` still return `UNSUPPORTED_VERSION`.
+those writes can duplicate after retries. A `transactional.id` and transactional
+batches still return `UNSUPPORTED_VERSION`.
 The separate error `non-nullable field recordErrors was serialized as null`
 indicates a malformed broker Produce response; update older brokers.
 
 Idempotent writes require `acks=all` and always flush to S3 before acknowledgement,
 even when ordinary writes use buffered mode. See [producer retry guarantees](protocol.md#idempotent-producers)
 for retry-window and recovery details.
+
+### librdkafka / kcat consumers
+
+Both `read_uncommitted` and `read_committed` are supported for KafScale's
+nontransactional log. Committed reads stop at the durable last stable offset;
+volatile buffered records remain hidden until their S3 flush is published.
+Transactional writes and commit markers remain unsupported.
+
+```bash
+kcat -b kafscale-broker:9092 -C -t orders -o beginning \
+  -X isolation.level=read_committed
+```
 
 ## Monitoring
 

@@ -30,7 +30,7 @@ Any registry that speaks the Confluent Schema Registry REST API works with KafSc
 
 Data that is mirrored or copied from another Kafka cluster into KafScale keeps the schema ids in its frames. Consumers can read it as long as they use the registry that assigned those ids, or a registry that holds the same ids (see [Moving schemas into the built in registry](#moving-schemas-into-the-built-in-registry)).
 
-Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_schemas`). Confluent Schema Registry 8.4.0 writes that topic with an idempotent producer that has no transactional id. KafScale now supports this nontransactional `InitProducerId` startup path. This alone does not establish full registry compatibility: registry modes requiring transactions, `read_committed`, or log compaction remain unsupported. An external Kafka cluster for registry storage remains an option.
+Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_schemas`). Confluent Schema Registry 8.4.0 writes that topic with an idempotent producer that has no transactional id. KafScale now supports this nontransactional `InitProducerId` startup path. This alone does not establish full registry compatibility: registry modes requiring transactions or log compaction remain unsupported. An external Kafka cluster for registry storage remains an option.
 
 ## Option 2: run the built in registry
 

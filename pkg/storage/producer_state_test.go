@@ -19,8 +19,10 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -31,6 +33,7 @@ func idempotentBatch(t *testing.T, epoch int16, sequence, count int32) RecordBat
 	binary.BigEndian.PutUint64(data[43:51], 123)
 	binary.BigEndian.PutUint16(data[51:53], uint16(epoch))
 	binary.BigEndian.PutUint32(data[53:57], uint32(sequence))
+	binary.BigEndian.PutUint32(data[17:21], crc32.Checksum(data[21:], crcTable))
 	batch, err := NewRecordBatchFromBytes(data)
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +51,7 @@ func TestIdempotentAppendConcurrentAndRecovery(t *testing.T) {
 	log := producerTestLog(s3)
 	batch := idempotentBatch(t, 0, 0, 2)
 	var wg sync.WaitGroup
+	var appended atomic.Int32
 	for i := 0; i < 32; i++ {
 		wg.Add(1)
 		go func() {
@@ -60,9 +64,15 @@ func TestIdempotentAppendConcurrentAndRecovery(t *testing.T) {
 			if result.BaseOffset != 0 || result.LastOffset != 1 {
 				t.Errorf("retry offsets: %+v", result)
 			}
+			if !result.Duplicate {
+				appended.Add(1)
+			}
 		}()
 	}
 	wg.Wait()
+	if got := appended.Load(); got != 1 {
+		t.Fatalf("reported %d new appends for one batch", got)
+	}
 	if got := log.BufferedHighWatermark(); got != 2 {
 		t.Fatalf("duplicates advanced watermark to %d", got)
 	}
@@ -71,12 +81,30 @@ func TestIdempotentAppendConcurrentAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := recovered.AppendIdempotentBatches(ctx, []RecordBatch{batch})
-	if err != nil || result.BaseOffset != 0 || recovered.BufferedHighWatermark() != 2 {
+	if err != nil || !result.Duplicate || result.BaseOffset != 0 || recovered.BufferedHighWatermark() != 2 {
 		t.Fatalf("recovered retry: %+v %v", result, err)
 	}
 	result, err = recovered.AppendIdempotentBatches(ctx, []RecordBatch{idempotentBatch(t, 0, 2, 1)})
 	if err != nil || result.BaseOffset != 2 {
 		t.Fatalf("recovered continuation: %+v %v", result, err)
+	}
+}
+
+func TestRestoreRejectsLegacyTransactionalBatches(t *testing.T) {
+	for _, flags := range []uint16{0x10, 0x20, 0x30} {
+		ctx := context.Background()
+		s3 := NewMemoryS3Client()
+		log := producerTestLog(s3)
+		batch := idempotentBatch(t, 0, 0, 1)
+		binary.BigEndian.PutUint16(batch.Bytes[21:23], flags)
+		binary.BigEndian.PutUint32(batch.Bytes[17:21], crc32.Checksum(batch.Bytes[21:], crcTable))
+		// Simulate a segment written by an older broker that did not check flags.
+		if _, err := log.AppendBatches(ctx, []RecordBatch{batch}, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := producerTestLog(s3).RestoreFromS3(ctx); err == nil {
+			t.Fatalf("restored unsupported transactional flags %x", flags)
+		}
 	}
 }
 

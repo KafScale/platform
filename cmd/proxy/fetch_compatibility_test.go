@@ -51,26 +51,36 @@ func TestProxyAdvertisesLibrdkafkaFetchCompatibility(t *testing.T) {
 }
 
 func TestProxyForwardsFetchCompatibilityVersions(t *testing.T) {
-	addr, _ := fallbackBackend(t)
+	addr, seen := fallbackBackend(t)
 	p := &proxy{backends: []string{addr}, backendRetries: 1, dialTimeout: time.Second, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	pool := newConnPool(time.Second)
 	pool.dial = p.dialBackend
 	defer pool.Close()
 	for version := int16(4); version <= 12; version++ {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
-			req := kmsg.NewPtrFetchRequest()
-			req.Version = version
-			req.Topics = []kmsg.FetchRequestTopic{{Topic: "orders", Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1024}}}}
-			header := &protocol.RequestHeader{APIKey: protocol.APIKeyFetch, APIVersion: version}
-			wire, err := p.handleFetchRouting(context.Background(), header, encodeFetchRequest(header, req), pool)
-			if err != nil {
-				t.Fatal(err)
-			}
-			resp, err := parseFetchResponse(wire, version)
-			if err != nil || len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 || resp.Topics[0].Partitions[0].ErrorCode != 0 {
-				t.Fatal(resp, err)
-			}
-		})
+		for _, isolation := range []int8{0, 1} {
+			t.Run(fmt.Sprintf("v%d/isolation%d", version, isolation), func(t *testing.T) {
+				req := kmsg.NewPtrFetchRequest()
+				req.Version, req.IsolationLevel = version, isolation
+				req.Topics = []kmsg.FetchRequestTopic{{Topic: "orders", Partitions: []kmsg.FetchRequestTopicPartition{{Partition: 0, PartitionMaxBytes: 1024}}}}
+				header := &protocol.RequestHeader{APIKey: protocol.APIKeyFetch, APIVersion: version}
+				wire, err := p.handleFetchRouting(context.Background(), header, encodeFetchRequest(header, req), pool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case request := <-seen:
+					if request.api != protocol.APIKeyFetch {
+						t.Fatal(request)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("backend did not observe Fetch")
+				}
+				resp, err := parseFetchResponse(wire, version)
+				if err != nil || len(resp.Topics) != 1 || len(resp.Topics[0].Partitions) != 1 || resp.Topics[0].Partitions[0].ErrorCode != 0 {
+					t.Fatal(resp, err)
+				}
+			})
+		}
 	}
 }
 

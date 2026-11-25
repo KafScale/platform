@@ -1256,6 +1256,7 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 				continue
 			}
 			var result *storage.AppendResult
+			duplicate := false
 			idempotent := false
 			for _, batch := range batches {
 				if int64(binary.BigEndian.Uint64(batch.Bytes[43:51])) >= 0 {
@@ -1265,7 +1266,11 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			if idempotent && req.Acks != -1 {
 				err = errIdempotentAcks
 			} else if idempotent {
-				result, err = plog.AppendIdempotentBatches(ctx, batches)
+				idempotentResult, appendErr := plog.AppendIdempotentBatches(ctx, batches)
+				err = appendErr
+				if idempotentResult != nil {
+					result, duplicate = &idempotentResult.AppendResult, idempotentResult.Duplicate
+				}
 			} else {
 				result, err = plog.AppendBatches(ctx, batches, req.Acks != 0 && h.flushOnAck)
 			}
@@ -1307,8 +1312,10 @@ func (h *handler) handleProduce(ctx context.Context, header *protocol.RequestHea
 			p.LogAppendTime = now
 			p.LogStartOffset = 0
 			partitionResponses = append(partitionResponses, p)
-			for _, batch := range batches {
-				producedMessages += int64(batch.MessageCount)
+			if !duplicate {
+				for _, batch := range batches {
+					producedMessages += int64(batch.MessageCount)
+				}
 			}
 			if h.traceKafka {
 				h.logger.Debug("produce append success", "topic", topic.Topic, "partition", part.Partition, "base_offset", result.BaseOffset, "last_offset", result.LastOffset)
@@ -2150,6 +2157,10 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				continue
 			}
 			nextOffset, offsetErr := h.store.NextOffset(ctx, topicName, part.Partition)
+			durableOffset := nextOffset
+			if offsetErr != nil {
+				durableOffset = -1
+			}
 			// In flush-disabled / acks=0 mode (KAFSCALE_PRODUCE_SYNC_FLUSH=false)
 			// no flush fires for the buffered tail, so the metadata store's
 			// high-watermark (nextOffset) lags the records already acknowledged to
@@ -2161,7 +2172,7 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			// broker restart (the buffer is in-memory; restore is segment-only). In
 			// the default flushOnAck=true path every acknowledged produce is already
 			// flushed, the buffer is empty at fetch time, and this is a no-op.
-			if !h.flushOnAck && offsetErr == nil {
+			if req.IsolationLevel == 0 && !h.flushOnAck && offsetErr == nil {
 				if buffered := plog.BufferedHighWatermark(); buffered > nextOffset {
 					nextOffset = buffered
 				}
@@ -2187,11 +2198,16 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				}
 			}
 			var recordSet []byte
+			fetchEndOffset := nextOffset
+			if req.IsolationLevel == 1 && offsetErr == nil {
+				// A position in the volatile tail is valid but not yet readable.
+				fetchEndOffset = max(nextOffset, plog.BufferedHighWatermark())
+			}
 			if offsetErr == nil {
 				switch {
-				case part.FetchOffset > nextOffset:
+				case part.FetchOffset > fetchEndOffset:
 					errorCode = protocol.OFFSET_OUT_OF_RANGE
-				case part.FetchOffset == nextOffset:
+				case part.FetchOffset >= nextOffset:
 					recordSet = nil
 				default:
 					recordSet, err = plog.Read(ctx, part.FetchOffset, part.PartitionMaxBytes)
@@ -2210,6 +2226,9 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 				}
 			}
 
+			if req.IsolationLevel == 1 && errorCode == protocol.NONE {
+				recordSet = limitFetchToStableOffset(recordSet, durableOffset)
+			}
 			if err := plog.CheckOwnership(); err != nil {
 				errorCode = protocol.NOT_LEADER_OR_FOLLOWER
 				recordSet = nil
@@ -2229,7 +2248,10 @@ func (h *handler) fetchResponseOnce(ctx context.Context, header *protocol.Reques
 			p.Partition = part.Partition
 			p.ErrorCode = errorCode
 			p.HighWatermark = highWatermark
-			p.LastStableOffset = highWatermark
+			p.LastStableOffset = durableOffset
+			if req.IsolationLevel == 1 {
+				p.AbortedTransactions = make([]kmsg.FetchResponseTopicPartitionAbortedTransaction, 0)
+			}
 			p.LogStartOffset = 0
 			p.PreferredReadReplica = -1
 			if recordSet == nil {
