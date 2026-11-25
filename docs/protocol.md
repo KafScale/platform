@@ -19,6 +19,22 @@ limitations under the License.
 
 Kafscale implements a focused subset of the Kafka protocol. Versions below reflect what the broker advertises in ApiVersions today.
 
+## Topic identity
+
+Following [KIP-516](https://cwiki.apache.org/confluence/spaces/KAFKA/pages/127406437/KIP-516%2BTopic%2BIdentifiers), new topics receive a random version 4 UUID, persisted atomically with the topic
+metadata in etcd. The ID survives broker restarts, metadata refresh, partition
+expansion and operator reconciliation. Deleting and recreating the same topic
+name assigns a new ID; Metadata and Fetch requests using its old ID receive
+`UNKNOWN_TOPIC_ID`.
+
+The operator preserves stored IDs and tracks the Kubernetes topic resource UID
+in the same snapshot. A replacement resource with a different UID receives a new
+topic ID. Concurrent creators retain the ID from the winning snapshot write.
+Existing topics retain their stored IDs after upgrade. Older snapshots without
+an explicit ID retain the legacy name-derived ID; new creations never use that
+fallback. In standalone memory mode, IDs last for the lifetime of that store;
+restart persistence requires etcd.
+
 ## Supported
 
 | API Key | Name | Version | Notes |

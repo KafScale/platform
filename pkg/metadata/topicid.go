@@ -17,9 +17,15 @@ package metadata
 
 import (
 	"crypto/sha1"
+
+	"github.com/google/uuid"
 )
 
-// TopicIDForName returns a stable 16-byte ID derived from a topic name.
+// NewTopicID allocates a random UUID for a new topic incarnation.
+func NewTopicID() [16]byte { return [16]byte(uuid.New()) }
+
+// TopicIDForName returns the legacy name-derived ID. It is retained only for
+// existing snapshots without an explicit ID; new topics use NewTopicID.
 func TopicIDForName(name string) [16]byte {
 	sum := sha1.Sum([]byte(name))
 	var id [16]byte
