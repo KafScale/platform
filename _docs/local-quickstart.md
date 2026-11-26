@@ -37,7 +37,7 @@ native tool for restore, prune and schema import.
 git clone https://github.com/KafScale/platform.git
 cd platform/deploy/docker-compose
 docker compose up -d --wait
-curl -fsS http://localhost:9094/readyz
+curl -fsS http://127.0.0.1:9094/readyz
 ```
 
 This starts etcd, a local MinIO test store, the broker, proxy and console.
@@ -46,17 +46,20 @@ MinIO binary or image is published as a KafScale release. Its credentials and
 volumes are for local testing. Product images default to the published `v2.1.0`
 tag; `TAG` selects another published release.
 
-Open the console at [http://localhost:3080/ui/](http://localhost:3080/ui/). Sign in as
-`kafscaleadmin` with password `kafscale`.
+Open the console at [http://127.0.0.1:3080/ui/](http://127.0.0.1:3080/ui/). Sign in as
+`kafscaleadmin` with password `kafscale`. Host ports bind to the IPv4 loopback
+address only, and the proxy advertises `127.0.0.1:9093`. Use `127.0.0.1` rather
+than `localhost`: on hosts where `localhost` resolves to `::1` first, clients
+would try an address that nothing listens on.
 
 ## Write and read your first message
 
-Use the proxy's host endpoint, `localhost:9093`. The broker advertises its
+Use the proxy's host endpoint, `127.0.0.1:9093`. The broker advertises its
 container hostname for services inside the Compose network.
 
 ```bash
-printf 'hello from KafScale\n' | kcat -P -b localhost:9093 -t quickstart
-kcat -C -b localhost:9093 -t quickstart -o beginning -c 1 -e
+printf 'hello from KafScale\n' | kcat -P -b 127.0.0.1:9093 -t quickstart
+kcat -C -b 127.0.0.1:9093 -t quickstart -o beginning -c 1 -e
 ```
 
 `v2.1.0`, the first release with #28, supports default nontransactional
