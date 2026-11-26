@@ -68,11 +68,12 @@ func TestPublishingTokenPermissions(t *testing.T) {
 					continue
 				}
 				allowed := map[string]map[string]bool{
-					"ci.yml/coverage-badge":            {"contents": true},
-					"docker.yml/build-and-push":        {"packages": true},
-					"docker.yml/release":               {"contents": true},
-					"sync-demo-videos.yml/publish":     {"contents": true, "pull-requests": true},
-					"sync-quickstart-site.yml/publish": {"contents": true, "pages": true},
+					"ci.yml/coverage-badge":              {"contents": true},
+					"docker.yml/build-and-push":          {"packages": true},
+					"docker.yml/release":                 {"contents": true},
+					"docker.yml/update-homebrew-formula": {"contents": true, "pull-requests": true},
+					"sync-demo-videos.yml/publish":       {"contents": true, "pull-requests": true},
+					"sync-quickstart-site.yml/publish":   {"contents": true, "pages": true},
 				}
 				if !allowed[name+"/"+id][permission] {
 					t.Fatalf("unexpected %s write grant in %s/%s", permission, name, id)
@@ -95,6 +96,14 @@ func TestPublishingTokenPermissions(t *testing.T) {
 				needs, ok := job.Needs.([]any)
 				if job.If != "startsWith(github.ref, 'refs/tags/v')" || !ok || len(needs) != 2 || needs[0] != "build-and-push" || needs[1] != "assets" || len(job.Permissions) != 1 || len(job.Steps) != 2 || !strings.HasPrefix(job.Steps[0].Uses, "actions/download-artifact@") || !strings.HasPrefix(job.Steps[1].Uses, "softprops/action-gh-release@") {
 					t.Fatal("release write token exposed outside the release API step")
+				}
+			case "docker.yml/update-homebrew-formula":
+				needs, ok := job.Needs.([]any)
+				if job.If != "startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-dev')" || !ok || len(needs) != 1 || needs[0] != "release" || len(job.Permissions) != 2 || job.Permissions["pull-requests"] != "write" || len(job.Steps) != 3 {
+					t.Fatal("homebrew formula PR is not restricted to final version tags after the GitHub release")
+				}
+				if !strings.HasPrefix(job.Steps[0].Uses, "actions/checkout@") || job.Steps[0].With["persist-credentials"] != "false" || !strings.HasPrefix(job.Steps[1].Uses, "actions/download-artifact@") || job.Steps[2].Run != "bash scripts/open_homebrew_formula_pr.sh" || job.Steps[2].Env["GH_TOKEN"] != "${{ secrets.GITHUB_TOKEN }}" {
+					t.Fatal("homebrew formula PR must use GITHUB_TOKEN without persisted checkout credentials")
 				}
 			case "sync-quickstart-site.yml/publish":
 				if job.If != "github.ref == 'refs/heads/main'" || len(job.Permissions) != 2 || job.Permissions["pages"] != "write" {

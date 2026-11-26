@@ -70,12 +70,37 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 		return workflow
 	}
 	workflow := read("docker.yml")
-	if len(workflow.Jobs) != 4 {
+	if len(workflow.Jobs) != 5 {
 		t.Fatal("release workflow jobs changed")
 	}
 	release := workflow.Jobs["release"]
 	if strings.Join(release.Needs, ",") != "build-and-push,assets" || release.Permissions["contents"] != "write" {
 		t.Fatal("release must wait for images and native assets")
+	}
+	homebrew := workflow.Jobs["update-homebrew-formula"]
+	if strings.Join(homebrew.Needs, ",") != "release" || homebrew.Permissions["contents"] != "write" || homebrew.Permissions["pull-requests"] != "write" || len(homebrew.Permissions) != 2 {
+		t.Fatal("homebrew formula PR must wait for the GitHub release and use the built-in token")
+	}
+	if homebrew.If != "startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-rc') && !contains(github.ref_name, '-dev')" {
+		t.Fatal("homebrew formula PR must run only on final version tags")
+	}
+	var homebrewCheckout, homebrewDownload, homebrewFormula bool
+	for _, step := range homebrew.Steps {
+		if strings.HasPrefix(step.Uses, "actions/checkout@") {
+			if step.With["persist-credentials"] != false {
+				t.Fatal("homebrew formula PR must check out without persisted credentials")
+			}
+			homebrewCheckout = true
+		}
+		if strings.HasPrefix(step.Uses, "actions/download-artifact@") && step.With["name"] == "release-assets" {
+			homebrewDownload = true
+		}
+		if step.Run == "bash scripts/open_homebrew_formula_pr.sh" && step.Env["GH_TOKEN"] == "${{ secrets.GITHUB_TOKEN }}" && step.Env["RELEASE_TAG"] == "${{ github.ref_name }}" {
+			homebrewFormula = true
+		}
+	}
+	if !homebrewCheckout || !homebrewDownload || !homebrewFormula {
+		t.Fatal("homebrew formula PR must regenerate Formula/kafscale-cli.rb from published assets and open a PR with GITHUB_TOKEN")
 	}
 	var download, attach bool
 	for _, step := range release.Steps {

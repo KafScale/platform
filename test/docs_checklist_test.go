@@ -77,3 +77,35 @@ func TestIdempotenceFlagNamesRelease(t *testing.T) {
 		}
 	}
 }
+
+func TestDevStackUsesIPv4Loopback(t *testing.T) {
+	compose := readRepoDoc(t, "deploy/docker-compose/docker-compose.yaml")
+	if !regexp.MustCompile(`(?m)^\s*KAFSCALE_PROXY_ADVERTISED_HOST:\s*"?127\.0\.0\.1"?\s*$`).MatchString(compose) {
+		t.Fatal("development Compose proxy must advertise 127.0.0.1 so clients never resolve localhost to ::1")
+	}
+	portMap := regexp.MustCompile(`(?m)^\s+-\s+"(?:127\.0\.0\.1:)?\d+:\d+"`)
+	for _, line := range portMap.FindAllString(compose, -1) {
+		if !strings.Contains(line, `"127.0.0.1:`) {
+			t.Errorf("development Compose publishes %s; host ports must bind 127.0.0.1 only", strings.TrimSpace(line))
+		}
+	}
+	if portMap.FindString(compose) == "" {
+		t.Fatal("development Compose publishes no quoted host ports")
+	}
+	for _, rel := range []string{"README.md", "docs/local-quickstart.md", "deploy/docker-compose/README.md", "deploy/docker-compose/Makefile"} {
+		doc := readRepoDoc(t, rel)
+		for _, stale := range []string{"localhost:9093", "localhost:9094", "localhost:3080"} {
+			if strings.Contains(doc, stale) {
+				t.Errorf("%s uses %s; use 127.0.0.1 to match the published ports", rel, stale)
+			}
+		}
+		if rel == "deploy/docker-compose/Makefile" {
+			continue
+		}
+		for _, want := range []string{"127.0.0.1:9093", "http://127.0.0.1:3080/ui/"} {
+			if !strings.Contains(doc, want) {
+				t.Errorf("%s does not mention %s", rel, want)
+			}
+		}
+	}
+}

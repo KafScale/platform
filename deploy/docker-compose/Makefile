@@ -37,21 +37,21 @@ restart: ## Restart all services
 
 health: ## Check service health
 	@echo "=== Health Checks ==="
-	@echo -n "etcd:      "; curl -s http://localhost:2379/health | head -c 50 || echo "FAIL"
-	@echo -n "minio:     "; curl -s http://localhost:9000/minio/health/live || echo "FAIL"
-	@echo -n "broker:    "; nc -z localhost 9092 && echo "OK" || echo "FAIL"
+	@echo -n "etcd:      "; curl -s http://127.0.0.1:2379/health | head -c 50 || echo "FAIL"
+	@echo -n "minio:     "; curl -s http://127.0.0.1:9000/minio/health/live || echo "FAIL"
+	@echo -n "broker:    "; nc -z 127.0.0.1 9092 && echo "OK" || echo "FAIL"
 
 test-upload: ## Test LFS upload (creates 1KB test file)
 	@echo "Uploading test file..."
 	@dd if=/dev/urandom bs=1024 count=1 2>/dev/null | \
-		curl -s -X POST http://localhost:8080/lfs/produce \
+		curl -s -X POST http://127.0.0.1:8080/lfs/produce \
 		-H "X-Kafka-Topic: test-uploads" \
 		-H "Content-Type: application/octet-stream" \
 		--data-binary @- | jq .
 
 test-download: ## Test LFS stream download (requires KEY, SHA256, and SIZE)
 	@if [ -z "$(KEY)" ] || [ -z "$(SHA256)" ] || [ -z "$(SIZE)" ]; then echo "Usage: make test-download KEY=default/@lfs/topic/... SHA256=<envelope-sha256> SIZE=<envelope-size> [BUCKET=kafscale] [OUT=downloaded-blob.bin]"; exit 1; fi
-	@curl -f -sS -X POST http://localhost:8080/lfs/download \
+	@curl -f -sS -X POST http://127.0.0.1:8080/lfs/download \
 		-H "Content-Type: application/json" \
 		-d '{"bucket":"$(BUCKET)","key":"$(KEY)","mode":"stream","integrity":{"sha256":"$(SHA256)","checksum_alg":"sha256","size":$(SIZE)}}' \
 		-o "$(OUT)"
