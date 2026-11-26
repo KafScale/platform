@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -83,6 +85,15 @@ func TestProxyListTopicsAfterCreateE2E(t *testing.T) {
 	admin := kadm.NewClient(client)
 	for i := range 10 {
 		topic := fmt.Sprintf("listed-%d", i)
+		// Mirroring tools probe the target before creating it with the source
+		// partition count. The probe must not auto-create a one-partition topic.
+		probe, err := admin.ListTopics(ctx, topic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if detail, ok := probe[topic]; !ok || !errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
+			t.Fatalf("missing-topic probe: %+v", probe)
+		}
 		if _, err := admin.CreateTopic(ctx, 3, 1, nil, topic); err != nil {
 			t.Fatal(err)
 		}

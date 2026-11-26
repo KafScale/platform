@@ -66,8 +66,7 @@ func TestProxyPlainAutoCreateE2E(t *testing.T) {
 			waitForPort(t, brokerAddr)
 			start("proxy", []string{"KAFSCALE_PROXY_ADDR=" + proxyAddr, "KAFSCALE_PROXY_BACKENDS=" + brokerAddr, "KAFSCALE_PROXY_ADVERTISED_HOST=127.0.0.1", "KAFSCALE_PROXY_ADVERTISED_PORT=" + proxyPort, "KAFSCALE_PROXY_ETCD_ENDPOINTS=" + strings.Join(endpoints, ","), "KAFSCALE_PROXY_HEALTH_ADDR="})
 			waitForPort(t, proxyAddr)
-			// Use exact wire versions; v1 has no opt-in field and franz-go leaves it
-			// false by default. Both must reach the same broker policy as direct clients.
+			// Legacy versions have no client flag; v4+ require an explicit opt-in.
 			for _, test := range []struct {
 				version int16
 				flag    bool
@@ -103,18 +102,18 @@ func TestProxyPlainAutoCreateE2E(t *testing.T) {
 					t.Fatal(resp)
 				}
 				topic := resp.Topics[0]
-				if enabled {
+				if enabled && (test.version < 4 || test.flag) {
 					if topic.ErrorCode != 0 || len(topic.Partitions) != 3 || resp.Brokers[0].Host != "127.0.0.1" || fmt.Sprint(resp.Brokers[0].Port) != proxyPort {
 						t.Fatal(resp)
 					}
-				} else if topic.ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+				} else if topic.ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION || len(topic.Partitions) != 0 {
 					t.Fatal(resp)
 				}
 			}
 			if !enabled {
 				return
 			}
-			producer, err := kgo.NewClient(kgo.SeedBrokers(proxyAddr), kgo.DisableIdempotentWrite())
+			producer, err := kgo.NewClient(kgo.SeedBrokers(proxyAddr), kgo.AllowAutoTopicCreation(), kgo.DisableIdempotentWrite())
 			if err != nil {
 				t.Fatal(err)
 			}
