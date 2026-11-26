@@ -85,7 +85,7 @@ func TestSimpleOffsetCommitE2E(t *testing.T) {
 	for name, addr := range map[string]string{"broker": brokerAddr, "proxy": proxyAddr} {
 		t.Run(name, func(t *testing.T) {
 			topic, group := "simple-"+name, "simple-group-"+name
-			client, err := kgo.NewClient(kgo.SeedBrokers(addr), kgo.DisableIdempotentWrite())
+			client, err := kgo.NewClient(kgo.SeedBrokers(addr), kgo.AllowAutoTopicCreation(), kgo.DisableIdempotentWrite())
 			if err != nil {
 				t.Fatal(err)
 			}
