@@ -60,7 +60,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
     </div>
     <div class="card">
       <h3>Local quick start and native CLI</h3>
-      <p>Start a development stack with Docker Compose and a native kcat client, with no Go toolchain or Kubernetes cluster. Release tags now also publish <code>kafscale-cli</code> archives for Linux and macOS. <a href="/local-quickstart/">Local quick start</a> · <a href="/cli-install/">Install the CLI</a></p>
+      <p>Start a development stack with Docker Compose and a native kcat client, with no Go toolchain or Kubernetes cluster. Install <code>kafscale-cli</code> with Homebrew, or download a Linux or macOS archive. <a href="/local-quickstart/">Local quick start</a> · <a href="/cli-install/">Install the CLI</a></p>
     </div>
   </div>
 </section>
