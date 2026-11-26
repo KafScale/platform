@@ -186,3 +186,19 @@ func TestCLIInstallDownloadBlockAgainstReleaseAssets(t *testing.T) {
 		t.Fatalf("download block did not verify and run the CLI:\n%s", out)
 	}
 }
+
+func TestCLIInstallDocumentsHomebrew(t *testing.T) {
+	doc := readRepoDoc(t, "docs/cli-install.md")
+	for _, want := range []string{
+		"brew tap kafscale/platform https://github.com/KafScale/platform",
+		"brew install kafscale-cli",
+		"brew trust kafscale/platform",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("docs/cli-install.md is missing %q", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot(t), "Formula", "kafscale-cli.rb")); err != nil {
+		t.Fatalf("Formula/kafscale-cli.rb: %v", err)
+	}
+}
