@@ -100,6 +100,9 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 	publish := workflow.Jobs["build-and-push"]
 	for id, mode := range map[string]string{"validate": "false", "build-and-push": "true"} {
 		job := workflow.Jobs[id]
+		if strings.Join(job.Needs, ",") != "assets" {
+			t.Fatalf("%s must test the generated release assets", id)
+		}
 		if job.Uses != "" || job.RunsOn != "ubuntu-latest" || job.Timeout != 60 || len(job.Strategy) != 0 || len(job.Steps) != 2 {
 			t.Fatalf("%s must be a single job without a matrix", id)
 		}
@@ -178,8 +181,17 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 	if len(expected) != 0 {
 		t.Fatalf("missing release images: %v", expected)
 	}
-	var foundBuild, foundPlan, foundLogin, foundQEMU bool
+	var foundBuild, foundPlan, foundLogin, foundQEMU, foundCompose, foundSmoke bool
 	for _, step := range action.Runs.Steps {
+		if strings.HasPrefix(step.Uses, "actions/download-artifact@") && step.With["name"] == "release-assets" && step.With["path"] == "dist/release" {
+			foundCompose = true
+		}
+		if step.Run == "bash scripts/test_release_compose.sh dist/release/docker-compose.yaml" {
+			if !foundBuild || !foundCompose {
+				t.Fatal("smoke test must run after candidate images and generated assets are available")
+			}
+			foundSmoke = true
+		}
 		if strings.HasPrefix(step.Run, "bash scripts/build_release_images.sh --print") {
 			foundPlan = true
 			if step.Env["PUBLISH_IMAGES"] != "${{ inputs.publish }}" {
@@ -205,7 +217,7 @@ func TestDockerReleaseImageMatrix(t *testing.T) {
 			}
 		}
 	}
-	if !foundBuild || !foundPlan || !foundLogin || !foundQEMU {
+	if !foundBuild || !foundPlan || !foundLogin || !foundQEMU || !foundCompose || !foundSmoke {
 		t.Fatal("missing build or publishing login step")
 	}
 }
@@ -277,8 +289,14 @@ done
 			}
 			for name, target := range override.Target {
 				if mode == "pr" {
-					if strings.Join(target.Platforms, ",") != "linux/amd64" || strings.Join(target.Output, ",") != "type=cacheonly" || len(target.Tags) != 0 {
-						t.Fatal("PR must build once without image export")
+					output := "type=cacheonly"
+					var tags []string
+					if name == "broker" || name == "proxy" || name == "console" {
+						output = "type=docker"
+						tags = []string{"ghcr.io/kafscale/kafscale-" + name + ":v2.0.1"}
+					}
+					if strings.Join(target.Platforms, ",") != "linux/amd64" || strings.Join(target.Output, ",") != output || strings.Join(target.Tags, ",") != strings.Join(tags, ",") {
+						t.Fatal("PR must load candidate Compose images and cache other native builds")
 					}
 				} else if len(target.Platforms) != 0 || strings.Join(target.Tags, ",") != "ghcr.io/kafscale/kafscale-"+name+":v2.0.1" {
 					t.Fatal("release must retain both catalog platforms and publish the version tag")
@@ -320,5 +338,61 @@ func TestNewBuildWorkflowsSkipUnrelatedPRs(t *testing.T) {
 		if !excludesDocs || workflow.Concurrency.Group == "" || workflow.Concurrency.CancelInProgress != "${{ github.event_name == 'pull_request' }}" {
 			t.Fatalf("%s must skip documentation-only PRs and cancel superseded PR runs", name)
 		}
+	}
+}
+
+func TestReleaseComposeProvisioning(t *testing.T) {
+	for _, failBucket := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "bucket-failure"}[failBucket], func(t *testing.T) {
+			work := t.TempDir()
+			docker := `#!/bin/sh
+printf 'docker %s\n' "$*" >> "$CAPTURE/events"
+`
+			curl := `#!/bin/sh
+printf 'curl %s\n' "$*" >> "$CAPTURE/events"
+if [ "$FAIL_BUCKET" = true ]; then
+ for arg in "$@"; do
+  if [ "$arg" = PUT ]; then exit 22; fi
+ done
+fi
+`
+			for name, script := range map[string]string{"docker": docker, "curl": curl} {
+				if err := os.WriteFile(filepath.Join(work, name), []byte(script), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", "scripts/test_release_compose.sh", "dist/release/docker-compose.yaml")
+			cmd.Dir = repoRoot(t)
+			failure := "false"
+			if failBucket {
+				failure = "true"
+			}
+			cmd.Env = append(os.Environ(), "PATH="+work+string(os.PathListSeparator)+os.Getenv("PATH"), "CAPTURE="+work, "FAIL_BUCKET="+failure)
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != failBucket {
+				t.Fatalf("smoke test: %v %s", err, out)
+			}
+			raw, err := os.ReadFile(filepath.Join(work, "events"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := string(raw)
+			put := strings.Index(events, "-X PUT http://127.0.0.1:9000/release-compose-check")
+			create := strings.Index(events, "docker compose -p release-smoke -f dist/release/docker-compose.yaml create")
+			up := strings.Index(events, "up -d --wait --wait-timeout 180")
+			if put < 0 {
+				t.Fatal("bucket provisioning was not attempted")
+			}
+			if failBucket {
+				if create >= 0 || up >= 0 {
+					t.Fatal("product containers started after bucket provisioning failed")
+				}
+			} else if create < put || up < create || !strings.Contains(events, "curl -fsSI --aws-sigv4") {
+				t.Fatal("bucket must be created and verified before starting the generated Compose")
+			}
+			if !strings.Contains(events, "docker rm -f release-smoke-s3") || !strings.Contains(events, "down --volumes") {
+				t.Fatal("smoke test did not clean up")
+			}
+		})
 	}
 }

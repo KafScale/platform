@@ -44,7 +44,7 @@ runs:
       shell: bash
       env:
         PUBLISH_IMAGES: ${{ inputs.publish }}
-        RELEASE_TAG: ${{ github.ref_name }}
+        RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v0.0.0-ci' }}
         SOURCE_REVISION: ${{ github.sha }}
       run: bash scripts/build_release_images.sh --print > "$RUNNER_TEMP/release-images.json"
     - name: Build all release images
@@ -53,3 +53,11 @@ runs:
         source: .
         files: ${{ runner.temp }}/release-images.json
         push: ${{ inputs.publish }}
+    - name: Download generated release Compose
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: release-assets
+        path: dist/release
+    - name: Smoke-test generated Compose with candidate images and provisioned S3
+      shell: bash
+      run: bash scripts/test_release_compose.sh dist/release/docker-compose.yaml
