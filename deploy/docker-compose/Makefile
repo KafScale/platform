@@ -16,7 +16,7 @@
 .PHONY: up down logs ps restart health test-upload test-download clean help
 
 REGISTRY ?= ghcr.io
-TAG ?= v2.0.1
+TAG ?= v2.1.0
 BUCKET ?= kafscale
 OUT ?= downloaded-blob.bin
 

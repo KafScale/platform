@@ -32,8 +32,8 @@ This chart deploys the Kafscale operator (which in turn manages broker pods) and
 helm upgrade --install kafscale deploy/helm/kafscale \
   --namespace kafscale --create-namespace \
   --set operator.etcdEndpoints[0]=http://etcd.kafscale.svc:2379 \
-  --set operator.image.tag=v2.0.1 \
-  --set console.image.tag=v2.0.1
+  --set operator.image.tag=v2.1.0 \
+  --set console.image.tag=v2.1.0
 ```
 
 For a dev/latest install, set `operator.image.useLatest=true`, `console.image.useLatest=true`, and `operator.brokerImage.useLatest=true` (this also forces `imagePullPolicy=Always`).

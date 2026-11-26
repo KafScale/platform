@@ -25,7 +25,7 @@ such as [kcat](https://github.com/edenhill/kcat#install) for produce and consume
 ## Download a release
 
 Open [GitHub releases](https://github.com/KafScale/platform/releases) and select
-a release containing CLI assets. `v2.1.0` is the first release that will carry
+a release containing CLI assets. `v2.1.0` is the first release that carries
 them; older releases, including `v2.0.1`, have no binary attachments.
 
 Each such release provides:
