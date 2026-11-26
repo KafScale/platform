@@ -66,7 +66,7 @@ services:
       broker: {condition: service_healthy}
     environment:
       KAFSCALE_PROXY_ADDR: ":9092"
-      KAFSCALE_PROXY_ADVERTISED_HOST: localhost
+      KAFSCALE_PROXY_ADVERTISED_HOST: 127.0.0.1
       KAFSCALE_PROXY_ADVERTISED_PORT: "9093"
       KAFSCALE_PROXY_HEALTH_ADDR: ":9094"
       KAFSCALE_PROXY_ETCD_ENDPOINTS: http://etcd:2379

@@ -57,3 +57,13 @@ docker network connect --alias external-s3 release-smoke_default release-smoke-s
 docker compose -p release-smoke -f "$compose_file" up -d --wait --wait-timeout 180
 curl -fsS http://127.0.0.1:9094/readyz
 curl -fsS http://127.0.0.1:3080/healthz
+curl -fsS -o /dev/null http://127.0.0.1:3080/ui/
+kcat_image="${KCAT_IMAGE:-ueisele/kcat:1.7.1-librdkafka2.11.1-alma10.1-20251124-202511291703@sha256:d8a5fe246bfeedf57fb3ed7a1155b1c75576014a87f26cb750d4e382847d2926}"
+printf 'release smoke\n' | docker run --rm -i --network host "$kcat_image" \
+  -P -b 127.0.0.1:9093 -t release-smoke -X enable.idempotence=false
+consumed="$(docker run --rm --network host "$kcat_image" \
+  -C -b 127.0.0.1:9093 -t release-smoke -o beginning -c 1 -e)"
+if [ "$consumed" != "release smoke" ]; then
+  echo "kcat round trip through 127.0.0.1:9093 returned '$consumed'" >&2
+  exit 1
+fi
