@@ -36,11 +36,16 @@ On macOS or Linux, install the latest final release with Homebrew:
 
 ```bash
 brew tap kafscale/platform https://github.com/KafScale/platform
-brew install kafscale-cli
+brew update
+brew install kafscale/platform/kafscale-cli
 ```
 
-If brew says the tap is untrusted, run `brew trust kafscale/platform` once and
-install again. A `-rc` or `-dev` tag is a GitHub pre-release and does not
+`brew update` refreshes an existing tap so newly added formulae are available.
+The fully qualified install command selects this tap and trusts only this formula.
+If an older tap checkout reports "No available formula", run `brew update`
+and retry the fully qualified install command above.
+
+A `-rc` or `-dev` tag is a GitHub pre-release and does not
 update the Homebrew formula.
 
 ## Download a release
