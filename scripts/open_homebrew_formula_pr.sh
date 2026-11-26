@@ -36,23 +36,46 @@ base="${DEFAULT_BRANCH:-main}"
 version="${tag#v}"
 branch="homebrew/kafscale-cli-${version}"
 
+# Query errors must stop the job rather than look like a missing PR. A merged
+# formula PR also completes this release; a closed, unmerged PR may be retried.
+existing_pr="$(gh pr list --head "$branch" --base "$base" --state all \
+  --json state,url --jq '.[] | select(.state == "OPEN" or .state == "MERGED") | .url')"
+if [[ -n "$existing_pr" ]]; then
+  echo "formula pull request already exists for $tag: $existing_pr"
+  exit 0
+fi
+
+gh auth setup-git
+# Resume a branch left behind by a failed/interrupted PR creation. Fetch its
+# actual tip so any changes are ordinary fast-forwards, never forced updates.
+branch_exists=false
+if git ls-remote --exit-code --heads origin "refs/heads/$branch"; then
+  branch_exists=true
+  git fetch --no-tags origin "refs/heads/$branch"
+  git checkout -B "$branch" FETCH_HEAD
+else
+  status=$?
+  if [[ "$status" -ne 2 ]]; then
+    exit "$status"
+  fi
+  git checkout -B "$branch"
+fi
+
 bash scripts/update_homebrew_formula.sh "$tag" "$sums" Formula/kafscale-cli.rb
 
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git checkout -B "$branch"
 git add Formula/kafscale-cli.rb
 if git diff --cached --quiet; then
-  echo "formula already up to date for $tag"
-  exit 0
+  if [[ "$branch_exists" == false ]]; then
+    echo "formula already up to date for $tag"
+    exit 0
+  fi
+else
+  git commit -m "Update Homebrew formula for ${tag}"
+  git push -u origin "HEAD:${branch}"
 fi
-git commit -m "Update the Homebrew formula for kafscale-cli ${tag}"
-gh auth setup-git
-git push -u origin "HEAD:${branch}"
-if gh pr view "$branch" --json url --jq .url >/dev/null 2>&1; then
-  echo "pull request for $branch already exists"
-  exit 0
-fi
+# Even without a new commit, an existing remote branch still needs its PR.
 gh pr create --base "$base" --head "$branch" \
   --title "Update the Homebrew formula for kafscale-cli ${tag}" \
   --body "Regenerates Formula/kafscale-cli.rb from the ${tag} release assets. This is the in-repo Homebrew tap update, matching the inf-cli formula PR flow."
