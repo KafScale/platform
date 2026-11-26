@@ -114,8 +114,8 @@ func (p *testPKI) rotateServer(t testing.TB) {
 func (p *testPKI) authenticate(t testing.TB, certificate *tls.Certificate, options TLSOptions, wrap func(net.Conn) net.Conn) (string, error) {
 	t.Helper()
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	type result struct {
 		principal string
 		err       error
@@ -128,7 +128,7 @@ func (p *testPKI) authenticate(t testing.TB, certificate *tls.Certificate, optio
 		}
 		_, principal, err := options.Authenticate(context.Background(), conn)
 		done <- result{principal, err}
-		server.Close()
+		_ = server.Close()
 	}()
 	cfg := &tls.Config{RootCAs: p.roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
 	if certificate != nil {
@@ -306,7 +306,7 @@ func BenchmarkMTLSSteadyRecords(b *testing.B) {
 	done := make(chan error, 1)
 	payload := make([]byte, 64<<10)
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		secured, _, err := p.options.Authenticate(context.Background(), server)
 		if err != nil {
 			done <- err
@@ -340,7 +340,7 @@ func BenchmarkMTLSSteadyRecords(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	raw.Close()
+	_ = raw.Close()
 	if err := <-done; err != nil {
 		b.Fatal(err)
 	}
@@ -349,8 +349,8 @@ func BenchmarkMTLSSteadyRecords(b *testing.B) {
 func TestTLSHonorsEarlierContextDeadline(t *testing.T) {
 	p := newTestPKI(t)
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	start := time.Now()

@@ -129,8 +129,7 @@ func (p *protoPrinter) sorted(list []string) []string {
 }
 
 func (p *protoPrinter) decls(n ast.Node) (options, ranges, extends []string) {
-	var add func(ast.Node)
-	add = func(d ast.Node) {
+	add := func(d ast.Node) {
 		switch d := d.(type) {
 		case *ast.OptionNode:
 			options = append(options, p.s.text(d))
@@ -158,7 +157,7 @@ func (p *protoPrinter) decls(n ast.Node) (options, ranges, extends []string) {
 }
 
 func (p *protoPrinter) file(fd *descriptorpb.FileDescriptorProto) {
-	if syntax := p.s.file.AST().Syntax; syntax != nil && !(p.normalize && syntax.Syntax.AsString() == "proto2") {
+	if syntax := p.s.file.AST().Syntax; syntax != nil && (!p.normalize || syntax.Syntax.AsString() != "proto2") {
 		p.line("syntax", syntax.Syntax.AsString())
 	}
 	if fd.Package != nil {

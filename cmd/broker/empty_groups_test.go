@@ -83,7 +83,7 @@ func TestDeleteGroupsCannotCrossNestedGroupACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	victim := "a/offsets/victim"
 	for _, group := range []string{"a", victim} {
 		if err := store.PutConsumerGroup(ctx, &metadatapb.ConsumerGroup{GroupId: group, State: "empty"}); err != nil {

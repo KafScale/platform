@@ -84,7 +84,7 @@ func TestCommitSimpleConsumerOffsetRacesJoin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	store := &EtcdStore{client: client}
 	if err := store.CommitSimpleConsumerOffset(ctx, "g", "orders", 0, 9, ""); !errors.Is(err, ErrConsumerGroupNotEmpty) {
 		t.Fatal(err)

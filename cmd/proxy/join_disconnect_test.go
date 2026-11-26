@@ -33,7 +33,7 @@ func TestProxyDisconnectCancelsPendingJoin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	entered := make(chan struct{})
 	backendClosed := make(chan error, 1)
 	go func() {
@@ -42,7 +42,7 @@ func TestProxyDisconnectCancelsPendingJoin(t *testing.T) {
 			backendClosed <- err
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err := protocol.ReadFrame(conn); err != nil {
 			backendClosed <- err
 			return
@@ -55,7 +55,7 @@ func TestProxyDisconnectCancelsPendingJoin(t *testing.T) {
 	p := &proxy{backends: []string{listener.Addr().String()}, backendRetries: 1, dialTimeout: time.Second, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.setReady(true)
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	done := make(chan struct{})
 	go func() { defer close(done); p.handleConnection(context.Background(), server) }()
 	request := kmsg.NewPtrJoinGroupRequest()
@@ -69,7 +69,7 @@ func TestProxyDisconnectCancelsPendingJoin(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("JoinGroup did not reach backend")
 	}
-	client.Close()
+	_ = client.Close()
 	select {
 	case err := <-backendClosed:
 		if !errors.Is(err, io.EOF) {
@@ -87,8 +87,8 @@ func TestProxyDisconnectCancelsPendingJoin(t *testing.T) {
 
 func TestForwardCancellationDoesNotCloseReusedConnection(t *testing.T) {
 	backend, client := net.Pipe()
-	defer backend.Close()
-	defer client.Close()
+	defer func() { _ = backend.Close() }()
+	defer func() { _ = client.Close() }()
 	p := &proxy{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

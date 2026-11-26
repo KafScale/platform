@@ -133,7 +133,9 @@ func TestRestoreBoundedConcurrencyAndProgress(t *testing.T) {
 			defer func() {
 				cancel()
 				if !joined {
-					<-done
+					if err := <-done; err != nil {
+						t.Logf("restore stopped: %v", err)
+					}
 				}
 			}()
 			for i := 0; i < expected; i++ {

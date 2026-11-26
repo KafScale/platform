@@ -36,7 +36,7 @@ func TestForwardIdentity(t *testing.T) {
 		server, client := net.Pipe()
 		done := make(chan error, 1)
 		go func() {
-			defer server.Close()
+			defer func() { _ = server.Close() }()
 			got, err := ReceiveIdentity(server, testKey)
 			if err == nil && got != principal {
 				err = errors.New("wrong principal")
@@ -52,7 +52,7 @@ func TestForwardIdentity(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
-		client.Close()
+		_ = client.Close()
 	}
 	ctx := WithPrincipal(context.Background(), "a")
 	if Principal(ctx) != "a" || Principal(context.Background()) != "" {
@@ -163,10 +163,10 @@ func (c *failNthWrite) Write(b []byte) (int, error) {
 }
 func TestIdentityAckWriteFailure(t *testing.T) {
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	done := make(chan error, 1)
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		_, err := ReceiveIdentity(&failNthWrite{Conn: server, failAt: 2}, testKey)
 		done <- err
 	}()
@@ -183,7 +183,7 @@ func TestIdentityProofCannotBeReplayed(t *testing.T) {
 		server, client := net.Pipe()
 		done := make(chan error, 1)
 		go func() {
-			defer server.Close()
+			defer func() { _ = server.Close() }()
 			_, err := ReceiveIdentity(server, testKey)
 			done <- err
 			if err == nil {
@@ -210,7 +210,7 @@ func TestIdentityProofCannotBeReplayed(t *testing.T) {
 			}
 		}
 		err := <-done
-		client.Close()
+		_ = client.Close()
 		if (i == 0) != (err == nil) {
 			t.Fatalf("attempt %d: %v", i, err)
 		}
@@ -222,7 +222,7 @@ func TestIdentityDeadlineResetFailures(t *testing.T) {
 		server, client := net.Pipe()
 		done := make(chan error, 1)
 		go func() {
-			defer server.Close()
+			defer func() { _ = server.Close() }()
 			c := net.Conn(server)
 			if receiverFails {
 				c = &deadlineConn{Conn: c, failAt: 2}
@@ -238,7 +238,7 @@ func TestIdentityDeadlineResetFailures(t *testing.T) {
 			c = &deadlineConn{Conn: c, failAt: 2}
 		}
 		err := SendIdentity(c, testKey, "a")
-		client.Close()
+		_ = client.Close()
 		serverErr := <-done
 		if receiverFails && serverErr == nil {
 			t.Fatal("receiver deadline reset failure ignored")
@@ -261,7 +261,7 @@ func BenchmarkIdentityHandshake(b *testing.B) {
 		server, client := net.Pipe()
 		done := make(chan error, 1)
 		go func() {
-			defer server.Close()
+			defer func() { _ = server.Close() }()
 			_, err := ReceiveIdentity(server, testKey)
 			done <- err
 			if err == nil {
@@ -274,7 +274,7 @@ func BenchmarkIdentityHandshake(b *testing.B) {
 		if err := <-done; err != nil {
 			b.Fatal(err)
 		}
-		client.Close()
+		_ = client.Close()
 	}
 }
 

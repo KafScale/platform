@@ -1304,7 +1304,7 @@ func TestBuildStoreUsesEtcdEnv(t *testing.T) {
 
 	store := buildStore(context.Background(), buildBrokerInfo(), testLogger())
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
-		defer etcdStore.Close()
+		defer func() { _ = etcdStore.Close() }()
 	} else {
 		t.Fatalf("expected etcd store when KAFSCALE_ETCD_ENDPOINTS is set")
 	}
@@ -1589,7 +1589,7 @@ func TestBrokerApiVersionsNegotiation(t *testing.T) {
 		t.Fatal(err)
 	}
 	addr := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	server := &broker.Server{Addr: addr, Handler: newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))}
 	done := make(chan error, 1)
@@ -1618,7 +1618,7 @@ func TestBrokerApiVersionsNegotiation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial broker: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	testutil.AssertApiVersionsNegotiation(t, conn)
 }
 

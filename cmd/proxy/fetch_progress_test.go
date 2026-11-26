@@ -58,7 +58,7 @@ func startFetchProgressBackend(t *testing.T, handle fetchProgressHandler) string
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				for {
 					frame, err := protocol.ReadFrame(conn)
 					if err != nil {
@@ -87,11 +87,11 @@ func startFetchProgressBackend(t *testing.T, handle fetchProgressHandler) string
 	}()
 	t.Cleanup(func() {
 		cancel()
-		ln.Close()
+		_ = ln.Close()
 		<-accepted
 		mu.Lock()
 		for _, conn := range connections {
-			conn.Close()
+			_ = conn.Close()
 		}
 		mu.Unlock()
 		workers.Wait()

@@ -119,7 +119,7 @@ func TestReadinessUsesLiveEtcdDespiteCachedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	mux := http.NewServeMux()
 	Register(mux, store)
 	if rec := probe(mux, ctx, "/readyz"); rec.Code != http.StatusOK {
@@ -147,7 +147,7 @@ func TestReadinessRejectsUnresolvableEtcd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	if _, err := store.Metadata(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}

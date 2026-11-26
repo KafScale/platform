@@ -41,7 +41,8 @@ func TestContextWithConnInfoNil(t *testing.T) {
 }
 
 func TestConnInfoFromContextNilContext(t *testing.T) {
-	got := ConnInfoFromContext(nil)
+	var nilCtx context.Context
+	got := ConnInfoFromContext(nilCtx)
 	if got != nil {
 		t.Fatalf("expected nil for nil context, got %+v", got)
 	}

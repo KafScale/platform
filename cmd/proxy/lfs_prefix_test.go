@@ -300,7 +300,7 @@ func countingBackend(t *testing.T, m *lfsModule) *atomic.Int32 {
 				return
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				if _, err := protocol.ReadFrame(c); err == nil {
 					accepted.Add(1)
 				}

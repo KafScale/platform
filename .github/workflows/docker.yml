@@ -109,7 +109,7 @@ jobs:
       - name: Validate archives, checksums, target binaries and Compose
         env:
           KAFSCALE_RELEASE_ASSET_DIR: ${{ github.workspace }}/dist/release
-        run: go test ./test -run '^TestReleaseAssets$' -count=1
+        run: go test ./test -run '^(TestReleaseAssets|TestCLIInstallDownloadBlockAgainstReleaseAssets)$' -count=1
       - name: Validate release Compose configuration
         env:
           KAFSCALE_S3_BUCKET: release-check

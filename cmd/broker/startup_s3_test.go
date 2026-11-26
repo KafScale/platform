@@ -79,7 +79,7 @@ func TestStartupChecksConditionalS3(t *testing.T) {
 					t.Fatalf("probe must create the same key twice: calls=%d first=%s current=%s", calls, firstKey, key)
 				}
 				if tc.ignoreCondition {
-					return s3.MemoryS3Client.UploadIndex(ctx, key, body)
+					return s3.UploadIndex(ctx, key, body)
 				}
 				if tc.secondErr != nil {
 					return tc.secondErr
@@ -207,10 +207,11 @@ func TestStartupProbeAWSConditionalPUT(t *testing.T) {
 					}
 					w.Header().Set("Content-Type", "application/xml")
 					w.WriteHeader(secondStatus)
-					if secondStatus == http.StatusPreconditionFailed {
-						fmt.Fprint(w, "<Error><Code>PreconditionFailed</Code></Error>")
-					} else if secondStatus == http.StatusBadRequest {
-						fmt.Fprint(w, "<Error><Code>InvalidRequest</Code><Message>unsupported condition</Message></Error>")
+					switch secondStatus {
+					case http.StatusPreconditionFailed:
+						_, _ = fmt.Fprint(w, "<Error><Code>PreconditionFailed</Code></Error>")
+					case http.StatusBadRequest:
+						_, _ = fmt.Fprint(w, "<Error><Code>InvalidRequest</Code><Message>unsupported condition</Message></Error>")
 					}
 				case http.MethodDelete:
 					deletes++
@@ -275,9 +276,9 @@ func TestStartupProbeBackendRejectsConditionFailsFast(t *testing.T) {
 					w.Header().Set("Content-Type", "application/xml")
 					w.WriteHeader(tc.status)
 					if tc.status == http.StatusBadRequest {
-						fmt.Fprintf(w, "<Error><Code>%s</Code><Message>invalid argument</Message></Error>", tc.code)
+						_, _ = fmt.Fprintf(w, "<Error><Code>%s</Code><Message>invalid argument</Message></Error>", tc.code)
 					} else if tc.code != "" {
-						fmt.Fprintf(w, "<Error><Code>%s</Code><Message>If-None-Match is not supported</Message></Error>", tc.code)
+						_, _ = fmt.Fprintf(w, "<Error><Code>%s</Code><Message>If-None-Match is not supported</Message></Error>", tc.code)
 					}
 				case http.MethodDelete:
 					w.WriteHeader(http.StatusNoContent)

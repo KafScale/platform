@@ -411,8 +411,8 @@ func TestServerAlwaysSuppliesPeerAddress(t *testing.T) {
 	for _, mode := range []string{"plain", "principal_only", "forwarded"} {
 		t.Run(mode, func(t *testing.T) {
 			server, client := net.Pipe()
-			defer client.Close()
-			client.SetDeadline(time.Now().Add(time.Second))
+			defer func() { _ = client.Close() }()
+			_ = client.SetDeadline(time.Now().Add(time.Second))
 			seen := make(chan ConnContext, 1)
 			supplied := &ConnContext{Principal: "service", ProxyAddr: "proxy"}
 			s := &Server{Handler: captureConnectionHandler{seen: seen}}
@@ -448,7 +448,7 @@ func TestServerAlwaysSuppliesPeerAddress(t *testing.T) {
 			if mode == "principal_only" && supplied.RemoteAddr != "" {
 				t.Fatal("hook result was mutated")
 			}
-			client.Close()
+			_ = client.Close()
 			select {
 			case <-done:
 			case <-time.After(time.Second):
@@ -489,7 +489,7 @@ func (h *ackZeroCloseHandler) Handle(ctx context.Context, _ *protocol.RequestHea
 
 func TestServerDrainsAckZeroProducesAfterEOF(t *testing.T) {
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	handler := &ackZeroCloseHandler{started: make(chan struct{})}
 	s := &Server{Handler: handler}
 	done := make(chan struct{})
@@ -510,7 +510,7 @@ func TestServerDrainsAckZeroProducesAfterEOF(t *testing.T) {
 			}
 		}
 	}
-	client.Close()
+	_ = client.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -545,7 +545,7 @@ func TestServerResponseDeadlineDrainsRequests(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal-response", true: "error-response"}[fail], func(t *testing.T) {
 			server, client := net.Pipe()
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			ready := make(chan struct{})
 			defer func() {
 				select {

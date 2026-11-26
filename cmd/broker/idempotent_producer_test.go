@@ -110,7 +110,7 @@ func startIdempotenceBroker(t *testing.T) (string, *handler) {
 	addr := listener.Addr().String()
 	_, portText, _ := net.SplitHostPort(addr)
 	port, _ := strconv.Atoi(portText)
-	listener.Close()
+	_ = listener.Close()
 	info := protocol.MetadataBroker{NodeID: 1, Host: "127.0.0.1", Port: int32(port)}
 	snapshot := metadataForBroker(info)
 	h := newHandler(metadata.NewInMemoryStore(snapshot), storage.NewMemoryS3Client(), info, testLogger())
@@ -135,7 +135,7 @@ func startIdempotenceBroker(t *testing.T) (string, *handler) {
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return addr, h
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -175,7 +175,7 @@ func TestIdempotentRetryAcrossEtcdPartitionOwners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	s3 := storage.NewMemoryS3Client()
 	newOwner := func(id int32) *handler {
 		h := newHandler(store, s3, protocol.MetadataBroker{NodeID: id}, testLogger())

@@ -20,8 +20,10 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -124,4 +126,63 @@ func cliEnvIndexSection(t *testing.T, ops string) string {
 		return rest[:end]
 	}
 	return rest
+}
+
+func cliInstallDownloadBlock(t *testing.T) string {
+	t.Helper()
+	doc := readRepoDoc(t, "docs/cli-install.md")
+	for _, block := range regexp.MustCompile("(?s)```bash\n(.*?)```").FindAllStringSubmatch(doc, -1) {
+		if strings.Contains(block[1], "releases/download") {
+			return block[1]
+		}
+	}
+	t.Fatal("docs/cli-install.md has no release download block")
+	return ""
+}
+
+func TestCLIInstallDownloadBlockIsPastable(t *testing.T) {
+	block := cliInstallDownloadBlock(t)
+	if strings.Contains(block, "X.Y.Z") {
+		t.Fatal("download block still contains a version placeholder")
+	}
+	for _, want := range []string{`VERSION="${VERSION:-v2.1.0}"`, "uname -s", "uname -m", "sha256sum -c -", "shasum -a 256 -c -", `&& tar -xzf "$ARCHIVE"`} {
+		if !strings.Contains(block, want) {
+			t.Errorf("download block is missing %q", want)
+		}
+	}
+	syntax := exec.Command("bash", "-n")
+	syntax.Stdin = strings.NewReader(block)
+	if out, err := syntax.CombinedOutput(); err != nil {
+		t.Fatalf("download block is not valid bash: %v %s", err, out)
+	}
+}
+
+func TestCLIInstallDownloadBlockAgainstReleaseAssets(t *testing.T) {
+	assets := os.Getenv("KAFSCALE_RELEASE_ASSET_DIR")
+	if assets == "" {
+		t.Skip("set KAFSCALE_RELEASE_ASSET_DIR to built release assets")
+	}
+	tag := os.Getenv("RELEASE_TAG")
+	if tag == "" {
+		t.Fatal("RELEASE_TAG required")
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skipf("no CLI archive for %s", runtime.GOOS)
+	}
+	bin := t.TempDir()
+	curl := "#!/bin/sh\nfor arg in \"$@\"; do url=\"$arg\"; done\ncase \"$url\" in\n https://github.com/KafScale/platform/releases/download/" + tag + "/*) cp \"$ASSETS/${url##*/}\" . ;;\n *) echo \"unexpected URL $url\" >&2; exit 22 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(curl), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-e")
+	cmd.Dir = t.TempDir()
+	cmd.Stdin = strings.NewReader(cliInstallDownloadBlock(t))
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "ASSETS="+assets, "VERSION="+tag)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("download block failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), ": OK") || !strings.Contains(string(out), "kafscale-cli "+tag) {
+		t.Fatalf("download block did not verify and run the CLI:\n%s", out)
+	}
 }

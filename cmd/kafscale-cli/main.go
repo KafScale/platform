@@ -65,8 +65,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	switch args[0] {
 	case "version", "--version":
-		fmt.Fprintln(stdout, "kafscale-cli "+version)
-		return nil
+		_, err := fmt.Fprintln(stdout, "kafscale-cli "+version)
+		return err
 	case "restore":
 		return runRestoreCommand(ctx, args[1:], stdout)
 	case "prune":

@@ -203,7 +203,7 @@ func TestEtcdRetentionFencesConcurrentChanges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			store := &EtcdStore{client: client}
 			if deleted, err := store.ExpireConsumerGroup(ctx, id, time.Now().Add(-24*time.Hour), time.Now()); deleted || !errors.Is(err, ErrConsumerGroupChanged) {
 				t.Fatalf("unfenced %s: %v, %v", mode, deleted, err)
@@ -268,7 +268,7 @@ func TestRetentionCommitFencesAndStoreErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			store := &EtcdStore{client: client}
 			err = store.CommitMemberConsumerOffset(ctx, id, 0, "", 0, "orders", 0, 99, "")
 			if mode == "changed" {

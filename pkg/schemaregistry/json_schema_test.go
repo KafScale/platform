@@ -199,11 +199,12 @@ func TestJSONGUIDCollision(t *testing.T) {
 	close(statuses)
 	wins, rejected := 0, 0
 	for status := range statuses {
-		if status == 200 {
+		switch status {
+		case 200:
 			wins++
-		} else if status == 422 {
+		case 422:
 			rejected++
-		} else {
+		default:
 			t.Errorf("unexpected status %d", status)
 		}
 	}

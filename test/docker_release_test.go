@@ -347,6 +347,9 @@ func TestReleaseComposeProvisioning(t *testing.T) {
 			work := t.TempDir()
 			docker := `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$CAPTURE/events"
+case "$*" in
+ *" -C -b 127.0.0.1:9093 "*) printf 'release smoke\n' ;;
+esac
 `
 			curl := `#!/bin/sh
 printf 'curl %s\n' "$*" >> "$CAPTURE/events"
@@ -390,9 +393,71 @@ fi
 			} else if create < put || up < create || !strings.Contains(events, "curl -fsSI --aws-sigv4") {
 				t.Fatal("bucket must be created and verified before starting the generated Compose")
 			}
+			if !failBucket {
+				produce := strings.Index(events, "-P -b 127.0.0.1:9093 -t release-smoke")
+				consume := strings.Index(events, "-C -b 127.0.0.1:9093 -t release-smoke")
+				if produce < up || consume < produce {
+					t.Fatal("smoke test must produce and consume through 127.0.0.1:9093 after the stack is up")
+				}
+			}
 			if !strings.Contains(events, "docker rm -f release-smoke-s3") || !strings.Contains(events, "down --volumes") {
 				t.Fatal("smoke test did not clean up")
 			}
 		})
+	}
+}
+
+func TestReleaseComposeUsesIPv4Loopback(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "deploy/docker-compose/docker-compose.release.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compose struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Ports       []string          `yaml:"ports"`
+		} `yaml:"services"`
+	}
+	if err := yamlv3.Unmarshal(raw, &compose); err != nil {
+		t.Fatal(err)
+	}
+	published := 0
+	for name, service := range compose.Services {
+		for _, port := range service.Ports {
+			published++
+			if !strings.HasPrefix(port, "127.0.0.1:") {
+				t.Errorf("service %s publishes %q; release ports must bind 127.0.0.1 only", name, port)
+			}
+		}
+	}
+	if published == 0 {
+		t.Fatal("release Compose publishes no ports")
+	}
+	if got := compose.Services["proxy"].Environment["KAFSCALE_PROXY_ADVERTISED_HOST"]; got != "127.0.0.1" {
+		t.Fatalf("proxy advertises %q; it must advertise 127.0.0.1 so clients never resolve localhost to ::1", got)
+	}
+	doc, err := os.ReadFile(filepath.Join(root, "docs/s3-connection.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	section := string(doc)
+	start := strings.Index(section, "## Release Compose with your bucket")
+	if start < 0 {
+		t.Fatal("docs/s3-connection.md has no release Compose section")
+	}
+	section = section[start:]
+	if end := strings.Index(section[3:], "\n## "); end >= 0 {
+		section = section[:end+3]
+	}
+	for _, stale := range []string{"localhost:9093", "localhost:9094", "localhost:3080"} {
+		if strings.Contains(section, stale) {
+			t.Errorf("release Compose docs use %s; use 127.0.0.1 to match the published ports", stale)
+		}
+	}
+	for _, want := range []string{"127.0.0.1:9093", "http://127.0.0.1:9094/readyz", "http://127.0.0.1:3080/ui/"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("release Compose docs do not mention %s", want)
+		}
 	}
 }

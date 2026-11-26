@@ -120,7 +120,7 @@ func TestLegacyTopicIDSurvivesUpgrade(t *testing.T) {
 			endpoints := testutil.StartEmbeddedEtcd(t)
 			seed := ClusterMetadata{Brokers: []protocol.MetadataBroker{{NodeID: 1}}, Topics: []protocol.MetadataTopic{{Topic: kmsg.StringPtr("orders"), TopicID: legacyID, Partitions: []protocol.MetadataPartition{{Partition: 0, Leader: 1}}}}}
 			cli := newEtcdClient(t, endpoints)
-			defer cli.Close()
+			defer func() { _ = cli.Close() }()
 			writeSnapshotFixture(t, cli, seed)
 			store := newTestEtcdStore(t, ctx, seed, endpoints)
 			if err := store.CreatePartitions(ctx, "orders", 2); err != nil {

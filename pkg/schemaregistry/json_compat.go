@@ -300,7 +300,7 @@ func jsonValueEqual(a, b any) bool       { return reflect.DeepEqual(a, b) }
 // Distinct branches must have distinct compatible counterparts. A polynomial
 // augmenting-path matcher avoids enumerating permutations of large unions.
 func (c *jsonComparison) combined(w, r *jsonRule) error {
-	if w.kind != r.kind && r.kind != "any" && !(jsonBranchCount(w) == 1 && jsonBranchCount(r) == 1) && !(jsonBranchCount(w) == 1 && r.kind == "one") && !(jsonBranchCount(r) == 1 && w.kind == "all") {
+	if w.kind != r.kind && r.kind != "any" && (jsonBranchCount(w) != 1 || jsonBranchCount(r) != 1) && (jsonBranchCount(w) != 1 || r.kind != "one") && (jsonBranchCount(r) != 1 || w.kind != "all") {
 		return c.bad("combined criterion")
 	}
 	if (r.kind == "all" && len(r.children) > len(w.children)) || (w.kind != "all" && len(w.children) > len(r.children)) {

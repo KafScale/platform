@@ -53,7 +53,7 @@ func deleteRoutingBackend(t *testing.T, respond func(*protocol.RequestHeader, *k
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				for {
 					frame, err := protocol.ReadFrame(conn)
 					if err != nil {
@@ -79,11 +79,11 @@ func deleteRoutingBackend(t *testing.T, respond func(*protocol.RequestHeader, *k
 		}
 	}()
 	t.Cleanup(func() {
-		listener.Close()
+		_ = listener.Close()
 		<-done
 		mu.Lock()
 		for _, conn := range connections {
-			conn.Close()
+			_ = conn.Close()
 		}
 		mu.Unlock()
 		workers.Wait()
@@ -97,7 +97,7 @@ func TestDeleteGroupsRoutesAndRetriesOnlyRejectedGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	// Deliberately stale route: group a is actually owned by broker 1.
 	for group, owner := range map[string]string{"a": "2", "b": "2", "active": "1"} {
 		if _, err := cli.Put(ctx, metadata.GroupLeasePrefix()+"/"+group, owner); err != nil {

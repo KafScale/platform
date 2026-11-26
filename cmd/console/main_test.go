@@ -39,7 +39,7 @@ func TestBuildMetadataStoreUsesEtcdEnv(t *testing.T) {
 		t.Fatalf("build metadata store: %v", err)
 	}
 	if etcdStore, ok := store.(*metadata.EtcdStore); ok {
-		defer etcdStore.Close()
+		defer func() { _ = etcdStore.Close() }()
 	} else {
 		t.Fatalf("expected etcd store when KAFSCALE_CONSOLE_ETCD_ENDPOINTS is set")
 	}

@@ -1674,7 +1674,7 @@ func TestStreamVerify_HonestObject_AtMultipleSizes(t *testing.T) {
 			defer srv.Close()
 
 			resp := streamVerifyPostBody(t, srv, key, sha, int64(n))
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -1719,7 +1719,7 @@ func TestStreamVerify_SameSizeTamper_NoTamperedBytesInResponse(t *testing.T) {
 			defer srv.Close()
 
 			resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(n))
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			// Mismatch must produce a structured error response, never 200.
 			if resp.StatusCode != http.StatusBadGateway {
@@ -1772,7 +1772,7 @@ func TestStreamVerify_OversizedS3Response_RefusesToServe(t *testing.T) {
 	defer srv.Close()
 
 	resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(declaredSize))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502 for oversized S3 object, got %d", resp.StatusCode)
@@ -1806,7 +1806,7 @@ func TestStreamVerify_EmptyObjectSubstitution_RefusesToServe(t *testing.T) {
 	defer srv.Close()
 
 	resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(declaredSize))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502 for empty-object substitution, got %d", resp.StatusCode)
@@ -1841,7 +1841,7 @@ func TestStreamVerify_ContentLengthSetOnlyAfterVerification(t *testing.T) {
 	defer srv.Close()
 
 	resp := streamVerifyPostBody(t, srv, key, envelopeSHA, int64(declaredSize))
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		t.Fatal("regression: 200 OK on integrity mismatch")

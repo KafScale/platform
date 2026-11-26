@@ -280,7 +280,7 @@ func TestSnapshotRebalancesKafkaCreatedTopics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	topic, err := store.CreateTopic(ctx, metadata.TopicSpec{Name: "kafka-created", NumPartitions: 8, ReplicationFactor: 1})
 	if err != nil {
 		t.Fatal(err)

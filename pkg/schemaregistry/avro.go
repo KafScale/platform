@@ -16,10 +16,8 @@
 package schemaregistry
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"strconv"
 
 	"github.com/hamba/avro/v2"
@@ -43,14 +41,6 @@ func parseAvro(text string, refs []resolvedReference) (avro.Schema, error) {
 		}
 	}
 	return avro.ParseWithCache(text, "", cache)
-}
-
-func canonicalText(text string) (string, error) {
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, []byte(text)); err != nil {
-		return "", err
-	}
-	return buf.String(), nil
 }
 
 func schemaHash(schemaType, canonical string, refs []Reference) string {

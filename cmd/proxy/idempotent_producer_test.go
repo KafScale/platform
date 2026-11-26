@@ -33,11 +33,11 @@ func idempotentProxyRequest(t *testing.T, p *proxy, req kmsg.Request) kmsg.Respo
 	server, client := net.Pipe()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	defer client.Close()
-	client.SetDeadline(time.Now().Add(5 * time.Second))
+	defer func() { _ = client.Close() }()
+	_ = client.SetDeadline(time.Now().Add(5 * time.Second))
 	done := make(chan struct{})
 	go func() { defer close(done); p.handleConnection(ctx, server) }()
-	defer func() { client.Close(); <-done }()
+	defer func() { _ = client.Close(); <-done }()
 	if _, err := client.Write(kmsg.NewRequestFormatter().AppendRequest(nil, req, 28)); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestProxyInitProducerIDForwardingAndUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -72,7 +72,7 @@ func TestProxyInitProducerIDForwardingAndUnavailable(t *testing.T) {
 				return
 			}
 			func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				frame, err := protocol.ReadFrame(conn)
 				if err != nil {
 					return
@@ -95,7 +95,7 @@ func TestProxyInitProducerIDForwardingAndUnavailable(t *testing.T) {
 			}()
 		}
 	}()
-	defer func() { listener.Close(); <-done }()
+	defer func() { _ = listener.Close(); <-done }()
 	for version := int16(0); version <= 4; version++ {
 		req := kmsg.NewPtrInitProducerIDRequest()
 		req.Version = version

@@ -138,7 +138,7 @@ func TestServerDisconnectDuringJoinGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	server := &Server{Handler: disconnectJoinHandler{c}}
 	done := make(chan struct{})
 	go func() {
@@ -152,14 +152,14 @@ func TestServerDisconnectDuringJoinGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	request := pendingJoinRequest()
 	frame := kmsg.NewRequestFormatter().AppendRequest(nil, request, 17)
 	if _, err := client.Write(frame); err != nil {
 		t.Fatal(err)
 	}
 	dead := waitForJoiningMember(t, c, leader.MemberID)
-	client.Close()
+	_ = client.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -170,7 +170,7 @@ func TestServerDisconnectDuringJoinGroup(t *testing.T) {
 
 func TestServerPipelinedRequestsPreserveOrder(t *testing.T) {
 	serverConn, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	server := &Server{Handler: &testHandler{}}
 	done := make(chan struct{})
 	go func() { defer close(done); server.handleConnection(serverConn) }()
@@ -198,7 +198,7 @@ func TestServerPipelinedRequestsPreserveOrder(t *testing.T) {
 	if err := <-written; err != nil {
 		t.Fatal(err)
 	}
-	client.Close()
+	_ = client.Close()
 	select {
 	case <-done:
 	case <-time.After(time.Second):

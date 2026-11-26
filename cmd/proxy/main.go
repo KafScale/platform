@@ -351,7 +351,7 @@ func (p *proxy) listenAndServe(ctx context.Context) error {
 				return nil
 			default:
 			}
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+			if isTemporaryAcceptError(err) {
 				p.logger.Warn("accept temporary error", "error", err)
 				continue
 			}
@@ -608,7 +608,7 @@ func (p *proxy) fetchProbe(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("fetch probe: no backend: %w", err)
 	}
-	defer conn.Close()
+	defer p.closeConn(conn, addr)
 
 	respBytes, err := p.forwardToBackend(probeCtx, conn, addr, buildFetchProbePayload())
 	if err != nil {
@@ -698,7 +698,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 	var backendAddr string
 	defer func() {
 		if backendConn != nil {
-			backendConn.Close()
+			p.closeConn(backendConn, backendAddr)
 		}
 	}()
 	pool := newConnPool(p.dialTimeout)
@@ -893,7 +893,7 @@ func (p *proxy) handleConnection(ctx context.Context, conn net.Conn) {
 
 		resp, err := p.forwardToBackend(ctx, backendConn, backendAddr, frame.Payload)
 		if err != nil {
-			backendConn.Close()
+			p.closeConn(backendConn, backendAddr)
 			backendConn, backendAddr, err = p.connectBackend(ctx)
 			if err != nil {
 				p.logger.Warn("backend reconnect failed", "error", err)
@@ -957,7 +957,7 @@ func (cp *connPool) Borrow(ctx context.Context, addr string) (net.Conn, error) {
 // for the same address.
 func (cp *connPool) Return(addr string, conn net.Conn) {
 	if old, ok := cp.conns[addr]; ok {
-		old.Close()
+		_ = old.Close()
 	}
 	cp.conns[addr] = conn
 }
@@ -965,7 +965,7 @@ func (cp *connPool) Return(addr string, conn net.Conn) {
 // Close closes all pooled connections.
 func (cp *connPool) Close() {
 	for addr, c := range cp.conns {
-		c.Close()
+		_ = c.Close()
 		delete(cp.conns, addr)
 	}
 }
@@ -1041,7 +1041,7 @@ func (p *proxy) forwardProduceRaw(ctx context.Context, payload []byte, pool *con
 	}
 	resp, err := p.forwardToBackend(ctx, conn, addr, payload)
 	if err != nil {
-		conn.Close()
+		p.closeConn(conn, addr)
 		return nil, err
 	}
 	pool.Return(addr, conn)
@@ -1069,7 +1069,7 @@ func (p *proxy) fireAndForgetProduce(ctx context.Context, header *protocol.Reque
 			continue
 		}
 		if writeErr := protocol.WriteFrame(conn, payload); writeErr != nil {
-			conn.Close()
+			p.closeConn(conn, targetAddr)
 			p.logger.Debug("fire-and-forget write failed", "target", targetAddr, "error", writeErr)
 			continue
 		}
@@ -1265,7 +1265,7 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 			defer wg.Done()
 			respBytes, err := p.forwardToBackend(ctx, w.conn, w.target, w.payload)
 			if err != nil {
-				w.conn.Close()
+				p.closeConn(w.conn, w.target)
 				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: err}
 				return
 			}
@@ -1274,7 +1274,7 @@ func (p *proxy) fanOutProduce(ctx context.Context, header *protocol.RequestHeade
 				parseErr = errors.New("produce response correlation mismatch")
 			}
 			if parseErr != nil {
-				w.conn.Close()
+				p.closeConn(w.conn, w.target)
 				results[i] = fanOutResult{subReq: w.subReq, target: w.target, err: parseErr}
 				return
 			}
@@ -2034,7 +2034,7 @@ func (p *proxy) handleGroupRouting(ctx context.Context, header *protocol.Request
 
 		resp, err := p.forwardToBackend(ctx, conn, actualAddr, payload)
 		if err != nil {
-			conn.Close()
+			p.closeConn(conn, actualAddr)
 			continue
 		}
 
@@ -2145,7 +2145,7 @@ func (p *proxy) forwardFetchRaw(ctx context.Context, payload []byte, pool *connP
 	}
 	resp, err := p.forwardToBackend(ctx, conn, addr, payload)
 	if err != nil {
-		conn.Close()
+		p.closeConn(conn, addr)
 		return nil, err
 	}
 	pool.Return(addr, conn)
@@ -2537,4 +2537,26 @@ func clientIDStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func (p *proxy) closeConn(conn net.Conn, addr string) {
+	if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) && p.logger != nil {
+		p.logger.Debug("backend connection close failed", "addr", addr, "error", err)
+	}
+}
+
+func isTemporaryAcceptError(err error) bool {
+	if errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	for _, errno := range []syscall.Errno{syscall.EINTR, syscall.EAGAIN, syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.ENOMEM, syscall.ECONNABORTED, syscall.ECONNRESET} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }

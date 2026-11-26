@@ -133,12 +133,14 @@ Removes noise from KafkaJS v2 partitioner changes.
 For KafScale, use **fewer partitions** than you would with Apache Kafka:
 
 ```bash
-# Good for KafScale
-kafka-topics --create --topic agent_requests --partitions 3
-
-# Overkill for KafScale (but works)
-kafka-topics --create --topic agent_requests --partitions 50
+kafka-topics --bootstrap-server 127.0.0.1:29092 --create --topic agent_requests \
+  --partitions 3 --replication-factor 1
 ```
+
+Fifty partitions also work, but are more than KafScale needs. Always pass
+`--replication-factor`: KafScale supports CreateTopics v0 to v2, and the Apache
+Kafka CLI only omits the replication factor with CreateTopics v4 or later. See
+[protocol support](../../docs/protocol.md#creating-topics-with-the-apache-kafka-cli).
 
 Why? KafScale scales horizontally without needing many partitions. The platform handles distribution internally.
 

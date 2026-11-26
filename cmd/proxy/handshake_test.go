@@ -55,17 +55,17 @@ func TestHandshakeSettings(t *testing.T) {
 func TestClientHelloAdmission(t *testing.T) {
 	for _, data := range [][]byte{{}, {22, 3, 3, 0, 4}, {23, 3, 3, 0, 4, 1}, {22, 3, 3, 0, 0, 1}, {22, 3, 3, 255, 255, 1}, {22, 3, 3, 0, 4, 1}} {
 		server, client := net.Pipe()
-		go func() { client.Write(data); client.Close() }()
+		go func() { _, _ = client.Write(data); _ = client.Close() }()
 		if _, err := clientHello(server); err == nil {
 			t.Fatal("invalid hello accepted")
 		}
-		server.Close()
+		_ = server.Close()
 	}
 	hello := []byte{22, 3, 3, 0, 4, 1, 0, 0, 0}
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
-	go func() { client.Write(hello) }()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
+	go func() { _, _ = client.Write(hello) }()
 	buffered, err := clientHello(server)
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +88,8 @@ func TestHandshakeQueueAndIPLimits(t *testing.T) {
 			s.admission.queueTimeout = 20 * time.Millisecond
 			s.admission.timeout = 100 * time.Millisecond
 			server, client := net.Pipe()
-			defer server.Close()
-			defer client.Close()
+			defer func() { _ = server.Close() }()
+			defer func() { _ = client.Close() }()
 			conn := &admissionConn{Conn: server, host: "127.0.0.2"}
 			if reason == "deadline" {
 				conn.deadlineError = true
@@ -113,7 +113,7 @@ func TestHandshakeQueueAndIPLimits(t *testing.T) {
 				ctx, cancel = context.WithTimeout(ctx, 5*time.Millisecond)
 				defer cancel()
 			}
-			go func() { client.Write([]byte{22, 3, 3, 0, 4, 1, 0, 0, 0}) }()
+			go func() { _, _ = client.Write([]byte{22, 3, 3, 0, 4, 1, 0, 0, 0}) }()
 			_, _, err = s.authenticate(ctx, conn)
 			var failure *authenticationFailure
 			if !errors.As(err, &failure) || failure.reason != reason {
@@ -137,9 +137,9 @@ func TestIdlePeersDoNotOccupyTLSSlots(t *testing.T) {
 	pending := make(chan error, 64)
 	for i := 0; i < 64; i++ {
 		server, client := net.Pipe()
-		t.Cleanup(func() { client.Close() })
+		t.Cleanup(func() { _ = client.Close() })
 		go func(ip string) {
-			defer server.Close()
+			defer func() { _ = server.Close() }()
 			_, _, err := s.authenticate(context.Background(), &admissionConn{Conn: server, host: ip})
 			pending <- err
 		}(fmt.Sprintf("127.0.0.%d", i+2))
@@ -160,11 +160,11 @@ func TestIdlePeersDoNotOccupyTLSSlots(t *testing.T) {
 		t.Fatal("idle peers consumed cryptographic slots")
 	}
 	server, raw := net.Pipe()
-	defer raw.Close()
+	defer func() { _ = raw.Close() }()
 	done := make(chan error, 1)
 	finish := make(chan struct{})
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		_, _, err := s.authenticate(context.Background(), &admissionConn{Conn: server, host: "127.0.0.1"})
 		done <- err
 		<-finish
@@ -195,8 +195,8 @@ func TestHandshakeWaitsForAvailableSlot(t *testing.T) {
 	s.handshakes = make(chan struct{}, 1)
 	s.handshakes <- struct{}{}
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	done := make(chan error, 1)
 	go func() { _, _, err := s.authenticate(context.Background(), server); done <- err }()
 	if _, err := client.Write([]byte{22, 3, 3, 0, 4, 1, 0, 0, 0}); err != nil {
@@ -208,7 +208,7 @@ func TestHandshakeWaitsForAvailableSlot(t *testing.T) {
 	default:
 	}
 	<-s.handshakes
-	go io.Copy(io.Discard, client)
+	go func() { _, _ = io.Copy(io.Discard, client) }()
 	var failure *authenticationFailure
 	if err := <-done; !errors.As(err, &failure) || failure.reason != "tls" {
 		t.Fatal("queued connection never reached TLS", err)

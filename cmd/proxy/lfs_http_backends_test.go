@@ -91,7 +91,7 @@ func ackingBackend(t *testing.T, topic string) (string, <-chan struct{}) {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		header, _, _ := protocol.ParseRequestHeader(frame.Payload)
 		response := kmsg.NewPtrProduceResponse()
 		response.Version = 9

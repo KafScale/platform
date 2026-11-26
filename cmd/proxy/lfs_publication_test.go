@@ -65,7 +65,7 @@ func TestLFSListenerTracksUnconfirmedUploads(t *testing.T) {
 						received <- err
 						return
 					}
-					defer conn.Close()
+					defer func() { _ = conn.Close() }()
 					_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 					frame, err := protocol.ReadFrame(conn)
 					if err != nil {
@@ -205,10 +205,10 @@ func TestLFSHTTPProduceResponseBudget(t *testing.T) {
 	m, _ := testLFSModule(t)
 	m.dialTimeout = 50 * time.Millisecond
 	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		if _, err := protocol.ReadFrame(server); err != nil {
 			return
 		}
@@ -233,10 +233,10 @@ func TestLFSForwardWaitsBeyondDialTimeout(t *testing.T) {
 	m, _ := testLFSModule(t)
 	m.dialTimeout = time.Second
 	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		if _, err := protocol.ReadFrame(server); err != nil {
 			return
 		}
@@ -257,8 +257,8 @@ func TestLFSForwardStopsOnCancellation(t *testing.T) {
 			m, _ := testLFSModule(t)
 			m.dialTimeout = time.Second
 			client, server := net.Pipe()
-			defer client.Close()
-			defer server.Close()
+			defer func() { _ = client.Close() }()
+			defer func() { _ = server.Close() }()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if phase == "deadline" {
@@ -269,13 +269,14 @@ func TestLFSForwardStopsOnCancellation(t *testing.T) {
 			if phase == "already_cancelled" {
 				cancel()
 			}
-			if phase == "read" || phase == "deadline" {
+			switch phase {
+			case "read", "deadline":
 				go func() {
 					if _, err := protocol.ReadFrame(server); err == nil && phase == "read" {
 						cancel()
 					}
 				}()
-			} else if phase == "write" {
+			case "write":
 				time.AfterFunc(50*time.Millisecond, cancel)
 			}
 			done := make(chan error, 1)

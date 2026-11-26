@@ -18,6 +18,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/KafScale/platform/v2/internal/health"
@@ -37,10 +38,13 @@ func (h *handler) readiness(ctx context.Context) (bool, string) {
 
 func (h *handler) readinessHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if ready, state := h.readiness(r.Context()); !ready {
+	ready, state := h.readiness(r.Context())
+	body := fmt.Sprintf("ready state=%s\n", state)
+	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintf(w, "not ready state=%s\n", state)
-	} else {
-		fmt.Fprintf(w, "ready state=%s\n", state)
+		body = "not " + body
+	}
+	if _, err := io.WriteString(w, body); err != nil {
+		h.logResponseWriteError("/readyz", err)
 	}
 }

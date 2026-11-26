@@ -99,7 +99,7 @@ func (h *harness) do(method, path string, body any) (int, []byte) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		h.t.Fatal(err)
@@ -541,7 +541,9 @@ func TestImportMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Sscan(string(resp.Kvs[0].Value), &counter)
+	if _, err := fmt.Sscan(string(resp.Kvs[0].Value), &counter); err != nil {
+		t.Fatalf("parse counter: %v", err)
+	}
 	if counter != 102 {
 		t.Fatalf("counter %d, want 102", counter)
 	}

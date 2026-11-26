@@ -133,7 +133,7 @@ func (p *proxy) dialBackend(ctx context.Context, addr string) (net.Conn, error) 
 	if p.security != nil && p.security.keyFile != "" {
 		principal := authn.Principal(ctx)
 		if principal == "" {
-			conn.Close()
+			p.closeConn(conn, addr)
 			return nil, errors.New("authenticated backend principal required")
 		}
 		key, keyErr := authn.ReadKey(p.security.keyFile)
@@ -141,7 +141,7 @@ func (p *proxy) dialBackend(ctx context.Context, addr string) (net.Conn, error) 
 			keyErr = authn.SendIdentity(conn, key, principal)
 		}
 		if keyErr != nil {
-			conn.Close()
+			p.closeConn(conn, addr)
 			return nil, keyErr
 		}
 	}
@@ -200,14 +200,14 @@ func (p *proxy) brokerMetadata(ctx context.Context, header *protocol.RequestHead
 			return
 		}
 		if err != nil || pool == nil {
-			conn.Close()
+			p.closeConn(conn, addr)
 		} else {
 			pool.Return(addr, conn)
 		}
 	}()
 	response, err := p.forwardToBackend(ctx, conn, addr, payload)
 	if err != nil && reused {
-		conn.Close()
+		p.closeConn(conn, addr)
 		conn, err = p.dialBackend(ctx, addr)
 		if err != nil {
 			return nil, err

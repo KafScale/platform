@@ -30,7 +30,7 @@ func TestToolInputSchemasRequiredFields(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	client := connectMCPClient(t, ctx, Options{Store: testStore()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	listed, err := client.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestDescribeTopicsThroughMCPListsEveryTopic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	client := connectMCPClient(t, ctx, Options{Store: testStore()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: toolDescribeTopics, Arguments: map[string]any{}})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestDescribeGroupMissingGroupIDError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	client := connectMCPClient(t, ctx, Options{Store: testStore()})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: toolDescribeGroup, Arguments: map[string]any{}})
 	if err == nil {
 		t.Fatalf("describe_group without group_id succeeded: %+v", result)

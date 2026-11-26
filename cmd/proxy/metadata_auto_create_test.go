@@ -44,7 +44,7 @@ func TestPlainMetadataMissingTopicsReachBroker(t *testing.T) {
 						client, server := net.Pipe()
 						_ = server.SetDeadline(time.Now().Add(5 * time.Second))
 						go func() {
-							defer server.Close()
+							defer func() { _ = server.Close() }()
 							frame, err := protocol.ReadFrame(server)
 							if err != nil {
 								backendErr <- err

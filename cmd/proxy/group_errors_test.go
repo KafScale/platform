@@ -37,7 +37,7 @@ func TestProxyFailureLogsAndResponses(t *testing.T) {
 			p.logger = slog.New(slog.NewTextHandler(&logs, nil))
 			p.setReady(true)
 			server, client := net.Pipe()
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			_ = client.SetDeadline(time.Now().Add(3 * time.Second))
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()

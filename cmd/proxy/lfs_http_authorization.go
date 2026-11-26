@@ -56,7 +56,7 @@ func (m *lfsModule) produceHTTPRecord(ctx context.Context, conn net.Conn, payloa
 	}
 	result := response.Topics[0].Partitions[0]
 	if result.ErrorCode != 0 {
-		return 0, fmt.Errorf("Kafka produce rejected: %w", kerr.ErrorForCode(result.ErrorCode))
+		return 0, fmt.Errorf("produce rejected by Kafka: %w", kerr.ErrorForCode(result.ErrorCode))
 	}
 	return result.BaseOffset, nil
 }
