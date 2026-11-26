@@ -13,9 +13,9 @@ nav_order: 12
 
 WarpStream also embeds Bento in its agents as Managed Data Pipelines, but that mode only works with WarpStream BYOC. With KafScale you run Bento as its own process or container next to the cluster, and it works the same way.
 
-## The one setting that matters
+## Idempotent writes
 
-The Bento `kafka_franz` output has `idempotent_write: true` by default. KafScale does not support idempotent producers, so set it to `false`. Without it, writes fail.
+The Bento `kafka_franz` output has `idempotent_write: true` by default. From v2.1.0 that default works when every broker and proxy is on v2.1.0 or later. On older releases, set `idempotent_write: false` or writes fail with `InitProducerId` unsupported.
 
 ## Write to KafScale
 
@@ -29,7 +29,6 @@ output:
   kafka_franz:
     seed_brokers: [ "127.0.0.1:39092" ]
     topic: orders
-    idempotent_write: false
 ```
 
 ## Read from KafScale
@@ -66,7 +65,6 @@ output:
   kafka_franz:
     seed_brokers: [ "127.0.0.1:39092" ]
     topic: orders-paid
-    idempotent_write: false
 ```
 
 Run it with `bento -c config.yaml`.

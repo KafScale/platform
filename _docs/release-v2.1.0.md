@@ -1,0 +1,57 @@
+---
+layout: doc
+title: "KafScale Release v2.1.0"
+description: "Release notes for KafScale v2.1.0: idempotent producers, new topic IDs, and a native CLI."
+permalink: /releases/v2.1.0/
+nav_title: v2.1.0
+nav_order: 22
+nav_group: Releases
+---
+
+<!--
+Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+
+# v2.1.0
+
+Release date: 2026-11-26
+
+The main Helm chart is version `2.1.0`; processor charts are version `0.3.0`. All charts default to application images tagged `v2.1.0`.
+
+## Upgrade notes
+
+Upgrade all brokers and proxies to v2.1.0 before enabling idempotence. Recreated
+topics receive a new topic ID. See [Upgrading from v2.0.1 to v2.1.0](/upgrade-compatibility/#upgrading-from-v201-to-v210).
+
+### Behavior changes
+
+- Publish native `kafscale-cli` archives for Linux/macOS on amd64/arm64, a version-pinned external-S3 Compose file and SHA-256 checksums on release tags. The CLI runs without Docker or Go; MinIO remains a local development/CI fixture (#431).
+- Lead the README and website with a local Compose quick start, native Kafka client examples, CLI installation, and a shared guide for connecting S3 through Helm, Compose or the CLI (#430).
+
+- Assign and persist a random UUID for each new topic. Same-name recreation gets a new ID, and stale Fetch/Metadata IDs return `UNKNOWN_TOPIC_ID`. Preserve existing IDs across upgrades, partition expansion, restarts and operator reconciliation; track Kubernetes resource incarnations in the metadata snapshot (#424).
+
+- Support nontransactional idempotent producers through brokers and the Kubernetes proxy (`InitProducerId` v0-v4). Default Java producers can send without disabling idempotence (#28).
+- Allocate producer IDs durably through etcd; deduplicate the last five batches per producer and partition under the append lock. Rebuild sequence state from S3 on restart and ownership changes, including after uncertain writes. Idempotent writes require `acks=all` and always flush before success.
+- Support `read_committed` Fetch and offset queries on the durable nontransactional log. Return explicit protocol errors for transactional writes and control batches; omit unsupported APIs from version negotiation. Transactions and cross-session exactly-once delivery remain unsupported.
+- Upgrade all brokers and proxies before enabling idempotence. See [protocol guarantees and limits](/protocol/#idempotent-producers).
+- Deduplicated retries no longer count as fresh broker ingest in `kafscale_produce_rps`.
+
+- The release Compose proxy now advertises `127.0.0.1:9093`, and the docs use `127.0.0.1` for the release stack's Kafka, health and console ports. Its ports bind to the IPv4 loopback address only, so `localhost` failed intermittently on hosts that resolve it to `::1` first. The release smoke test now produces and consumes through `127.0.0.1:9093` (#436).
+- Docs: the console links point to `/ui/`; `kafka-topics --create` examples pass `--replication-factor` and the CreateTopics v0 to v2 requirement is documented; the Helm quick start keeps the console password off the command line; the quick starts name `v2.1.0` as the first release with idempotent producers; and the CLI download block picks your platform, verifies the checksum and is tested against built release assets (#437).
+- Fix all 307 golangci-lint findings (errcheck, staticcheck, unused) in code, add `.golangci.yml` with no per-linter issue caps, and run golangci-lint v2.15.0 in CI. The proxy no longer uses the deprecated `net.Error.Temporary` to decide whether to retry an accept error. Broker `/metrics` is rendered in full before it is written.
+- Operator validation messages for Kafka security now start with the field name, for example `identitySecretRef is required when Kafka security is enabled`.
+
+[Full changelog](https://github.com/KafScale/platform/compare/v2.0.1...v2.1.0)

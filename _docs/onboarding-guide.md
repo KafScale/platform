@@ -64,8 +64,7 @@ Total time: ~2 hours for the full path, or ~35 minutes for the minimal path (E10
 The starting point. Uses the standard `kafka-clients` library to list topics, create a topic, produce 25 messages, and consume 5 messages.
 
 **Key KafScale configuration:**
-- `enable.idempotence=false`. KafScale does not implement `InitProducerId`, so idempotent and transactional producers cannot start.
-- The sample defaults to `acks=0` for a quick demo. For durable produces, use `acks=all` or `acks=1` (with `KAFSCALE_PRODUCE_SYNC_FLUSH=true`, the broker default).
+- The sample defaults to `acks=all` and nontransactional idempotence (`--idempotence=true`). From v2.1.0 that is supported. Leave `transactional.id` unset. Transactions remain unsupported.
 - Bootstrap server: `127.0.0.1:39092` (default local demo port)
 
 ```bash
@@ -73,10 +72,10 @@ cd examples/E10_java-kafka-client-demo
 mvn clean package exec:java
 ```
 
-Or run the shaded jar:
+Or pass explicit flags:
 
 ```bash
-java -jar target/java-kafka-client-demo-1.0-SNAPSHOT.jar --bootstrap=127.0.0.1:39092 --acks=all --idempotence=false
+mvn clean package exec:java -Dexec.args="--bootstrap=127.0.0.1:39092 --topic=demo-topic-1 --produce-count=10 --consume-count=10 --acks=all --idempotence=true"
 ```
 
 ---

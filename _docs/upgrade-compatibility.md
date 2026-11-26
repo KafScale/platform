@@ -28,8 +28,33 @@ limitations under the License.
 # Upgrade and compatibility guide
 
 This is the canonical guide for upgrading from published v1.6.3
-(`092291b78b8abf1e5bde6cafd92550e9726b46e0`) to v2.0.1. It applies to v2.0.0
-as well, except for the Go module path described in [Go types](#go-types).
+(`092291b78b8abf1e5bde6cafd92550e9726b46e0`) to v2.1.0. It applies to v2.0.0
+and v2.0.1 as well, except for the Go module path described in [Go types](#go-types)
+and the v2.1.0 changes in [Upgrading from v2.0.1 to v2.1.0](#upgrading-from-v201-to-v210).
+
+## Upgrading from v2.0.1 to v2.1.0
+
+v2.1.0 adds nontransactional idempotent producers, committed reads, new IDs for
+recreated topics, native `kafscale-cli` release archives, and a local Compose
+quick start.
+
+Upgrade every broker and every proxy to v2.1.0 before you enable idempotence
+(`enable.idempotence=true`, or any default Java producer). A mixed cluster
+rejects `InitProducerId`. Transactions remain unsupported. See
+[protocol guarantees and limits](/protocol/#idempotent-producers).
+
+Deleting a topic and creating one with the same name now assigns a new topic
+ID. Clients that cached the old ID receive `UNKNOWN_TOPIC_ID` and must refresh
+metadata. Existing topics keep their IDs across the upgrade, partition
+expansion, restarts and operator reconciliation.
+
+Fetch the current module with:
+
+```sh
+go get github.com/KafScale/platform/v2@v2.1.0
+```
+
+v2.0.1 remains the first `/v2` release you can fetch; see [Go types](#go-types).
 
 ## Compatibility has separate boundaries
 

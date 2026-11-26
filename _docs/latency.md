@@ -22,7 +22,7 @@ schema:
       name: Does KafScale support transactions?
       acceptedAnswer:
         "@type": Answer
-        text: "No. Transactions, idempotent producers and compacted topics are deliberate trade-offs of the S3 design. Segments in object storage are immutable and brokers keep no state, so there is no producer sequence state, no transaction coordinator and no segment rewriting. Set enable.idempotence=false on producers. For CDC, key-value state topics or exactly-once pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics."
+        text: "No. Transactions and compacted topics remain unsupported. Since v2.1.0, nontransactional idempotent producers work: brokers and the proxy implement InitProducerId, and producer IDs are stored in etcd. Leave transactional.id unset and use acks=all. Transactions and cross-session exactly-once delivery are still unsupported. For CDC, compacted state topics or transactional pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics."
 ---
 
 # KafScale latency, batching and trade-offs
@@ -157,7 +157,7 @@ A quick calculation with the S3 Standard request price used on the [Operations](
 Start with these producer settings. The `linger.ms`, `batch.size` and compression values are the high-throughput settings from the [developer guide](https://github.com/KafScale/platform/tree/main/examples/101_kafscale-dev-guide) in the repo:
 
 ```properties
-enable.idempotence=false
+enable.idempotence=true
 acks=all
 linger.ms=100
 batch.size=65536
@@ -167,7 +167,7 @@ compression.type=snappy
 - **`linger.ms`** waits up to that many milliseconds to fill a batch. It adds at most that much latency and cuts the number of requests. Raise it for logs and telemetry, lower it when you care about the last 100 ms.
 - **`batch.size`** caps the batch per partition. Larger batches mean fewer, bigger S3 objects.
 - **`compression.type`** shrinks what you store and upload. KafScale stores the client's record batches as they arrive, so compression on the producer is compression in S3.
-- **`enable.idempotence=false`** is required. See the trade-offs below.
+- **`enable.idempotence=true`** with `acks=all` is the default for Java producers and is supported from v2.1.0. Leave `transactional.id` unset. On older releases, set `enable.idempotence=false`. See the trade-offs below.
 
 Broker-side settings (see [Environment variable index](/operations/#environment-variable-index)):
 
@@ -190,11 +190,11 @@ The two profiles documented in the repo:
 
 ## Trade-offs of the S3 design
 
-KafScale does not support log compaction, transactions or idempotent producers. These are deliberate choices, not missing pieces. They follow from two decisions: segments in S3 are immutable, and brokers keep no state.
+KafScale does not support log compaction or transactions. These are deliberate choices, not missing pieces. They follow from two decisions: segments in S3 are immutable, and there is no transaction coordinator. Since v2.1.0, nontransactional idempotent producers are supported.
 
 ### Does KafScale support transactions?
 
-No. Transactions, idempotent producers and compacted topics are deliberate trade-offs of the S3 design. Segments in object storage are immutable and brokers keep no state, so there is no producer sequence state, no transaction coordinator and no segment rewriting. Set `enable.idempotence=false` on producers. For CDC, key-value state topics or exactly-once pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics.
+No. Transactions and compacted topics remain unsupported. Since v2.1.0, default nontransactional idempotent producers work. Leave `transactional.id` unset and use `acks=all`. Transactions and cross-session exactly-once delivery are still unsupported. For CDC, compacted state topics or transactional pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics.
 
 ### Why there are no compacted topics
 
@@ -202,11 +202,13 @@ Compaction rewrites old segments to keep only the latest value per key. KafScale
 
 This rules out topics that act as a key-value state store, such as CDC changelogs that rely on compaction or Kafka Streams state topics.
 
-### Why there are no transactions or idempotent producers
+### Why there are no transactions
 
-Exactly-once delivery needs a transaction coordinator and per-producer sequence numbers that the brokers remember. KafScale brokers are stateless, so they keep neither, and the broker does not implement `InitProducerId`. Set `enable.idempotence=false` and do not set `transactional.id`.
+Exactly-once delivery across topics needs a transaction coordinator. KafScale does not implement one, and transactional APIs still return `UNSUPPORTED_VERSION`. Do not set `transactional.id`.
 
 This rules out exactly-once pipelines across topics, for example read-process-write jobs that commit offsets and output in one transaction.
+
+Since v2.1.0, nontransactional idempotent producers are supported. Brokers and the Kubernetes proxy advertise `InitProducerId`. Producer IDs come from etcd, and sequence state is rebuilt from S3 after a restart or ownership change. Duplicate retries in the recent window are acknowledged at their original offsets. Use `acks=all` and leave `transactional.id` unset. Upgrade every broker and proxy to v2.1.0 before you enable idempotence on an existing cluster. See [idempotent producers](/protocol/#idempotent-producers).
 
 ### The cost of small writes
 

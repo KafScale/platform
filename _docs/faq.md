@@ -155,7 +155,7 @@ When S3 latency exceeds thresholds, brokers enter `DEGRADED` state. If S3 become
 
 ### Can I use existing Kafka clients?
 
-Yes. KafScale implements the Kafka wire protocol for core APIs. Standard Kafka clients work. Producers must set `enable.idempotence=false`, because KafScale does not implement `InitProducerId`.
+Yes. KafScale implements the Kafka wire protocol for core APIs. Standard Kafka clients work. From v2.1.0, default nontransactional idempotent producers work (`InitProducerId` is implemented). Leave `transactional.id` unset and use `acks=all`. On older releases, set `enable.idempotence=false` and upgrade every broker and proxy before enabling idempotence.
 
 Tested clients include kafka-python, franz-go, librdkafka, Sarama, and the official Java client.
 
@@ -163,7 +163,7 @@ Tested clients include kafka-python, franz-go, librdkafka, Sarama, and the offic
 
 KafScale supports 21 Kafka APIs covering produce, fetch, metadata, and consumer group operations. See [Protocol](/protocol/) for the complete compatibility matrix.
 
-Not supported: transactions (exactly-once semantics), compacted topics, and the admin API for ACLs.
+Not supported: transactions (exactly-once semantics), compacted topics, and the admin API for ACLs. Nontransactional idempotent producers are supported from v2.1.0.
 
 ### Can I migrate from Kafka to KafScale?
 
@@ -179,7 +179,7 @@ Yes, for workloads that do not use transactions or compacted topics. Copy topics
 
 ### Does Bento work with KafScale?
 
-Yes. Use the Bento `kafka_franz` input and output and set `idempotent_write: false` on the output. See [Bento with KafScale](/bento/).
+Yes. Use the Bento `kafka_franz` input and output. From v2.1.0 the default `idempotent_write: true` works when every broker and proxy is on v2.1.0 or later. On older releases, set `idempotent_write: false`. See [Bento with KafScale](/bento/).
 
 ### Do consumer groups work?
 
