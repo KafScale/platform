@@ -192,7 +192,7 @@ Related targets:
 
 ### Demo workflow
 
-Need an interactive run? `make demo` boots embedded etcd plus the broker + console, opens `http://127.0.0.1:48080/ui/`, and keeps everything running until you hit `Ctrl+C`. It is the quickest way to click around the UI while real messages flow through the broker/MinIO stack.
+Need an interactive run? `make demo` boots embedded etcd plus the broker + console, opens `http://127.0.0.1:48080/ui/`, and keeps everything running until you hit `Ctrl+C`. It is the quickest way to click around the UI while real messages flow through the broker/MinIO stack. Topic auto-creation defaults to on; set `KAFSCALE_AUTO_CREATE_TOPICS` before `make demo` if you need a different value.
 
 The demo wires `KAFSCALE_CONSOLE_BROKER_METRICS_URL=http://127.0.0.1:39093/metrics` so the console scrapes broker Prometheus metrics and populates the S3/metrics cards with live data. Any other process starting `cmd/console` can set the same env var (for example, `go run ./cmd/console`) to render broker-reported S3 state and latency. Without that scrape, or when it fails, those cards show n/a.
 

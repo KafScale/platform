@@ -130,7 +130,7 @@ func TestProxyMTLSE2E(t *testing.T) {
 	makeClient := func(identity, clientID string, consume bool) *kgo.Client {
 		t.Helper()
 		cert, _, _ := pki.certificate(t, "spiffe://test/"+identity, false, false)
-		options := []kgo.Opt{kgo.SeedBrokers(proxyAddr), kgo.ClientID(clientID), kgo.DisableIdempotentWrite(), kgo.DialTLSConfig(&tls.Config{RootCAs: pki.roots, ServerName: "localhost", Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}), kgo.RequestTimeoutOverhead(3 * time.Second)}
+		options := []kgo.Opt{kgo.SeedBrokers(proxyAddr), kgo.ClientID(clientID), kgo.AllowAutoTopicCreation(), kgo.DisableIdempotentWrite(), kgo.DialTLSConfig(&tls.Config{RootCAs: pki.roots, ServerName: "localhost", Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}), kgo.RequestTimeoutOverhead(3 * time.Second)}
 		if consume {
 			options = append(options, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{"mtls-orders": {0: kgo.NewOffset().AtStart()}}))
 		}
