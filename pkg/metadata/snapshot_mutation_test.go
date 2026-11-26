@@ -251,7 +251,7 @@ func TestSnapshotExpansionBatchesAtomically(t *testing.T) {
 func TestSnapshotFailedInitialReadRecoversWithoutNewEvent(t *testing.T) {
 	endpoints := testutil.StartEmbeddedEtcd(t)
 	cli := newEtcdClient(t, endpoints)
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	writeSnapshotFixture(t, cli, snapshotFixture())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

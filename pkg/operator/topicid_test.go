@@ -72,7 +72,7 @@ func TestOperatorTopicIDLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	// A broker mutation must preserve the operator resource UID as well as IDs.
 	if _, err := store.CreateTopic(ctx, metadata.TopicSpec{Name: "api-created", NumPartitions: 1}); err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestOperatorPreservesLegacyTopicID(t *testing.T) {
 		if _, err := cli.Put(ctx, "/kafscale/metadata/snapshot", string(payload)); err != nil {
 			t.Fatal(err)
 		}
-		cli.Close()
+		_ = cli.Close()
 		desired := BuildClusterMetadataForBrokers(&kafscalev1.KafscaleCluster{}, []kafscalev1.KafscaleTopic{{ObjectMeta: metav1.ObjectMeta{Name: "orders", UID: "adopted-resource"}, Spec: kafscalev1.KafscaleTopicSpec{Partitions: 1}}}, 1)
 		for range 2 {
 			if err := PublishMetadataSnapshot(ctx, endpoints, desired); err != nil {

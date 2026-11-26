@@ -925,7 +925,7 @@ func TestLFSStatusAlwaysAvailable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != http.StatusUnauthorized {
 				t.Fatalf("unauthenticated status=%d", resp.StatusCode)
 			}
@@ -946,7 +946,7 @@ func TestLFSStatusAlwaysAvailable(t *testing.T) {
 				} else if resp.StatusCode != http.StatusMethodNotAllowed {
 					t.Fatalf("POST status=%d", resp.StatusCode)
 				}
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 		})
 	}

@@ -202,11 +202,11 @@ func TestLFSCanceledLockWaitHasBoundedCleanup(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		recoverDeletes()
 		select {
-		case <-done:
+		case err := <-done:
+			t.Fatalf("canceled request remained blocked in unbounded cleanup, then returned %v", err)
 		case <-time.After(2 * time.Second):
-			t.Fatal("waiter failed to recover")
+			t.Fatal("canceled request remained blocked in unbounded cleanup and the waiter failed to recover")
 		}
-		t.Fatal("canceled request remained blocked in unbounded cleanup")
 	}
 	for len(blocked.contexts) > 0 {
 		contexts = append(contexts, <-blocked.contexts)

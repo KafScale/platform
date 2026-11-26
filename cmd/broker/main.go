@@ -16,6 +16,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -119,7 +120,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	}
-	switch req.(type) {
+	switch req := req.(type) {
 	case *kmsg.ApiVersionsRequest:
 		errorCode := int16(protocol.NONE)
 		responseVersion := header.APIVersion
@@ -135,7 +136,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeResponse(header.CorrelationID, responseVersion, resp), nil
 	case *kmsg.MetadataRequest:
-		metaReq := req.(*kmsg.MetadataRequest)
+		metaReq := req
 		if h.traceKafka {
 			h.logger.Debug("metadata request", "topics", len(metaReq.Topics))
 		}
@@ -264,15 +265,15 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.InitProducerIDRequest:
-		return h.handleInitProducerID(ctx, header, req.(*kmsg.InitProducerIDRequest))
+		return h.handleInitProducerID(ctx, header, req)
 	case *kmsg.ProduceRequest:
-		return h.handleProduce(ctx, header, req.(*kmsg.ProduceRequest))
+		return h.handleProduce(ctx, header, req)
 	case *kmsg.FetchRequest:
-		return h.handleFetch(ctx, header, req.(*kmsg.FetchRequest))
+		return h.handleFetch(ctx, header, req)
 	case *kmsg.FindCoordinatorRequest:
 		coord := h.coordinatorBroker(ctx)
 		code := int16(protocol.NONE)
-		findReq := req.(*kmsg.FindCoordinatorRequest)
+		findReq := req
 		if findReq.CoordinatorType == 0 {
 			coord, code = h.findGroupCoordinator(ctx, findReq.CoordinatorKey)
 		}
@@ -283,7 +284,6 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp.Port = coord.Port
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.JoinGroupRequest:
-		req := req.(*kmsg.JoinGroupRequest)
 		if !h.allowGroup(principal, req.Group, acl.ActionGroupWrite) {
 			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.Group)
 			resp := kmsg.NewPtrJoinGroupResponse()
@@ -310,7 +310,6 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.SyncGroupRequest:
-		req := req.(*kmsg.SyncGroupRequest)
 		if !h.allowGroup(principal, req.Group, acl.ActionGroupWrite) {
 			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.Group)
 			resp := kmsg.NewPtrSyncGroupResponse()
@@ -333,7 +332,6 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.DescribeGroupsRequest:
-		req := req.(*kmsg.DescribeGroupsRequest)
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
 			allowed := make([]string, 0, len(req.Groups))
 			denied := make(map[string]struct{})
@@ -416,14 +414,13 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				resp.ErrorCode = protocol.REQUEST_TIMED_OUT
 				return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 			}
-			resp, err := h.coordinator.ListGroups(ctx, req.(*kmsg.ListGroupsRequest))
+			resp, err := h.coordinator.ListGroups(ctx, req)
 			if err != nil {
 				return nil, err
 			}
 			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 		})
 	case *kmsg.HeartbeatRequest:
-		req := req.(*kmsg.HeartbeatRequest)
 		if !h.allowGroup(principal, req.Group, acl.ActionGroupWrite) {
 			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.Group)
 			resp := kmsg.NewPtrHeartbeatResponse()
@@ -443,7 +440,6 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp := h.coordinator.Heartbeat(ctx, req)
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.LeaveGroupRequest:
-		req := req.(*kmsg.LeaveGroupRequest)
 		if !h.allowGroup(principal, req.Group, acl.ActionGroupWrite) {
 			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.Group)
 			resp := kmsg.NewPtrLeaveGroupResponse()
@@ -463,7 +459,6 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		resp := h.coordinator.LeaveGroup(ctx, req)
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.OffsetCommitRequest:
-		req := req.(*kmsg.OffsetCommitRequest)
 		if !h.allowGroup(principal, req.Group, acl.ActionGroupWrite) {
 			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupWrite, acl.ResourceGroup, req.Group)
 			resp := kmsg.NewPtrOffsetCommitResponse()
@@ -486,7 +481,6 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		}
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.OffsetFetchRequest:
-		req := req.(*kmsg.OffsetFetchRequest)
 		if !h.allowGroup(principal, req.Group, acl.ActionGroupRead) {
 			h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupRead, acl.ResourceGroup, req.Group)
 			resp := kmsg.NewPtrOffsetFetchResponse()
@@ -514,7 +508,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 	case *kmsg.OffsetForLeaderEpochRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			offsetReq := req.(*kmsg.OffsetForLeaderEpochRequest)
+			offsetReq := req
 			if !h.allowTopics(principal, topicsFromOffsetForLeaderEpoch(offsetReq), acl.ActionFetch) {
 				return h.unauthorizedOffsetForLeaderEpoch(principal, header, offsetReq)
 			}
@@ -522,11 +516,11 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *kmsg.DescribeConfigsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			return h.handleDescribeConfigs(ctx, header, req.(*kmsg.DescribeConfigsRequest))
+			return h.handleDescribeConfigs(ctx, header, req)
 		})
 	case *kmsg.AlterConfigsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			alterReq := req.(*kmsg.AlterConfigsRequest)
+			alterReq := req
 			if !h.allowAdmin(principal) {
 				return h.unauthorizedAlterConfigs(principal, header, alterReq)
 			}
@@ -534,7 +528,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *kmsg.CreatePartitionsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			createReq := req.(*kmsg.CreatePartitionsRequest)
+			createReq := req
 			if !h.allowAdmin(principal) {
 				return h.unauthorizedCreatePartitions(principal, header, createReq)
 			}
@@ -542,7 +536,7 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 		})
 	case *kmsg.DeleteGroupsRequest:
 		return h.withAdminMetrics(header.APIKey, func() ([]byte, error) {
-			deleteReq := req.(*kmsg.DeleteGroupsRequest)
+			deleteReq := req
 			allowed := make([]string, 0, len(deleteReq.Groups))
 			denied := make(map[string]struct{})
 			leaseErrors := make(map[string]int16)
@@ -613,19 +607,19 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 			return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 		})
 	case *kmsg.CreateTopicsRequest:
-		createReq := req.(*kmsg.CreateTopicsRequest)
+		createReq := req
 		if !h.allowAdmin(principal) {
 			return h.unauthorizedCreateTopics(principal, header, createReq)
 		}
 		return h.handleCreateTopics(ctx, header, createReq)
 	case *kmsg.DeleteTopicsRequest:
-		deleteReq := req.(*kmsg.DeleteTopicsRequest)
+		deleteReq := req
 		if !h.allowAdmin(principal) {
 			return h.unauthorizedDeleteTopics(principal, header, deleteReq)
 		}
 		return h.handleDeleteTopics(ctx, header, deleteReq)
 	case *kmsg.ListOffsetsRequest:
-		listReq := req.(*kmsg.ListOffsetsRequest)
+		listReq := req
 		if !h.allowTopics(principal, topicsFromListOffsets(listReq), acl.ActionFetch) {
 			return h.unauthorizedListOffsets(principal, header, listReq)
 		}
@@ -708,42 +702,52 @@ func (h *handler) backpressureError() (int16, string) {
 
 func (h *handler) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	snap := h.s3Health.Snapshot()
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	fmt.Fprintln(w, "# HELP kafscale_s3_health_state Current broker view of S3 health.")
-	fmt.Fprintln(w, "# TYPE kafscale_s3_health_state gauge")
+	var buf bytes.Buffer
+	fmt.Fprintln(&buf, "# HELP kafscale_s3_health_state Current broker view of S3 health.")
+	fmt.Fprintln(&buf, "# TYPE kafscale_s3_health_state gauge")
 	for _, state := range []broker.S3HealthState{broker.S3StateHealthy, broker.S3StateDegraded, broker.S3StateUnavailable} {
 		value := 0
 		if snap.State == state {
 			value = 1
 		}
-		fmt.Fprintf(w, "kafscale_s3_health_state{state=%q} %d\n", state, value)
+		fmt.Fprintf(&buf, "kafscale_s3_health_state{state=%q} %d\n", state, value)
 	}
-	fmt.Fprintln(w, "# HELP kafscale_s3_latency_ms_avg Average S3 latency in the sliding window.")
-	fmt.Fprintln(w, "# TYPE kafscale_s3_latency_ms_avg gauge")
-	fmt.Fprintf(w, "kafscale_s3_latency_ms_avg %f\n", float64(snap.AvgLatency)/float64(time.Millisecond))
-	fmt.Fprintln(w, "# HELP kafscale_s3_error_rate Fraction of S3 operations that failed in the sliding window.")
-	fmt.Fprintln(w, "# TYPE kafscale_s3_error_rate gauge")
-	fmt.Fprintf(w, "kafscale_s3_error_rate %f\n", snap.ErrorRate)
+	fmt.Fprintln(&buf, "# HELP kafscale_s3_latency_ms_avg Average S3 latency in the sliding window.")
+	fmt.Fprintln(&buf, "# TYPE kafscale_s3_latency_ms_avg gauge")
+	fmt.Fprintf(&buf, "kafscale_s3_latency_ms_avg %f\n", float64(snap.AvgLatency)/float64(time.Millisecond))
+	fmt.Fprintln(&buf, "# HELP kafscale_s3_error_rate Fraction of S3 operations that failed in the sliding window.")
+	fmt.Fprintln(&buf, "# TYPE kafscale_s3_error_rate gauge")
+	fmt.Fprintf(&buf, "kafscale_s3_error_rate %f\n", snap.ErrorRate)
 	if !snap.Since.IsZero() {
-		fmt.Fprintln(w, "# HELP kafscale_s3_state_duration_seconds Seconds spent in the current S3 state.")
-		fmt.Fprintln(w, "# TYPE kafscale_s3_state_duration_seconds gauge")
-		fmt.Fprintf(w, "kafscale_s3_state_duration_seconds %f\n", time.Since(snap.Since).Seconds())
+		fmt.Fprintln(&buf, "# HELP kafscale_s3_state_duration_seconds Seconds spent in the current S3 state.")
+		fmt.Fprintln(&buf, "# TYPE kafscale_s3_state_duration_seconds gauge")
+		fmt.Fprintf(&buf, "kafscale_s3_state_duration_seconds %f\n", time.Since(snap.Since).Seconds())
 	}
-	fmt.Fprintln(w, "# HELP kafscale_produce_rps Broker ingest throughput measured over the sliding window.")
-	fmt.Fprintln(w, "# TYPE kafscale_produce_rps gauge")
-	fmt.Fprintf(w, "kafscale_produce_rps %f\n", h.produceRate.rate())
-	fmt.Fprintln(w, "# HELP kafscale_fetch_rps Broker fetch throughput measured over the sliding window.")
-	fmt.Fprintln(w, "# TYPE kafscale_fetch_rps gauge")
-	fmt.Fprintf(w, "kafscale_fetch_rps %f\n", h.fetchRate.rate())
+	fmt.Fprintln(&buf, "# HELP kafscale_produce_rps Broker ingest throughput measured over the sliding window.")
+	fmt.Fprintln(&buf, "# TYPE kafscale_produce_rps gauge")
+	fmt.Fprintf(&buf, "kafscale_produce_rps %f\n", h.produceRate.rate())
+	fmt.Fprintln(&buf, "# HELP kafscale_fetch_rps Broker fetch throughput measured over the sliding window.")
+	fmt.Fprintln(&buf, "# TYPE kafscale_fetch_rps gauge")
+	fmt.Fprintf(&buf, "kafscale_fetch_rps %f\n", h.fetchRate.rate())
 	if h.produceLatency != nil {
-		h.produceLatency.WritePrometheus(w, "kafscale_produce_latency_ms", "Produce request latency in milliseconds.")
+		h.produceLatency.WritePrometheus(&buf, "kafscale_produce_latency_ms", "Produce request latency in milliseconds.")
 	}
 	if h.consumerLag != nil {
-		h.consumerLag.WritePrometheus(w)
+		h.consumerLag.WritePrometheus(&buf)
 	}
-	h.writeRuntimeMetrics(w)
-	h.adminMetrics.writePrometheus(w)
-	h.authMetrics.writePrometheus(w)
+	h.writeRuntimeMetrics(&buf)
+	h.adminMetrics.writePrometheus(&buf)
+	h.authMetrics.writePrometheus(&buf)
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		h.logResponseWriteError("/metrics", err)
+	}
+}
+
+func (h *handler) logResponseWriteError(path string, err error) {
+	if h.logger != nil {
+		h.logger.Debug("http response write failed", "path", path, "error", err)
+	}
 }
 
 func (h *handler) recordS3Op(op string, latency time.Duration, err error) {
@@ -835,15 +839,6 @@ func (h *handler) allowGroup(principal string, group string, action acl.Action) 
 		return true
 	}
 	return h.authorizer.Allows(principal, action, acl.ResourceGroup, group)
-}
-
-func (h *handler) allowGroups(principal string, groups []string, action acl.Action) bool {
-	for _, group := range groups {
-		if !h.allowGroup(principal, group, action) {
-			return false
-		}
-	}
-	return true
 }
 
 func (h *handler) allowCluster(principal string, action acl.Action) bool {
@@ -940,20 +935,6 @@ func (h *handler) unauthorizedCreatePartitions(principal string, header *protoco
 	}
 	resp := kmsg.NewPtrCreatePartitionsResponse()
 	resp.Topics = results
-	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
-}
-
-func (h *handler) unauthorizedDeleteGroups(principal string, header *protocol.RequestHeader, req *kmsg.DeleteGroupsRequest) ([]byte, error) {
-	h.recordAuthzDeniedWithPrincipal(principal, acl.ActionGroupAdmin, acl.ResourceGroup, strings.Join(req.Groups, ","))
-	results := make([]kmsg.DeleteGroupsResponseGroup, 0, len(req.Groups))
-	for _, groupID := range req.Groups {
-		g := kmsg.NewDeleteGroupsResponseGroup()
-		g.Group = groupID
-		g.ErrorCode = protocol.GROUP_AUTHORIZATION_FAILED
-		results = append(results, g)
-	}
-	resp := kmsg.NewPtrDeleteGroupsResponse()
-	resp.Groups = results
 	return protocol.EncodeResponse(header.CorrelationID, header.APIVersion, resp), nil
 }
 
@@ -2987,7 +2968,9 @@ func startMetricsServer(ctx context.Context, addr string, h *handler, logger *sl
 	mux.HandleFunc("/metrics", h.metricsHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintf(w, "ok state=%s\n", h.s3Health.State())
+		if _, err := fmt.Fprintf(w, "ok state=%s\n", h.s3Health.State()); err != nil {
+			logger.Debug("http response write failed", "path", "/healthz", "error", err)
+		}
 	})
 	mux.HandleFunc("/readyz", h.readinessHandler)
 	srv := &http.Server{

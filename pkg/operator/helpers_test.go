@@ -1260,7 +1260,7 @@ func TestReconcileEtcdStatefulSetMemoryMode(t *testing.T) {
 	// Should have an emptyDir volume named "data" with Memory medium
 	foundMemData := false
 	for _, v := range sts.Spec.Template.Spec.Volumes {
-		if v.Name == "data" && v.VolumeSource.EmptyDir != nil && v.VolumeSource.EmptyDir.Medium == corev1.StorageMediumMemory {
+		if v.Name == "data" && v.EmptyDir != nil && v.EmptyDir.Medium == corev1.StorageMediumMemory {
 			foundMemData = true
 		}
 	}

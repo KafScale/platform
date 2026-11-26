@@ -795,7 +795,13 @@ demo-long: release-broker-ports ensure-minio ## Launch the broker + console demo
 tidy:
 	go mod tidy
 
-lint:
+GOLANGCI_LINT_VERSION ?= v2.15.0
+
+lint: ## Run golangci-lint with .golangci.yml (CI uses $(GOLANGCI_LINT_VERSION))
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint not found. Install $(GOLANGCI_LINT_VERSION): go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)"; \
+		exit 1; \
+	}
 	golangci-lint run
 
 help: ## Show targets

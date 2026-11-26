@@ -97,7 +97,7 @@ func fallbackBackend(t *testing.T) (string, <-chan routedRequest) {
 			workers.Add(1)
 			go func() {
 				defer workers.Done()
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				for {
 					frame, err := protocol.ReadFrame(conn)
 					if err != nil {
@@ -142,11 +142,11 @@ func fallbackBackend(t *testing.T) (string, <-chan routedRequest) {
 		}
 	}()
 	t.Cleanup(func() {
-		ln.Close()
+		_ = ln.Close()
 		<-done
 		mu.Lock()
 		for _, conn := range connections {
-			conn.Close()
+			_ = conn.Close()
 		}
 		mu.Unlock()
 		workers.Wait()
@@ -187,7 +187,7 @@ func TestFanOutDoesNotExcludeSuccessfulBrokers(t *testing.T) {
 						if result.err != nil {
 							t.Fatal(result.err)
 						}
-						result.conn.Close()
+						_ = result.conn.Close()
 					}
 				} else {
 					header.APIVersion = 3
@@ -200,7 +200,7 @@ func TestFanOutDoesNotExcludeSuccessfulBrokers(t *testing.T) {
 						if result.err != nil {
 							t.Fatal(result.err)
 						}
-						result.conn.Close()
+						_ = result.conn.Close()
 					}
 				}
 				parts := 0

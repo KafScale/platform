@@ -43,7 +43,7 @@ func TestDescribeGroupWithOnlyOffsets(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer etcd.Close()
+				defer func() { _ = etcd.Close() }()
 				store = etcd
 			}
 			for _, offset := range []metadata.ConsumerOffset{
@@ -201,12 +201,12 @@ func TestDescribeOffsetOnlyGroupThroughMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	client, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, ct, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	result, err := client.CallTool(ctx, &mcp.CallToolParams{Name: toolDescribeGroup, Arguments: map[string]any{"group_id": "g"}})
 	if err != nil {
 		t.Fatal(err)

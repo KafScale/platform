@@ -80,7 +80,7 @@ func startPartitionBroker(t *testing.T) *partitionBroker {
 }
 
 func (b *partitionBroker) serve(c net.Conn) {
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	for {
 		frame, err := protocol.ReadFrame(c)
 		if err != nil {

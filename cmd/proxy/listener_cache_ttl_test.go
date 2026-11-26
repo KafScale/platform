@@ -66,7 +66,7 @@ func startRecordingBroker(t *testing.T) *recordingBroker {
 			conns = append(conns, c)
 			mu.Unlock()
 			go func() {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				for {
 					frame, err := protocol.ReadFrame(c)
 					if err != nil {
@@ -119,7 +119,7 @@ func listenerTTLProxy(t *testing.T) (*proxy, *recordingBroker, *metadata.EtcdSto
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	if _, err := cli.Put(ctx, metadata.PartitionLeasePrefix()+"/orders/0", "0"); err != nil {
 		t.Fatal(err)
 	}

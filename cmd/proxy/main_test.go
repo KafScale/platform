@@ -1117,7 +1117,7 @@ func (b *failingFirstBackend) run() {
 			return
 		}
 		go func(conn net.Conn) {
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			_, _ = protocol.ReadFrame(conn)
 			b.mu.Lock()
 			b.attempts++
@@ -1137,7 +1137,7 @@ func TestForwardFetchRetriesOnBackendError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	fb := &failingFirstBackend{ln: ln, fail: 1}
 	go fb.run()
@@ -1853,7 +1853,9 @@ func TestEnvBoolDefault(t *testing.T) {
 		if c.set {
 			t.Setenv(key, c.val)
 		} else {
-			os.Unsetenv(key)
+			if err := os.Unsetenv(key); err != nil {
+				t.Fatalf("unset %s: %v", key, err)
+			}
 		}
 		if got := envBoolDefault(key, c.fallback); got != c.want {
 			t.Errorf("envBoolDefault(%q set=%v, fallback=%v) = %v, want %v",
@@ -1864,7 +1866,7 @@ func TestEnvBoolDefault(t *testing.T) {
 
 func TestProxyApiVersionsNegotiation(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
-	defer clientConn.Close()
+	defer func() { _ = clientConn.Close() }()
 	p := &proxy{apiVersions: generateProxyApiVersions()}
 	done := make(chan struct{})
 	go func() {
@@ -1872,7 +1874,7 @@ func TestProxyApiVersionsNegotiation(t *testing.T) {
 		p.handleConnection(context.Background(), serverConn)
 	}()
 	defer func() {
-		clientConn.Close()
+		_ = clientConn.Close()
 		select {
 		case <-done:
 		case <-time.After(time.Second):
@@ -1913,7 +1915,7 @@ func TestProxyStopsWritingAfterFailedWrite(t *testing.T) {
 		}
 	}
 	time.Sleep(200 * time.Millisecond)
-	clientConn.Close()
+	_ = clientConn.Close()
 	<-done
 	conn.mu.Lock()
 	defer conn.mu.Unlock()

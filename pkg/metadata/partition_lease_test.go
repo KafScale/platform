@@ -215,7 +215,9 @@ func TestPartitionLeaseAccessors(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	mgr.Acquire(ctx, "orders", 0)
+	if err := mgr.Acquire(ctx, "orders", 0); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
 
 	// CurrentOwner
 	owner, err := mgr.CurrentOwner(ctx, "orders", 0)

@@ -178,7 +178,7 @@ func (p *proxy) fanOutByPartitionOwner(ctx context.Context, header *protocol.Req
 			defer wg.Done()
 			r.resp, r.err = p.sendToOwner(ctx, header, r.conn, r.target, subRequest(req, r.include))
 			if r.err != nil {
-				r.conn.Close()
+				p.closeConn(r.conn, r.target)
 			}
 		}()
 	}

@@ -102,7 +102,7 @@ func TestReleaseAssets(t *testing.T) {
 							t.Fatal("Linux CLI requires a dynamic loader")
 						}
 					}
-					binary.Close()
+					_ = binary.Close()
 				} else {
 					binary, err := macho.NewFile(bytes.NewReader(body))
 					if err != nil {
@@ -115,7 +115,7 @@ func TestReleaseAssets(t *testing.T) {
 					if binary.Cpu != want {
 						t.Fatalf("%s has CPU %s", name, binary.Cpu)
 					}
-					binary.Close()
+					_ = binary.Close()
 				}
 				if osName == runtime.GOOS && arch == runtime.GOARCH {
 					executable := filepath.Join(t.TempDir(), "kafscale-cli")
@@ -132,7 +132,7 @@ func TestReleaseAssets(t *testing.T) {
 					}
 				}
 			}
-			gz.Close()
+			_ = gz.Close()
 			if len(entries) != 3 {
 				t.Fatalf("missing archive files in %s: %v", name, entries)
 			}

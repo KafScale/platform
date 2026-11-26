@@ -420,7 +420,9 @@ func TestCreatePartitionsShrink(t *testing.T) {
 		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
 	})
 	ctx := context.Background()
-	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 3, ReplicationFactor: 1})
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 3, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
 	err := store.CreatePartitions(ctx, "orders", 2) // shrink
 	if err == nil {
 		t.Fatal("expected error for shrinking partitions")
@@ -532,7 +534,9 @@ func TestUpdateOffsetsSucceeds(t *testing.T) {
 		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
 	})
 	ctx := context.Background()
-	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1})
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
 	err := store.UpdateOffsets(ctx, "orders", 0, 10)
 	if err != nil {
 		t.Fatalf("UpdateOffsets: %v", err)
@@ -551,7 +555,9 @@ func TestNextOffsetPartitionMismatch(t *testing.T) {
 		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
 	})
 	ctx := context.Background()
-	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1})
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 1, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
 	_, err := store.NextOffset(ctx, "orders", 99)
 	if err == nil {
 		t.Fatal("expected error for non-existent partition")
@@ -721,9 +727,15 @@ func TestDeleteTopicCleansOffsets(t *testing.T) {
 		Brokers: []protocol.MetadataBroker{{NodeID: 1}},
 	})
 	ctx := context.Background()
-	store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 2, ReplicationFactor: 1})
-	store.UpdateOffsets(ctx, "orders", 0, 10)
-	store.UpdateOffsets(ctx, "orders", 1, 20)
+	if _, err := store.CreateTopic(ctx, TopicSpec{Name: "orders", NumPartitions: 2, ReplicationFactor: 1}); err != nil {
+		t.Fatalf("create topic: %v", err)
+	}
+	if err := store.UpdateOffsets(ctx, "orders", 0, 10); err != nil {
+		t.Fatalf("update offsets: %v", err)
+	}
+	if err := store.UpdateOffsets(ctx, "orders", 1, 20); err != nil {
+		t.Fatalf("update offsets: %v", err)
+	}
 
 	if err := store.DeleteTopic(ctx, "orders"); err != nil {
 		t.Fatalf("DeleteTopic: %v", err)

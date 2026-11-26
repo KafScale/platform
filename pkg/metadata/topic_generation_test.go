@@ -46,7 +46,7 @@ func newRetireStore(t *testing.T, ctx context.Context) *EtcdStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -155,7 +155,7 @@ func TestRetireTopicGuardsGeneration(t *testing.T) {
 	if _, err := store.client.Delete(ctx, TopicGenerationKey("orders")); err != nil {
 		t.Fatal(err)
 	}
-	store.client.Close()
+	_ = store.client.Close()
 	if _, err := store.TopicGeneration(ctx, "orders"); err == nil {
 		t.Fatal("expected error from closed client")
 	}

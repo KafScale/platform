@@ -16,7 +16,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -25,7 +24,6 @@ import (
 	"encoding/pem"
 	"github.com/KafScale/platform/v2/pkg/authn"
 	"math/big"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -111,32 +109,4 @@ func (p *testPKI) rotateServer(t testing.TB) {
 	_, cert, key := p.certificate(t, "", false, true)
 	writeTestFile(t, p.options.CertFile, cert)
 	writeTestFile(t, p.options.KeyFile, key)
-}
-func (p *testPKI) authenticate(t testing.TB, certificate *tls.Certificate, options TLSOptions, wrap func(net.Conn) net.Conn) (string, error) {
-	t.Helper()
-	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
-	type result struct {
-		principal string
-		err       error
-	}
-	done := make(chan result, 1)
-	go func() {
-		conn := net.Conn(server)
-		if wrap != nil {
-			conn = wrap(conn)
-		}
-		_, principal, err := options.Authenticate(context.Background(), conn)
-		done <- result{principal, err}
-		server.Close()
-	}()
-	cfg := &tls.Config{RootCAs: p.roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}
-	if certificate != nil {
-		cfg.Certificates = []tls.Certificate{*certificate}
-	}
-	secured := tls.Client(client, cfg)
-	_ = secured.HandshakeContext(context.Background())
-	r := <-done
-	return r.principal, r.err
 }

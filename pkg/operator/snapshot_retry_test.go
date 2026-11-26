@@ -67,7 +67,7 @@ func TestPublishSnapshotRetryDoesNotResurrectDeletedTopic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	var once sync.Once
 	factory := func(cfg clientv3.Config) (*clientv3.Client, error) {
 		cli, err := clientv3.New(cfg)
@@ -106,7 +106,7 @@ func TestPublishSnapshotPreservesUnreadableSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	if _, err := cli.Put(ctx, "/kafscale/metadata/snapshot", "broken"); err != nil {
 		t.Fatal(err)
 	}

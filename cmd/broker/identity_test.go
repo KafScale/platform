@@ -68,7 +68,7 @@ func TestLoadBrokerIdentityContext(t *testing.T) {
 	server, client := net.Pipe()
 	done := make(chan error, 1)
 	go func(server net.Conn) {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		wrapped, info, err := f(server)
 		if err == nil && (wrapped != server || info.Principal != "service-a") {
 			t.Error("identity lost", info)
@@ -84,19 +84,19 @@ func TestLoadBrokerIdentityContext(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	client.Close()
+	_ = client.Close()
 	server, client = net.Pipe()
-	client.Close()
+	_ = client.Close()
 	if _, _, err := f(server); err == nil {
 		t.Fatal("unauthenticated connection accepted")
 	}
-	server.Close()
+	_ = server.Close()
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	server, client = net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	if _, _, err := f(server); err == nil {
 		t.Fatal("removed key accepted")
 	}
@@ -112,7 +112,7 @@ func TestAuthenticatedPrincipalOverridesClientID(t *testing.T) {
 	server, client := net.Pipe()
 	done := make(chan *broker.ConnContext, 1)
 	go func() {
-		defer server.Close()
+		defer func() { _ = server.Close() }()
 		_, info, err := f(server)
 		if err != nil {
 			t.Error(err)
@@ -126,7 +126,7 @@ func TestAuthenticatedPrincipalOverridesClientID(t *testing.T) {
 		t.Fatal(err)
 	}
 	info := <-done
-	client.Close()
+	_ = client.Close()
 	ctx := broker.ContextWithConnInfo(context.Background(), info)
 	spoof := "admin"
 	header := &protocol.RequestHeader{ClientID: &spoof, APIVersion: 0, CorrelationID: 4}

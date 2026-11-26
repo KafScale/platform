@@ -160,7 +160,7 @@ func TestProxyHealthServesWhileEtcdBlocksStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	snapshot := metadata.ClusterMetadata{
 		Brokers: []protocol.MetadataBroker{{NodeID: 0, Host: "127.0.0.1", Port: 19092}},
 	}

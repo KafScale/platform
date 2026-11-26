@@ -33,7 +33,7 @@ func TestProxyResponseWriteDeadline(t *testing.T) {
 	for _, mode := range []string{"normal", "not-ready", "backend-error"} {
 		t.Run(mode, func(t *testing.T) {
 			server, client := net.Pipe()
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			p := &proxy{responseWriteTimeout: 25 * time.Millisecond, backendRetries: 1, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 			var request kmsg.Request
 			switch mode {
@@ -70,7 +70,7 @@ func TestProxyFetchEOFDrainsQueuedProduce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	entered := make(chan struct{})
 	stored := make(chan error, 1)
 	go func() {
@@ -80,29 +80,29 @@ func TestProxyFetchEOFDrainsQueuedProduce(t *testing.T) {
 				stored <- err
 				return
 			}
-			conn.SetDeadline(time.Now().Add(3 * time.Second))
+			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
 			frame, err := protocol.ReadFrame(conn)
 			if err != nil {
-				conn.Close()
+				_ = conn.Close()
 				stored <- err
 				return
 			}
 			header, request, err := protocol.ParseRequest(frame.Payload)
 			if err != nil {
-				conn.Close()
+				_ = conn.Close()
 				stored <- err
 				return
 			}
 			if index == 0 {
 				if header.APIKey != protocol.APIKeyFetch {
-					conn.Close()
+					_ = conn.Close()
 					stored <- errors.New("expected Fetch first")
 					return
 				}
 				close(entered)
 				var b [1]byte
 				_, err = conn.Read(b[:])
-				conn.Close()
+				_ = conn.Close()
 				if !errors.Is(err, io.EOF) {
 					stored <- err
 					return
@@ -110,11 +110,11 @@ func TestProxyFetchEOFDrainsQueuedProduce(t *testing.T) {
 			} else {
 				produce, ok := request.(*kmsg.ProduceRequest)
 				if !ok || produce.Acks != 0 || len(produce.Topics) != 1 {
-					conn.Close()
+					_ = conn.Close()
 					stored <- errors.New("queued acks=0 Produce did not arrive")
 					return
 				}
-				conn.Close()
+				_ = conn.Close()
 				stored <- nil
 			}
 		}
@@ -122,7 +122,7 @@ func TestProxyFetchEOFDrainsQueuedProduce(t *testing.T) {
 	p := &proxy{backends: []string{listener.Addr().String()}, dialTimeout: time.Second, backendRetries: 6, backendBackoff: time.Hour, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.setReady(true)
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	done := make(chan struct{})
 	go func() { defer close(done); p.handleConnection(context.Background(), server) }()
 	fetch := kmsg.NewPtrFetchRequest()
@@ -142,7 +142,7 @@ func TestProxyFetchEOFDrainsQueuedProduce(t *testing.T) {
 	if _, err := client.Write(kmsg.NewRequestFormatter().AppendRequest(nil, produce, 2)); err != nil {
 		t.Fatal(err)
 	}
-	client.Close()
+	_ = client.Close()
 	select {
 	case err := <-stored:
 		if err != nil {
@@ -182,7 +182,7 @@ func TestDisconnectedAcknowledgedProduceStopsBackendWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	entered := make(chan struct{})
 	closed := make(chan error, 1)
 	go func() {
@@ -191,7 +191,7 @@ func TestDisconnectedAcknowledgedProduceStopsBackendWait(t *testing.T) {
 			closed <- err
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 		defer stop()
 		if _, err := protocol.ReadFrame(conn); err != nil {
@@ -206,8 +206,8 @@ func TestDisconnectedAcknowledgedProduceStopsBackendWait(t *testing.T) {
 	p := &proxy{backends: []string{listener.Addr().String()}, dialTimeout: time.Second, backendRetries: 1, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.setReady(true)
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	done := make(chan struct{})
 	go func() { defer close(done); p.handleConnection(ctx, server) }()
 	req := kmsg.NewPtrProduceRequest()
@@ -221,7 +221,7 @@ func TestDisconnectedAcknowledgedProduceStopsBackendWait(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Produce did not reach backend")
 	}
-	client.Close()
+	_ = client.Close()
 	select {
 	case err := <-closed:
 		if !errors.Is(err, io.EOF) {

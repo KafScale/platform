@@ -35,16 +35,16 @@ const kafkaSecurityPath = "/etc/kafscale/security"
 func validateKafkaSecurity(s kafscalev1.KafkaSecuritySpec) error {
 	if s.IdentitySecretRef == "" {
 		if s.ACLSecretRef != "" || s.TLSSecretRef != "" || len(s.ProxyPodSelector) != 0 || s.MaxHandshakes != 0 || s.MaxHandshakesPerIP != 0 || s.HandshakeTimeoutMS != 0 || s.HandshakeQueueMS != 0 {
-			return errors.New("Kafka security requires identitySecretRef")
+			return errors.New("identitySecretRef is required when Kafka security is enabled")
 		}
 		return nil
 	}
 	if s.ACLSecretRef == "" {
-		return errors.New("Kafka security requires aclSecretRef")
+		return errors.New("aclSecretRef is required when Kafka security is enabled")
 	}
 	for _, value := range []int32{s.MaxHandshakes, s.MaxHandshakesPerIP, s.HandshakeTimeoutMS, s.HandshakeQueueMS} {
 		if value < 0 || value > 60000 {
-			return errors.New("Kafka handshake settings must be 1..60000, or omitted")
+			return errors.New("handshake settings in Kafka security must be 1..60000, or omitted")
 		}
 	}
 	return nil

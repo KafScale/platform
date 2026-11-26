@@ -121,7 +121,7 @@ func TestBrokerReadinessRejectsCachedMetadataDuringEtcdLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	h := &handler{store: store, s3Health: broker.NewS3HealthMonitor(broker.S3HealthConfig{})}
 	if rec := brokerReadiness(h, context.Background()); rec.Code != 200 {
 		t.Fatal(rec.Code, rec.Body.String())

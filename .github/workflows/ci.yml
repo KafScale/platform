@@ -118,6 +118,21 @@ jobs:
         working-directory: lfs-client-sdk/java
         run: mvn -B test -Dtest='!LfsProducerIntegrationTest' -Dsurefire.failIfNoSpecifiedTests=false
 
+  go-lint:
+    name: Go Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
   go-unit:
     name: Go Unit Tests
     runs-on: ubuntu-latest

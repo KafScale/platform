@@ -46,8 +46,8 @@ func TestFrameReadWrite(t *testing.T) {
 
 func TestWriteFrameWithDeadlineResetsPerChunk(t *testing.T) {
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	payload := bytes.Repeat([]byte{7}, 4*ResponseWriteChunk)
 	done := make(chan error, 1)
 	go func() {
@@ -74,8 +74,8 @@ func TestWriteFrameWithDeadlineResetsPerChunk(t *testing.T) {
 
 func TestWriteFrameWithDeadlineStalledReader(t *testing.T) {
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	done := make(chan error, 1)
 	go func() {
 		done <- WriteFrameWithDeadline(server, bytes.Repeat([]byte{1}, 2*ResponseWriteChunk), 50*time.Millisecond)
@@ -97,8 +97,8 @@ func TestWriteFrameWithDeadlineStalledReader(t *testing.T) {
 // the complete response within the overall frame limit.
 func TestWriteFrameWithDeadlineTrickleLimit(t *testing.T) {
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	done := make(chan error, 1)
 	go func() {
 		done <- writeFrameWithLimits(server, bytes.Repeat([]byte{1}, 12*ResponseWriteChunk), time.Second, 150*time.Millisecond)

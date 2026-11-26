@@ -47,7 +47,7 @@ func dialCountingBackend(t *testing.T, topic string) (string, *atomic.Int32) {
 			}
 			dials.Add(1)
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				for {
 					frame, err := protocol.ReadFrame(c)
 					if err != nil {

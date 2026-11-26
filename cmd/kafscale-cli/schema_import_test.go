@@ -89,7 +89,7 @@ func (r *testRegistry) call(method, path string, body any) (int, []byte) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, data
 }
@@ -759,7 +759,7 @@ func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) 
 			v, ok := bySubject[subject][ver]
 			if !ok || v.Unreadable {
 				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(fmt.Sprintf(`{"error_code":40401,"message":"No artifact with ID '%s' in group 'null' was found."}`, subject)))
+				_, _ = fmt.Fprintf(w, `{"error_code":40401,"message":"No artifact with ID '%s' in group 'null' was found."}`, subject)
 				return
 			}
 			body := map[string]any{"subject": subject, "version": v.Version, "id": v.ID, "schemaType": "AVRO", "schema": v.Schema}
@@ -779,7 +779,7 @@ func startRawSchemaSource(t *testing.T, subjects map[string][]rawSchemaVersion) 
 			}
 			if !deleted && len(nums) == 0 && len(versions) > 0 {
 				w.WriteHeader(http.StatusNotFound)
-				_, _ = w.Write([]byte(fmt.Sprintf(`{"error_code":40401,"message":"Subject '%s' not found."}`, subject)))
+				_, _ = fmt.Fprintf(w, `{"error_code":40401,"message":"Subject '%s' not found."}`, subject)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(nums)

@@ -269,15 +269,6 @@ func (s snapshot) int(key string) (int64, error) {
 	return strconv.ParseInt(string(kv.Value), 10, 64)
 }
 
-func (s snapshot) version(key string) (int, error) {
-	kv := s[key]
-	if kv == nil {
-		return 0, nil
-	}
-	v, err := strconv.ParseInt(string(kv.Value), 10, 32)
-	return int(v), err
-}
-
 func (s snapshot) str(key string) string {
 	if kv := s[key]; kv != nil {
 		return string(kv.Value)
@@ -1432,9 +1423,10 @@ func (r *Registry) checkAgainst(ctx context.Context, subject, level, schemaType,
 		return errIncompatible(subject, level, prevVersion, prev.Text, fmt.Sprintf("{errorType:\"TYPE_MISMATCH\", description:\"schema type %s does not match %s\"}", schemaType, prev.Type))
 	}
 	checkReads := checkReads
-	if schemaType == schemaTypeProtobuf {
+	switch schemaType {
+	case schemaTypeProtobuf:
 		checkReads = checkProtoReads
-	} else if schemaType == schemaTypeJSON {
+	case schemaTypeJSON:
 		checkReads = checkJSONReads
 	}
 	if rule.backward {

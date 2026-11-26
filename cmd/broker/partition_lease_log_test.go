@@ -43,7 +43,7 @@ func TestPartitionLogLeaseHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	s3 := storage.NewMemoryS3Client()
 	a := newHandler(store, s3, protocol.MetadataBroker{NodeID: 0}, testLogger())
 	b := newHandler(store, s3, protocol.MetadataBroker{NodeID: 1}, testLogger())
@@ -239,7 +239,7 @@ func TestProduceRejectsLostLeaseAtOffsetCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	s3 := &replaceLeaseOnIndexS3{MemoryS3Client: storage.NewMemoryS3Client(), client: store.EtcdClient()}
 	h := newHandler(store, s3, protocol.MetadataBroker{NodeID: 0}, testLogger())
 	defer h.coordinator.Stop()
@@ -270,7 +270,7 @@ func TestProduceOwnershipRejectionBeforeAppendIsReroutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	s3 := storage.NewMemoryS3Client()
 	h := newHandler(store, s3, protocol.MetadataBroker{NodeID: 0}, testLogger())
 	defer h.coordinator.Stop()
@@ -366,7 +366,7 @@ func TestProduceFencingConflictDoesNotBlockOtherPartitions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 			s3 := &conditionalConflictS3{MemoryS3Client: storage.NewMemoryS3Client(), conflict: conflict}
 			h := newHandler(store, s3, meta.Brokers[0], testLogger())
 			defer h.coordinator.Stop()

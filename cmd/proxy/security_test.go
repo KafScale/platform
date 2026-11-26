@@ -91,7 +91,7 @@ func securityBackend(t *testing.T, key []byte, requests chan<- string, response 
 	}
 	var wg sync.WaitGroup
 	acceptDone := make(chan struct{})
-	t.Cleanup(func() { ln.Close(); <-acceptDone; wg.Wait() })
+	t.Cleanup(func() { _ = ln.Close(); <-acceptDone; wg.Wait() })
 	go func() {
 		defer close(acceptDone)
 		for {
@@ -102,7 +102,7 @@ func securityBackend(t *testing.T, key []byte, requests chan<- string, response 
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				principal, err := authn.ReceiveIdentity(c, key)
 				if err != nil {
 					return
@@ -154,7 +154,7 @@ func TestProxyMTLSIdentityIsolation(t *testing.T) {
 		go func(cert tls.Certificate) {
 			defer wg.Done()
 			server, raw := net.Pipe()
-			defer raw.Close()
+			defer func() { _ = raw.Close() }()
 			done := make(chan struct{})
 			go func() { defer close(done); p.handleConnection(context.Background(), server) }()
 			client := tls.Client(raw, &tls.Config{RootCAs: pki.roots, ServerName: "localhost", Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13})
@@ -175,7 +175,7 @@ func TestProxyMTLSIdentityIsolation(t *testing.T) {
 					return
 				}
 			}
-			raw.Close()
+			_ = raw.Close()
 			<-done
 		}(cert)
 	}
@@ -189,7 +189,7 @@ func TestProxyMTLSIdentityIsolation(t *testing.T) {
 	}
 	server, raw := net.Pipe()
 	done := make(chan struct{})
-	raw.Close()
+	_ = raw.Close()
 	go func() { p.handleConnection(context.Background(), server); close(done) }()
 	<-done
 	recorder := httptest.NewRecorder()
@@ -213,31 +213,31 @@ func TestProxyBackendIdentityFailures(t *testing.T) {
 	addr := securityBackend(t, key, seen, func(h *protocol.RequestHeader, _ []byte) []byte { return nil })
 	p := &proxy{security: s, dialTimeout: time.Second}
 	if c, err := p.dialBackend(context.Background(), addr); err == nil {
-		c.Close()
+		_ = c.Close()
 		t.Fatal("missing backend principal accepted")
 	}
 	c, err := p.dialBackend(authn.WithPrincipal(context.Background(), authn.ProbePrincipal), addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Close()
+	_ = c.Close()
 	// Client identity is not needed for the internal readiness connection.
 	ctx := authn.WithPrincipal(context.Background(), "service-a")
 	c, err = p.dialBackend(ctx, addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.Close()
+	_ = c.Close()
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if c, err = p.dialBackend(ctx, addr); err == nil {
-		c.Close()
+		_ = c.Close()
 		t.Fatal("missing key accepted")
 	}
 	writeTestFile(t, path, bytes.Repeat([]byte{9}, 32))
 	if c, err = p.dialBackend(ctx, addr); err == nil {
-		c.Close()
+		_ = c.Close()
 		t.Fatal("wrong key accepted")
 	}
 	if _, err = p.dialBackend(ctx, "127.0.0.1:0"); err == nil {
@@ -314,8 +314,8 @@ func TestProxyHandshakeLimit(t *testing.T) {
 		s.handshakes <- struct{}{}
 	}
 	server, client := net.Pipe()
-	defer server.Close()
-	defer client.Close()
+	defer func() { _ = server.Close() }()
+	defer func() { _ = client.Close() }()
 	if _, _, err := s.authenticate(context.Background(), server); err == nil {
 		t.Fatal("handshake limit ignored")
 	}
@@ -543,9 +543,9 @@ func TestMetadataRetriesStaleAuthenticatedConnection(t *testing.T) {
 			defer pool.Close()
 			oldServer, oldClient := net.Pipe()
 			if kind == "read" {
-				go func() { defer oldServer.Close(); _, _ = protocol.ReadFrame(oldServer) }()
+				go func() { defer func() { _ = oldServer.Close() }(); _, _ = protocol.ReadFrame(oldServer) }()
 			} else {
-				oldServer.Close()
+				_ = oldServer.Close()
 			}
 			pool.Return(addr, oldClient)
 			request := kmsg.NewPtrMetadataRequest()

@@ -237,7 +237,9 @@ func TestGroupLeaseAccessors(t *testing.T) {
 
 	// CurrentOwner before any acquire
 	ctx := context.Background()
-	mgr.Acquire(ctx, "test-group")
+	if err := mgr.Acquire(ctx, "test-group"); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
 	owner, err := mgr.CurrentOwner(ctx, "test-group")
 	if err != nil {
 		t.Fatalf("CurrentOwner: %v", err)

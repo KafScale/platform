@@ -59,7 +59,7 @@ func (r *ClusterReconciler) pollManagedEtcdHealth(ctx context.Context, cluster *
 	var maxDbSize int64
 	for i, ep := range endpoints {
 		member := fmt.Sprintf("etcd-%d", i)
-		status, err := cli.Maintenance.Status(pollCtx, ep)
+		status, err := cli.Status(pollCtx, ep)
 		if err != nil {
 			continue
 		}

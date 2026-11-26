@@ -83,7 +83,7 @@ func WriteFrameWithDeadline(conn net.Conn, payload []byte, timeout time.Duration
 
 func writeFrameWithLimits(conn net.Conn, payload []byte, timeout, limit time.Duration) error {
 	deadline := time.Now().Add(limit)
-	defer conn.SetWriteDeadline(time.Time{})
+	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
 	var lengthBuf [4]byte
 	binary.BigEndian.PutUint32(lengthBuf[:], uint32(len(payload)))
 	if err := conn.SetWriteDeadline(earlierWriteDeadline(deadline, timeout)); err != nil {

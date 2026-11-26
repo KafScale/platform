@@ -37,12 +37,12 @@ func TestTopicChangesRefreshListedTopics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	cases := []struct {
 		name   string
 		topics []protocol.MetadataTopic
@@ -57,7 +57,7 @@ func TestTopicChangesRefreshListedTopics(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for _, tc := range cases {
 			frame, err := protocol.ReadFrame(conn)
 			if err != nil {
@@ -78,7 +78,7 @@ func TestTopicChangesRefreshListedTopics(t *testing.T) {
 	p := &proxy{store: store, backends: []string{listener.Addr().String()}, backendRetries: 1, dialTimeout: time.Second, advertisedHost: "entry", advertisedPort: 29092, cacheTTL: time.Minute, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.setReady(true)
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	go p.handleConnection(ctx, server)
 	formatter := kmsg.NewRequestFormatter(kmsg.FormatterClientID("client"))
 	correlation := int32(0)
@@ -136,13 +136,13 @@ func TestTopicChangeDoesNotShareEarlierRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		frame, err := protocol.ReadFrame(conn)
 		if err != nil {
 			return
@@ -162,7 +162,7 @@ func TestTopicChangeDoesNotShareEarlierRefresh(t *testing.T) {
 	go func() { defer close(earlier); p.refreshMetadataCache(context.Background()) }()
 	<-store.calls
 	server, client := net.Pipe()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	go p.handleConnection(context.Background(), server)
 	req := kmsg.NewPtrCreateTopicsRequest()
 	req.Version = 2

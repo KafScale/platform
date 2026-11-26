@@ -36,7 +36,7 @@ func TestDescribeGroupMemberDetailsSurviveRestart(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				t.Cleanup(func() { etcd.Close() })
+				t.Cleanup(func() { _ = etcd.Close() })
 				store = etcd
 			}
 			c := newTestCoordinator(t, store)

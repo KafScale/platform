@@ -77,7 +77,7 @@ func TestPartitionHandoverFencesInFlightAcquisition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	a := NewPartitionLeaseManager(cli, PartitionLeaseConfig{BrokerID: "0"})
 	defer a.ReleaseAll()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -215,7 +215,7 @@ func TestPartitionReleaseLateDeleteKeepsReacquiredLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	a := NewPartitionLeaseManager(cli, PartitionLeaseConfig{BrokerID: "0"})
 	defer a.ReleaseAll()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

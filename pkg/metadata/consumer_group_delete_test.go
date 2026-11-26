@@ -219,7 +219,7 @@ func TestEtcdDeletionFencesConcurrentWrites(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { cli.Close() })
+			t.Cleanup(func() { _ = cli.Close() })
 			store := &EtcdStore{client: cli}
 			err = store.DeleteConsumerGroupAndOffsets(ctx, groupID)
 			switch mode {

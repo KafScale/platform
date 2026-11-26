@@ -65,7 +65,7 @@ func TestRebalanceFinishesActiveAppendBeforeRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	s3 := &handoverBlockedS3{MemoryS3Client: storage.NewMemoryS3Client(), persisted: make(chan struct{}), resume: make(chan struct{})}
 	var resume sync.Once
 	defer resume.Do(func() { close(s3.resume) })
@@ -238,7 +238,7 @@ func TestPartitionRebalanceTimerAndDial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	addr := listener.Addr().String()
 	if !brokerListening(ctx, addr) || brokerListening(ctx, "invalid-address") {
 		t.Fatal("broker reachability did not follow TCP dial results")
@@ -296,7 +296,7 @@ func TestRebalancePreservesAcknowledgedDataAndFencesRetainedLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 	s3 := storage.NewMemoryS3Client()
 	a := newHandler(store, s3, meta.Brokers[0], testLogger())
 	b := newHandler(store, s3, meta.Brokers[1], testLogger())

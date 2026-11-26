@@ -37,7 +37,7 @@ func TestLFSHTTPProduceReplies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer listener.Close()
+			defer func() { _ = listener.Close() }()
 			m.backends = []string{listener.Addr().String()}
 			done := make(chan struct{})
 			go func() {
@@ -46,7 +46,7 @@ func TestLFSHTTPProduceReplies(t *testing.T) {
 				if err != nil {
 					return
 				}
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				frame, err := protocol.ReadFrame(c)
 				if err != nil {
 					return
@@ -98,11 +98,11 @@ func TestLFSHTTPMalformedAcknowledgements(t *testing.T) {
 	for _, kind := range []string{"transport", "short", "correlation", "missing", "wrong_partition", "wrong_topic"} {
 		t.Run(kind, func(t *testing.T) {
 			server, client := net.Pipe()
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 			m := testHTTPModule(t)
 			m.dialTimeout = time.Second
 			go func() {
-				defer server.Close()
+				defer func() { _ = server.Close() }()
 				_, _ = protocol.ReadFrame(server)
 				if kind == "transport" {
 					return
@@ -149,7 +149,7 @@ func TestLFSHTTPMultipartBrokerRejection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	m.backends = []string{listener.Addr().String()}
 	done := make(chan struct{})
 	go func() {
@@ -158,7 +158,7 @@ func TestLFSHTTPMultipartBrokerRejection(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer c.Close()
+		defer func() { _ = c.Close() }()
 		frame, err := protocol.ReadFrame(c)
 		if err != nil {
 			return

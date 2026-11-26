@@ -141,7 +141,7 @@ func namespaceWarning(s settings) string {
 	return fmt.Sprintf("KAFSCALE_S3_NAMESPACE is %q; schema id records go to %s/@schemas/ in bucket %s, and registries on different etcd clusters that use this bucket and namespace share one schema id space; set KAFSCALE_S3_NAMESPACE per cluster", s.namespace, s.namespace, s.s3.Bucket)
 }
 
-func run(ctx context.Context, getenv func(string) string) error {
+func run(ctx context.Context, getenv func(string) string) (err error) {
 	s, err := loadSettings(getenv)
 	if err != nil {
 		return err
@@ -155,7 +155,11 @@ func run(ctx context.Context, getenv func(string) string) error {
 	if err != nil {
 		return fmt.Errorf("connect to etcd: %w", err)
 	}
-	defer cli.Close()
+	defer func() {
+		if closeErr := cli.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close etcd client: %w", closeErr))
+		}
+	}()
 	cfg := schemaregistry.Config{Client: cli, Namespace: s.namespace, InlineLimit: s.inlineLimit}
 	if s.s3 != nil {
 		if cfg.S3, err = storage.NewS3Client(ctx, *s.s3); err != nil {
