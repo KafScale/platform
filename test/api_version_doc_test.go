@@ -145,7 +145,7 @@ func TestGoModulePathIsV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(ice), "github.com/KafScale/platform/v2 v2.0.0") || !strings.Contains(string(ice), "replace github.com/KafScale/platform/v2 => ../../..") {
+	if !strings.Contains(string(ice), "github.com/KafScale/platform/v2 v2.1.0") || !strings.Contains(string(ice), "replace github.com/KafScale/platform/v2 => ../../..") {
 		t.Fatal("iceberg processor does not require and replace /v2")
 	}
 	script := readRepoDoc(t, "scripts/check_go_api_compatibility.sh")
