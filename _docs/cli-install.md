@@ -30,6 +30,19 @@ neither Docker nor a Go toolchain when installed from a release archive.
 Its commands are `restore`, `prune` and `schema import`; use a Kafka client
 such as [kcat](https://github.com/edenhill/kcat#install) for produce and consume.
 
+## Homebrew
+
+On macOS or Linux, install the latest final release with Homebrew:
+
+```bash
+brew tap kafscale/platform https://github.com/KafScale/platform
+brew install kafscale-cli
+```
+
+If brew says the tap is untrusted, run `brew trust kafscale/platform` once and
+install again. A `-rc` or `-dev` tag is a GitHub pre-release and does not
+update the Homebrew formula.
+
 ## Download a release
 
 Open [GitHub releases](https://github.com/KafScale/platform/releases) and select
