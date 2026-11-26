@@ -86,14 +86,17 @@ func TestDemoStack(t *testing.T) {
 
 	brokerCmd := exec.CommandContext(demoCtx, "go", "run", filepath.Join(repoRoot(t), "cmd", "broker"))
 	configureProcessGroup(brokerCmd)
-	brokerCmd.Env = append(os.Environ(),
-		"KAFSCALE_AUTO_CREATE_TOPICS=true",
+	brokerEnv := append(os.Environ(),
 		"KAFSCALE_AUTO_CREATE_PARTITIONS=1",
 		fmt.Sprintf("KAFSCALE_BROKER_ADDR=%s", brokerAddr),
 		fmt.Sprintf("KAFSCALE_METRICS_ADDR=%s", metricsAddr),
 		fmt.Sprintf("KAFSCALE_CONTROL_ADDR=%s", controlAddr),
 		fmt.Sprintf("KAFSCALE_ETCD_ENDPOINTS=%s", strings.Join(endpoints, ",")),
 	)
+	if _, set := os.LookupEnv("KAFSCALE_AUTO_CREATE_TOPICS"); !set {
+		brokerEnv = append(brokerEnv, "KAFSCALE_AUTO_CREATE_TOPICS=true")
+	}
+	brokerCmd.Env = brokerEnv
 	var brokerLogs bytes.Buffer
 	brokerCmd.Stdout = io.MultiWriter(&brokerLogs, mustLogFile(t, "demo-broker.log"))
 	brokerCmd.Stderr = brokerCmd.Stdout

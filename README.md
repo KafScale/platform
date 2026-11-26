@@ -181,7 +181,7 @@ make demo
 
 This starts MinIO, a broker on `127.0.0.1:39092` and the console on
 `http://127.0.0.1:48080/ui/` (user `kafscaleadmin`, password `kafscale`).
-Segments land in the MinIO bucket `kafscale`.
+Segments land in the MinIO bucket `kafscale`. Topic auto-creation is on unless you set `KAFSCALE_AUTO_CREATE_TOPICS` first.
 
 **2. Build and start kaf-mirror**
 
