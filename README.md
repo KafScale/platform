@@ -73,11 +73,13 @@ Install the native CLI with Homebrew:
 
 ```bash
 brew tap kafscale/platform https://github.com/KafScale/platform
-brew install kafscale-cli
+brew update
+brew install kafscale/platform/kafscale-cli
 ```
 
-If brew says the tap is untrusted, run `brew trust kafscale/platform` once and
-install again. Archives and source builds are in the [CLI install guide](docs/cli-install.md).
+`brew update` refreshes an existing tap so newly added formulae are available.
+The fully qualified install command selects this tap and trusts only this formula.
+Archives and source builds are in the [CLI install guide](docs/cli-install.md).
 
 ## Why KafScale Exists
 
