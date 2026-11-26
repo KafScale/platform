@@ -57,11 +57,11 @@ client. No Go toolchain or Kubernetes cluster is required.
 git clone https://github.com/KafScale/platform.git
 cd platform/deploy/docker-compose
 docker compose up -d --wait
-printf 'hello from KafScale\n' | kcat -P -b localhost:9093 -t quickstart
-kcat -C -b localhost:9093 -t quickstart -o beginning -c 1 -e
+printf 'hello from KafScale\n' | kcat -P -b 127.0.0.1:9093 -t quickstart
+kcat -C -b 127.0.0.1:9093 -t quickstart -o beginning -c 1 -e
 ```
 
-Open the console at [http://localhost:3080/ui/](http://localhost:3080/ui/), user
+Open the console at [http://127.0.0.1:3080/ui/](http://127.0.0.1:3080/ui/), user
 `kafscaleadmin`, password `kafscale`. The first start builds the local MinIO test
 fixture inside Docker and can take several minutes. Default images are `v2.1.0`,
 the first release with idempotent producer support (#28).

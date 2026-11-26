@@ -71,11 +71,11 @@ docker compose down
 
 | Service | URL |
 |---------|-----|
-| LFS HTTP API | http://localhost:8080 |
-| MinIO Console | http://localhost:9001 |
-| KafScale Console | http://localhost:3080/ui/ |
-| E72 Browser Demo | http://localhost:3072 |
-| Health Check | http://localhost:9094/readyz |
+| LFS HTTP API | http://127.0.0.1:8080 |
+| MinIO Console | http://127.0.0.1:9001 |
+| KafScale Console | http://127.0.0.1:3080/ui/ |
+| E72 Browser Demo | http://127.0.0.1:3072 |
+| Health Check | http://127.0.0.1:9094/readyz |
 
 ## Testing
 
@@ -89,25 +89,25 @@ Docker Compose sets:
 
 ### Proxy Kafka Port
 
-The proxy advertises `localhost:9093`. Use it from the host only. Clients inside the compose network connect to `broker:9092`.
+The proxy advertises `127.0.0.1:9093`. Use it from the host only. Clients inside the compose network connect to `broker:9092`.
 
 ### Health Check
 
 ```bash
-curl http://localhost:9094/readyz
+curl http://127.0.0.1:9094/readyz
 ```
 
 ### LFS Upload
 
 ```bash
 # Upload a file
-curl -X POST http://localhost:8080/lfs/produce \
+curl -X POST http://127.0.0.1:8080/lfs/produce \
   -H "X-Kafka-Topic: test-uploads" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @myfile.bin
 
 # Upload with key
-curl -X POST http://localhost:8080/lfs/produce \
+curl -X POST http://127.0.0.1:8080/lfs/produce \
   -H "X-Kafka-Topic: test-uploads" \
   -H "X-Kafka-Key: $(echo -n 'my-key' | base64)" \
   -H "Content-Type: video/mp4" \
@@ -119,7 +119,7 @@ curl -X POST http://localhost:8080/lfs/produce \
 ```bash
 # Stream a verified object through the proxy.
 # Use bucket/key/sha256/size from the LFS envelope returned by /lfs/produce.
-curl -X POST http://localhost:8080/lfs/download \
+curl -X POST http://127.0.0.1:8080/lfs/download \
   -H "Content-Type: application/json" \
   -d '{
     "bucket": "kafscale",
@@ -143,12 +143,12 @@ Traceability is enabled in the compose file by default. It consists of:
 ### Where to see it
 
 1) **Console UI**
-   - Open http://localhost:3080/ui/
+   - Open http://127.0.0.1:3080/ui/
    - Navigate to the **LFS** tab for objects, topics, live events, and S3 browser.
 
 2) **Raw events from Kafka**
 ```bash
-kcat -b localhost:9093 -C -t __lfs_ops_state -o beginning
+kcat -b 127.0.0.1:9093 -C -t __lfs_ops_state -o beginning
 ```
 
 ### Key settings (compose)
@@ -166,13 +166,13 @@ Console LFS dashboard:
 
 ```bash
 # List topics
-kcat -b localhost:9093 -L
+kcat -b 127.0.0.1:9093 -L
 
 # Produce message (goes through regular broker, not LFS)
-echo "hello" | kcat -b localhost:9093 -P -t test-topic
+echo "hello" | kcat -b 127.0.0.1:9093 -P -t test-topic
 
 # Consume messages
-kcat -b localhost:9093 -C -t test-topic -o beginning
+kcat -b 127.0.0.1:9093 -C -t test-topic -o beginning
 ```
 
 ## Configuration
@@ -215,7 +215,7 @@ with v2.0.1. The v2.0.0 tag has no demo image. From the repository root:
 docker compose -f deploy/docker-compose/docker-compose.yaml --profile demo up -d
 ```
 
-Open [the browser demo](http://localhost:3072), choose a non-empty file (up to
+Open [the browser demo](http://127.0.0.1:3072), choose a non-empty file (up to
 100 MiB), and upload it to a Kafka topic. Inspect the returned LFS envelope,
 then click **Verify and download file**. The proxy verifies the S3 object and
 the browser checks the downloaded size and SHA-256 before saving it.
@@ -293,11 +293,11 @@ REGISTRY=my-registry.local:5000 TAG=v2.1.0 docker compose up -d
               ┌─────────┴─────────┐
               │   Host Machine    │
               │                   │
-              │ localhost:8080    │ ← LFS HTTP API
+              │ 127.0.0.1:8080    │ ← LFS HTTP API
               │ broker:9092       │ ← Kafka Broker (Compose network)
-              │ localhost:9093    │ ← Kafka Proxy
-              │ localhost:9001    │ ← MinIO Console
-              │ localhost:3080/ui/│ ← KafScale Console
+              │ 127.0.0.1:9093    │ ← Kafka Proxy
+              │ 127.0.0.1:9001    │ ← MinIO Console
+              │ 127.0.0.1:3080/ui/│ ← KafScale Console
               └───────────────────┘
 ```
 
@@ -333,7 +333,7 @@ docker info | grep -A5 "Insecure Registries"
 docker compose logs proxy
 
 # Verify MinIO is healthy
-curl http://localhost:9000/minio/health/live
+curl http://127.0.0.1:9000/minio/health/live
 
 # Check bucket exists
 docker compose exec minio ls /data
