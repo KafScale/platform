@@ -67,7 +67,17 @@ fixture inside Docker and can take several minutes. Default images are `v2.1.0`,
 the first release with idempotent producer support (#28).
 
 [Local guide](docs/local-quickstart.md) · [Connect your S3](docs/s3-connection.md) ·
-[Native CLI downloads](docs/cli-install.md) · [Kubernetes and Helm](docs/quickstart.md)
+[Install the CLI](docs/cli-install.md) · [Kubernetes and Helm](docs/quickstart.md)
+
+Install the native CLI with Homebrew:
+
+```bash
+brew tap kafscale/platform https://github.com/KafScale/platform
+brew install kafscale-cli
+```
+
+If brew says the tap is untrusted, run `brew trust kafscale/platform` once and
+install again. Archives and source builds are in the [CLI install guide](docs/cli-install.md).
 
 ## Why KafScale Exists
 
