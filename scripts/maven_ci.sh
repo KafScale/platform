@@ -18,7 +18,10 @@
 # support Resolver 1.x (Maven 3.9) and Resolver 2.x (newer Maven versions).
 # https://maven.apache.org/resolver/configuration.html
 set -euo pipefail
-options=(--batch-mode --no-transfer-progress --update-snapshots
+# Use the same repository identity on the host and in schema containers so a
+# restored cache stays usable. Tests may supply a local HTTP fixture instead.
+settings="${MAVEN_SETTINGS:-$(dirname "$0")/../.github/maven-settings.xml}"
+options=(--settings "$settings" --batch-mode --no-transfer-progress --update-snapshots
   -Daether.connector.connectTimeout=10000
   -Daether.connector.requestTimeout=60000)
 for prefix in aether.connector.http aether.transport.http; do

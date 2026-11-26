@@ -275,8 +275,10 @@ func (h *srHarness) maven(goals ...string) string {
 	args := append(h.docker[1:], "run", "--rm", "--network", "host",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"-e", "HOME=/tmp", "-e", "MAVEN_CONFIG=/tmp/.m2",
+		"-e", "MAVEN_SETTINGS=/maven-settings.xml",
 		"-v", h.m2+":/m2", "-v", h.javaDir+":/src", "-w", "/src",
 		"-v", filepath.Join(repoRoot(h.t), "scripts", "maven_ci.sh")+":/maven_ci.sh:ro",
+		"-v", filepath.Join(repoRoot(h.t), ".github", "maven-settings.xml")+":/maven-settings.xml:ro",
 		srMavenImage, "bash", "/maven_ci.sh", "-q", "-Dmaven.repo.local=/m2")
 	return h.run(nil, h.docker[0], append(args, goals...)...)
 }

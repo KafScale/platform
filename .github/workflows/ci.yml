@@ -113,15 +113,26 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: maven
-          cache-dependency-path: |
-            lfs-client-sdk/java/pom.xml
-            scripts/maven_ci.sh
+      - name: Restore Java SDK Maven repository
+        id: sdk-maven-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-${{ runner.arch }}-sdk-maven-v2-${{ hashFiles('lfs-client-sdk/java/pom.xml', 'scripts/maven_ci.sh', '.github/maven-settings.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-sdk-maven-v2-
       - name: Verify Maven HTTP retries and cache reuse
         run: python3 -m unittest discover -s test -p maven_transport_test.py
       - name: Run Java SDK tests without the Docker integration test
         working-directory: lfs-client-sdk/java
         run: bash ../../scripts/maven_ci.sh test -Dtest='!LfsProducerIntegrationTest' -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Save Java SDK Maven repository
+        if: ${{ !cancelled() && steps.sdk-maven-cache.outputs.cache-primary-key != '' && steps.sdk-maven-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ job.status == 'success' && steps.sdk-maven-cache.outputs.cache-primary-key || format('{0}-partial-{1}-{2}', steps.sdk-maven-cache.outputs.cache-primary-key, github.run_id, github.run_attempt) }}
 
   go-lint:
     name: Go Lint
@@ -266,7 +277,7 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/kafscale-e2e-m2
-          key: ${{ runner.os }}-${{ runner.arch }}-schema-maven-v1-${{ hashFiles('test/e2e/testdata/schemaregistry/java/pom.xml', 'test/e2e/schema_registry_test.go', 'scripts/maven_ci.sh') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-schema-maven-v1-${{ hashFiles('test/e2e/testdata/schemaregistry/java/pom.xml', 'test/e2e/schema_registry_test.go', 'scripts/maven_ci.sh', '.github/maven-settings.xml') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-schema-maven-v1-
 
@@ -288,7 +299,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/kafscale-e2e-m2
-          key: ${{ steps.schema-maven-cache.outputs.cache-primary-key }}
+          key: ${{ job.status == 'success' && steps.schema-maven-cache.outputs.cache-primary-key || format('{0}-partial-{1}-{2}', steps.schema-maven-cache.outputs.cache-primary-key, github.run_id, github.run_attempt) }}
 
       - name: Check operator startup readiness, scaling and retry regressions
         if: matrix.suite == 'operator-api'

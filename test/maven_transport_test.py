@@ -16,6 +16,7 @@
 """Exercise real Maven HTTP resolution against a local repository, without Central."""
 import hashlib
 import http.server
+import os
 import pathlib
 import shutil
 import subprocess
@@ -66,9 +67,10 @@ class MavenTransportTest(unittest.TestCase):
             thread.start()
             try:
                 url = f'http://127.0.0.1:{server.server_port}/'
-                (work / 'settings.xml').write_text(f'''<settings><mirrors><mirror>
-<id>fixture</id><url>{url}</url><mirrorOf>*</mirrorOf>
-</mirror></mirrors></settings>''')
+                settings = (ROOT / '.github/maven-settings.xml').read_text()
+                self.assertIn('<mirrorOf>central</mirrorOf>', settings)
+                (work / 'settings.xml').write_text(settings.replace(
+                    'https://maven-central.storage-download.googleapis.com/maven2/', url))
                 (work / 'pom.xml').write_text('''<project xmlns="http://maven.apache.org/POM/4.0.0">
 <modelVersion>4.0.0</modelVersion><groupId>fixture</groupId>
 <artifactId>client</artifactId><version>1</version><packaging>pom</packaging>
@@ -81,12 +83,12 @@ class MavenTransportTest(unittest.TestCase):
                     # retry count and maximum Retry-After interval.
                     return subprocess.run([
                         'bash', str(ROOT / 'scripts/maven_ci.sh'),
-                        '-s', str(work / 'settings.xml'),
                         f'-Dmaven.repo.local={repository}',
                         '-Daether.connector.http.retryHandler.interval=1',
                         '-Daether.transport.http.retryHandler.interval=1',
                         'validate',
-                    ], cwd=work, text=True, stdout=subprocess.PIPE,
+                    ], cwd=work, env={**os.environ, 'MAVEN_SETTINGS': str(work / 'settings.xml')},
+                        text=True, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, timeout=30)
 
                 result = invoke(work / 'repository')
