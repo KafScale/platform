@@ -286,7 +286,7 @@ signing in (see [Console](/operations/#console)). The console needs
 set to the cluster namespace. Without `console.etcdEndpoints`, that delete
 returns `503` with `metadata store not configured`. Without
 `console.s3Namespace`, it returns `503` with `console S3 namespace not configured; set KAFSCALE_S3_NAMESPACE to the KafscaleCluster namespace`.
-Without `console.auth.existingSecret`, and without both `console.auth.username` and `console.auth.password`, login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`. The chart sets those from the Secret named by `console.auth.existingSecret` (keys `username` and `password`), or from `--set console.auth.username` and `--set console.auth.password`.
+Without `console.auth.existingSecret`, and without both `console.auth.username` and `console.auth.password`, login returns `503` and every other `/ui/api` call returns `503` with `ui auth disabled`. The chart sets those from the Secret named by `console.auth.existingSecret` (keys `username` and `password`). Use that Secret, as shown below. Never pass the console password with `--set` or any other command-line flag: it would end up in shell history and the process list. If you must keep `console.auth.username` and `console.auth.password` in Helm values, put them in a values file readable only by you (mode 600) and pass it with `-f`.
 
 For the quickstart cluster `demo` in namespace `kafscale`, when etcd is
 operator-managed, first create the console login Secret. Enter the console

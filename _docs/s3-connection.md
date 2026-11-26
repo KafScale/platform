@@ -95,13 +95,23 @@ export KAFSCALE_S3_ACCESS_KEY KAFSCALE_S3_SECRET_KEY KAFSCALE_UI_PASSWORD
 # export KAFSCALE_S3_ENDPOINT=https://s3.example.net
 # export KAFSCALE_S3_PATH_STYLE=true
 docker compose up -d --wait
-curl -fsS http://localhost:9094/readyz
+curl -fsS http://127.0.0.1:9094/readyz
 ```
 
-Use `localhost:9093` for host Kafka clients and `http://localhost:3080` for the
-console (`kafscaleadmin` and your chosen password). The host ports bind to
-loopback; this Compose file is for access from that host. For a shared deployment
-with authentication and TLS, follow [Kubernetes and Helm](/quickstart/).
+Use `127.0.0.1:9093` for host Kafka clients and `http://127.0.0.1:3080/ui/` for
+the console (`kafscaleadmin` and your chosen password). The host ports bind to
+the IPv4 loopback address only, and the proxy advertises `127.0.0.1:9093`. Use
+`127.0.0.1` rather than `localhost`: on hosts where `localhost` resolves to
+`::1` first, clients would try an address that nothing listens on. This Compose
+file is for access from that host.
+
+```bash
+printf 'hello from KafScale\n' | kcat -P -b 127.0.0.1:9093 -t quickstart
+kcat -C -b 127.0.0.1:9093 -t quickstart -o beginning -c 1 -e
+```
+
+For a shared deployment with authentication and TLS, follow
+[Kubernetes and Helm](/quickstart/).
 
 ## Native CLI
 

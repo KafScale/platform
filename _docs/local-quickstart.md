@@ -46,7 +46,7 @@ MinIO binary or image is published as a KafScale release. Its credentials and
 volumes are for local testing. Product images default to the published `v2.0.1`
 tag; `TAG` selects another published release.
 
-Open the console at [http://localhost:3080](http://localhost:3080). Sign in as
+Open the console at [http://localhost:3080/ui/](http://localhost:3080/ui/). Sign in as
 `kafscaleadmin` with password `kafscale`.
 
 ## Write and read your first message
@@ -60,8 +60,9 @@ printf 'hello from KafScale\n' | kcat -P -b localhost:9093 -t quickstart \
 kcat -C -b localhost:9093 -t quickstart -o beginning -c 1 -e
 ```
 
-The compatibility flag is needed for the default `v2.0.1` images. Releases
-containing #28 support default nontransactional idempotent producers; see
+The compatibility flag is needed for the default `v2.0.1` images. `v2.1.0`, the
+first release with #28, supports default nontransactional idempotent producers
+and does not need it; see
 [protocol support](https://github.com/KafScale/platform/blob/main/docs/protocol.md#idempotent-producers). Transactions remain unsupported.
 
 To inspect or stop the stack:
