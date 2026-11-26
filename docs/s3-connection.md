@@ -100,8 +100,10 @@ file is for access from that host.
 ```bash
 printf 'hello from KafScale\n' | kcat -P -b 127.0.0.1:9093 -t quickstart
 kcat -C -b 127.0.0.1:9093 -t quickstart -o beginning -c 1 -e
-``` For a shared deployment
-with authentication and TLS, follow [Kubernetes and Helm](quickstart.md).
+```
+
+For a shared deployment with authentication and TLS, follow
+[Kubernetes and Helm](quickstart.md).
 
 ## Native CLI
 
