@@ -37,7 +37,7 @@ services:
       retries: 12
 
   broker:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.0.1}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.1.0}
     depends_on:
       etcd: {condition: service_healthy}
     environment:
@@ -60,7 +60,7 @@ services:
       retries: 24
 
   proxy:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-proxy:${TAG:-v2.0.1}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-proxy:${TAG:-v2.1.0}
     depends_on:
       etcd: {condition: service_healthy}
       broker: {condition: service_healthy}
@@ -79,7 +79,7 @@ services:
       retries: 24
 
   console:
-    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-console:${TAG:-v2.0.1}
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-console:${TAG:-v2.1.0}
     depends_on:
       etcd: {condition: service_healthy}
       broker: {condition: service_healthy}

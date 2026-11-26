@@ -57,16 +57,14 @@ client. No Go toolchain or Kubernetes cluster is required.
 git clone https://github.com/KafScale/platform.git
 cd platform/deploy/docker-compose
 docker compose up -d --wait
-printf 'hello from KafScale\n' | kcat -P -b localhost:9093 -t quickstart \
-  -X enable.idempotence=false
+printf 'hello from KafScale\n' | kcat -P -b localhost:9093 -t quickstart
 kcat -C -b localhost:9093 -t quickstart -o beginning -c 1 -e
 ```
 
 Open the console at [http://localhost:3080/ui/](http://localhost:3080/ui/), user
 `kafscaleadmin`, password `kafscale`. The first start builds the local MinIO test
-fixture inside Docker and can take several minutes. The default `v2.0.1` images
-need `enable.idempotence=false`. `v2.1.0`, the first release with idempotent
-producer support (#28), does not.
+fixture inside Docker and can take several minutes. Default images are `v2.1.0`,
+the first release with idempotent producer support (#28).
 
 [Local guide](docs/local-quickstart.md) · [Connect your S3](docs/s3-connection.md) ·
 [Native CLI downloads](docs/cli-install.md) · [Kubernetes and Helm](docs/quickstart.md)
@@ -225,7 +223,7 @@ More on the backup pattern: [KafShield, Kafka backup and disaster recovery on S3
 
 ## Examples
 
-Go code imports `github.com/KafScale/platform/v2`; fetch it with `go get github.com/KafScale/platform/v2@v2.0.1`.
+Go code imports `github.com/KafScale/platform/v2`; fetch it with `go get github.com/KafScale/platform/v2@v2.1.0`.
 
 - Quickstart guide: `examples/101_kafscale-dev-guide/README.md`
 - Spring Boot app demo (E20): `examples/E20_spring-boot-kafscale-demo/README.md`

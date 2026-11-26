@@ -17,7 +17,7 @@ limitations under the License.
 
 # KafScale Docker Compose
 
-Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v2.0.1` images.
+Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v2.1.0` images.
 
 This is the development/test stack, with a local MinIO fixture. For released
 images connected to your own bucket, use the separate release Compose file
@@ -29,7 +29,7 @@ runs on your host without Docker.
 
 You need Docker and Docker Compose v2.
 
-By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v2.0.1`, plus `kafscale-e72-browser-demo` with the `demo` profile. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
+By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-proxy` and `kafscale-console` at tag `v2.1.0`, plus `kafscale-e72-browser-demo` with the `demo` profile. These images are public. MinIO is built from `test/e2e/minio.Dockerfile`.
 
 ### Use a Local Registry
 
@@ -169,7 +169,7 @@ Console LFS dashboard:
 kcat -b localhost:9093 -L
 
 # Produce message (goes through regular broker, not LFS)
-echo "hello" | kcat -b localhost:9093 -P -t test-topic -X enable.idempotence=false
+echo "hello" | kcat -b localhost:9093 -P -t test-topic
 
 # Consume messages
 kcat -b localhost:9093 -C -t test-topic -o beginning
@@ -184,7 +184,7 @@ Edit `.env` to customize:
 ```bash
 # Registry settings
 REGISTRY=ghcr.io
-TAG=v2.0.1
+TAG=v2.1.0
 
 # MinIO credentials
 MINIO_ROOT_USER=minioadmin
@@ -267,7 +267,7 @@ Version tags still build and publish linux/amd64 and linux/arm64 images.
 ### Override Registry/Tag
 
 ```bash
-REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker compose up -d
+REGISTRY=my-registry.local:5000 TAG=v2.1.0 docker compose up -d
 ```
 
 ## Architecture
@@ -320,7 +320,7 @@ docker compose restart proxy
 
 ```bash
 # Check that the default image pulls
-docker pull ghcr.io/kafscale/kafscale-broker:v2.0.1
+docker pull ghcr.io/kafscale/kafscale-broker:v2.1.0
 
 # For a local registry, check the Docker daemon config
 docker info | grep -A5 "Insecure Registries"
