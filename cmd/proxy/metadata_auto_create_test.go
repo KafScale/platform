@@ -63,7 +63,7 @@ func TestPlainMetadataMissingTopicsReachBroker(t *testing.T) {
 							for _, topic := range req.Topics {
 								result := kmsg.NewMetadataResponseTopic()
 								result.Topic = topic.Topic
-								if *topic.Topic == "new" && !enabled {
+								if *topic.Topic == "new" && (!enabled || (version >= 4 && !req.AllowAutoTopicCreation)) {
 									result.ErrorCode = protocol.UNKNOWN_TOPIC_OR_PARTITION
 								} else {
 									result.Partitions = []kmsg.MetadataResponseTopicPartition{{Partition: 0, Leader: 7}, {Partition: 1, Leader: 7}, {Partition: 2, Leader: 7}}
@@ -104,7 +104,7 @@ func TestPlainMetadataMissingTopicsReachBroker(t *testing.T) {
 						t.Fatal(decoded)
 					}
 					topic := decoded.Topics[1]
-					if enabled {
+					if enabled && (version < 4 || flag) {
 						if topic.ErrorCode != 0 || len(topic.Partitions) != 3 || topic.Partitions[0].Leader != 0 {
 							t.Fatal(topic)
 						}

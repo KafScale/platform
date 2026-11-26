@@ -76,6 +76,11 @@ kafka-topics.sh --bootstrap-server 127.0.0.1:9093 --create --topic orders \
   --partitions 3 --replication-factor 1
 ```
 
+Metadata v4 and later respect `AllowAutoTopicCreation`: an unknown topic returns
+`UNKNOWN_TOPIC_OR_PARTITION` without creating it when the flag is false. Creation
+requires both the flag and `KAFSCALE_AUTO_CREATE_TOPICS=true`. Metadata v0 to v3
+have no client flag and use the broker setting.
+
 `ListOffsets` does not auto-create topics, regardless of the broker's auto-create
 setting. Earliest and latest lookups return `UNKNOWN_TOPIC_OR_PARTITION` for
 missing topics or partitions. Deadline/cancellation errors return

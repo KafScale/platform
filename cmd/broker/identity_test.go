@@ -241,32 +241,103 @@ func TestAuthenticatedMetadataLegacyListAll(t *testing.T) {
 	}
 }
 
-func TestMetadataAutoCreateWithoutClientFlag(t *testing.T) {
-	for _, version := range []int16{1, 4} {
-		t.Run(fmt.Sprint(version), func(t *testing.T) {
-			t.Setenv("KAFSCALE_ACL_ENABLED", "false")
-			store := metadata.NewInMemoryStore(defaultMetadata())
-			h := newTestHandler(store)
-			h.autoCreateTopics = true
-			name := "legacy-auto-create"
-			request := kmsg.NewPtrMetadataRequest()
-			request.Version = version
-			request.AllowAutoTopicCreation = false
-			request.Topics = []kmsg.MetadataRequestTopic{{Topic: &name}}
-			if _, err := h.Handle(context.Background(), &protocol.RequestHeader{APIKey: protocol.APIKeyMetadata, APIVersion: version}, request); err != nil {
-				t.Fatal(err)
+func TestMetadataAutoCreateRespectsClientFlag(t *testing.T) {
+	for version := int16(0); version <= 12; version++ {
+		for _, brokerAllows := range []bool{false, true} {
+			for _, clientAllows := range []bool{false, true} {
+				t.Run(fmt.Sprintf("v%d_broker_%t_client_%t", version, brokerAllows, clientAllows), func(t *testing.T) {
+					t.Setenv("KAFSCALE_ACL_ENABLED", "false")
+					store := metadata.NewInMemoryStore(defaultMetadata())
+					h := newTestHandler(store)
+					t.Cleanup(h.coordinator.Stop)
+					h.autoCreateTopics = brokerAllows
+					h.autoCreatePartitions = 2
+					name := "metadata-auto-create"
+					request := kmsg.NewPtrMetadataRequest()
+					request.Version = version
+					request.AllowAutoTopicCreation = clientAllows
+					request.Topics = []kmsg.MetadataRequestTopic{{Topic: &name}}
+					// Decode the wire body so legacy versions have no client flag.
+					header := &protocol.RequestHeader{APIKey: protocol.APIKeyMetadata, APIVersion: version}
+					_, decoded, err := protocol.ParseRequestBody(header, request.AppendTo(nil))
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := h.Handle(context.Background(), header, decoded)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response := decodeKmsgResponse(t, version, data, kmsg.NewPtrMetadataResponse)
+					if len(response.Topics) != 1 || response.Topics[0].Topic == nil || *response.Topics[0].Topic != name {
+						t.Fatalf("unexpected topics: %+v", response.Topics)
+					}
+					wantCreated := brokerAllows && (version < 4 || clientAllows)
+					wantCode := int16(protocol.UNKNOWN_TOPIC_OR_PARTITION)
+					wantPartitions := 0
+					if wantCreated {
+						wantCode = 0
+						wantPartitions = 2
+					}
+					if topic := response.Topics[0]; topic.ErrorCode != wantCode || len(topic.Partitions) != wantPartitions {
+						t.Fatalf("metadata topic: %+v; want code %d, partitions %d", topic, wantCode, wantPartitions)
+					}
+					all, err := store.Metadata(context.Background(), nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					created := false
+					for _, topic := range all.Topics {
+						if topic.Topic != nil && *topic.Topic == name {
+							created = true
+						}
+					}
+					if created != wantCreated {
+						t.Fatalf("topic created = %t, want %t", created, wantCreated)
+					}
+				})
 			}
-			all, err := store.Metadata(context.Background(), nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, topic := range all.Topics {
-				if topic.Topic != nil && *topic.Topic == name {
-					return
-				}
-			}
-			t.Fatal("broker auto-create was disabled by absent client flag")
-		})
+		}
+	}
+}
+
+func TestMetadataProbeThenExplicitCreate(t *testing.T) {
+	t.Setenv("KAFSCALE_ACL_ENABLED", "false")
+	h := newTestHandler(metadata.NewInMemoryStore(defaultMetadata()))
+	t.Cleanup(h.coordinator.Stop)
+	h.autoCreateTopics = true
+	h.autoCreatePartitions = 1
+	ctx := context.Background()
+	name := "mirror-target"
+	request := kmsg.NewPtrMetadataRequest()
+	request.Version = 12
+	request.AllowAutoTopicCreation = false
+	request.Topics = []kmsg.MetadataRequestTopic{{Topic: &name}}
+	header := &protocol.RequestHeader{APIKey: protocol.APIKeyMetadata, APIVersion: 12}
+	data, err := h.Handle(ctx, header, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := decodeKmsgResponse(t, 12, data, kmsg.NewPtrMetadataResponse)
+	if len(response.Topics) != 1 || response.Topics[0].ErrorCode != protocol.UNKNOWN_TOPIC_OR_PARTITION {
+		t.Fatalf("metadata probe: %+v", response.Topics)
+	}
+	create := kmsg.NewPtrCreateTopicsRequest()
+	create.Topics = []kmsg.CreateTopicsRequestTopic{{Topic: name, NumPartitions: 2, ReplicationFactor: 1}}
+	data, err = h.Handle(ctx, &protocol.RequestHeader{APIKey: protocol.APIKeyCreateTopics}, create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := decodeKmsgResponse(t, 0, data, kmsg.NewPtrCreateTopicsResponse)
+	if len(created.Topics) != 1 || created.Topics[0].ErrorCode != 0 {
+		t.Fatalf("explicit create: %+v", created.Topics)
+	}
+	data, err = h.Handle(ctx, header, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = decodeKmsgResponse(t, 12, data, kmsg.NewPtrMetadataResponse)
+	if len(response.Topics) != 1 || response.Topics[0].ErrorCode != 0 || len(response.Topics[0].Partitions) != 2 {
+		t.Fatalf("metadata after explicit create: %+v", response.Topics)
 	}
 }
 

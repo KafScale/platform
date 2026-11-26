@@ -147,7 +147,8 @@ func (h *handler) Handle(ctx context.Context, header *protocol.RequestHeader, re
 				topicNames = append(topicNames, *t.Topic)
 			}
 		}
-		if h.autoCreateTopics && len(topicNames) > 0 {
+		// Before v4, Metadata has no client auto-creation flag.
+		if h.autoCreateTopics && (header.APIVersion < 4 || metaReq.AllowAutoTopicCreation) && len(topicNames) > 0 {
 			for _, name := range topicNames {
 				if metadata.ValidateTopicName(name) != nil {
 					continue

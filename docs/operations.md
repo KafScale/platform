@@ -1291,9 +1291,10 @@ Their complete variable tables and cleanup behavior are in the user guides:
 In plain mode, a Metadata request for a missing named topic is forwarded to a
 broker before the proxy rewrites the advertised addresses. The broker decides
 whether to create the topic using `KAFSCALE_AUTO_CREATE_TOPICS` and its configured
-partition count. This preserves direct-broker behavior for older request versions
-and clients that leave `AllowAutoTopicCreation` unset. If broker auto-creation is
-disabled, the response contains `UNKNOWN_TOPIC_OR_PARTITION`. Known-topic and
+partition count. Metadata v4 and later also require the client's
+`AllowAutoTopicCreation` flag to be true. Earlier versions have no client flag
+and use the broker setting. If either the broker or the client disables
+auto-creation, a missing topic returns `UNKNOWN_TOPIC_OR_PARTITION`. Known-topic and
 ID-based lookups continue to use the metadata store. Authenticated proxies always
 forward Metadata to enforce broker ACLs.
 

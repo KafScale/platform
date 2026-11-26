@@ -279,7 +279,7 @@ Properties:
 - Unauthorized ID lookups return the same unknown-ID response as absent IDs, without revealing the name.
 - Listing metadata omits unauthorized topics. Explicit requests return an authorization error.
 - Unauthorized metadata requests cannot auto-create topics.
-- Broker auto-create keeps its existing behavior for older clients and for clients that omit the AllowAutoTopicCreation flag. The produce ACL is checked before creation.
+- Metadata v4 and later auto-create topics only when both the broker setting and the client's `AllowAutoTopicCreation` flag allow it. Earlier versions have no client flag and use the broker setting. The produce ACL is checked before creation.
 
 ## Trust boundary and what is not covered
 
