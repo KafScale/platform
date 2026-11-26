@@ -188,14 +188,11 @@ func TestCLIInstallDownloadBlockAgainstReleaseAssets(t *testing.T) {
 }
 
 func TestCLIInstallDocumentsHomebrew(t *testing.T) {
-	doc := readRepoDoc(t, "docs/cli-install.md")
-	for _, want := range []string{
-		"brew tap kafscale/platform https://github.com/KafScale/platform",
-		"brew install kafscale-cli",
-		"brew trust kafscale/platform",
-	} {
-		if !strings.Contains(doc, want) {
-			t.Errorf("docs/cli-install.md is missing %q", want)
+	for _, path := range []string{"README.md", "docs/cli-install.md"} {
+		doc := readRepoDoc(t, path)
+		const commands = "brew tap kafscale/platform https://github.com/KafScale/platform\nbrew update\nbrew install kafscale/platform/kafscale-cli"
+		if !strings.Contains(doc, commands) {
+			t.Errorf("%s is missing the Homebrew tap, refresh and fully qualified install commands", path)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot(t), "Formula", "kafscale-cli.rb")); err != nil {
