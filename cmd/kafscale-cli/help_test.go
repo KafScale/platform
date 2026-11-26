@@ -147,3 +147,15 @@ func TestSchemaImportHelpHidesAuthEnv(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIVersion(t *testing.T) {
+	for _, flag := range []string{"version", "--version"} {
+		var output bytes.Buffer
+		if err := run(context.Background(), []string{flag}, &output, &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.String() != "kafscale-cli "+version+"\n" {
+			t.Fatal(output.String())
+		}
+	}
+}

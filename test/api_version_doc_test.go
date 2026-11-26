@@ -30,8 +30,19 @@ func TestExamplesUseKafscaleV1(t *testing.T) {
 	var checked int
 	for _, dir := range []string{"docs", "scripts", "deploy", "examples", "test/e2e", "README.md"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
 				return err
+			}
+			if d.IsDir() {
+				if d.Name() == "node_modules" || d.Name() == "logs" {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			// This guard checks source examples, not recorded videos, binary
+			// fixtures or runtime logs. Reading those dominates race-test time.
+			if !isExampleSource(path) {
+				return nil
 			}
 			rel, _ := filepath.Rel(root, path)
 			if rel == "docs/upgrade-compatibility.md" || strings.HasPrefix(rel, "docs/releases/") || strings.Contains(rel, "node_modules") {
@@ -53,6 +64,32 @@ func TestExamplesUseKafscaleV1(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no files checked")
+	}
+}
+
+func isExampleSource(path string) bool {
+	name := strings.ToLower(filepath.Base(path))
+	if strings.HasPrefix(name, "dockerfile.") || strings.HasPrefix(name, "makefile.") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case "", ".md", ".yaml", ".yml", ".sh", ".py", ".go", ".json", ".tpl", ".tmpl", ".tape", ".html", ".js", ".ts", ".cjs", ".mjs", ".dockerfile":
+		return true
+	default:
+		return false
+	}
+}
+
+func TestExampleSourceIncludesExtensionlessFiles(t *testing.T) {
+	for _, path := range []string{"deploy/Dockerfile", "deploy/Dockerfile.dev", "examples/Makefile", "examples/Makefile.local", "scripts/run-demo", "test/e2e/minio.Dockerfile", "docs/quickstart.md"} {
+		if !isExampleSource(path) {
+			t.Errorf("source file %s would escape the stale API check", path)
+		}
+	}
+	for _, path := range []string{"docs/demo.mp4", "docs/demo.gif", "test/e2e/fixture.gz", "examples/runtime.log"} {
+		if isExampleSource(path) {
+			t.Errorf("non-source file %s would be scanned", path)
+		}
 	}
 }
 

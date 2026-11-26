@@ -48,6 +48,10 @@ for name, image in catalog["target"].items():
         # PRs compile every release image once on the native Linux runner.
         config["platforms"] = ["linux/amd64"]
         config["output"] = ["type=cacheonly"]
+        if name in ("broker", "proxy", "console"):
+            repository = image["tags"][0].rsplit(":", 1)[0]
+            config["tags"] = [repository + ":" + os.environ.get("RELEASE_TAG", "v0.0.0-ci")]
+            config["output"] = ["type=docker"]
     if os.environ.get("GITHUB_ACTIONS") == "true":
         config["cache-from"] = ["type=gha,scope=" + name]
         config["cache-to"] = ["type=gha,mode=max,scope=" + name]

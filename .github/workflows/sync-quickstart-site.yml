@@ -1,0 +1,81 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Publish quick start documentation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/local-quickstart.md'
+      - 'docs/s3-connection.md'
+      - 'docs/cli-install.md'
+      - 'docs/quickstart.md'
+      - 'docs/operations.md'
+      - 'docs/schema-registry.md'
+      - 'scripts/sync_quickstart_site.py'
+      - '.github/workflows/sync-quickstart-site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quickstart-site
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      # Publish only the reviewed onboarding pages from trusted main to gh-pages.
+      contents: write
+      pages: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          ref: gh-pages
+          path: site
+          persist-credentials: false
+      - name: Prepare onboarding pages and local Get started link
+        run: python3 source/scripts/sync_quickstart_site.py --source source --site site
+      - name: Publish reviewed site changes
+        working-directory: site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git add index.md _docs/local-quickstart.md _docs/quickstart.md _docs/s3-connection.md _docs/cli-install.md _docs/operations.md _docs/schema-registry.md
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Update local quick start and release documentation'
+          gh auth setup-git
+          for attempt in 1 2 3; do
+            if git push origin HEAD:gh-pages; then exit 0; fi
+            echo "Retrying site push ($attempt/3)"
+            git fetch origin gh-pages
+            git rebase origin/gh-pages
+          done
+          exit 1
+      - name: Request the GitHub Pages build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method POST "repos/$GITHUB_REPOSITORY/pages/builds"

@@ -588,8 +588,12 @@ The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-
 
 ### Installing kafscale-cli
 
-`kafscale-cli` is built from this repository and needs Go 1.26 or later. There is no container image or
-released binary for it. From the repository root:
+Install a [native CLI release archive](cli-install.md) for Linux or macOS, amd64
+or arm64. The binary runs directly on your host, without Docker or Go. Archives
+start with releases built after #431; older tags have no binary attachments.
+
+To build an unreleased version from source, use the Go version in `go.mod` and run
+from the repository root:
 
 ```bash
 go build -o bin/kafscale-cli ./cmd/kafscale-cli

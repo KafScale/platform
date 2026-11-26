@@ -35,6 +35,7 @@ import (
 )
 
 var (
+	version      = "dev"
 	newS3Client  = storage.NewS3Client
 	newEtcdStore = metadata.NewEtcdStore
 	newMemoryS3  = func() storage.S3Client { return storage.NewMemoryS3Client() }
@@ -63,6 +64,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return fmt.Errorf("command required")
 	}
 	switch args[0] {
+	case "version", "--version":
+		fmt.Fprintln(stdout, "kafscale-cli "+version)
+		return nil
 	case "restore":
 		return runRestoreCommand(ctx, args[1:], stdout)
 	case "prune":
@@ -87,7 +91,7 @@ func writeUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "       "+strings.TrimPrefix(pruneUsage, "usage: "))
 	_, _ = fmt.Fprintln(w, "       "+strings.TrimPrefix(schemaImportUsage, "usage: "))
 	_, _ = fmt.Fprintln(w, "")
-	_, _ = fmt.Fprintln(w, "Use kafscale-cli <command> --help for flag help.")
+	_, _ = fmt.Fprintln(w, "Use kafscale-cli <command> --help for flag help; --version prints the build version.")
 	_, _ = fmt.Fprintln(w, "")
 	writeCLIEnvUsage(w)
 }

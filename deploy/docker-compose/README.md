@@ -19,6 +19,12 @@ limitations under the License.
 
 Run a local KafScale platform with Docker Compose. Verified with Docker Compose v2.29.7 and the `v2.0.1` images.
 
+This is the development/test stack, with a local MinIO fixture. For released
+images connected to your own bucket, use the separate release Compose file
+and [S3 connection guide](../../docs/s3-connection.md). MinIO is not packaged or
+published as a KafScale release artifact. The [native CLI](../../docs/cli-install.md)
+runs on your host without Docker.
+
 ## Prerequisites
 
 You need Docker and Docker Compose v2.
@@ -30,7 +36,7 @@ By default the compose file pulls `ghcr.io/kafscale/kafscale-broker`, `kafscale-
 Push images to your own registry, then set `REGISTRY` and `TAG`. Images are pulled from `<registry>/kafscale/<image>:<tag>`.
 
 ```bash
-REGISTRY=<registry> TAG=<tag> docker compose up -d
+REGISTRY=<registry> TAG=<tag> docker compose up -d --wait
 ```
 
 If the registry uses plain HTTP, add it to `insecure-registries` in the Docker daemon config.
@@ -41,13 +47,13 @@ If the registry uses plain HTTP, add it to `insecure-registries` in the Docker d
 cd deploy/docker-compose
 
 # Start all services
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop all services
-docker-compose down
+docker compose down
 ```
 
 ## Services
@@ -142,7 +148,7 @@ Traceability is enabled in the compose file by default. It consists of:
 
 2) **Raw events from Kafka**
 ```bash
-kcat -b localhost:9092 -C -t __lfs_ops_state -o beginning
+kcat -b localhost:9093 -C -t __lfs_ops_state -o beginning
 ```
 
 ### Key settings (compose)
@@ -160,13 +166,13 @@ Console LFS dashboard:
 
 ```bash
 # List topics
-kcat -b localhost:9092 -L
+kcat -b localhost:9093 -L
 
 # Produce message (goes through regular broker, not LFS)
-echo "hello" | kcat -b localhost:9092 -P -t test-topic
+echo "hello" | kcat -b localhost:9093 -P -t test-topic -X enable.idempotence=false
 
 # Consume messages
-kcat -b localhost:9092 -C -t test-topic -o beginning
+kcat -b localhost:9093 -C -t test-topic -o beginning
 ```
 
 ## Configuration
@@ -261,7 +267,7 @@ Version tags still build and publish linux/amd64 and linux/arm64 images.
 ### Override Registry/Tag
 
 ```bash
-REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker-compose up -d
+REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker compose up -d
 ```
 
 ## Architecture
@@ -288,7 +294,7 @@ REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker-compose up -d
               │   Host Machine    │
               │                   │
               │ localhost:8080    │ ← LFS HTTP API
-              │ localhost:9092    │ ← Kafka Broker
+              │ broker:9092       │ ← Kafka Broker (Compose network)
               │ localhost:9093    │ ← Kafka Proxy
               │ localhost:9001    │ ← MinIO Console
               │ localhost:3080    │ ← KafScale Console
@@ -301,13 +307,13 @@ REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker-compose up -d
 
 ```bash
 # Check service status
-docker-compose ps
+docker compose ps
 
 # View logs for specific service
-docker-compose logs proxy
+docker compose logs proxy
 
 # Restart a service
-docker-compose restart proxy
+docker compose restart proxy
 ```
 
 ### Image pull fails
@@ -324,23 +330,23 @@ docker info | grep -A5 "Insecure Registries"
 
 ```bash
 # Check proxy logs
-docker-compose logs proxy
+docker compose logs proxy
 
 # Verify MinIO is healthy
 curl http://localhost:9000/minio/health/live
 
 # Check bucket exists
-docker-compose exec minio ls /data
+docker compose exec minio ls /data
 ```
 
 ### Reset everything
 
 ```bash
 # Stop and remove all containers, volumes
-docker-compose down -v
+docker compose down -v
 
 # Start fresh
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Volumes
@@ -354,5 +360,5 @@ docker-compose up -d
 To persist data across restarts, volumes are used. To reset:
 
 ```bash
-docker-compose down -v
+docker compose down -v
 ```

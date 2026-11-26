@@ -1,0 +1,101 @@
+# Copyright 2026 Alexander Alten (novatechflow), NovaTechflow (novatechflow.com).
+# This project is supported and financed by Scalytics, Inc. (www.scalytics.io).
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Released S3-backed stack. Supply bucket, region and credentials before starting.
+# No MinIO service, local builds, or source checkout is required.
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.33@sha256:d367cba7801b29d2f7481bb56802894658ec8a647834509118c81f77f721381b
+    command:
+      - etcd
+      - --name=etcd0
+      - --data-dir=/etcd-data
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-cluster=etcd0=http://etcd:2380
+      - --initial-cluster-state=new
+    ports: ["127.0.0.1:2379:2379"]
+    volumes: ["etcd-data:/etcd-data"]
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  broker:
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-broker:${TAG:-v2.0.1}
+    depends_on:
+      etcd: {condition: service_healthy}
+    environment:
+      KAFSCALE_BROKER_ID: "0"
+      KAFSCALE_BROKER_ADDR: ":9092"
+      KAFSCALE_BROKER_HOST: broker
+      KAFSCALE_BROKER_PORT: "9092"
+      KAFSCALE_ETCD_ENDPOINTS: http://etcd:2379
+      KAFSCALE_S3_BUCKET: ${KAFSCALE_S3_BUCKET:?Set KAFSCALE_S3_BUCKET}
+      KAFSCALE_S3_REGION: ${KAFSCALE_S3_REGION:?Set KAFSCALE_S3_REGION}
+      KAFSCALE_S3_ENDPOINT: ${KAFSCALE_S3_ENDPOINT:-}
+      KAFSCALE_S3_PATH_STYLE: ${KAFSCALE_S3_PATH_STYLE:-false}
+      KAFSCALE_S3_ACCESS_KEY: ${KAFSCALE_S3_ACCESS_KEY:?Set KAFSCALE_S3_ACCESS_KEY}
+      KAFSCALE_S3_SECRET_KEY: ${KAFSCALE_S3_SECRET_KEY:?Set KAFSCALE_S3_SECRET_KEY}
+      KAFSCALE_S3_SESSION_TOKEN: ${KAFSCALE_S3_SESSION_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  proxy:
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-proxy:${TAG:-v2.0.1}
+    depends_on:
+      etcd: {condition: service_healthy}
+      broker: {condition: service_healthy}
+    environment:
+      KAFSCALE_PROXY_ADDR: ":9092"
+      KAFSCALE_PROXY_ADVERTISED_HOST: localhost
+      KAFSCALE_PROXY_ADVERTISED_PORT: "9093"
+      KAFSCALE_PROXY_HEALTH_ADDR: ":9094"
+      KAFSCALE_PROXY_ETCD_ENDPOINTS: http://etcd:2379
+      KAFSCALE_PROXY_BACKENDS: broker:9092
+    ports: ["127.0.0.1:9093:9092", "127.0.0.1:9094:9094"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9094/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  console:
+    image: ${REGISTRY:-ghcr.io}/kafscale/kafscale-console:${TAG:-v2.0.1}
+    depends_on:
+      etcd: {condition: service_healthy}
+      broker: {condition: service_healthy}
+    environment:
+      KAFSCALE_CONSOLE_HTTP_ADDR: ":3080"
+      KAFSCALE_CONSOLE_ETCD_ENDPOINTS: http://etcd:2379
+      KAFSCALE_CONSOLE_BROKER_METRICS_URL: http://broker:8080/metrics
+      KAFSCALE_S3_NAMESPACE: default
+      KAFSCALE_UI_USERNAME: kafscaleadmin
+      KAFSCALE_UI_PASSWORD: ${KAFSCALE_UI_PASSWORD:?Set KAFSCALE_UI_PASSWORD}
+    ports: ["127.0.0.1:3080:3080"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  etcd-data:

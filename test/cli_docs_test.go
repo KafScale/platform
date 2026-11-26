@@ -29,7 +29,8 @@ import (
 func TestCLIInstallAndCredentialsDocumented(t *testing.T) {
 	ops := readRepoDoc(t, "docs/operations.md")
 	for _, want := range []string{
-		"`kafscale-cli` is built from this repository and needs Go 1.26 or later.",
+		"Install a [native CLI release archive](cli-install.md) for Linux or macOS, amd64",
+		"The binary runs directly on your host, without Docker or Go.",
 		"go build -o bin/kafscale-cli ./cmd/kafscale-cli",
 		"### Installing kafscale-cli",
 		"It defaults to `KAFSCALE_NAMESPACE`, then `KAFSCALE_S3_NAMESPACE`, then `default`.",

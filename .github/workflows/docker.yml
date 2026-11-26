@@ -22,6 +22,10 @@ on:
       - '.github/workflows/docker*.yml'
       - '.github/actions/build-release-images/**'
       - 'scripts/build_release_images.sh'
+      - 'scripts/build_release_assets.sh'
+      - 'scripts/test_release_compose.sh'
+      - 'deploy/docker-compose/docker-compose.release.yaml'
+      - 'test/release_assets_test.go'
       - '.dockerignore'
       - 'deploy/docker/**'
       - 'go.mod'
@@ -49,6 +53,7 @@ concurrency:
 jobs:
   validate:
     name: Release image builds
+    needs: [assets]
     if: github.event_name == 'pull_request' || !startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -66,6 +71,7 @@ jobs:
 
   build-and-push:
     name: Release image builds
+    needs: [assets]
     if: github.event_name != 'pull_request' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -82,16 +88,59 @@ jobs:
         with:
           publish: 'true'
 
+  assets:
+    name: Native CLI release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v0.0.0-ci' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build native CLI archives and S3 Compose file
+        run: bash scripts/build_release_assets.sh dist/release
+      - name: Validate archives, checksums, target binaries and Compose
+        env:
+          KAFSCALE_RELEASE_ASSET_DIR: ${{ github.workspace }}/dist/release
+        run: go test ./test -run '^TestReleaseAssets$' -count=1
+      - name: Validate release Compose configuration
+        env:
+          KAFSCALE_S3_BUCKET: release-check
+          KAFSCALE_S3_REGION: us-east-1
+          KAFSCALE_S3_ACCESS_KEY: test-access
+          KAFSCALE_S3_SECRET_KEY: test-secret
+          KAFSCALE_UI_PASSWORD: test-password
+        run: docker compose -f dist/release/docker-compose.yaml config --quiet
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-assets
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [build-and-push, assets]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       # Creating the GitHub release requires contents: write; no source code runs in this job.
       contents: write
     steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-assets
+          path: release-assets
       - name: Create GitHub release
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
         with:
           generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-dev') || contains(github.ref_name, '-rc') }}
