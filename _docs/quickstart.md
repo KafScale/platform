@@ -28,12 +28,14 @@ limitations under the License.
 
 # Kafscale Quickstart
 
+For a first local run, start with the [Docker Compose quick start](/local-quickstart/).
 This guide covers a minimal installation on a cloud Kubernetes cluster using the Helm chart in this repo.
+[Connect your S3](/s3-connection/) explains bucket, region, endpoint and credentials settings across Helm, Compose and the native CLI.
 
 ## Prerequisites
 
 - Kubernetes 1.26+
-- Helm 3.12+
+- Helm 3.14+
 - `kubectl` access to your cluster
 - `jq` (used to build the login request and the optional session token patch)
 - An S3-compatible bucket and credentials
@@ -50,13 +52,25 @@ kubectl create namespace kafscale
 The operator passes the secret through to broker pods as environment variables. Use AWS-style keys.
 
 ```bash
-printf 'AWS secret access key: '
-read -rs AWS_SECRET_ACCESS_KEY
-echo
-printf '%s' "$AWS_SECRET_ACCESS_KEY" | kubectl -n kafscale create secret generic kafscale-s3 \
-  --from-literal=AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY \
-  --from-file=AWS_SECRET_ACCESS_KEY=/dev/stdin
-unset AWS_SECRET_ACCESS_KEY
+(
+  set -euo pipefail
+  umask 077
+  credentials_dir=$(mktemp -d)
+  trap 'rm -rf "$credentials_dir"' EXIT
+  printf 'AWS access key ID: '
+  IFS= read -r AWS_ACCESS_KEY_ID
+  printf 'AWS secret access key: '
+  IFS= read -rs AWS_SECRET_ACCESS_KEY
+  printf '\n'
+  : "${AWS_ACCESS_KEY_ID:?Access key ID must not be empty}"
+  : "${AWS_SECRET_ACCESS_KEY:?Secret key must not be empty}"
+  printf '%s' "$AWS_ACCESS_KEY_ID" > "$credentials_dir/AWS_ACCESS_KEY_ID"
+  printf '%s' "$AWS_SECRET_ACCESS_KEY" > "$credentials_dir/AWS_SECRET_ACCESS_KEY"
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  kubectl -n kafscale create secret generic kafscale-s3 \
+    --from-file=AWS_ACCESS_KEY_ID="$credentials_dir/AWS_ACCESS_KEY_ID" \
+    --from-file=AWS_SECRET_ACCESS_KEY="$credentials_dir/AWS_SECRET_ACCESS_KEY"
+)
 ```
 
 If you need a session token:
@@ -112,7 +126,7 @@ This creates the broker deployment and wires S3 + etcd into the broker env.
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: demo
@@ -132,7 +146,7 @@ If you are using external etcd, set `spec.etcd.endpoints` instead:
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: demo
@@ -148,6 +162,8 @@ spec:
       - http://etcd.kafscale.svc:2379
 EOF
 ```
+
+For broker autoscaling, see [Scaling brokers](/operations/#scaling-brokers). The HPA needs a metrics server and CPU/memory requests in `spec.brokers.resources`; `<unknown>` utilization targets mean these requirements are not met or metrics are not ready. Apply the current CRD before setting resource requests.
 
 For S3-compatible endpoints (MinIO, etc), add:
 
@@ -201,7 +217,7 @@ For AWS S3, drop `--endpoint-url`, or run `aws s3 mb s3://kafscale-demo --region
 
 ```bash
 cat <<'EOF' | kubectl apply -n kafscale -f -
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleTopic
 metadata:
   name: orders
@@ -221,24 +237,27 @@ which is only reachable from inside the cluster. For the quickstart cluster
 `demo-broker-0.demo-broker-headless.kafscale.svc.cluster.local:9092`.
 `kubectl port-forward` to `svc/demo-broker` cannot work with this cluster.
 
-Run a client in the cluster:
+Run a long-lived client pod and execute kcat after the pod is ready. This keeps output attached even when kcat exits immediately:
 
 ```bash
-kubectl -n kafscale run kcat --rm -it --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -L
-echo hello | kubectl -n kafscale run kcat-produce --rm -i --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -t orders -P
-kubectl -n kafscale run kcat-consume --rm -it --restart=Never --image=edenhill/kcat:1.7.1 -- -b demo-broker:9092 -t orders -C -o beginning -e
+kubectl -n kafscale run kcat-client --restart=Never --image=edenhill/kcat:1.7.1 --command -- sleep 86400
+kubectl -n kafscale wait --for=condition=Ready pod/kcat-client --timeout=120s
+kubectl -n kafscale exec kcat-client -- kcat -b demo-broker:9092 -L
+printf '%s\n' hello | kubectl -n kafscale exec -i kcat-client -- kcat -b demo-broker:9092 -t orders -P
+kubectl -n kafscale exec kcat-client -- kcat -b demo-broker:9092 -t orders -C -o beginning -e
+kubectl -n kafscale delete pod kcat-client
 ```
 
 Or enable the Kafka proxy (`proxy.enabled=true`) and set
 `proxy.advertisedHost` / `proxy.advertisedPort` to an address the client can
 reach. For local clusters, pin `proxy.service.nodePort` (see
-[`docs/operations.md`](/operations/)).
+`docs/operations.md`).
 
 Port-forward to `svc/<cluster>-broker` only works when `spec.brokers.replicas`
 is `1` and `spec.brokers.advertisedHost` is set to an address the client can
 reach, for example `127.0.0.1`.
 
-Note: Kafka clients that default to idempotent producers or transactions must disable them explicitly.
+Default nontransactional idempotent producers are supported. Leave `transactional.id` unset and use `acks=all`; transactions remain unsupported. Both isolation levels are supported for nontransactional records. Upgrade all brokers and proxies before enabling idempotence on older deployments.
 
 Service names for a `KafscaleCluster` named `<cluster>` in namespace
 `<namespace>` are documented in [Service names](/operations/#service-names).
@@ -283,12 +302,11 @@ printf '%s' "$CONSOLE_PASSWORD" | kubectl -n kafscale create secret generic kafs
   --from-literal=username=kafscaleadmin --from-file=password=/dev/stdin
 ```
 
-Then install or upgrade with:
+Upgrade the existing release while retaining its image tags, proxy settings, and other install values. `--reuse-values` applies to this existing release; if you manage values in a file, pass that same file with `-f` instead:
 
 ```bash
 helm upgrade --install kafscale deploy/helm/kafscale \
-  --namespace kafscale --create-namespace \
-  --set 'operator.etcdEndpoints={}' \
+  --namespace kafscale --reuse-values \
   --set 'console.etcdEndpoints[0]=http://demo-etcd-client.kafscale.svc.cluster.local:2379' \
   --set 'console.s3Namespace=kafscale' \
   --set 'console.auth.existingSecret=kafscale-console-auth'
@@ -324,6 +342,6 @@ unset CONSOLE_PASSWORD
 
 ## Next Steps
 
-- [`docs/operations.md`](/operations/) for etcd/S3 HA and backup guidance
-- [`docs/development.md`](/development/) for build/test workflows
-- [`docs/user-guide.md`](/user-guide/) for runtime behavior and limits
+- `docs/operations.md` for etcd/S3 HA and backup guidance
+- `docs/development.md` for build/test workflows
+- `docs/user-guide.md` for runtime behavior and limits

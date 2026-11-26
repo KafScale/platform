@@ -39,7 +39,7 @@ Any registry that speaks the Confluent Schema Registry REST API works with KafSc
 
 Data that is mirrored or copied from another Kafka cluster into KafScale keeps the schema ids in its frames. Consumers can read it as long as they use the registry that assigned those ids, or a registry that holds the same ids (see [Moving schemas into the built in registry](#moving-schemas-into-the-built-in-registry)).
 
-Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_schemas`). Confluent Schema Registry 8.4.0 writes that topic with an idempotent producer that has no transactional id. That producer sends `InitProducerId` at startup, which KafScale does not support (see [Limits / Non-Goals](/user-guide/#limits--non-goals)), so its `kafkastore.bootstrap.servers` must point at a Kafka cluster, not at KafScale.
+Confluent Schema Registry and Karapace keep their own state in a Kafka topic (`_schemas`). Confluent Schema Registry 8.4.0 writes that topic with an idempotent producer that has no transactional id. KafScale now supports this nontransactional `InitProducerId` startup path. This alone does not establish full registry compatibility: registry modes requiring transactions or log compaction remain unsupported. An external Kafka cluster for registry storage remains an option.
 
 ## Option 2: run the built in registry
 
@@ -141,7 +141,7 @@ A hard delete keeps the schema itself: `GET /schemas/ids/{id}` still returns it,
 
 ### Moving schemas into the built in registry
 
-To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API, including Apicurio Registry's Confluent compatible API. Build the CLI with `go build -o bin/kafscale-cli ./cmd/kafscale-cli` from the repository root, as described in [operations.md](/operations/#installing-kafscale-cli):
+To keep the ids that existing data carries, import the schemas with their ids before any client registers new ones. `kafscale-cli schema import` does this from any registry with the Confluent REST API, including Apicurio Registry's Confluent compatible API. Install a [native CLI release archive](/cli-install/), or build from source with `go build -o bin/kafscale-cli ./cmd/kafscale-cli` from the repository root, as described in [operations.md](/operations/#installing-kafscale-cli):
 
 ```bash
 printf 'Source registry credentials (user:password or bearer:<token>): '
@@ -183,13 +183,33 @@ The import can be run again at any time, for example to copy schemas registered 
 - A subject whose mode in the target is not `IMPORT` is switched to `IMPORT` while its new versions are imported and set back afterwards.
 - `--dry-run` prints what would change and writes nothing.
 
-When the last run is done, switch the target to `READWRITE` with `PUT /mode` and `{"mode": "READWRITE"}`, and point clients at it. Hard deleted versions are not in the source anymore and are not copied.
+**After an Apicurio import, check compatibility before enabling writes.** Import copies the source's global compatibility level, including `NONE`, which disables compatibility checks. The import intentionally preserves source settings; it does not choose a new policy for you. A subject level that the import copied, including `NONE`, stays in force after you change the global default. From Apicurio, a subject level equal to the source global level is not copied (see above), so a subject set to `NONE` while the Apicurio global level is `NONE` follows the new global default. Inspect and update those subject overrides through `/config/{subject}` too.
+
+After the last import run, set your intended compatibility policy before switching to `READWRITE`. For the quickstart release, forward the registry Service in a second terminal:
+
+```bash
+kubectl -n kafscale port-forward svc/kafscale-schema-registry 8081:8081
+```
+
+Then restore the default `BACKWARD` policy (or use your intended policy), verify it, and enable writes:
+
+```bash
+registry_url=http://127.0.0.1:8081
+curl -fsS -X PUT "$registry_url/config" -H 'Content-Type: application/json' \
+  --data '{"compatibility":"BACKWARD"}'
+curl -fsS "$registry_url/config"
+curl -fsS -X PUT "$registry_url/mode" -H 'Content-Type: application/json' \
+  --data '{"mode":"READWRITE"}'
+```
+
+Use your release's Service name and namespace for the port-forward. Point clients at the registry after these checks. Hard deleted versions are not in the source anymore and are not copied.
 
 Without the CLI, the same steps by hand:
 
 1. `PUT /mode` with `{"mode": "IMPORT"}`, or `PUT /mode/{subject}` for one subject. This is refused with 42205 while the registry, or that subject, already holds schemas, unless `force=true` is set.
 2. For every subject version in the source registry, `POST /subjects/{subject}/versions` with `{"schema": ..., "schemaType": ..., "references": ..., "id": ..., "version": ...}`. The id must be free or already hold the same schema, and the version must be free or already hold the same id, otherwise the request fails with 42205. Compatibility is not checked in `IMPORT` mode.
-3. `PUT /mode` with `{"mode": "READWRITE"}`. New schemas get ids above the highest imported id.
+3. Review the target compatibility settings, including global and subject-level `NONE` values. Set the intended global level with `PUT /config` and subject overrides with `PUT /config/{subject}`.
+4. `PUT /mode` with `{"mode": "READWRITE"}`. New schemas get ids above the highest imported id.
 
 In `READONLY` and `IMPORT` mode, registering a schema that the subject already holds without an id returns its existing id and version, as in Confluent Schema Registry. A new schema without an id is refused with 42205.
 
@@ -240,7 +260,7 @@ Backends:
 - AWS S3 and MinIO support the condition. MinIO was checked with the image built from `test/e2e/minio.Dockerfile`.
 - Cloudflare R2 documents atomic `If-None-Match: *` on `PutObject`. Ceph RGW is reported to support it. Neither was tested here.
 - Backblaze B2 does not support conditional writes, and the Google Cloud Storage XML API supports `If-None-Match` only on reads. The registry does not start against them with `KAFSCALE_S3_BUCKET` set.
-- For any other provider in [supported.md](/supported/), the startup check decides.
+- For any other provider in [supported.md](https://github.com/KafScale/platform/blob/main/docs/supported.md), the startup check decides.
 
 A write can claim an id in S3 and then fail in etcd, for example when another instance registered first.
 
@@ -305,7 +325,7 @@ schemaRegistry:
     # The Service is <cluster>-etcd-client.<namespace>.svc.cluster.local:2379.
     - http://demo-etcd-client.kafscale.svc.cluster.local:2379
   s3:
-    bucket: kafscale-data
+    bucket: kafscale-demo
     region: us-east-1
     endpoint: http://minio.kafscale.svc.cluster.local:9000  # set for MinIO or any non-AWS endpoint
     credentialsSecret: kafscale-s3  # Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
@@ -333,6 +353,37 @@ Client settings, using the in cluster Service `<fullname>-schema-registry` on po
 The chart passes only the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` keys of the Secret named by `schemaRegistry.s3.credentialsSecret` to the registry, and no session token, so temporary credentials from that Secret are not supported. The registry reads the keys once at startup. When those keys in the Secret change, the registry does not roll and keeps using the old keys. Pointing `schemaRegistry.s3.credentialsSecret` at a different Secret changes the pod template, so `helm upgrade` rolls the registry. Once the old keys are revoked, deleted or expire, every request that has to read or write S3 fails with HTTP 500 and error code 50001, as described in [S3 credentials secret](/operations/#s3-credentials-secret).
 
 Rotate in this order. The order matters. Update the keys in the Secret, restart the registry, check the rollout, and only then revoke the old keys:
+
+Set the namespace and Secret name to your release's values. Keep the keys out of argv and preserve other Secret data with this merge patch:
+
+```bash
+(
+  set -euo pipefail
+  umask 077
+  credentials_dir=$(mktemp -d)
+  trap 'rm -rf "$credentials_dir"' EXIT
+  printf 'AWS access key ID: '
+  IFS= read -r AWS_ACCESS_KEY_ID
+  printf 'AWS secret access key: '
+  IFS= read -rs AWS_SECRET_ACCESS_KEY
+  printf '\n'
+  : "${AWS_ACCESS_KEY_ID:?Access key ID must not be empty}"
+  : "${AWS_SECRET_ACCESS_KEY:?Secret key must not be empty}"
+  printf '%s' "$AWS_ACCESS_KEY_ID" > "$credentials_dir/AWS_ACCESS_KEY_ID"
+  printf '%s' "$AWS_SECRET_ACCESS_KEY" > "$credentials_dir/AWS_SECRET_ACCESS_KEY"
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  namespace='<namespace>'
+  secret_name='kafscale-s3' # Set this to schemaRegistry.s3.credentialsSecret.
+  jq -n \
+    --rawfile access "$credentials_dir/AWS_ACCESS_KEY_ID" \
+    --rawfile secret "$credentials_dir/AWS_SECRET_ACCESS_KEY" \
+    '{data:{AWS_ACCESS_KEY_ID:($access|@base64),AWS_SECRET_ACCESS_KEY:($secret|@base64)}}' | \
+    kubectl -n "$namespace" patch secret "$secret_name" --type=merge --patch-file=/dev/stdin
+)
+```
+
+Then restart and check the registry:
+
 
 ```bash
 DEPLOY=$(kubectl get deployment -n '<namespace>' -l 'app.kubernetes.io/instance=<release>,app.kubernetes.io/component=schema-registry' -o name)

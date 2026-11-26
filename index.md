@@ -21,7 +21,7 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
       </a>
     </div>
     <div class="hero-actions">
-      <a class="button" href="/quickstart/">Get started</a>
+      <a class="button" href="/local-quickstart/">Get started</a>
       <a class="button secondary" href="https://github.com/KafScale/platform" target="_blank" rel="noreferrer">View on GitHub</a>
     </div>
   </div>

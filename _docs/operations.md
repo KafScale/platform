@@ -89,7 +89,7 @@ the override returns that cluster to the operator default.
 
 | Value | Purpose |
 |-------|---------|
-| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. Console etcd snapshot panel: Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges, and the operator metrics Service balances console scrapes across the replicas. When a scrape reaches a standby replica, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age 0, stale NO, and n/a for last success and last schedule. |
+| `operator.replicaCount` | Number of operator replicas (default `1`). Set `2` or more for HA; replicas elect a leader with a Kubernetes lease. Console etcd snapshot panel: Only the leader exports the `kafscale_operator_etcd_snapshot_*` gauges. By default, the console resolves the headless operator metrics Service and scrapes every ready pod directly on each refresh, selecting a pod that reports snapshot gauges. If only standby replicas respond, the console reuses the last values it read from the leader for up to 3 minutes. It adds the time since that read to the snapshot age, and shows the snapshot as stale once that age passes `kafscale_operator_etcd_snapshot_threshold_seconds`, which every replica exports from `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_STALE_AFTER_SEC`. Before the first leader read, and 3 minutes after the last one, the panel shows n/a. Snapshot access shows n/a when the operator exports no `kafscale_operator_etcd_snapshot_access_ok` gauge, as with `KAFSCALE_OPERATOR_ETCD_SNAPSHOT_SKIP_PREFLIGHT=true`. For etcd that the operator does not manage, the operator takes no snapshots and sets access to 0, so the panel shows access FAIL, age never, stale NO, and n/a for last success and last schedule. |
 | `operator.leaderKey` | Kubernetes leader election lock name. Use a DNS-1123 compatible name. |
 | `console.service.*` | Type/port used to expose the UI. Combine with `.console.ingress` to publish via an ingress controller. |
 | `console.auth.*` | Console login credentials. Set `console.auth.existingSecret` to a Secret with `username` and `password` keys, or set both `console.auth.username` and `console.auth.password`, to enable the UI. |
@@ -122,8 +122,9 @@ This placement applies to both `KafscaleTopic` resources and topics created thro
 
 Partitions move to new brokers:
 
-- Every 10 seconds (`KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS`), each broker checks the partitions it holds. When the preferred leader is another broker in the snapshot that accepts TCP connections, the old owner blocks new acquisitions, lets its active append finish, and then releases the lease. It does not take that partition back for three intervals (30 seconds by default), measured after release. The next produce or fetch goes to the preferred leader, which takes the lease.
-- The proxy sends produce and fetch requests for unowned partitions to the preferred leader and falls back to any broker when it cannot connect. On an ownership rejection it refreshes the current owner and retries the affected partitions internally, up to three attempts. Requests can still receive a retryable error while the old owner is draining or the destination is unavailable.
+- Every 10 seconds (`KAFSCALE_PARTITION_REBALANCE_INTERVAL_MS`), each broker checks the partitions it holds. When the preferred leader is another broker in the snapshot that accepts TCP connections, the old owner blocks new acquisitions, lets its active append finish, and then releases the lease. It does not take that partition back for three intervals (30 seconds by default), measured after release. The next produce, fetch, or list-offsets request goes to the preferred leader, which takes the lease.
+- The proxy sends produce, fetch, ListOffsets, and OffsetForLeaderEpoch requests for unowned partitions to the preferred leader and falls back to any broker when it cannot connect or the preferred leader is unknown. On an ownership rejection it refreshes the current owner and retries the affected partitions internally, up to three attempts. Requests can still receive a retryable error while the old owner is draining or the destination is unavailable.
+- For Fetch requests spanning several brokers, the proxy first probes without waiting and combines the returned bytes against `MinBytes`. Existing records drain over pooled connections without waiting for caught-up partitions. When more data is needed, each broker waits for bytes beyond its last response, rather than independently waiting for the full `MinBytes`. After each update the proxy rechecks the combined byte count against the original minimum, within one remaining `MaxWait` budget. Once a broker returns records, outstanding long polls are closed and their partitions are read again at the same offsets with zero wait on fresh connections. Responses from successive rounds replace earlier snapshots at those offsets; they are not appended together. This preserves partition records and watermarks without committing consumer offsets. A single-broker request keeps its original wait behavior.
 - Brokers only hand partitions over this way with `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default). With sync flush off, partitions stay where they are until their broker restarts.
 - A broker whose advertised port is not reachable from the other brokers (for example an external `advertisedPort`) never receives partitions this way; it only gets partitions that are unowned when a client asks for them.
 
@@ -134,7 +135,7 @@ Scale-down:
 - The StatefulSet removes the highest ordinal first. On SIGTERM the broker stops accepting connections, releases all of its partition and group leases, and waits for requests in flight. A produce that arrives after the release is rejected with `NOT_LEADER_OR_FOLLOWER`, and the client retries on the new owner.
 - The operator then publishes the snapshot without the removed broker, and its partitions get a preferred leader among the remaining brokers, which take the leases on the next request.
 - With `KAFSCALE_PRODUCE_SYNC_FLUSH=true` (the default) a produce is acknowledged only after its data is in S3, so removing a broker loses no acknowledged write. With `KAFSCALE_PRODUCE_SYNC_FLUSH=false`, records the removed broker acknowledged but had not yet flushed (up to `KAFSCALE_FLUSH_INTERVAL_MS` of data) are lost, as on any broker restart in that mode.
-- Keep client retries enabled for retryable failures. A write rejected before append can be rerouted. If records reached S3 but ownership or offset publication could not be confirmed, the broker returns `REQUEST_TIMED_OUT`; the proxy does not replay that uncertain write automatically. Producer idempotency is not supported, so client retries after uncertain writes or lost responses can still duplicate records. Routing through a planned rebalance does not provide exactly-once delivery.
+- Keep client retries enabled for retryable failures. A write rejected before append can be rerouted. If records reached S3 but ownership or offset publication could not be confirmed, the broker returns `REQUEST_TIMED_OUT`; the proxy does not replay that uncertain write automatically. Idempotent producers deduplicate retries within the same producer session and recent batch window, including after owner recovery. Non-idempotent writes and resends under a new producer ID can still duplicate records. Routing through a planned rebalance does not provide exactly-once delivery.
 
 Console and MCP use `/healthz` for liveness. Their Helm readiness probes use `/readyz`, which performs a live etcd read with a one-second deadline and returns HTTP 503 when configured etcd is unreachable, even if metadata is cached. The next successful probe restores readiness without restarting the process. The Kubernetes probe timeout is two seconds. Standalone or metrics-only mode without a metadata store remains ready.
 
@@ -177,7 +178,7 @@ helm upgrade --install kafscale deploy/helm/kafscale \
 
 Keep the other `--set` flags your install already uses, because an upgrade with only this flag resets them.
 
-- **TLS**: For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](/kafka-authentication/)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
+- **TLS**: For Kafka clients, use the proxy mTLS listener (see [Kafka proxy authentication](https://github.com/KafScale/platform/blob/main/docs/kafka-authentication.md)) or terminate TLS at a LoadBalancer (see [Proxy TLS via LoadBalancer](#proxy-tls-via-loadbalancer)). Brokers and the console have no TLS listener of their own; terminate TLS at your ingress or service mesh.
 - **Admin APIs**: Create/Delete Topics are enabled by default. Set `KAFSCALE_ALLOW_ADMIN_APIS=false` on broker pods to disable them, and gate external access via mTLS, ingress auth, or network policies.
 - **Topic deletion**: DeleteTopics keeps the topic's data in S3.
   - Each broker drops its cached partition logs for the topic. A topic re-created with the same name starts empty at offset 0 under a new prefix.
@@ -193,13 +194,13 @@ Keep the other `--set` flags your install already uses, because an upgrade with 
   - Replicas spread across nodes on multi-node clusters and still schedule on single-node dev clusters.
   - Set `proxy.affinity` explicitly to replace the chart default.
   - For operator-managed brokers and etcd, use `spec.brokers.affinity` and `spec.etcd.affinity` as described below.
-- **ACLs (v1.5)**: Optional, basic ACL enforcement is available at the broker.
+- **ACLs**: Optional, basic ACL enforcement is available at the broker.
   - With proxy mTLS enabled, identity comes from the client certificate mapping. Without it, identity comes from Kafka `client.id` or network identity, which is not authentication.
   - Configure via `KAFSCALE_ACL_ENABLED` plus either `KAFSCALE_ACL_JSON` or `KAFSCALE_ACL_FILE`.
   - Use `KAFSCALE_ACL_FAIL_OPEN=true` to allow traffic when the ACL config is missing/invalid (default is fail-closed).
   - **Authenticated proxy**: With `KAFSCALE_PROXY_IDENTITY_KEY_FILE` configured,
     the broker requires the proxy identity handshake and ignores legacy principal
-    sources. See [Kafka proxy authentication](/kafka-authentication/).
+    sources. See [Kafka proxy authentication](https://github.com/KafScale/platform/blob/main/docs/kafka-authentication.md).
   - **Principal source**: Set `KAFSCALE_PRINCIPAL_SOURCE` to `client_id` (default), `remote_addr`, or `proxy_addr`. Use `proxy_addr` with `KAFSCALE_PROXY_PROTOCOL=true` to derive principals from a trusted TCP proxy (PROXY protocol v1/v2).
   - **Auth denials**: Broker logs emit a rate-limited `authorization denied` entry with principal/action/resource context.
   - **Trust boundary**: Only enable `proxy_addr`/PROXY protocol when brokers are reachable *only* through a trusted LB or sidecar that injects the header. Do not expose brokers directly, or clients can spoof identity.
@@ -227,7 +228,7 @@ operator:
 ### Proxy TLS via LoadBalancer
 
 For per-client authentication and broker ACLs, use the native proxy mTLS listener
-with TLS passthrough. See [Kafka proxy authentication](/kafka-authentication/).
+with TLS passthrough. See [Kafka proxy authentication](https://github.com/KafScale/platform/blob/main/docs/kafka-authentication.md).
 The external termination configuration below provides transport security but does
 not forward certificate identities.
 
@@ -356,7 +357,33 @@ registering such a schema again when it is the latest version of the subject.
 
 Rotate the keys in this order. The order matters.
 
-1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the Secret.
+1. Update `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in the Secret. Set the namespace and Secret name below to your release's values. This patches only these two keys and preserves other keys, labels, and annotations:
+
+   ```bash
+   (
+     set -euo pipefail
+     umask 077
+     credentials_dir=$(mktemp -d)
+     trap 'rm -rf "$credentials_dir"' EXIT
+     printf 'AWS access key ID: '
+     IFS= read -r AWS_ACCESS_KEY_ID
+     printf 'AWS secret access key: '
+     IFS= read -rs AWS_SECRET_ACCESS_KEY
+     printf '\n'
+     : "${AWS_ACCESS_KEY_ID:?Access key ID must not be empty}"
+     : "${AWS_SECRET_ACCESS_KEY:?Secret key must not be empty}"
+     printf '%s' "$AWS_ACCESS_KEY_ID" > "$credentials_dir/AWS_ACCESS_KEY_ID"
+     printf '%s' "$AWS_SECRET_ACCESS_KEY" > "$credentials_dir/AWS_SECRET_ACCESS_KEY"
+     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+     namespace='<namespace>'
+     secret_name='kafscale-s3' # Set this to schemaRegistry.s3.credentialsSecret.
+     jq -n \
+       --rawfile access "$credentials_dir/AWS_ACCESS_KEY_ID" \
+       --rawfile secret "$credentials_dir/AWS_SECRET_ACCESS_KEY" \
+       '{data:{AWS_ACCESS_KEY_ID:($access|@base64),AWS_SECRET_ACCESS_KEY:($secret|@base64)}}' | \
+       kubectl -n "$namespace" patch secret "$secret_name" --type=merge --patch-file=/dev/stdin
+   )
+   ```
 2. Find the registry Deployment by its labels and restart it:
 
    ```bash
@@ -425,28 +452,7 @@ the default chain because its provider may resolve credentials later.
 ## Ops API examples
 
 Kafscale exposes Kafka admin APIs for operator workflows (consumer group visibility,
-config inspection, cleanup). The canonical plan and scope live in [`docs/ops-api.md`](/ops-api/).
-
-```bash
-# List consumer groups
-kafka-consumer-groups.sh --bootstrap-server '<broker>' --list
-
-# Describe a consumer group
-kafka-consumer-groups.sh --bootstrap-server '<broker>' --describe --group '<group-id>'
-
-# Delete a consumer group
-kafka-consumer-groups.sh --bootstrap-server '<broker>' --delete --group '<group-id>'
-
-# Read topic configs
-kafka-configs.sh --bootstrap-server '<broker>' --describe --entity-type topics --entity-name '<topic>'
-
-# Increase partition count for a topic (additive only)
-kafka-topics.sh --bootstrap-server '<broker>' --alter --topic '<topic>' --partitions '<count>'
-
-# Update topic retention (whitelist only)
-kafka-configs.sh --bootstrap-server '<broker>' --alter --entity-type topics --entity-name '<topic>' \
-  --add-config retention.ms=604800000
-```
+config inspection, cleanup). Command examples, API coverage, and config whitelists live in [Ops API](https://github.com/KafScale/platform/blob/main/docs/ops-api.md#ops-examples).
 
 ## etcd availability & storage
 
@@ -591,8 +597,12 @@ The restore image must include `/bin/sh` and an `etcdutl` that supports `--bump-
 
 ### Installing kafscale-cli
 
-`kafscale-cli` is built from this repository and needs Go 1.26 or later. There is no container image or
-released binary for it. From the repository root:
+Install a [native CLI release archive](/cli-install/) for Linux or macOS, amd64
+or arm64. The binary runs directly on your host, without Docker or Go. Archives
+start with releases built after #431; older tags have no binary attachments.
+
+To build an unreleased version from source, use the Go version in `go.mod` and run
+from the repository root:
 
 ```bash
 go build -o bin/kafscale-cli ./cmd/kafscale-cli
@@ -600,6 +610,44 @@ go build -o bin/kafscale-cli ./cmd/kafscale-cli
 
 `kafscale-cli --help` and `kafscale-cli <command> --help` print the commands,
 flags and environment variables.
+
+### CLI access from a laptop
+
+The restore and prune commands connect directly to etcd and S3. For the quickstart's
+`demo` cluster in namespace `kafscale`, run each port-forward in its own terminal:
+
+```bash
+kubectl -n kafscale port-forward svc/demo-etcd-client 2379:2379
+```
+
+For in-cluster MinIO, also forward its S3 API port (not the console port):
+
+```bash
+kubectl -n kafscale port-forward svc/minio 9000:9000
+```
+
+Replace the cluster, namespace, and S3 Service names for your installation. External
+etcd needs its own reachable client endpoint. AWS S3 does not need an S3 port-forward;
+leave `KAFSCALE_S3_ENDPOINT` unset for AWS rather than using the MinIO value below.
+In the terminal where you run the CLI, configure the quickstart environment:
+
+```bash
+export KAFSCALE_ETCD_ENDPOINTS=http://127.0.0.1:2379
+export KAFSCALE_S3_ENDPOINT=http://127.0.0.1:9000
+export KAFSCALE_S3_BUCKET=kafscale-demo
+export KAFSCALE_S3_REGION=us-east-1
+export KAFSCALE_S3_NAMESPACE=kafscale
+printf 'S3 access key ID: '
+IFS= read -r KAFSCALE_S3_ACCESS_KEY
+printf 'S3 secret access key: '
+IFS= read -rs KAFSCALE_S3_SECRET_KEY
+printf '\n'
+export KAFSCALE_S3_ACCESS_KEY KAFSCALE_S3_SECRET_KEY
+```
+
+Keep these variables set while running restore or prune. Afterwards, run
+`unset KAFSCALE_S3_ACCESS_KEY KAFSCALE_S3_SECRET_KEY`. Temporary credentials also
+need `KAFSCALE_S3_SESSION_TOKEN`; read it without echo and export it in the same way.
 
 ### Topic recovery on the DR spine
 
@@ -631,6 +679,8 @@ Operational semantics:
 - The safer pattern is restore, validate, then cut consumers or downstream jobs over deliberately.
 
 ### Pruning deleted topic data
+
+For laptop access, use the etcd and S3 port-forwards and credential input in [CLI access from a laptop](#cli-access-from-a-laptop).
 
 DeleteTopics keeps a deleted topic's S3 data and records it under `/kafscale/deleted-topics/<topic>/<generation>` in etcd. Use `kafscale-cli prune` to list that data and remove it. It runs as a dry run unless you pass `--force`. Every environment variable `prune` reads is listed in [kafscale-cli](#kafscale-cli):
 
@@ -1020,6 +1070,8 @@ See [Schema Registry](/schema-registry/) for what the registry does.
 - `KAFSCALE_CONSOLE_ETCD_USERNAME`, `KAFSCALE_CONSOLE_ETCD_PASSWORD`: Etcd auth for console.
 - `KAFSCALE_S3_NAMESPACE`: Same meaning as for the broker. Set it to the `KafscaleCluster` namespace, which the operator gives the brokers. The console writes it into the deleted topic record that `kafscale-cli prune` uses. When it is unset or blank, the console refuses topic deletes with `503`. The Helm chart sets it from `console.s3Namespace` and prints a warning in the install notes when `console.etcdEndpoints` is set and `console.s3Namespace` is empty.
 - `KAFSCALE_CONSOLE_BROKER_METRICS_URL`: Broker Prometheus endpoint.
+- `KAFSCALE_CONSOLE_OPERATOR_METRICS_URL`: Direct operator Prometheus endpoint. This takes precedence over discovery. A load-balanced Service URL can pin the console to a standby pod and leave snapshot metrics unavailable.
+- `KAFSCALE_CONSOLE_OPERATOR_METRICS_DISCOVERY_URL`: Headless operator metrics Service URL. The console resolves and scrapes every ready pod concurrently within one three-second budget. Helm sets this by default when operator metrics are enabled; use `console.metrics.operatorMetricsDiscoveryURL` to override it. See [operator metrics discovery](https://github.com/KafScale/platform/blob/main/docs/metrics.md#operator-metrics-discovery).
 - `KAFSCALE_UI_USERNAME`, `KAFSCALE_UI_PASSWORD`: Console login credentials. The Helm chart sets them from the Secret named by `console.auth.existingSecret` (keys `username` and `password`), or from `console.auth.username` and `console.auth.password`.
 - `KAFSCALE_CONSOLE_LFS_ENABLED`: Enable the LFS views and API (`true` to enable; any other value disables them).
 - `KAFSCALE_CONSOLE_KAFKA_BROKERS`: Comma-separated brokers used to consume the LFS tracker topic.
@@ -1210,6 +1262,28 @@ Operator note: for an LFS proxy deployment (`spec.lfsProxy`) the operator sets t
 
 The Iceberg processor addon has its own LFS environment overrides. See `addons/processors/iceberg-processor/README.md`.
 
+### SQL processor (KAFSQL)
+
+The executor only reads the manifest and time index; `kafsql-backfill` writes
+them. The build keys under `discovery_manifest` and `time_index` in the SQL
+processor config are read only by the backfill tool, and can be set with these
+environment variables:
+
+- `KAFSQL_MANIFEST_BUILD_MAX_SEGMENTS` / `KAFSQL_TIME_INDEX_BUILD_MAX_SEGMENTS`: cap on segments per build (`0` = no cap).
+- `KAFSQL_MANIFEST_BUILD_MAX_BYTES` / `KAFSQL_TIME_INDEX_BUILD_MAX_BYTES`: cap on build size in bytes (`0` = no cap).
+- `KAFSQL_MANIFEST_BUILD_LEASE_TTL_SECONDS` / `KAFSQL_TIME_INDEX_BUILD_LEASE_TTL_SECONDS`: how long the build lease is held (default `120` seconds).
+
+`KAFSQL_MANIFEST_BUILD_INTERVAL_SECONDS` no longer exists: it was documented
+but never read by any component, so it was removed from the config.
+
+### Processor demos
+
+The kind demo scripts are development tools, not runtime component settings.
+Their complete variable tables and cleanup behavior are in the user guides:
+
+- [Iceberg demo variables](https://github.com/KafScale/platform/blob/main/addons/processors/iceberg-processor/user-guide.md#one-command-demo): `ICEBERG_DEMO_CLEANUP` (default `1`) removes the topic and cluster objects; `ICEBERG_DEMO_CLEANUP_KIND` (default `1`) deletes the kind cluster on success. Set both to `0` to keep the demo running.
+- [KAFSQL demo variables](https://github.com/KafScale/platform/blob/main/addons/processors/sql-processor/user-guide.md#one-command-demo): `KAFSQL_DEMO_CLEANUP` (default `1`) removes the release, job, topic and cluster objects. Set it to `0` to keep them. The kind cluster stays up.
+
 ### idoc-explode
 
 `idoc-explode` (cmd/idoc-explode) reads SAP IDoc XML or JSONL envelopes and writes one file per topic. Flags: `-input` (file path; empty reads stdin) and `-out` (output directory).
@@ -1316,7 +1390,7 @@ Broker exposure settings (KafscaleCluster `spec.brokers`):
 Example (GKE/AWS/Azure load balancer):
 
 ```yaml
-apiVersion: kafscale.io/v1alpha1
+apiVersion: kafscale.io/v1
 kind: KafscaleCluster
 metadata:
   name: kafscale
@@ -1341,7 +1415,7 @@ spec:
 
 TLS note: brokers speak plaintext today. If you need TLS for Kafka traffic,
 terminate TLS at your load balancer, ingress TCP proxy, or service mesh and
-advertise that endpoint in `advertisedHost`/`advertisedPort`. See [`docs/security.md`](/security/)
+advertise that endpoint in `advertisedHost`/`advertisedPort`. See `docs/security.md`
 for the current transport security posture.
 
 Example certificate (cert-manager) for a TCP proxy or load balancer that uses a
@@ -1370,15 +1444,15 @@ spec:
   apply the new schema explicitly:
 
   ```sh
-  kubectl apply --server-side --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
+  kubectl apply --server-side --force-conflicts --field-manager=kafscale-crd-upgrade -f deploy/helm/kafscale/crds/
   kubectl wait --for=condition=Established crd/kafscaleclusters.kafscale.io
-  kubectl explain kafscalecluster.spec.security --api-version=kafscale.io/v1alpha1
+  kubectl explain kafscalecluster.spec.security --api-version=kafscale.io/v1
   ```
 
   Then run `helm upgrade --install` and reapply the cluster manifest with
   `kubectl apply --validate=strict -f cluster.yaml`. Fields submitted against an
   old schema may already have been pruned; upgrading the CRD does not restore
-  them. See [Kafka proxy authentication](/kafka-authentication/) for the full
+  them. See [Kafka proxy authentication](https://github.com/KafScale/platform/blob/main/docs/kafka-authentication.md) for the full
   configuration and rotation procedure.
 - Upgrading to a version with the consumer group index needs no manual step. Brokers on the old and new versions can run side by side: a group created or deleted by an old broker is fixed up by the next full scan, at most an hour later, and until then it is only swept late. Rolling back leaves the `/kafscale/consumer-groups/` keys in place, and older brokers ignore them.
 - Rollbacks can be performed with `helm rollback kafscale <REVISION>` which restores the previous deployment and service versions.  Brokers are stateless so the recovery window is short.
@@ -1512,7 +1586,7 @@ the other manually maintained CRD fields.
 
 A failed conditional segment PUT or a failed index upload after a successful segment PUT fences the old log handle. The broker evicts only that handle; the next request restores the immutable winning segment and continues after its last offset under the current lease. Restore rebuilds every read index in memory from validated segment bytes, checking the checksum, batch framing and offset bounds. Sidecar indexes are not trusted or required for partition restore: even an ordered, in-bounds sidecar can point at the wrong batch. This requires full-segment reads during restore, with the existing bounded worker pool and S3 semaphore. Failed append cleanup never deletes an immutable segment or its sidecar, including after a delayed old-writer failure. Recovery does not overwrite either object. Malformed segments and overlapping ranges fail restore rather than silently selecting or skipping data.
 
-This recovery prevents reuse of the winning segment’s occupied offsets. It does not deduplicate producer retries: a timed-out write may already exist in S3, and KafScale does not implement idempotent producers or `InitProducerId`. Retrying the same records can append them again at later offsets.
+This recovery prevents reuse of the winning segment’s occupied offsets. For idempotent producers, recovery also rebuilds recent producer sequence state from the validated S3 batches: retrying the same batch returns its original offsets. Non-idempotent retries and application resends under a new producer ID can append duplicates. See [idempotent producer guarantees](https://github.com/KafScale/platform/blob/main/docs/protocol.md#idempotent-producers).
 
 ## Produce deadlines and topic generations
 
