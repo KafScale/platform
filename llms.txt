@@ -9,6 +9,8 @@ Full text for LLMs: https://kafscale.io/llms-full.txt
 ## Docs
 
 - [Documentation](https://kafscale.io/docs/): Guides and reference for running KafScale
+- [Local quick start](https://kafscale.io/local-quickstart/): Run the development Compose stack and produce a first message with kcat
+- [Install the CLI](https://kafscale.io/cli-install/): Download native kafscale-cli archives, starting with v2.1.0
 - [Quickstart](https://kafscale.io/quickstart/): Install the operator, create a topic, and stream messages
 - [User guide](https://kafscale.io/user-guide/): How to use KafScale after it is deployed
 - [Architecture](https://kafscale.io/architecture/): How brokers, S3, etcd, and the operator fit together
@@ -19,12 +21,12 @@ Full text for LLMs: https://kafscale.io/llms-full.txt
 - [Schema Registry](https://kafscale.io/schema-registry/): Built-in Confluent-compatible schema registry (since v2.0.0) for Avro, Protobuf and JSON Schema. State in etcd, large schemas in S3, import from Confluent Schema Registry keeping ids
 - [mTLS authentication](https://kafscale.io/kafka-authentication/): TLS 1.3 and mTLS for Kafka clients at the KafScale proxy. URI SAN to principal mapping, broker ACLs, Secrets, Helm and CRD fields, certificate rotation
 - [Protocol compatibility](https://kafscale.io/protocol/): Kafka APIs the broker advertises
-- [Latency and batching](https://kafscale.io/latency/): KafScale latency is S3 latency. How produce and fetch map to S3 requests, AWS published S3 latency figures with sources, producer batching settings, and the deliberate trade-offs (no compaction, transactions or idempotent producers)
+- [Latency and batching](https://kafscale.io/latency/): KafScale latency is S3 latency. How produce and fetch map to S3 requests, AWS published S3 latency figures with sources, producer batching settings, and the deliberate trade-offs (no compaction or transactions; nontransactional idempotent producers are supported since v2.1.0)
 - [Comparison](https://kafscale.io/comparison/): How KafScale compares with other Kafka-compatible platforms
 - [Migrate from WarpStream](https://kafscale.io/migrate-from-warpstream/): Move topics from WarpStream with a kaf-mirror dual run and cutover, and what KafScale does not support
 - [Bento with KafScale](https://kafscale.io/bento/): Run Bento pipelines against KafScale with the kafka_franz input and output
 - [Project overview](https://kafscale.io/overview/): What KafScale optimizes for, and what it leaves out
-- [Release notes](https://kafscale.io/releases/): Changes, upgrade notes and fixes for each release. Latest: [v2.0.1](https://kafscale.io/releases/v2.0.1/)
+- [Release notes](https://kafscale.io/releases/): Changes, upgrade notes and fixes for each release. Latest: [v2.1.0](https://kafscale.io/releases/v2.1.0/)
 
 ## Related projects
 

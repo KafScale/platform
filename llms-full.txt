@@ -10,7 +10,7 @@ Short index: https://kafscale.io/llms.txt
 
 KafScale runs the Kafka protocol on stateless brokers and keeps all data in S3-compatible object storage. That removes broker disks, partition rebalancing and replica management from your operations work, and it gives you up to 90% lower storage cost than three-way replicated broker disks. It is open source under Apache 2.0, keeps metadata in etcd inside your own Kubernetes cluster, and stores data in the open, documented .kfs segment format, so processors can read it straight from S3.
 
-Standard Kafka clients work. Producers must set enable.idempotence=false.
+Standard Kafka clients work. From v2.1.0, default nontransactional idempotent producers work. Leave transactional.id unset and use acks=all. On older releases, set enable.idempotence=false.
 
 ## Storage cost
 
@@ -61,7 +61,7 @@ Details: https://kafscale.io/latency/
 
 In the default mode every produce request becomes one segment upload and one index upload per partition, so producer batching decides the S3 PUT count. Recommended starting point:
 
-enable.idempotence=false
+enable.idempotence=true
 acks=all
 linger.ms=100
 batch.size=65536
@@ -71,7 +71,7 @@ KafScale stores record batches as the producer sent them, so producer compressio
 
 ## Does KafScale support transactions?
 
-No. Transactions, idempotent producers and compacted topics are deliberate trade-offs of the S3 design. Segments in object storage are immutable and brokers keep no state, so there is no producer sequence state, no transaction coordinator and no segment rewriting. Set enable.idempotence=false on producers. For CDC, key-value state topics or exactly-once pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics.
+No. Transactions and compacted topics remain unsupported. Since v2.1.0, nontransactional idempotent producers work: brokers and the proxy implement InitProducerId, and producer IDs are stored in etcd. Leave transactional.id unset and use acks=all. Transactions and cross-session exactly-once delivery are still unsupported. For CDC, compacted state topics or transactional pipelines, keep those topics on a regular Kafka cluster and run KafScale beside it for high-volume logs, telemetry and analytics.
 
 Patterns that work on KafScale: give each record a stable key or ID and make consumers idempotent (for example upsert by key). The Iceberg processor adds a record_id of the form <topic>:<partition>:<offset> for deduplication. Keep latest-value-per-key state in a table or key-value store rather than in a compacted topic. Small writes cost more because every flush is an S3 object; batch on the producer.
 
@@ -105,7 +105,9 @@ Commercial support and an enterprise version of KafScale are available from Scal
 - mTLS authentication: https://kafscale.io/kafka-authentication/
 - Protocol compatibility: https://kafscale.io/protocol/
 - FAQ: https://kafscale.io/faq/
-- Release notes: https://kafscale.io/releases/ (latest: v2.0.1, https://kafscale.io/releases/v2.0.1/)
+- Release notes: https://kafscale.io/releases/ (latest: v2.1.0, https://kafscale.io/releases/v2.1.0/)
+- Local quick start: https://kafscale.io/local-quickstart/
+- Install the CLI: https://kafscale.io/cli-install/
 
 ## Author
 

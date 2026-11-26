@@ -47,6 +47,25 @@ description: Kafka-compatible streaming with stateless brokers, S3-native storag
 </section>
 
 <section class="section">
+  <h2>What's new in v2.1.0</h2>
+  <p>The current release is <a href="/releases/v2.1.0/">v2.1.0</a>.</p>
+  <div class="grid grid-3x2">
+    <div class="card">
+      <h3>Idempotent producers</h3>
+      <p>Default Java and Kafka clients can produce without turning off idempotence. Leave <code>transactional.id</code> unset and use <code>acks=all</code>. Transactions are still unsupported. Upgrade every broker and proxy before you enable this on an existing cluster. <a href="/protocol/#idempotent-producers">Protocol details</a></p>
+    </div>
+    <div class="card">
+      <h3>New topic IDs on recreate</h3>
+      <p>Deleting a topic and creating one with the same name now assigns a new topic ID. Clients that still have the old ID get <code>UNKNOWN_TOPIC_ID</code> and should refresh metadata. Existing topics keep their IDs across the upgrade. <a href="/upgrade-compatibility/#upgrading-from-v201-to-v210">Upgrade notes</a></p>
+    </div>
+    <div class="card">
+      <h3>Local quick start and native CLI</h3>
+      <p>Start a development stack with Docker Compose and a native kcat client, with no Go toolchain or Kubernetes cluster. Release tags now also publish <code>kafscale-cli</code> archives for Linux and macOS. <a href="/local-quickstart/">Local quick start</a> · <a href="/cli-install/">Install the CLI</a></p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
   <h2>Why teams adopt KafScale</h2>
   <div class="grid grid-3x2">
     <div class="card">

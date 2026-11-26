@@ -61,7 +61,7 @@ kcat -C -b localhost:9093 -t quickstart -o beginning -c 1 -e
 
 `v2.1.0`, the first release with #28, supports default nontransactional
 idempotent producers; see
-[protocol support](https://github.com/KafScale/platform/blob/main/docs/protocol.md#idempotent-producers). Transactions remain unsupported.
+[protocol support](/protocol/#idempotent-producers). Transactions remain unsupported.
 
 To inspect or stop the stack:
 

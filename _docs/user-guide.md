@@ -31,7 +31,7 @@ Kafscale is a Kafka-compatible, S3-backed message transport system. It keeps bro
 ## Concepts
 
 - **Topics / Partitions**: match upstream Kafka semantics. All Kafka client libraries continue to work.
-- **Brokers**: stateless pods accepting Kafka protocol traffic on port 9092 and metrics + gRPC control on 9093.
+- **Brokers**: stateless pods accepting Kafka protocol traffic on port 9092 and Prometheus metrics on 9093. The control-plane gRPC listener uses `KAFSCALE_CONTROL_ADDR` (binary default `:19094`). The operator does not set that variable or expose the port on broker pods.
 - **Metadata**: stored in etcd, encoded via protobufs (`kafscale.metadata.*`).
 - **Storage**: message segments live in S3 buckets; brokers only keep in-memory caches.
 - **Operator**: Kubernetes controller that provisions brokers, topics, and wiring based on CRDs.
@@ -42,26 +42,26 @@ For a kind-based demo environment run `make demo-platform`. The Makefile applies
 
 ## Client Examples
 
-Use this section to copy/paste a minimal example for your client. If you do not control client config (managed apps, hosted integrations), ask the operator team to confirm idempotence/transactions are disabled for Kafscale.
+Use this section to copy/paste a minimal example for your client. Default nontransactional idempotent producers are supported. Do not set a `transactional.id`; transactions remain unsupported. Both isolation levels are supported for nontransactional records.
 
-For install + bootstrap steps, follow [`docs/quickstart.md`](/quickstart/).
+For install + bootstrap steps, follow `docs/quickstart.md`.
 
 ### Java (plain)
 
-Start with a minimal set of producer properties. Turn idempotence off: KafScale does not implement `InitProducerId`, so idempotent and transactional producers cannot start.
+Java producer defaults work without disabling idempotence. Use `acks=all` and leave `transactional.id` unset.
 ```properties
 # Java producer properties
 bootstrap.servers=kafscale-broker:9092
-enable.idempotence=false
-acks=1
+enable.idempotence=true
+acks=all
 ```
 This is the smallest working producer in Java:
 ```java
 // Java producer
 Properties props = new Properties();
 props.put("bootstrap.servers", "kafscale-broker:9092");
-props.put("enable.idempotence", "false");
-props.put("acks", "1");
+props.put("enable.idempotence", "true");
+props.put("acks", "all");
 try (KafkaProducer<String, String> producer = new KafkaProducer<>(props, new StringSerializer(), new StringSerializer())) {
     producer.send(new ProducerRecord<>("orders", "key-1", "value-1")).get();
 }
@@ -90,8 +90,8 @@ spring:
     bootstrap-servers: kafscale-broker:9092
     producer:
       properties:
-        enable.idempotence: false
-        acks: 1
+        enable.idempotence: true
+        acks: all
     consumer:
       group-id: orders-consumer
       auto-offset-reset: earliest
@@ -148,18 +148,54 @@ fmt.Println(string(m.Value))
 
 ### Kafka CLI
 
-If you just want to test from a shell:
+For an existing topic, use the default producer settings. The Apache Kafka
+distribution uses `.sh` script names:
 ```bash
-# Kafka CLI
-kafka-console-producer --bootstrap-server kafscale-broker:9092 --topic orders --producer-property enable.idempotence=false
-kafka-console-consumer --bootstrap-server kafscale-broker:9092 --topic orders --from-beginning
+kafka-console-producer.sh --bootstrap-server kafscale-broker:9092 --topic orders
+# Type a value, then Ctrl-D to finish.
+kafka-console-consumer.sh --bootstrap-server kafscale-broker:9092 --topic orders --from-beginning
+```
+
+To send a key and value separated by a comma:
+
+```bash
+printf 'k1,v1\n' | kafka-console-producer.sh \
+  --bootstrap-server kafscale-broker:9092 --topic orders \
+  --property parse.key=true --property key.separator=,
+kafka-console-consumer.sh --bootstrap-server kafscale-broker:9092 --topic orders \
+  --from-beginning --property print.key=true --property key.separator=,
+```
+
+An `UnsupportedVersionException` mentioning `INIT_PRODUCER_ID` on a default
+producer indicates an older broker or proxy. Upgrade all brokers and proxies
+before enabling idempotence in an existing deployment. During a rolling upgrade,
+`--producer-property enable.idempotence=false` remains a compatibility option;
+those writes can duplicate after retries. A `transactional.id` and transactional
+batches still return `UNSUPPORTED_VERSION`.
+The separate error `non-nullable field recordErrors was serialized as null`
+indicates a malformed broker Produce response; update older brokers.
+
+Idempotent writes require `acks=all` and always flush to S3 before acknowledgement,
+even when ordinary writes use buffered mode. See [producer retry guarantees](/protocol/#idempotent-producers)
+for retry-window and recovery details.
+
+### librdkafka / kcat consumers
+
+Both `read_uncommitted` and `read_committed` are supported for KafScale's
+nontransactional log. Committed reads stop at the durable last stable offset;
+volatile buffered records remain hidden until their S3 flush is published.
+Transactional writes and commit markers remain unsupported.
+
+```bash
+kcat -b kafscale-broker:9092 -C -t orders -o beginning \
+  -X isolation.level=read_committed
 ```
 
 ## Monitoring
 
-- Metrics via Prometheus on port 9093 (`/metrics`)
-- Structured JSON logs from brokers/operators
-- Control-plane queries via the gRPC service defined in `proto/control/broker.proto`
+- Metrics via Prometheus on port 9093 (`/metrics`). See [Metrics and Dashboards](/metrics/).
+- Structured JSON logs from brokers and the operator.
+- Control-plane gRPC is defined in `proto/control/broker.proto` and listens on `KAFSCALE_CONTROL_ADDR`. The operator does not expose that port.
 
 ## Scaling / Maintenance
 
@@ -174,7 +210,7 @@ The BrokerControl `DrainPartitions` and `TriggerFlush` RPCs are not implemented 
 ## Limits / Non-Goals
 
 - No embedded stream processing features. Pair Kafscale with Flink, Wayang, Spark, etc.
-- Transactions, idempotent producers, and log compaction are out of scope for KafScale.
+- Transactions and log compaction are out of scope for KafScale. Supported and unsupported Kafka APIs are listed in [Kafka Protocol Support](/protocol/).
 
-For deployment and operations, read [`docs/operations.md`](/operations/).
-For deeper architectural details or development guidance, read `kafscale-spec.md` and [`docs/development.md`](/development/).
+For deployment and operations, read `docs/operations.md`.
+For deeper architectural details or development guidance, read `kafscale-spec.md` and `docs/development.md`.

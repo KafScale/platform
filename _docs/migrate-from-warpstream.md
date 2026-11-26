@@ -26,7 +26,7 @@ KafScale does not support everything WarpStream does. Check these before you sta
 | Feature | WarpStream | KafScale |
 |---------|------------|----------|
 | Transactions and exactly-once | Yes | No |
-| Idempotent producers | Yes | No. Set `enable.idempotence=false` |
+| Idempotent producers | Yes | Yes from v2.1.0, for nontransactional writes. Leave `transactional.id` unset. On older releases, set `enable.idempotence=false` |
 | Compacted topics | Yes | No |
 | ACL admin API | Yes | No |
 | SASL authentication | Yes | No |
@@ -49,14 +49,14 @@ Create the target topics with the same names and partition counts as on WarpStre
 
 kaf-mirror consumes from one Kafka-protocol cluster and produces to another. It mirrors topics under the same name by default, and also supports exact or regex mappings. It commits source offsets only after the target acknowledges the write, so a stopped job resumes where it left off.
 
-KafScale does not implement `InitProducerId`, so turn idempotent writes off when KafScale is the target:
+From v2.1.0, KafScale supports nontransactional idempotent producers, so you do not need to disable idempotent writes when the target cluster is on v2.1.0 or later. For older KafScale releases, set `KAFMIRROR_DISABLE_IDEMPOTENT_WRITES=true` or writes fail.
 
 ```bash
 git clone https://github.com/KafScale/kaf-mirror.git && cd kaf-mirror
 mkdir -p bin
 go build -o bin/kaf-mirror ./cmd/kaf-mirror
 go build -o bin/mirror-cli ./cmd/mirror-cli
-KAFMIRROR_DISABLE_IDEMPOTENT_WRITES=true ./bin/kaf-mirror
+./bin/kaf-mirror
 ```
 
 The admin password for `admin@localhost` is printed once to `logs/kaf-mirror.log`.
@@ -91,7 +91,7 @@ Offsets on KafScale will not match offsets on WarpStream, and consumer group pos
 1. Stop the producers on WarpStream.
 2. Wait until kaf-mirror lag reaches zero, then stop the job.
 3. Start consumers on KafScale. Use a new group id, and choose where to start: from the earliest offset if your consumers can handle duplicates, or from the latest offset if they can skip what they already processed on WarpStream.
-4. Point producers at KafScale with `enable.idempotence=false` and no `transactional.id`.
+4. Point producers at KafScale. From v2.1.0, leave idempotence on and do not set `transactional.id`. On older releases, set `enable.idempotence=false`.
 5. Keep the WarpStream cluster for a rollback window, then shut it down.
 
 For Bento pipelines that read or write WarpStream, see [Bento with KafScale](/bento/).

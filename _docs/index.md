@@ -16,8 +16,11 @@ KafScale keeps brokers stateless and moves processing into add-on services, so y
 ## Get started
 
 - [Project overview](/overview/)
+- [Try it locally](/local-quickstart/)
+- [Install the CLI](/cli-install/)
 - [Quickstart](/quickstart/)
 - [User guide](/user-guide/)
+- [v2.1.0 release notes](/releases/v2.1.0/)
 - [Onboarding Guide](/onboarding-guide/): E10–E50 progressive tutorial
 - [Architecture](/architecture/)
 
