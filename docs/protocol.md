@@ -62,6 +62,20 @@ restart persistence requires etcd.
 | 37 | CreatePartitions | 0-3 | Scale partitions |
 | 42 | DeleteGroups | 0-2 | Consumer group cleanup |
 
+### Creating topics with the Apache Kafka CLI
+
+KafScale supports CreateTopics v0 to v2. These versions require an explicit
+partition count and replication factor, so always pass both to `kafka-topics.sh
+--create`. Without `--replication-factor`, Apache Kafka 3.x clients fail with
+`UnsupportedVersionException: Creating topics with default partitions/replication
+factor are only supported in CreateTopicRequest version 4+`. KafScale stores data
+in S3, so use a replication factor of 1:
+
+```bash
+kafka-topics.sh --bootstrap-server 127.0.0.1:9093 --create --topic orders \
+  --partitions 3 --replication-factor 1
+```
+
 `ListOffsets` does not auto-create topics, regardless of the broker's auto-create
 setting. Earliest and latest lookups return `UNKNOWN_TOPIC_OR_PARTITION` for
 missing topics or partitions. Deadline/cancellation errors return

@@ -62,10 +62,11 @@ printf 'hello from KafScale\n' | kcat -P -b localhost:9093 -t quickstart \
 kcat -C -b localhost:9093 -t quickstart -o beginning -c 1 -e
 ```
 
-Open the console at [localhost:3080](http://localhost:3080), user `kafscaleadmin`,
-password `kafscale`. The first start builds the local MinIO test fixture inside
-Docker and can take several minutes. The flag above supports the default
-`v2.0.1` images; newer releases containing #28 support idempotent producers.
+Open the console at [http://localhost:3080/ui/](http://localhost:3080/ui/), user
+`kafscaleadmin`, password `kafscale`. The first start builds the local MinIO test
+fixture inside Docker and can take several minutes. The default `v2.0.1` images
+need `enable.idempotence=false`. `v2.1.0`, the first release with idempotent
+producer support (#28), does not.
 
 [Local guide](docs/local-quickstart.md) · [Connect your S3](docs/s3-connection.md) ·
 [Native CLI downloads](docs/cli-install.md) · [Kubernetes and Helm](docs/quickstart.md)

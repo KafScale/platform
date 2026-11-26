@@ -73,7 +73,7 @@ docker compose down
 |---------|-----|
 | LFS HTTP API | http://localhost:8080 |
 | MinIO Console | http://localhost:9001 |
-| KafScale Console | http://localhost:3080 |
+| KafScale Console | http://localhost:3080/ui/ |
 | E72 Browser Demo | http://localhost:3072 |
 | Health Check | http://localhost:9094/readyz |
 
@@ -143,7 +143,7 @@ Traceability is enabled in the compose file by default. It consists of:
 ### Where to see it
 
 1) **Console UI**
-   - Open http://localhost:3080
+   - Open http://localhost:3080/ui/
    - Navigate to the **LFS** tab for objects, topics, live events, and S3 browser.
 
 2) **Raw events from Kafka**
@@ -297,7 +297,7 @@ REGISTRY=my-registry.local:5000 TAG=v2.0.1 docker compose up -d
               │ broker:9092       │ ← Kafka Broker (Compose network)
               │ localhost:9093    │ ← Kafka Proxy
               │ localhost:9001    │ ← MinIO Console
-              │ localhost:3080    │ ← KafScale Console
+              │ localhost:3080/ui/│ ← KafScale Console
               └───────────────────┘
 ```
 
