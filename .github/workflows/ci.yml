@@ -95,6 +95,7 @@ jobs:
   lfs-sdk-tests:
     name: LFS SDK Python and Java Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -113,10 +114,14 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: maven
-          cache-dependency-path: lfs-client-sdk/java/pom.xml
+          cache-dependency-path: |
+            lfs-client-sdk/java/pom.xml
+            scripts/maven_ci.sh
+      - name: Verify Maven HTTP retries and cache reuse
+        run: python3 -m unittest discover -s test -p maven_transport_test.py
       - name: Run Java SDK tests without the Docker integration test
         working-directory: lfs-client-sdk/java
-        run: mvn -B test -Dtest='!LfsProducerIntegrationTest' -Dsurefire.failIfNoSpecifiedTests=false
+        run: bash ../../scripts/maven_ci.sh test -Dtest='!LfsProducerIntegrationTest' -Dsurefire.failIfNoSpecifiedTests=false
 
   go-lint:
     name: Go Lint
@@ -255,15 +260,35 @@ jobs:
           KAFSCALE_E2E: "1"
         run: go test -race -tags=e2e ./test/e2e -run '^(TestSimpleOffsetCommitE2E|TestTopicRecreateE2E)$' -v -count=1 -timeout=5m
 
+      - name: Restore schema client Maven repository
+        if: startsWith(matrix.suite, 'schema-')
+        id: schema-maven-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/kafscale-e2e-m2
+          key: ${{ runner.os }}-${{ runner.arch }}-schema-maven-v1-${{ hashFiles('test/e2e/testdata/schemaregistry/java/pom.xml', 'test/e2e/schema_registry_test.go', 'scripts/maven_ci.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-schema-maven-v1-
+
       - name: Schema registry end-to-end tests
         if: startsWith(matrix.suite, 'schema-')
         env:
           KAFSCALE_SR_PYTHON: ${{ runner.temp }}/sr-venv/bin/python
           SCHEMA_TEST: ${{ matrix.schema-test }}
+          KAFSCALE_E2E_M2: ${{ runner.temp }}/kafscale-e2e-m2
         run: |
           python3 -m venv "$RUNNER_TEMP/sr-venv"
           "$RUNNER_TEMP/sr-venv/bin/pip" install --require-hashes -r .github/requirements/schema-registry.txt
           go test -race -tags=e2e ./test/e2e -run "$SCHEMA_TEST" -v -count=1 -timeout=40m
+
+      # Preserve completed downloads even when a later test fails. Each matrix
+      # job has its own runner-local repository; no live directory is shared.
+      - name: Save schema client Maven repository
+        if: ${{ !cancelled() && startsWith(matrix.suite, 'schema-') && steps.schema-maven-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/kafscale-e2e-m2
+          key: ${{ steps.schema-maven-cache.outputs.cache-primary-key }}
 
       - name: Check operator startup readiness, scaling and retry regressions
         if: matrix.suite == 'operator-api'
