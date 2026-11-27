@@ -2908,31 +2908,8 @@ func metadataForBroker(b protocol.MetadataBroker) metadata.ClusterMetadata {
 	return metadata.ClusterMetadata{
 		ControllerID: b.NodeID,
 		ClusterID:    &clusterID,
-		Brokers: []protocol.MetadataBroker{
-			b,
-		},
-		Topics: []protocol.MetadataTopic{
-			{
-				ErrorCode:  0,
-				Topic:      kmsg.StringPtr("orders"),
-				TopicID:    metadata.TopicIDForName("orders"),
-				IsInternal: false,
-				Partitions: []protocol.MetadataPartition{
-					{
-						ErrorCode: 0,
-						Partition: 0,
-						Leader:    b.NodeID,
-						Replicas:  []int32{b.NodeID},
-						ISR:       []int32{b.NodeID},
-					},
-				},
-			},
-		},
+		Brokers:      []protocol.MetadataBroker{b},
 	}
-}
-
-func defaultMetadata() metadata.ClusterMetadata {
-	return metadataForBroker(buildBrokerInfo())
 }
 
 func buildStore(ctx context.Context, brokerInfo protocol.MetadataBroker, logger *slog.Logger) metadata.Store {

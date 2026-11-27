@@ -112,7 +112,7 @@ func startIdempotenceBroker(t *testing.T) (string, *handler) {
 	port, _ := strconv.Atoi(portText)
 	_ = listener.Close()
 	info := protocol.MetadataBroker{NodeID: 1, Host: "127.0.0.1", Port: int32(port)}
-	snapshot := metadataForBroker(info)
+	snapshot := testMetadataForBroker(info)
 	h := newHandler(metadata.NewInMemoryStore(snapshot), storage.NewMemoryS3Client(), info, testLogger())
 	t.Cleanup(h.coordinator.Stop)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -171,7 +171,7 @@ func TestIdempotentRetryAcrossEtcdPartitionOwners(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	endpoints := testutil.StartEmbeddedEtcd(t)
-	store, err := metadata.NewEtcdStore(ctx, metadataForBroker(protocol.MetadataBroker{NodeID: 0}), metadata.EtcdStoreConfig{Endpoints: endpoints})
+	store, err := metadata.NewEtcdStore(ctx, testMetadataForBroker(protocol.MetadataBroker{NodeID: 0}), metadata.EtcdStoreConfig{Endpoints: endpoints})
 	if err != nil {
 		t.Fatal(err)
 	}

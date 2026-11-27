@@ -72,7 +72,7 @@ func TestProxyListTopicsAfterCreateE2E(t *testing.T) {
 			}
 		})
 	}
-	start("broker", []string{"KAFSCALE_AUTO_CREATE_TOPICS=true", "KAFSCALE_AUTO_CREATE_PARTITIONS=1", "KAFSCALE_USE_MEMORY_S3=1", "KAFSCALE_BROKER_ADDR=" + brokerAddr, "KAFSCALE_BROKER_HOST=127.0.0.1", "KAFSCALE_BROKER_PORT=" + brokerPort, "KAFSCALE_METRICS_ADDR=" + freeAddr(t), "KAFSCALE_CONTROL_ADDR=" + freeAddr(t), "KAFSCALE_ETCD_ENDPOINTS=" + strings.Join(endpoints, ",")})
+	start("broker", []string{"KAFSCALE_AUTO_CREATE_TOPICS=false", "KAFSCALE_USE_MEMORY_S3=1", "KAFSCALE_BROKER_ADDR=" + brokerAddr, "KAFSCALE_BROKER_HOST=127.0.0.1", "KAFSCALE_BROKER_PORT=" + brokerPort, "KAFSCALE_METRICS_ADDR=" + freeAddr(t), "KAFSCALE_CONTROL_ADDR=" + freeAddr(t), "KAFSCALE_ETCD_ENDPOINTS=" + strings.Join(endpoints, ",")})
 	waitForPortWithin(t, brokerAddr, time.Minute)
 	start("proxy", []string{"KAFSCALE_PROXY_ADDR=" + proxyAddr, "KAFSCALE_PROXY_BACKENDS=" + brokerAddr, "KAFSCALE_PROXY_ADVERTISED_HOST=127.0.0.1", "KAFSCALE_PROXY_ADVERTISED_PORT=" + proxyPort, "KAFSCALE_PROXY_ETCD_ENDPOINTS=" + strings.Join(endpoints, ","), "KAFSCALE_PROXY_HEALTH_ADDR="})
 	waitForPortWithin(t, proxyAddr, time.Minute)
@@ -85,6 +85,13 @@ func TestProxyListTopicsAfterCreateE2E(t *testing.T) {
 	admin := kadm.NewClient(client)
 	for i := range 10 {
 		topic := fmt.Sprintf("listed-%d", i)
+		if i == 0 {
+			topic = "orders"
+			listed, err := admin.ListTopics(ctx)
+			if err != nil || len(listed) != 0 {
+				t.Fatalf("fresh broker topic list: %+v, %v", listed, err)
+			}
+		}
 		// Mirroring tools probe the target before creating it with the source
 		// partition count. The probe must not auto-create a one-partition topic.
 		probe, err := admin.ListTopics(ctx, topic)

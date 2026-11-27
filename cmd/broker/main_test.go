@@ -1864,3 +1864,23 @@ func TestProduceAppendPlainErrorStaysUnknown(t *testing.T) {
 		t.Fatalf("got code %d message %v, want %d and no message", part.ErrorCode, part.ErrorMessage, protocol.UNKNOWN_SERVER_ERROR)
 	}
 }
+
+// Test fixtures explicitly seed the orders topic; production startup has no topics.
+func testMetadataForBroker(b protocol.MetadataBroker) metadata.ClusterMetadata {
+	meta := metadataForBroker(b)
+	meta.Topics = []protocol.MetadataTopic{{
+		Topic:   kmsg.StringPtr("orders"),
+		TopicID: metadata.TopicIDForName("orders"),
+		Partitions: []protocol.MetadataPartition{{
+			Partition: 0,
+			Leader:    b.NodeID,
+			Replicas:  []int32{b.NodeID},
+			ISR:       []int32{b.NodeID},
+		}},
+	}}
+	return meta
+}
+
+func defaultMetadata() metadata.ClusterMetadata {
+	return testMetadataForBroker(buildBrokerInfo())
+}

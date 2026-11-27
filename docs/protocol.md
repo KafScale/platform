@@ -76,6 +76,10 @@ kafka-topics.sh --bootstrap-server 127.0.0.1:9093 --create --topic orders \
   --partitions 3 --replication-factor 1
 ```
 
+A broker with a fresh metadata store starts with no topics. Application topics,
+including `orders`, must be explicitly created or auto-created through a permitted
+Kafka request. Existing persisted topics are loaded on restart.
+
 Metadata v4 and later respect `AllowAutoTopicCreation`: an unknown topic returns
 `UNKNOWN_TOPIC_OR_PARTITION` without creating it when the flag is false. Creation
 requires both the flag and `KAFSCALE_AUTO_CREATE_TOPICS=true`. Metadata v0 to v3
